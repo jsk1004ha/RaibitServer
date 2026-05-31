@@ -17,6 +17,7 @@ model User {
   role           String       @default("USER")
   accountType    String       @default("NON_CLUB")
   approvalStatus String       @default("PENDING")
+  emailVerifiedAt DateTime?   @default(now())
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   memberships    Membership[]
@@ -24,6 +25,28 @@ model User {
   usageRecords   UsageRecord[]
   auditLogs      AuditLog[]
   githubIntegrations GitHubIntegration[]
+  emailVerificationCodes EmailVerificationCode[]
+}
+
+model EmailVerificationCode {
+  id         String   @id @default(cuid())
+  userId     String?
+  email      String
+  purpose    String   @default("signup")
+  payload    Json?
+  codeHash   String
+  codeSalt   String
+  attempts   Int      @default(0)
+  sentAt     DateTime @default(now())
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, purpose, consumedAt, createdAt])
+  @@index([userId, consumedAt])
+  @@index([expiresAt])
 }
 
 model Organization {

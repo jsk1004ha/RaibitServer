@@ -11,7 +11,9 @@ security:
 paths:
   /auth/github/login: { get: { summary: Start GitHub OAuth login, responses: { '302': { description: Redirect } } } }
   /auth/github/callback: { get: { summary: Complete GitHub OAuth login, responses: { '302': { description: Session created } } } }
-  /auth/signup: { post: { summary: Register email/password local user for local E2E, security: [], responses: { '201': { description: User, organization, membership, token } } } }
+  /auth/signup: { post: { summary: Start email/password signup and send a 6-digit email verification code without creating the account, security: [], responses: { '201': { description: Pending signup and emailVerification delivery summary } } } }
+  /auth/email/verify: { post: { summary: Verify signup email code, create the account, and return scoped JWT, security: [], responses: { '200': { description: Created verified session } } } }
+  /auth/email/resend: { post: { summary: Resend signup email verification code, security: [], responses: { '200': { description: Email verification delivery summary } } } }
   /auth/login: { post: { summary: Log in and return scoped JWT, security: [], responses: { '200': { description: Session } } } }
   /auth/logout: { post: { summary: Invalidate current session, responses: { '200': { description: Logged out } } } }
   /auth/me: { get: { summary: Return current user/account/quota subject, responses: { '200': { description: Current user } } } }

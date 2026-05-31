@@ -24,6 +24,7 @@ export { createDeploymentWorkflowHandlers, processBuilderWorkflowJob, processBui
 export { organizationScopeFromProjectInput, projectScopeFromInput } from './scope.ts';
 export { signJwtHs256, verifyJwtHs256, authorizeRequest, subjectFromRequest, requireAction, requireScope } from './auth.ts';
 export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessionPayloadForUser, sessionTtlSeconds, personalOrganizationSlug, normalizeAccountType, configuredAdminEmails, signupPolicyForAccount, shouldPromoteFirstLogin } from './identity.ts';
+export { issueSignupEmailVerificationCode, resendEmailVerificationCode, verifyEmailCodeAndCreateSession, assertUserEmailVerified, normalizeEmailVerificationCode, generateEmailVerificationCode, hashEmailVerificationCode, buildEmailVerificationMessage, emailVerificationSenderFromEnv, emailVerificationSenderDomainFromEnv } from './email-verification.ts';
 export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured, parseApiRuntimeConfig, validateApiRuntimeConfig, assertApiRuntimeConfig, devHeaderAuthAllowed, devTokenAuthAllowed } from './config.ts';
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';

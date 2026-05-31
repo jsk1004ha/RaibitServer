@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { assertEnvironmentWriteAllowed, assertRateLimit, assertSystemDeploymentActor, createControlPlaneRepository, createFixedWindowRateLimiter, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, personalOrganizationSlug, quotaUsageGauges, quotaWarnings, requireScope, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { assertEnvironmentWriteAllowed, assertRateLimit, assertSystemDeploymentActor, createControlPlaneRepository, createFixedWindowRateLimiter, createSessionToken, githubOAuthLoginPlan, issueSignupEmailVerificationCode, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -30,26 +30,39 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const jwtSecret = jwtSecretOrThrow();
     const email = normalizeEmail(input.email);
     assertRateLimit(authLimiter, `signup:${email}`);
-    const existing = repository.findUserByEmail ? await repository.findUserByEmail(email) : repository.store.findUserByEmail(email);
-    if (existing) throw new ForbiddenException('user already exists');
-    const passwordHash = hashPassword(input.password);
-    const organizationSlug = input.organizationSlug || personalOrganizationSlug(email);
-    const existingOrganization = repository.findOrganizationBySlug ? await repository.findOrganizationBySlug(organizationSlug) : repository.store.findOrganizationBySlug(organizationSlug);
-    if (existingOrganization) throw new ForbiddenException('organization slug already exists');
-    const organization = await repository.createOrganization({ name: input.organizationName || organizationSlug, slug: organizationSlug, plan: input.plan || 'free' });
-    const users = await usersForRepository(repository);
-    const policy = signupPolicyForAccount(input, email, { firstUser: users.length === 0 });
-    const user = await repository.createUser({
-      name: input.name || email,
-      email,
-      passwordHash,
-      role: policy.role,
-      accountType: policy.accountType,
-      approvalStatus: policy.approvalStatus,
-    });
-    const membership = await repository.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
-    const token = createSessionToken({ ...user, email }, [membership], jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver' });
-    return { user: publicUser(user), organization, membership, token };
+    try {
+      const emailVerification = await issueSignupEmailVerificationCode(repository, { ...input, email }, { jwtSecret, issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', env: process.env });
+      return { emailVerification, signup: { email, status: 'verification_required' } };
+    } catch (error) {
+      throw nestAuthError(error);
+    }
+  }
+
+  async verifyEmail(input: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const jwtSecret = jwtSecretOrThrow();
+    const email = normalizeEmail(input.email);
+    assertRateLimit(authLimiter, `email-verify:${email}`);
+    try {
+      const result = await verifyEmailCodeAndCreateSession(repository, input, { jwtSecret, issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', env: process.env });
+      authLimiter.reset(`email-verify:${email}`);
+      return { ...result, user: publicUser(result.user) };
+    } catch (error) {
+      throw nestAuthError(error);
+    }
+  }
+
+  async resendEmailVerification(input: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const jwtSecret = jwtSecretOrThrow();
+    const email = normalizeEmail(input.email);
+    assertRateLimit(authLimiter, `email-resend:${email}`);
+    try {
+      const emailVerification = await resendEmailVerificationCode(repository, input, { jwtSecret, issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', env: process.env });
+      return { emailVerification };
+    } catch (error) {
+      throw nestAuthError(error);
+    }
   }
 
   async login(input: Record<string, any>) {
@@ -59,6 +72,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     assertRateLimit(authLimiter, `login:${email}`);
     let user = repository.findUserByEmail ? await repository.findUserByEmail(email) : repository.store.findUserByEmail(email);
     if (!user || !verifyPassword(input.password, user.passwordHash)) throw new ForbiddenException('invalid credentials');
+    assertNestEmailVerified(user);
     if (shouldPromoteFirstLogin(user, await usersForRepository(repository))) {
       user = await repository.approveUser(user.id, { accountType: 'NON_CLUB', role: 'ADMIN', actorUserId: 'system' });
     }
@@ -577,6 +591,19 @@ function assertNestEnvironmentWriteAllowed(subject: Record<string, any>, entries
   } catch (error) {
     throw new ForbiddenException(error instanceof Error ? error.message : 'role requires env:write to modify secret environment keys');
   }
+}
+
+function assertNestEmailVerified(user: Record<string, any>) {
+  if (!user.emailVerifiedAt) throw new ForbiddenException('email_not_verified');
+}
+
+function nestAuthError(error: any) {
+  const message = error instanceof Error ? error.message : 'auth_error';
+  if (error?.statusCode === 400) return new BadRequestException(message);
+  if (error?.statusCode === 403) return new ForbiddenException(message);
+  if (error?.statusCode === 409) return new ConflictException(message);
+  if (error?.statusCode === 404) return new NotFoundException(message);
+  return error;
 }
 
 async function usersForRepository(repository: any) {

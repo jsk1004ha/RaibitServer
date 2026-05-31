@@ -219,6 +219,7 @@ Report에는 최소한 다음이 있어야 한다.
 
 ```txt
 [x] signup 가능
+[x] signup 시 이메일 코드 인증 가능
 [x] login 가능
 [x] 첫 auth 사용자/ADMIN_EMAILS 기반 admin bootstrap 가능
 [x] 모든 신규 회원가입은 기본 NON_CLUB이며 일반 사용자는 PENDING

@@ -38,6 +38,13 @@ export class InMemoryControlPlaneRepository {
   async findOrganizationBySlug(slug: string) { return this.store.findOrganizationBySlug(slug); }
   async createUser(input: Record<string, any>) { return this.store.createUser(input); }
   async findUserByEmail(email: string) { return this.store.findUserByEmail(email); }
+  async createEmailVerificationCode(input: Record<string, any>) { return this.store.createEmailVerificationCode(input); }
+  async invalidatePendingEmailVerificationCodes(email: string) { return this.store.invalidatePendingEmailVerificationCodes(email); }
+  async findPendingEmailVerificationCode(email: string, purpose?: string) { return this.store.findPendingEmailVerificationCode(email, purpose); }
+  async incrementEmailVerificationAttempts(id: string) { return this.store.incrementEmailVerificationAttempts(id); }
+  async consumeEmailVerificationCode(id: string, consumedAt?: string) { return this.store.consumeEmailVerificationCode(id, consumedAt); }
+  async markUserEmailVerified(userId: string, verifiedAt?: string) { return this.store.markUserEmailVerified(userId, verifiedAt); }
+  async recordEmailDelivery(input: Record<string, any>) { return this.store.recordEmailDelivery(input); }
   async findUserByGitHubId(githubId: string) { return this.store.findUserByGitHubId(githubId); }
   async linkGitHubUser(userId: string, input: Record<string, any> = {}) { return this.store.linkGitHubUser(userId, input); }
   async addMember(input: Record<string, any>) { return this.store.addMember(input); }
@@ -145,16 +152,67 @@ export class PrismaControlPlaneRepository {
 
   async createUser(input: Record<string, any>) {
     const accountType = normalizeAccountType(input.accountType);
+    const emailVerifiedAt = input.emailVerifiedAt === undefined ? new Date() : input.emailVerifiedAt;
     const user = await this.prisma.user.upsert({
       where: { email: input.email },
-      update: { name: input.name, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined, role: input.role || undefined, accountType, approvalStatus: input.approvalStatus || undefined },
-      create: { name: input.name, email: input.email, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || null, role: input.role || 'USER', accountType, approvalStatus: input.approvalStatus || 'PENDING' },
+      update: { name: input.name, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined, role: input.role || undefined, accountType, approvalStatus: input.approvalStatus || undefined, emailVerifiedAt: input.emailVerifiedAt === undefined ? undefined : input.emailVerifiedAt },
+      create: { name: input.name, email: input.email, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || null, role: input.role || 'USER', accountType, approvalStatus: input.approvalStatus || 'PENDING', emailVerifiedAt },
     });
     return redactUser(user);
   }
 
   async findUserByEmail(email: string) {
     return this.prisma.user.findUnique({ where: { email: String(email || '').toLowerCase() } });
+  }
+
+  async createEmailVerificationCode(input: Record<string, any>) {
+    return this.prisma.emailVerificationCode.create({
+      data: {
+        userId: input.userId || null,
+        email: String(input.email || '').toLowerCase(),
+        purpose: input.purpose || 'signup',
+        payload: input.payload || undefined,
+        codeHash: input.codeHash,
+        codeSalt: input.codeSalt,
+        expiresAt: new Date(input.expiresAt),
+        sentAt: input.sentAt ? new Date(input.sentAt) : new Date(),
+        attempts: Number(input.attempts || 0),
+      },
+    });
+  }
+
+  async invalidatePendingEmailVerificationCodes(email: string) {
+    return this.prisma.emailVerificationCode.updateMany({
+      where: { email: String(email || '').toLowerCase(), consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+  }
+
+  async findPendingEmailVerificationCode(email: string, purpose = 'signup') {
+    return this.prisma.emailVerificationCode.findFirst({
+      where: { email: String(email || '').toLowerCase(), purpose, consumedAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async incrementEmailVerificationAttempts(id: string) {
+    return this.prisma.emailVerificationCode.update({
+      where: { id },
+      data: { attempts: { increment: 1 } },
+    });
+  }
+
+  async consumeEmailVerificationCode(id: string, consumedAt = new Date().toISOString()) {
+    return this.prisma.emailVerificationCode.update({
+      where: { id },
+      data: { consumedAt: new Date(consumedAt) },
+    });
+  }
+
+  async markUserEmailVerified(userId: string, verifiedAt = new Date().toISOString()) {
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { emailVerifiedAt: new Date(verifiedAt) } });
+    await this.prisma.auditLog.create({ data: { actorUserId: userId, action: 'user.email:verify', targetType: 'user', targetId: userId, metadata: {} } });
+    return redactUser(user);
   }
 
   async findUserByGitHubId(githubId: string) {

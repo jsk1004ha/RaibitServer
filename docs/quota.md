@@ -8,7 +8,7 @@
 
 ## 사용자 상태
 
-첫 auth 사용자(이메일/비밀번호 signup 또는 deterministic GitHub callback)는 자동으로 `ADMIN` + `NON_CLUB` + `APPROVED`가 됩니다. 모든 신규 회원가입은 먼저 `NON_CLUB`으로 저장되고, `ADMIN_EMAILS`는 운영자가 사전에 지정한 이메일을 같은 관리자 bootstrap 경로로 승인하는 fallback입니다. club/non-club 전환은 어드민 화면에서 수행합니다. GitHub deterministic callback의 이메일 기반 계정 생성/연동은 production에서 기본 비활성화되며, 로컬/베타 검증 또는 `RAIBITSERVER_GITHUB_OAUTH_LOCAL_CALLBACK=1`일 때만 사용합니다.
+이메일/비밀번호 signup은 6자리 이메일 인증 코드를 발송하지만 아직 user/organization을 만들지 않습니다. `/auth/email/verify`가 성공해야 계정을 생성하고 세션 토큰을 발급합니다. 로컬 첫 verified auth 사용자 또는 deterministic GitHub callback은 `ADMIN` + `NON_CLUB` + `APPROVED`가 됩니다. 인증 완료된 신규 회원가입은 먼저 `NON_CLUB`으로 저장되고, `ADMIN_EMAILS`는 운영자가 사전에 지정한 이메일을 같은 관리자 bootstrap 경로로 승인하는 fallback입니다. club/non-club 전환은 어드민 화면에서 수행합니다. GitHub deterministic callback의 이메일 기반 계정 생성/연동은 production에서 기본 비활성화되며, 로컬/베타 검증 또는 `RAIBITSERVER_GITHUB_OAUTH_LOCAL_CALLBACK=1`일 때만 사용합니다.
 
 | 사용자 | 기본 상태 | 사용 가능 범위 |
 | --- | --- | --- |

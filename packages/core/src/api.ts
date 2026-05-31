@@ -2,7 +2,8 @@ import { RAIBITSERVERControlPlane } from './control-plane.ts';
 import { maskSecrets } from './secrets.ts';
 import { authorizeRequest, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
 import { organizationScopeFromProjectInput } from './scope.ts';
-import { createSessionToken, hashPassword, normalizeEmail, personalOrganizationSlug, sessionTtlSeconds, shouldPromoteFirstLogin, signupPolicyForAccount, verifyPassword } from './identity.ts';
+import { createSessionToken, normalizeEmail, sessionTtlSeconds, shouldPromoteFirstLogin, verifyPassword } from './identity.ts';
+import { assertUserEmailVerified, issueSignupEmailVerificationCode, resendEmailVerificationCode, verifyEmailCodeAndCreateSession } from './email-verification.ts';
 import { runtimeConfigStatus } from './config.ts';
 import { devHeaderAuthAllowed, devTokenAuthAllowed } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
@@ -34,16 +35,25 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
         const email = normalizeEmail(body.email);
         assertRateLimit(authLimiter, authRateKey(req, `signup:${email}`));
-        if (controlPlane.store.findUserByEmail(email)) return send(res, 409, { error: 'user_already_exists' });
-        const passwordHash = hashPassword(body.password);
-        const organizationSlug = body.organizationSlug || body.orgSlug || personalOrganizationSlug(email);
-        if (controlPlane.store.findOrganizationBySlug(organizationSlug)) return send(res, 409, { error: 'organization_slug_already_exists' });
-        const organization = controlPlane.store.createOrganization({ name: body.organizationName || organizationSlug, slug: organizationSlug, plan: body.plan || 'free' });
-        const policy = signupPolicyForAccount(body, email, { firstUser: controlPlane.store.users.size === 0 });
-        const user = controlPlane.store.createUser({ name: body.name || email, email, passwordHash, role: policy.role, accountType: policy.accountType, approvalStatus: policy.approvalStatus });
-        const membership = controlPlane.store.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
-        const token = createSessionToken({ ...user, email }, [membership], auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth) });
-        return send(res, 201, { user: publicUser(user), organization, membership, token });
+        const emailVerification = await issueSignupEmailVerificationCode(controlPlane.store, { ...body, email }, { jwtSecret: auth.jwtSecret, issuer: auth.issuer || 'raibitserver', env: process.env });
+        return send(res, 201, { emailVerification, signup: { email, status: 'verification_required' } });
+      }
+      if (method === 'POST' && url.pathname === '/auth/email/verify') {
+        const body = await readJson(req);
+        if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
+        const email = normalizeEmail(body.email);
+        assertRateLimit(authLimiter, authRateKey(req, `email-verify:${email}`));
+        const result = await verifyEmailCodeAndCreateSession(controlPlane.store, body, { jwtSecret: auth.jwtSecret, issuer: auth.issuer || 'raibitserver', sessionTtlSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth), env: process.env });
+        authLimiter.reset(authRateKey(req, `email-verify:${email}`));
+        return send(res, 200, { ...result, user: publicUser(result.user) });
+      }
+      if (method === 'POST' && url.pathname === '/auth/email/resend') {
+        const body = await readJson(req);
+        if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
+        const email = normalizeEmail(body.email);
+        assertRateLimit(authLimiter, authRateKey(req, `email-resend:${email}`));
+        const emailVerification = await resendEmailVerificationCode(controlPlane.store, body, { jwtSecret: auth.jwtSecret, issuer: auth.issuer || 'raibitserver', env: process.env });
+        return send(res, 200, { emailVerification });
       }
       if (method === 'POST' && url.pathname === '/auth/login') {
         const body = await readJson(req);
@@ -52,6 +62,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         assertRateLimit(authLimiter, authRateKey(req, `login:${email}`));
         let user = controlPlane.store.findUserByEmail(email);
         if (!user || !verifyPassword(body.password, user.passwordHash)) return send(res, 401, { error: 'invalid_credentials' });
+        assertUserEmailVerified(user);
         if (shouldPromoteFirstLogin(user, [...controlPlane.store.users.values()])) {
           user = controlPlane.store.approveUser(user.id, { accountType: 'NON_CLUB', role: 'ADMIN' });
         }

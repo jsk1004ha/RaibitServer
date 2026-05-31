@@ -120,6 +120,8 @@ test('production admin bootstrap requires configured admin email plus bootstrap 
 
 test('session JWT lifetime is server-clamped and login brute force is rate limited', async () => {
   const secret = 'security-test-secret';
+  const previousCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE;
+  process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE = '222222';
   const controlPlane = new RAIBITSERVERControlPlane();
   const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret, issuer: 'raibitserver' } }));
   server.listen(0);
@@ -128,8 +130,11 @@ test('session JWT lifetime is server-clamped and login brute force is rate limit
   try {
     const signup = await request(port, 'POST', '/auth/signup', { email: 'ttl@example.com', password: 'correct-horse', organizationSlug: 'ttl-org', expiresInSeconds: 315360000 });
     assert.equal(signup.statusCode, 201);
-    assert.equal(Object.prototype.hasOwnProperty.call(signup.body.user, 'passwordHash'), false);
-    const payload = decodeJwt(signup.body.token);
+    assert.equal(signup.body.user, undefined);
+    const verified = await request(port, 'POST', '/auth/email/verify', { email: 'ttl@example.com', code: '222222' });
+    assert.equal(verified.statusCode, 200);
+    assert.equal(Object.prototype.hasOwnProperty.call(verified.body.user, 'passwordHash'), false);
+    const payload = decodeJwt(verified.body.token);
     assert.equal(payload.exp - payload.iat <= 24 * 60 * 60, true);
 
     let limited;
@@ -139,6 +144,7 @@ test('session JWT lifetime is server-clamped and login brute force is rate limit
     assert.equal(limited.statusCode, 429);
   } finally {
     server.close();
+    if (previousCode === undefined) delete process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE; else process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE = previousCode;
   }
 });
 

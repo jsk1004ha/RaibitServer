@@ -22,7 +22,7 @@ test('dashboard exposes auth, admin, GitHub, deployment log, and resource consol
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx', import.meta.url), 'utf8'),
   ]);
   const combined = files.join('\n');
-  for (const marker of ['/auth/login', '/auth/signup', '/auth/github/login', '/auth/github/callback', '/admin/users/', '/github/repositories/import', '/github/repositories/:repositoryId/sync', '/projects/:projectId/services/:serviceId/github', '/integrations/github', 'Webhook / Preview contract', '/deployments/', '/status', '/cancel', '/rollback', 'Image digest', 'errorCode', '/console/command', '/console/tables', '/console/keys']) {
+  for (const marker of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend', '/auth/github/login', '/auth/github/callback', '/admin/users/', '/github/repositories/import', '/github/repositories/:repositoryId/sync', '/projects/:projectId/services/:serviceId/github', '/integrations/github', 'Webhook / Preview contract', '/deployments/', '/status', '/cancel', '/rollback', 'Image digest', 'errorCode', '/console/command', '/console/tables', '/console/keys']) {
     assert.ok(combined.includes(marker), `${marker} missing from dashboard routes`);
   }
 });

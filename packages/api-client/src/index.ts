@@ -17,6 +17,8 @@ export class RAIBITSERVERClient {
   me(): Promise<Record<string, unknown>> { return this.request('/auth/me'); }
   signup(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/auth/signup', { method: 'POST', body: input }); }
   login(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/auth/login', { method: 'POST', body: input }); }
+  verifyEmail(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/auth/email/verify', { method: 'POST', body: input }); }
+  resendEmailVerification(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/auth/email/resend', { method: 'POST', body: input }); }
   logout(): Promise<Record<string, unknown>> { return this.request('/auth/logout', { method: 'POST' }); }
   githubLogin(input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     const query = new URLSearchParams(Object.entries(input).map(([key, value]) => [key, String(value)])).toString();

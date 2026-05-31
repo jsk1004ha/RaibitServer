@@ -15,6 +15,8 @@ import { createDeploymentWorkflowHandlers, reconcileDeploymentRollout } from '..
 const e2eOptions = parseE2EOptions(process.argv.slice(2), process.env);
 const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET || 'local-e2e-secret-at-least-32-chars';
 const githubWebhookSecret = process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || 'local-e2e-github-webhook-secret';
+const emailVerificationCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE || '424242';
+process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE = emailVerificationCode;
 const baseDomain = process.env.BASE_DOMAIN || '127.0.0.1.sslip.io';
 const controlPlane = new RAIBITSERVERControlPlane();
 const api = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret, issuer: 'raibitserver' } }));
@@ -44,50 +46,56 @@ try {
 
   const bootstrapAdmin = await request('POST', '/auth/signup', { email: 'admin@example.com', password: 'correct-horse-battery', organizationSlug: 'admin-org' });
   assertStatus(bootstrapAdmin, 201, 'first-user admin bootstrap');
-  if (bootstrapAdmin.body.user.role !== 'ADMIN' || bootstrapAdmin.body.user.approvalStatus !== 'APPROVED' || bootstrapAdmin.body.user.accountType !== 'NON_CLUB') {
-    throw new Error('first auth user was not bootstrapped as approved non-club admin');
+  if (bootstrapAdmin.body.user || bootstrapAdmin.body.organization) throw new Error('signup created an account before email verification');
+  const adminVerified = await request('POST', '/auth/email/verify', { email: 'admin@example.com', code: emailVerificationCode });
+  assertStatus(adminVerified, 200, 'first-user email verification');
+  if (adminVerified.body.user.role !== 'ADMIN' || adminVerified.body.user.approvalStatus !== 'APPROVED' || adminVerified.body.user.accountType !== 'NON_CLUB') {
+    throw new Error('first verified auth user was not bootstrapped as approved non-club admin');
   }
-  const adminToken = bootstrapAdmin.body.token;
+  const adminToken = adminVerified.body.token;
 
   const pending = await request('POST', '/auth/signup', { email: 'student@example.com', password: 'correct-horse-battery', organizationSlug: 'student-org' });
   assertStatus(pending, 201, 'non-club signup');
-  const blocked = await request('POST', '/projects', { name: 'blocked', slug: 'blocked' }, pending.body.token);
+  const pendingVerified = await request('POST', '/auth/email/verify', { email: 'student@example.com', code: emailVerificationCode });
+  assertStatus(pendingVerified, 200, 'non-club email verification');
+  const pendingToken = pendingVerified.body.token;
+  const blocked = await request('POST', '/projects', { name: 'blocked', slug: 'blocked' }, pendingToken);
   assertStatus(blocked, 403, 'non-club pending blocked');
 
-  const approved = await request('POST', `/admin/users/${pending.body.user.id}/approve`, { accountType: 'NON_CLUB' }, adminToken);
+  const approved = await request('POST', `/admin/users/${pendingVerified.body.user.id}/approve`, { accountType: 'NON_CLUB' }, adminToken);
   assertStatus(approved, 200, 'admin approve non-club');
-  const quota = await request('PATCH', `/admin/users/${pending.body.user.id}/quota`, { maxProjects: 3, maxServices: 4, maxDeploymentsPerDay: 10, maxDbStorageMb: 2048 }, adminToken);
+  const quota = await request('PATCH', `/admin/users/${pendingVerified.body.user.id}/quota`, { maxProjects: 3, maxServices: 4, maxDeploymentsPerDay: 10, maxDbStorageMb: 2048 }, adminToken);
   assertStatus(quota, 200, 'admin quota set');
 
-  const project = await request('POST', '/projects', { name: 'local-e2e', slug: 'local-e2e' }, pending.body.token);
+  const project = await request('POST', '/projects', { name: 'local-e2e', slug: 'local-e2e' }, pendingToken);
   assertStatus(project, 201, 'approved non-club project create');
-  const service = await request('POST', `/projects/${project.body.id}/services`, { name: 'express-api', type: 'web', sourceType: 'local', buildMode: 'generated', port: appPort, attachedResources: ['local-sqlite'] }, pending.body.token);
+  const service = await request('POST', `/projects/${project.body.id}/services`, { name: 'express-api', type: 'web', sourceType: 'local', buildMode: 'generated', port: appPort, attachedResources: ['local-sqlite'] }, pendingToken);
   assertStatus(service, 201, 'service create');
   const sqlitePath = path.resolve('.raibitserver-work/local-e2e.sqlite');
-  const resource = await request('POST', `/projects/${project.body.id}/resources`, { name: 'local-sqlite', type: 'database', engine: 'sqlite', provider: 'local-pvc', sqlitePath, desiredSpec: { sqlitePath } }, pending.body.token);
+  const resource = await request('POST', `/projects/${project.body.id}/resources`, { name: 'local-sqlite', type: 'database', engine: 'sqlite', provider: 'local-pvc', sqlitePath, desiredSpec: { sqlitePath } }, pendingToken);
   assertStatus(resource, 201, 'sqlite resource create');
-  const envUpload = await request('POST', `/projects/${project.body.id}/services/${service.body.id}/env-file`, { filename: '.env', content: 'PUBLIC_URL=http://example.local\n' }, pending.body.token);
+  const envUpload = await request('POST', `/projects/${project.body.id}/services/${service.body.id}/env-file`, { filename: '.env', content: 'PUBLIC_URL=http://example.local\n' }, pendingToken);
   assertStatus(envUpload, 200, 'env file upload');
 
-  const consoleCreate = await request('POST', `/resources/${resource.body.id}/console/query`, { query: 'CREATE TABLE IF NOT EXISTS health (id INTEGER PRIMARY KEY, status TEXT)', confirmed: true }, pending.body.token);
+  const consoleCreate = await request('POST', `/resources/${resource.body.id}/console/query`, { query: 'CREATE TABLE IF NOT EXISTS health (id INTEGER PRIMARY KEY, status TEXT)', confirmed: true }, pendingToken);
   assertStatus(consoleCreate, 200, 'sqlite console create');
-  await request('POST', `/resources/${resource.body.id}/console/query`, { query: "INSERT INTO health(status) VALUES ('ok')", confirmed: true }, pending.body.token);
-  const consoleRows = await request('POST', `/resources/${resource.body.id}/console/query`, { query: 'SELECT status FROM health', limit: 10 }, pending.body.token);
+  await request('POST', `/resources/${resource.body.id}/console/query`, { query: "INSERT INTO health(status) VALUES ('ok')", confirmed: true }, pendingToken);
+  const consoleRows = await request('POST', `/resources/${resource.body.id}/console/query`, { query: 'SELECT status FROM health', limit: 10 }, pendingToken);
   assertStatus(consoleRows, 200, 'sqlite console select');
   if (!consoleRows.body.rows.some((row) => row.status === 'ok')) throw new Error('sqlite console did not return inserted row');
 
   const postgresResource = controlPlane.store.createResource({ projectId: project.body.id, name: 'local-postgres', type: 'database', engine: 'postgresql', provider: 'postgresql-direct', databaseName: 'locale2e', username: 'locale2e_app' });
-  const postgresProvision = await controlPlane.store.provisionResourceProvider({ resourceId: postgresResource.id, dryRun: true, actorUserId: pending.body.user.id, password: 'local-e2e-postgres-secret' });
+  const postgresProvision = await controlPlane.store.provisionResourceProvider({ resourceId: postgresResource.id, dryRun: true, actorUserId: pendingVerified.body.user.id, password: 'local-e2e-postgres-secret' });
   const postgresEnv = injectResourceEnv({ ...service.body, attachedResources: ['local-postgres'] }, [postgresProvision.resource], 'local-e2e');
   if (!String(postgresEnv.DATABASE_URL || '').startsWith('postgresql://')) throw new Error('PostgreSQL DATABASE_URL was not injected');
 
-  const betaResources = await createBetaResourceEvidence(project.body.id, service.body.id, pending.body.token);
+  const betaResources = await createBetaResourceEvidence(project.body.id, service.body.id, pendingToken);
 
   const urlHost = serviceHostname({ serviceName: 'express-api', projectSlug: 'local-e2e', organizationSlug: 'student-org', baseDomain });
   const localHttp = await getLocalApp(urlHost, appPort);
   if (localHttp.statusCode !== 200) throw new Error(`local app http check failed: ${localHttp.statusCode}`);
 
-  const deployment = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'production', branch: 'main', commitSha: 'local-e2e' }, pending.body.token);
+  const deployment = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'production', branch: 'main', commitSha: 'local-e2e' }, pendingToken);
   assertStatus(deployment, 202, 'deployment enqueue');
   const localBuild = await controlPlane.store.processNextWorkflowJob(createDeploymentWorkflowHandlers(controlPlane.store, {
     dryRun: true,
@@ -101,12 +109,12 @@ try {
   if (!localBuild.ok) throw new Error(`local builder workflow failed: ${localBuild.error}`);
   const localRollout = await reconcileDeploymentRollout(controlPlane.store, deployment.body.id, { dryRun: true, host: urlHost });
   if (localRollout.status !== 'READY') throw new Error(`local rollout did not become READY: ${localRollout.status}`);
-  const logs = await request('GET', `/deployments/${deployment.body.id}/logs`, null, pending.body.token);
+  const logs = await request('GET', `/deployments/${deployment.body.id}/logs`, null, pendingToken);
   assertStatus(logs, 200, 'build logs 조회');
-  const runtimeLogs = await request('GET', `/services/${service.body.id}/logs`, null, pending.body.token);
+  const runtimeLogs = await request('GET', `/services/${service.body.id}/logs`, null, pendingToken);
   assertStatus(runtimeLogs, 200, 'runtime logs 조회');
 
-  const preview = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'preview', triggerType: 'pull_request', pullRequestNumber: 42, branch: 'feature/local-e2e', previewUrl: `http://pr-42--${urlHost.replace(/^express-api--/, '')}` }, pending.body.token);
+  const preview = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'preview', triggerType: 'pull_request', pullRequestNumber: 42, branch: 'feature/local-e2e', previewUrl: `http://pr-42--${urlHost.replace(/^express-api--/, '')}` }, pendingToken);
   assertStatus(preview, 202, 'PR preview deployment enqueue');
   controlPlane.store.updateService(service.body.id, { githubRepository: 'student-org/local-e2e', repoUrl: 'https://github.com/student-org/local-e2e.git', githubIntegrationId: 'local-e2e' });
   const pushPayload = { repository: { full_name: 'student-org/local-e2e' }, ref: 'refs/heads/main', after: 'push-e2e' };
@@ -127,8 +135,11 @@ try {
 
   const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', organizationSlug: 'club-org' });
   assertStatus(club, 201, 'club signup');
-  if (club.body.user.accountType !== 'NON_CLUB') throw new Error('new club candidate did not start as NON_CLUB');
-  const approvedClub = await request('POST', `/admin/users/${club.body.user.id}/approve`, { accountType: 'CLUB_MEMBER' }, adminToken);
+  if (club.body.user || club.body.organization) throw new Error('club signup created an account before email verification');
+  const clubVerified = await request('POST', '/auth/email/verify', { email: 'club@example.com', code: emailVerificationCode });
+  assertStatus(clubVerified, 200, 'club email verification');
+  if (clubVerified.body.user.accountType !== 'NON_CLUB') throw new Error('new club candidate did not start as NON_CLUB');
+  const approvedClub = await request('POST', `/admin/users/${clubVerified.body.user.id}/approve`, { accountType: 'CLUB_MEMBER' }, adminToken);
   assertStatus(approvedClub, 200, 'admin approve club');
   const clubLogin = await request('POST', '/auth/login', { email: 'club@example.com', password: 'correct-horse-battery' });
   assertStatus(clubLogin, 200, 'club login after approval');
@@ -142,7 +153,7 @@ try {
   const liveBeta = await runLiveBetaScenario({
     e2ePlan,
     project: project.body,
-    projectToken: pending.body.token,
+    projectToken: pendingToken,
     existingServices: { 'express-api': service.body },
     sqliteResource: resource.body,
     sqlitePath,

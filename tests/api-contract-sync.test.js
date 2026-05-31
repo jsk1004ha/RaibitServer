@@ -54,6 +54,8 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
     '/services/{serviceId}/logs/stream',
     '/auth/github/login',
     '/auth/github/callback',
+    '/auth/email/verify',
+    '/auth/email/resend',
     '/github/installations',
     '/integrations/github',
     '/projects/{projectId}/services/{serviceId}/github',
@@ -120,7 +122,7 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   for (const marker of ["@Get('github/installations')", "@Get('github/installations/:installationId/repositories')", "@Post('github/webhooks')", "@Post('github/repositories/import')", "@Post('github/repositories/:repositoryId/sync')"]) assert.ok(githubController.includes(marker), `${marker} missing from GitHub controller`);
   assert.ok(apiMain.includes('rawBody: true'), 'Nest bootstrap must keep raw webhook bytes for GitHub HMAC verification');
   assert.ok(githubController.includes('req.rawBody'), 'GitHub webhook controller must verify the original raw payload bytes');
-  assert.ok(raibitserverService.includes('user: publicUser(user)'), 'Nest signup response must not expose passwordHash');
+  assert.ok(raibitserverService.includes('user: publicUser(result.user)'), 'Nest email verification response must not expose passwordHash');
   assert.ok(raibitserverService.includes('normalizeEnvEntries'), 'Nest env writes must normalize entries before persistence');
   assert.ok(raibitserverService.includes('parseDotEnv'), 'Nest env-file writes must parse dotenv content before persistence');
   assert.ok(envPolicy.includes('assertEnvironmentWriteAllowed'), 'limited-secret env write policy must be centralized in core');
@@ -137,6 +139,8 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.ok(persistence.includes('previewRuntimePlan'), 'GitHub preview jobs must carry deterministic Kubernetes preview workload plans');
   assert.ok(authController.includes("@Get('github/login')"));
   assert.ok(authController.includes("@Get('github/callback')"));
+  assert.ok(authController.includes("@Post('email/verify')"));
+  assert.ok(authController.includes("@Post('email/resend')"));
   for (const method of ['getProject', 'updateProject', 'deleteProject', 'getService', 'updateService', 'deleteService', 'getDeployment', 'updateDeploymentStatus', 'cancelDeployment', 'rollbackDeployment', 'resourceSchema', 'resourceTables', 'resourceCollections', 'resourceKeys', 'commandResource', 'listGitHubInstallations', 'listGitHubInstallationRepositories', 'importGitHubRepository', 'syncGitHubRepository']) assert.match(apiClient, new RegExp(method));
 });
 

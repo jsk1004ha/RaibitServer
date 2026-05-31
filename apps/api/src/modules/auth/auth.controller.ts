@@ -16,6 +16,16 @@ export class AuthController {
     return this.authService.login(input);
   }
 
+  @Post('email/verify')
+  verifyEmail(@Body() input: Record<string, any>) {
+    return this.authService.verifyEmail(input);
+  }
+
+  @Post('email/resend')
+  resendEmailVerification(@Body() input: Record<string, any>) {
+    return this.authService.resendEmailVerification(input);
+  }
+
   @Get('github/login')
   githubLogin(@Query() input: Record<string, any>) {
     return this.authService.githubLogin(input || {});

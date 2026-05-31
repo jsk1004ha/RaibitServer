@@ -230,6 +230,12 @@ RAIBITSERVER_AUTH_AUDIENCE=raibitserver-api
 RAIBITSERVER_SECRET_ENCRYPTION_KEY=<32바이트-이상-랜덤값>
 ADMIN_EMAILS=admin@example.com
 RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN=<32바이트-이상-랜덤-초기-admin-token>
+RAIBITSERVER_EMAIL_VERIFICATION_TTL_SECONDS=600
+RAIBITSERVER_EMAIL_DOMAIN=raibitserver.app
+RAIBITSERVER_EMAIL_FROM="RAIBITSERVER <email-verification@raibitserver.app>"
+RAIBITSERVER_EMAIL_DELIVERY_MODE=webhook
+RAIBITSERVER_EMAIL_WEBHOOK_URL=https://mail-bridge.internal/send
+RAIBITSERVER_EMAIL_WEBHOOK_TOKEN=<mail-bridge-token>
 
 # Dashboard -> API
 RAIBITSERVER_API_URL=https://api.raibitserver.app/api
@@ -273,6 +279,7 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 - `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다. 특히 인증 비활성화는 `NODE_ENV=production`에서는 무시되며, 로컬에서도 `RAIBITSERVER_AUTH_DISABLED_CONFIRM=I_UNDERSTAND_THIS_GRANTS_GLOBAL_OWNER` 확인값이 있어야만 활성화됩니다. dev header 인증은 추가로 `RAIBITSERVER_DEV_HEADER_BIND_LOCAL=1`이 있어야만 켜집니다.
 - 인증 rate limit은 기본적으로 소켓 원격 주소를 사용하고 `X-Forwarded-For`를 신뢰하지 않습니다. Cloudflare Access/Tunnel, Nginx, Ingress처럼 신뢰된 프록시만 API 앞에 있고 origin bypass가 방화벽으로 막힌 경우에만 `RAIBITSERVER_TRUST_PROXY_HEADERS=1`을 설정하세요.
 - 운영 첫 admin은 더 이상 “첫 가입자”만으로 자동 승격되지 않습니다. `ADMIN_EMAILS`에 포함된 이메일이 `RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN`을 함께 제출할 때만 admin bootstrap이 허용됩니다.
+- 이메일/비밀번호 signup은 6자리 이메일 인증 코드를 먼저 발송하고, `/auth/email/verify` 성공 후에만 세션 토큰을 발급합니다. 발신자는 발송 전용 주소(`RAIBITSERVER_EMAIL_FROM`, 예: `RAIBITSERVER <email-verification@raibitserver.app>`)이고, `RAIBITSERVER_EMAIL_DOMAIN`/`RAIBITSERVER_BASE_DOMAIN`/`BASE_DOMAIN`에서 자동 생성할 수도 있습니다. 이 기능은 사용자 메일함/MX를 운영하지 않으며 production은 `RAIBITSERVER_EMAIL_WEBHOOK_URL` 같은 실제 mail bridge와 발신 도메인의 SPF/DKIM/DMARC 설정이 필요합니다.
 - DB console 권한은 `db:schema:read`, `db:data:read`, `db:query:write`로 분리됩니다. 기본 developer는 schema metadata만 볼 수 있고 row data `SELECT`는 maintainer/db-admin 이상 권한이 필요합니다.
 - public egress는 프로젝트 namespace 전체가 아니라 `*-public-egress` 서비스별 NetworkPolicy로만 열립니다. ingress/proxy에서는 `x-raibitserver-user`, `x-raibitserver-role`, `x-raibitserver-organization`, `x-raibitserver-project` 헤더를 외부 요청에서 제거하세요.
 - production tenant API는 local/file source와 기본 허용 목록 밖 Git host를 거부합니다. 예외가 필요하면 `RAIBITSERVER_ALLOWED_GIT_HOSTS`로 Git host를 명시하고, 로컬 source는 개발 환경에서만 사용하세요.
@@ -294,7 +301,7 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
    ```
 3. **Secret 준비**
    - `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, GitHub/registry/provider secret을 secret manager에 저장합니다.
-   - 첫 로그인 사용자는 자동으로 `ADMIN / NON_CLUB / APPROVED`가 됩니다. 모든 회원가입은 먼저 `NON_CLUB`으로 시작하며, 운영자는 어드민 화면에서 `CLUB_MEMBER`/`NON_CLUB`을 전환합니다. `ADMIN_EMAILS`에도 break-glass 관리자 이메일을 넣어 둡니다.
+   - 회원가입 요청은 이메일 코드만 발송하고, 코드 인증이 성공해야 user/organization을 생성하고 세션 토큰을 발급합니다. 로컬 첫 verified auth 사용자는 `ADMIN / NON_CLUB / APPROVED`가 되고, 운영 첫 admin은 `ADMIN_EMAILS` + bootstrap token으로 제한됩니다. 인증 완료된 신규 회원가입은 먼저 `NON_CLUB`으로 시작하며, 운영자는 어드민 화면에서 `CLUB_MEMBER`/`NON_CLUB`을 전환합니다.
 4. **이미지 빌드/배포**
    - API, Dashboard, Go workers 이미지를 빌드해 registry에 push합니다.
    - Helm을 사용한다면 `infra/helm/raibitserver/values.yaml`의 `image.registry`, `image.tag`, `ingress.host`, replica 수를 환경에 맞게 덮어씁니다.

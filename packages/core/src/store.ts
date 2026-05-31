@@ -49,6 +49,8 @@ export class ControlPlaneStore {
   deploymentEvents: any[];
   quotas: Map<string, any>;
   resourceAttachments: any[];
+  emailVerificationCodes: any[];
+  emailDeliveries: any[];
 
   constructor() {
     this.organizations = new Map();
@@ -71,6 +73,8 @@ export class ControlPlaneStore {
     this.deploymentEvents = [];
     this.quotas = new Map();
     this.resourceAttachments = [];
+    this.emailVerificationCodes = [];
+    this.emailDeliveries = [];
   }
 
   createOrganization({ name, slug, plan = 'free' }: Record<string, any>) {
@@ -86,8 +90,22 @@ export class ControlPlaneStore {
     return organization ? deepClone(organization) : null;
   }
 
-  createUser({ name, email, githubId = null, passwordHash = null, role = 'USER', accountType = 'NON_CLUB', approvalStatus = 'PENDING', avatarUrl = null }: Record<string, any>) {
-    const user = { id: stableId('usr', email || name), name, email: String(email || '').toLowerCase(), avatarUrl, githubId, passwordHash, role, accountType: normalizeAccountType(accountType), approvalStatus, createdAt: nowIso(), updatedAt: nowIso() };
+  createUser({ name, email, githubId = null, passwordHash = null, role = 'USER', accountType = 'NON_CLUB', approvalStatus = 'PENDING', avatarUrl = null, emailVerifiedAt = undefined }: Record<string, any>) {
+    const timestamp = nowIso();
+    const user = {
+      id: stableId('usr', email || name),
+      name,
+      email: String(email || '').toLowerCase(),
+      avatarUrl,
+      githubId,
+      passwordHash,
+      role,
+      accountType: normalizeAccountType(accountType),
+      approvalStatus,
+      emailVerifiedAt: emailVerifiedAt === undefined ? timestamp : emailVerifiedAt,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
     this.users.set(user.id, user);
     return deepClone(redactUser(user));
   }
@@ -96,6 +114,89 @@ export class ControlPlaneStore {
     const normalized = String(email || '').toLowerCase();
     const user = [...this.users.values()].find((candidate) => candidate.email === normalized);
     return user ? deepClone(user) : null;
+  }
+
+  createEmailVerificationCode(input: Record<string, any>) {
+    const row = {
+      id: stableId('evc', input.userId, input.email, Date.now(), this.emailVerificationCodes.length),
+      userId: input.userId || null,
+      email: String(input.email || '').toLowerCase(),
+      purpose: input.purpose || 'signup',
+      payload: input.payload || null,
+      codeHash: input.codeHash,
+      codeSalt: input.codeSalt,
+      expiresAt: input.expiresAt,
+      sentAt: input.sentAt || nowIso(),
+      consumedAt: null,
+      attempts: Number(input.attempts || 0),
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    this.emailVerificationCodes.push(row);
+    return deepClone(row);
+  }
+
+  invalidatePendingEmailVerificationCodes(email: string) {
+    const normalized = String(email || '').toLowerCase();
+    const consumedAt = nowIso();
+    for (const row of this.emailVerificationCodes) {
+      if (row.email === normalized && !row.consumedAt) {
+        row.consumedAt = consumedAt;
+        row.updatedAt = consumedAt;
+      }
+    }
+    return true;
+  }
+
+  findPendingEmailVerificationCode(email: string, purpose = 'signup') {
+    const normalized = String(email || '').toLowerCase();
+    const normalizedPurpose = String(purpose || 'signup');
+    const row = [...this.emailVerificationCodes]
+      .filter((candidate) => candidate.email === normalized && !candidate.consumedAt && String(candidate.purpose || 'signup') === normalizedPurpose)
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
+    return row ? deepClone(row) : null;
+  }
+
+  incrementEmailVerificationAttempts(id: string) {
+    const row = this.emailVerificationCodes.find((candidate) => String(candidate.id) === String(id));
+    if (!row) throw notFound(`email verification code not found: ${id}`);
+    row.attempts = Number(row.attempts || 0) + 1;
+    row.updatedAt = nowIso();
+    return deepClone(row);
+  }
+
+  consumeEmailVerificationCode(id: string, consumedAt = nowIso()) {
+    const row = this.emailVerificationCodes.find((candidate) => String(candidate.id) === String(id));
+    if (!row) throw notFound(`email verification code not found: ${id}`);
+    row.consumedAt = consumedAt;
+    row.updatedAt = consumedAt;
+    return deepClone(row);
+  }
+
+  markUserEmailVerified(userId: string, verifiedAt = nowIso()) {
+    const user = this.users.get(userId);
+    if (!user) throw notFound(`user not found: ${userId}`);
+    user.emailVerifiedAt = verifiedAt;
+    user.updatedAt = verifiedAt;
+    this.audit(userId, 'user.email:verify', 'user', userId, {});
+    return redactUser(deepClone(user));
+  }
+
+  recordEmailDelivery(input: Record<string, any>) {
+    const row = {
+      id: stableId('eml', input.to, input.purpose || 'email', Date.now(), this.emailDeliveries.length),
+      from: input.from || null,
+      to: String(input.to || '').toLowerCase(),
+      subject: input.subject,
+      text: input.text,
+      purpose: input.purpose || 'email',
+      deliveryMode: input.deliveryMode || 'console',
+      messageId: input.messageId || null,
+      sentAt: input.sentAt || nowIso(),
+      createdAt: nowIso(),
+    };
+    this.emailDeliveries.push(row);
+    return deepClone(row);
   }
 
   findUserByGitHubId(githubId: string) {

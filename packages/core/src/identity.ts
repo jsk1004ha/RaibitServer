@@ -64,6 +64,7 @@ export function sessionPayloadForUser(user: Record<string, any>, memberships: Ar
     accountType: user.accountType || 'NON_CLUB',
     approvalStatus: user.approvalStatus || 'PENDING',
     userRole: user.role || 'USER',
+    emailVerified: Boolean(user.emailVerifiedAt),
   };
 }
 

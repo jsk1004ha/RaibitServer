@@ -7,6 +7,8 @@ export class AuthService {
 
   signup(input: Record<string, any>) { return this.controlPlane.signup(input); }
   login(input: Record<string, any>) { return this.controlPlane.login(input); }
+  verifyEmail(input: Record<string, any>) { return this.controlPlane.verifyEmail(input); }
+  resendEmailVerification(input: Record<string, any>) { return this.controlPlane.resendEmailVerification(input); }
   githubLogin(input: Record<string, any>) { return this.controlPlane.githubLogin(input); }
   githubCallback(input: Record<string, any>) { return this.controlPlane.githubCallback(input); }
   currentUser(subject: Record<string, any>) { return this.controlPlane.currentUser(subject); }
