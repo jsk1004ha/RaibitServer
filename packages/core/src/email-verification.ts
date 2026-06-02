@@ -131,6 +131,8 @@ export async function issueSignupEmailVerificationCode(repository: any, input: R
   const email = normalizeEmail(input.email);
   const existing = await target.findUserByEmail(email);
   if (existing) throw statusError('user_already_exists', 409);
+  const pendingSignup = target.findPendingEmailVerificationCode ? await target.findPendingEmailVerificationCode(email, 'signup') : null;
+  if (pendingSignup) throw statusError('signup_verification_already_pending', 409);
   const organizationSlug = input.organizationSlug || input.orgSlug || personalOrganizationSlug(email);
   const existingOrganization = target.findOrganizationBySlug ? await target.findOrganizationBySlug(organizationSlug) : null;
   if (existingOrganization) throw statusError('organization_slug_already_exists', 409);

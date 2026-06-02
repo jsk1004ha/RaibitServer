@@ -160,6 +160,39 @@ test('signup sends an email code and requires verification before login issues a
   }
 });
 
+test('signup rejects replacement while an email verification code is pending', async () => {
+  const secret = 'email-verification-replacement-secret';
+  const previousCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE;
+  process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE = '135790';
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const victimSignup = await request(port, 'POST', '/auth/signup', { email: 'pending@example.com', password: 'victim-password', name: 'Victim', organizationSlug: 'pending-org' });
+    assert.equal(victimSignup.statusCode, 201);
+
+    const replacementSignup = await request(port, 'POST', '/auth/signup', { email: 'pending@example.com', password: 'attacker-password', name: 'Attacker', organizationSlug: 'attacker-org' });
+    assert.equal(replacementSignup.statusCode, 409);
+    assert.equal(replacementSignup.body.error, 'signup_verification_already_pending');
+    assert.equal(controlPlane.store.emailVerificationCodes.filter((row) => row.email === 'pending@example.com' && !row.consumedAt).length, 1);
+
+    const verified = await request(port, 'POST', '/auth/email/verify', { email: 'pending@example.com', code: '135790' });
+    assert.equal(verified.statusCode, 200);
+    assert.equal(verified.body.user.name, 'Victim');
+    assert.equal(verified.body.organization.slug, 'pending-org');
+
+    const attackerLogin = await request(port, 'POST', '/auth/login', { email: 'pending@example.com', password: 'attacker-password' });
+    assert.equal(attackerLogin.statusCode, 401);
+    const victimLogin = await request(port, 'POST', '/auth/login', { email: 'pending@example.com', password: 'victim-password' });
+    assert.equal(victimLogin.statusCode, 200);
+  } finally {
+    server.close();
+    if (previousCode === undefined) delete process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE; else process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE = previousCode;
+  }
+});
+
 test('signup/login tokens isolate hosted projects, service env upload, and GitHub integration', async () => {
   const secret = 'auth-env-github-secret';
   const previousAdminEmails = process.env.ADMIN_EMAILS;
