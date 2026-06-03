@@ -5,10 +5,10 @@
 ## URL 패턴
 
 ```txt
-pr-<number>--<service>--<project>--<org>.preview.<BASE_DOMAIN>
+pr-<number>-<user>-<project>.preview.<BASE_DOMAIN>
 ```
 
-서비스 실행 URL과 관리 화면은 subdomain-first routing 원칙을 따릅니다.
+서비스 실행 URL은 `<user>-<project>.apps.<BASE_DOMAIN>`이고, preview URL도 같은 user-project label 앞에 PR 번호를 붙입니다. Kubernetes workload 이름은 계속 service 단위로 분리합니다.
 
 ## 생성 흐름
 

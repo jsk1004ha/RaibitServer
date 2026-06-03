@@ -12,7 +12,7 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 - **컨테이너 우선 빌드**: 사용자 Dockerfile을 최우선으로 사용하고, 없을 때만 프레임워크 감지/생성 Dockerfile fallback을 사용합니다.
 - **BuildKit 캐시 경로**: builder는 inline cache와 선택적 registry cache(`cache-from/cache-to`) 및 패키지 매니저 cache mount를 계획해 반복 배포 시간을 줄입니다.
 - **관리형 리소스**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, SQLite, Object Storage, Qdrant/vector, NATS/queue를 카탈로그 리소스로 다룹니다.
-- **서브도메인 라우팅**: 서비스 실행 URL, preview URL, console/resource 화면은 `<service>--<project>--<org>` 형태의 서브도메인을 사용합니다.
+- **서브도메인 라우팅**: 서비스 실행 URL은 `<user>-<project>.apps.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 user-project label을 기준으로 분리합니다.
 - **승인·쿼터·감사**: 비동아리 사용자는 관리자 승인 후 쿼터 안에서 사용하고, 주요 작업은 감사 로그와 사용량에 반영됩니다.
 - **실시간 운영 UX**: 배포/런타임 로그는 조회 API와 SSE snapshot stream을 모두 제공하고, 쿼터 응답은 게이지/경고를 포함합니다.
 - **안전한 기본값**: namespace 격리, NetworkPolicy, non-root 컨테이너, privileged/hostPath 차단, 리소스 제한, secret masking을 기본으로 적용합니다.
@@ -200,7 +200,7 @@ GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드
 | 서비스 관리 화면 | `*.console.raibitserver.app` |
 | 리소스 관리 화면 | `*.resources.raibitserver.app` |
 
-서비스/preview host는 `<service>--<project>--<org>` 또는 `pr-<number>--<service>--<project>--<org>` 패턴으로 생성됩니다. 따라서 `*.apps`, `*.preview`, `*.console`, `*.resources` wildcard 인증서를 준비해야 합니다.
+서비스 실행 host는 `<user>-<project>.apps.<BASE_DOMAIN>` 패턴으로 생성됩니다. PR preview host는 `pr-<number>-<user>-<project>.preview.<BASE_DOMAIN>`이고, 개별 service/resource 관리 화면은 충돌 방지를 위해 `<user>-<project>-<service>.console.<BASE_DOMAIN>` 및 `<user>-<project>-<resource>.resources.<BASE_DOMAIN>`를 사용합니다. 따라서 `*.apps`, `*.preview`, `*.console`, `*.resources` wildcard 인증서를 준비해야 합니다.
 
 Cloudflare Tunnel을 쓰는 경우 각 tenant service hostname을 tunnel ingress rule에 직접 매핑하지 마세요. Tunnel은 `*.apps.<BASE_DOMAIN>`, `*.preview.<BASE_DOMAIN>`, `*.console.<BASE_DOMAIN>`, `*.resources.<BASE_DOMAIN>` 같은 zone-level wildcard를 **내부 Kubernetes Ingress Controller 하나**로 보내고, 최종 Host 기반 라우팅은 Kubernetes Ingress가 담당해야 합니다. Cloudflare Tunnel hostname wildcard는 `*.example.com` 형태만 쓰고 `test.*.example.com` 같은 중간 wildcard에 의존하지 않습니다. 자세한 예시는 [Cloudflare Tunnel 운영 가이드](docs/cloudflare-tunnel.md)와 [production tunnel 예시](deploy/production/cloudflare-tunnel.example.yml)를 참고하세요.
 

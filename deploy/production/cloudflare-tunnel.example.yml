@@ -4,7 +4,7 @@
 # Kubernetes ingress controller service.
 #
 # Do not add per-service tunnel rules such as
-# web--project--org.apps.raibitserver.app. Keep Cloudflare at zone-level
+# user-project.apps.raibitserver.app. Keep Cloudflare at zone-level
 # wildcard routing and let Kubernetes Ingress route by Host.
 
 tunnel: <TUNNEL_UUID>
@@ -27,7 +27,7 @@ ingress:
     service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
 
   # Tenant workloads and preview apps. Kubernetes Ingress owns the final Host
-  # match for web--project--org.apps and pr-N--web--project--org.preview.
+  # match for user-project.apps and pr-N-user-project.preview.
   - hostname: "*.apps.raibitserver.app"
     service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
   - hostname: "*.preview.raibitserver.app"

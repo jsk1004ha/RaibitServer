@@ -49,7 +49,7 @@ func NewServiceReconcilerWithStore(config Config, state store.ReconcileStore, ru
 		config.OutputDir = filepath.Join(os.TempDir(), "raibitserver-orchestrator")
 	}
 	if config.BaseDomain == "" {
-		config.BaseDomain = "apps.raibitserver.local"
+		config.BaseDomain = "raibitserver.local"
 	}
 	if config.Timeout <= 0 {
 		config.Timeout = 10 * time.Minute

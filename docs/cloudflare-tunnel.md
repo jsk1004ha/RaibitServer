@@ -28,7 +28,7 @@ Cloudflare Tunnel에는 각 tenant service hostname을 직접 나열하지 않�
 | `*.console.<BASE_DOMAIN>` | 내부 Ingress Controller | service console Ingress |
 | `*.resources.<BASE_DOMAIN>` | 내부 Ingress Controller | resource console/API Ingress |
 
-RAIBITSERVER의 generated host는 `web--project--org.apps.<BASE_DOMAIN>`처럼 wildcard 아래의 단일 DNS label에 `--`로 service/project/org를 인코딩합니다. `web.project.org.apps.<BASE_DOMAIN>`처럼 여러 label을 쓰면 `*.apps.<BASE_DOMAIN>` 하나로 커버되지 않으므로 사용하지 않습니다.
+RAIBITSERVER의 generated app host는 `<user>-<project>.apps.<BASE_DOMAIN>`처럼 wildcard 아래의 단일 DNS label에 user/project를 인코딩합니다. Preview는 `pr-<number>-<user>-<project>.preview.<BASE_DOMAIN>`를 사용합니다. `web.project.org.apps.<BASE_DOMAIN>`처럼 여러 label을 쓰면 `*.apps.<BASE_DOMAIN>` 하나로 커버되지 않으므로 사용하지 않습니다.
 
 예시는 [`deploy/production/cloudflare-tunnel.example.yml`](../deploy/production/cloudflare-tunnel.example.yml)을 확인하세요.
 

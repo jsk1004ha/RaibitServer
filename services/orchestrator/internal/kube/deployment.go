@@ -53,16 +53,24 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	organizationSlug := slug(firstNonEmpty(project.OrganizationID, "org"))
 	serviceName := slug(firstNonEmpty(service.Slug, service.Name, service.ID, "service"))
 	baseServiceName := serviceName
-	domain := firstNonEmpty(baseDomain, service.BaseDomain, "apps.raibitserver.local")
-	host := serviceName + "--" + projectSlug + "--" + organizationSlug + "." + domain
+	domain := rootBaseDomain(firstNonEmpty(baseDomain, service.BaseDomain, "raibitserver.local"))
+	tenantLabel := organizationSlug + "-" + projectSlug
+	host := tenantLabel + ".apps." + domain
 	preview := false
 	if deployment.DeploymentType == "preview" && deployment.PullRequestNumber > 0 {
 		preview = true
 		previewKey := "pr-" + strconv.Itoa(deployment.PullRequestNumber)
-		host = previewKey + "--" + baseServiceName + "--" + projectSlug + "--" + organizationSlug + ".preview." + domain
+		host = previewKey + "-" + tenantLabel + ".preview." + domain
 		serviceName = previewKey + "-" + baseServiceName
 	}
 	return AppServiceSpec{Name: serviceName, Namespace: organizationSlug + "-" + projectSlug, Image: firstNonEmpty(deployment.ImageURL, service.ImageURL), Port: service.Port, Replicas: service.Replicas, Host: host, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug, ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName, PublicEgress: servicePublicEgress(service)}
+}
+
+func rootBaseDomain(domain string) string {
+	domain = strings.TrimSpace(domain)
+	domain = strings.TrimPrefix(domain, "apps.")
+	domain = strings.TrimPrefix(domain, "preview.")
+	return domain
 }
 
 func CompileServiceManifests(spec AppServiceSpec) []map[string]any {
