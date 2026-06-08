@@ -19,23 +19,24 @@ function joinLabel(...parts: any[]) {
   return parts.filter(Boolean).map((part) => slugify(part)).join('-');
 }
 
-function tenantProjectLabel(organizationSlug: any, projectSlug: any) {
-  return joinLabel(organizationSlug, projectSlug);
+export function tenantProjectLabel(organizationSlug: any, projectSlug: any) {
+  return [organizationSlug, projectSlug].map((part) => slugify(part)).join('--');
 }
 
 export function serviceHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'service', baseDomain = DEFAULT_DOMAIN, customDomain = null, preview = null }: AnyRecord = {}) {
   if (customDomain) return customDomain;
-  const label = joinLabel(preview, organizationSlug, projectSlug);
+  const tenantLabel = tenantProjectLabel(organizationSlug, projectSlug);
+  const label = preview ? `${slugify(preview)}-${tenantLabel}` : tenantLabel;
   const zone = preview ? SUBDOMAIN_ZONES.PREVIEW : SUBDOMAIN_ZONES.APPS;
   return `${label}.${zone}.${baseDomain}`;
 }
 
 export function serviceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'service', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
-  return `${joinLabel(organizationSlug, projectSlug, serviceName)}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
+  return `${tenantProjectLabel(organizationSlug, projectSlug)}-${slugify(serviceName)}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
 }
 
 export function resourceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', resourceName = 'resource', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
-  return `${joinLabel(organizationSlug, projectSlug, resourceName)}.${SUBDOMAIN_ZONES.RESOURCES}.${baseDomain}`;
+  return `${tenantProjectLabel(organizationSlug, projectSlug)}-${slugify(resourceName)}.${SUBDOMAIN_ZONES.RESOURCES}.${baseDomain}`;
 }
 
 export function projectConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {

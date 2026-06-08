@@ -10,28 +10,28 @@ import (
 )
 
 type AppServiceSpec struct {
-	Name             string            `json:"name"`
-	Namespace        string            `json:"namespace"`
-	Image            string            `json:"image"`
-	Port             int               `json:"port"`
-	Replicas         int               `json:"replicas"`
-	Host             string            `json:"host,omitempty"`
-	Env              map[string]string `json:"env,omitempty"`
-	ProjectSlug      string            `json:"projectSlug"`
-	OrganizationSlug string            `json:"organizationSlug"`
-	ServiceType      string            `json:"serviceType"`
-	DeploymentID     string            `json:"deploymentId"`
-	Preview          bool              `json:"preview"`
-	PullRequestNumber int              `json:"pullRequestNumber,omitempty"`
-	BaseServiceName  string            `json:"baseServiceName,omitempty"`
-	PublicEgress     bool              `json:"publicEgress,omitempty"`
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace"`
+	Image             string            `json:"image"`
+	Port              int               `json:"port"`
+	Replicas          int               `json:"replicas"`
+	Host              string            `json:"host,omitempty"`
+	Env               map[string]string `json:"env,omitempty"`
+	ProjectSlug       string            `json:"projectSlug"`
+	OrganizationSlug  string            `json:"organizationSlug"`
+	ServiceType       string            `json:"serviceType"`
+	DeploymentID      string            `json:"deploymentId"`
+	Preview           bool              `json:"preview"`
+	PullRequestNumber int               `json:"pullRequestNumber,omitempty"`
+	BaseServiceName   string            `json:"baseServiceName,omitempty"`
+	PublicEgress      bool              `json:"publicEgress,omitempty"`
 }
 
 type DeploymentPlan struct {
-	Kind      string         `json:"kind"`
-	Service   AppServiceSpec `json:"service"`
-	Safe      bool           `json:"safe"`
-	Reconcile string         `json:"reconcile"`
+	Kind      string           `json:"kind"`
+	Service   AppServiceSpec   `json:"service"`
+	Safe      bool             `json:"safe"`
+	Reconcile string           `json:"reconcile"`
 	Manifests []map[string]any `json:"manifests"`
 }
 
@@ -54,7 +54,7 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	serviceName := slug(firstNonEmpty(service.Slug, service.Name, service.ID, "service"))
 	baseServiceName := serviceName
 	domain := rootBaseDomain(firstNonEmpty(baseDomain, service.BaseDomain, "raibitserver.local"))
-	tenantLabel := organizationSlug + "-" + projectSlug
+	tenantLabel := organizationSlug + "--" + projectSlug
 	host := tenantLabel + ".apps." + domain
 	preview := false
 	if deployment.DeploymentType == "preview" && deployment.PullRequestNumber > 0 {
@@ -63,7 +63,7 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 		host = previewKey + "-" + tenantLabel + ".preview." + domain
 		serviceName = previewKey + "-" + baseServiceName
 	}
-	return AppServiceSpec{Name: serviceName, Namespace: organizationSlug + "-" + projectSlug, Image: firstNonEmpty(deployment.ImageURL, service.ImageURL), Port: service.Port, Replicas: service.Replicas, Host: host, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug, ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName, PublicEgress: servicePublicEgress(service)}
+	return AppServiceSpec{Name: serviceName, Namespace: tenantLabel, Image: firstNonEmpty(deployment.ImageURL, service.ImageURL), Port: service.Port, Replicas: service.Replicas, Host: host, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug, ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName, PublicEgress: servicePublicEgress(service)}
 }
 
 func rootBaseDomain(domain string) string {
@@ -160,12 +160,12 @@ func servicePublicEgressPolicy(spec AppServiceSpec, labels map[string]any) map[s
 var privateIPv4EgressExceptions = []any{"10.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"}
 var privateIPv6EgressExceptions = []any{"::1/128", "fc00::/7", "fe80::/10", "fd00:ec2::254/128"}
 
-var slugPattern = regexp.MustCompile(`[^a-z0-9._-]+`)
+var slugPattern = regexp.MustCompile(`[^a-z0-9]+`)
 
 func slug(value string) string {
 	out := strings.ToLower(strings.TrimSpace(value))
 	out = slugPattern.ReplaceAllString(out, "-")
-	out = strings.Trim(out, "-._")
+	out = strings.Trim(out, "-")
 	if out == "" {
 		return "item"
 	}
