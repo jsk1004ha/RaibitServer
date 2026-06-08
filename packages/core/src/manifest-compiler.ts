@@ -4,7 +4,7 @@ import { resolveBuildStrategy } from './build-strategy.ts';
 import { DEFAULT_DOMAIN, DEFAULT_PORT, SERVICE_TYPES } from './constants.ts';
 import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
 import { slugify } from './ids.ts';
-import { domainPlanForProject, serviceHostname } from './domain-router.ts';
+import { domainPlanForProject, serviceHostname, tenantProjectLabel } from './domain-router.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -14,7 +14,7 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   const projectSlug = slugify(project.slug || project.name);
   const organizationSlug = slugify(organization.slug || organization.name || 'org');
   const baseDomain = spec.baseDomain || DEFAULT_DOMAIN;
-  const namespace = slugify(`${organization.slug || organization.name || 'org'}-${projectSlug}`);
+  const namespace = tenantProjectLabel(organizationSlug, projectSlug);
   const services: AnyRecord[] = spec.services || [];
   const resources: AnyRecord[] = spec.resources || [];
   const manifests: AnyRecord[] = [namespaceManifest(namespace, projectSlug)];

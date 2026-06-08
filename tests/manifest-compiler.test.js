@@ -15,7 +15,7 @@ function find(kind, name) {
 }
 
 test('compiler emits namespace, workloads, routes, autoscaling, and isolation', () => {
-  assert.equal(plan.metadata.namespace, 'gdg-hongik-festival-2026');
+  assert.equal(plan.metadata.namespace, 'gdg-hongik--festival-2026');
   for (const kind of ['Namespace', 'Deployment', 'CronJob', 'Job', 'Service', 'Ingress', 'HorizontalPodAutoscaler', 'NetworkPolicy', 'PodDisruptionBudget']) {
     assert.equal(kinds().includes(kind), true, kind);
   }
