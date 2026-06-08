@@ -9,7 +9,8 @@
     "incremental": true,
     "isolatedModules": true,
     "plugins": [{ "name": "next" }],
-    "types": ["node"]
+    "types": ["node", "react", "react-dom"],
+    "typeRoots": ["./node_modules/@types", "../../node_modules/@types"]
   },
   "include": ["next-env.d.ts", "app/**/*.ts", "app/**/*.tsx", "components/**/*.ts", "components/**/*.tsx", "lib/**/*.ts"],
   "exclude": ["node_modules"]
