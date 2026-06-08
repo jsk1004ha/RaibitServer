@@ -151,8 +151,16 @@ export class ControlPlaneStore {
   findPendingEmailVerificationCode(email: string, purpose = 'signup') {
     const normalized = String(email || '').toLowerCase();
     const normalizedPurpose = String(purpose || 'signup');
+    const now = Date.now();
     const row = [...this.emailVerificationCodes]
-      .filter((candidate) => candidate.email === normalized && !candidate.consumedAt && String(candidate.purpose || 'signup') === normalizedPurpose)
+      .filter((candidate) => {
+        const expiresAt = Date.parse(candidate.expiresAt || '');
+        return candidate.email === normalized
+          && !candidate.consumedAt
+          && String(candidate.purpose || 'signup') === normalizedPurpose
+          && Number.isFinite(expiresAt)
+          && expiresAt > now;
+      })
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
     return row ? deepClone(row) : null;
   }

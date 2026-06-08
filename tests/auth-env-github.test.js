@@ -160,7 +160,7 @@ test('signup sends an email code and requires verification before login issues a
   }
 });
 
-test('signup rejects replacement while an email verification code is pending', async () => {
+test('signup replacement invalidates stale or malicious pending email verification payloads', async () => {
   const secret = 'email-verification-replacement-secret';
   const previousCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE;
   process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE = '135790';
@@ -170,12 +170,11 @@ test('signup rejects replacement while an email verification code is pending', a
   await once(server, 'listening');
   const { port } = server.address();
   try {
+    const attackerSignup = await request(port, 'POST', '/auth/signup', { email: 'pending@example.com', password: 'attacker-password', name: 'Attacker', organizationSlug: 'attacker-org' });
+    assert.equal(attackerSignup.statusCode, 201);
+
     const victimSignup = await request(port, 'POST', '/auth/signup', { email: 'pending@example.com', password: 'victim-password', name: 'Victim', organizationSlug: 'pending-org' });
     assert.equal(victimSignup.statusCode, 201);
-
-    const replacementSignup = await request(port, 'POST', '/auth/signup', { email: 'pending@example.com', password: 'attacker-password', name: 'Attacker', organizationSlug: 'attacker-org' });
-    assert.equal(replacementSignup.statusCode, 409);
-    assert.equal(replacementSignup.body.error, 'signup_verification_already_pending');
     assert.equal(controlPlane.store.emailVerificationCodes.filter((row) => row.email === 'pending@example.com' && !row.consumedAt).length, 1);
 
     const verified = await request(port, 'POST', '/auth/email/verify', { email: 'pending@example.com', code: '135790' });
@@ -187,6 +186,18 @@ test('signup rejects replacement while an email verification code is pending', a
     assert.equal(attackerLogin.statusCode, 401);
     const victimLogin = await request(port, 'POST', '/auth/login', { email: 'pending@example.com', password: 'victim-password' });
     assert.equal(victimLogin.statusCode, 200);
+
+    const staleSignup = await request(port, 'POST', '/auth/signup', { email: 'stale@example.com', password: 'old-password', name: 'Stale', organizationSlug: 'stale-old-org' });
+    assert.equal(staleSignup.statusCode, 201);
+    const staleRecord = controlPlane.store.emailVerificationCodes.find((row) => row.email === 'stale@example.com' && !row.consumedAt);
+    staleRecord.expiresAt = '2000-01-01T00:00:00.000Z';
+
+    const freshSignup = await request(port, 'POST', '/auth/signup', { email: 'stale@example.com', password: 'fresh-password', name: 'Fresh', organizationSlug: 'stale-fresh-org' });
+    assert.equal(freshSignup.statusCode, 201);
+    const freshVerified = await request(port, 'POST', '/auth/email/verify', { email: 'stale@example.com', code: '135790' });
+    assert.equal(freshVerified.statusCode, 200);
+    assert.equal(freshVerified.body.user.name, 'Fresh');
+    assert.equal(freshVerified.body.organization.slug, 'stale-fresh-org');
   } finally {
     server.close();
     if (previousCode === undefined) delete process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE; else process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE = previousCode;

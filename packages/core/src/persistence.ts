@@ -190,7 +190,7 @@ export class PrismaControlPlaneRepository {
 
   async findPendingEmailVerificationCode(email: string, purpose = 'signup') {
     return this.prisma.emailVerificationCode.findFirst({
-      where: { email: String(email || '').toLowerCase(), purpose, consumedAt: null },
+      where: { email: String(email || '').toLowerCase(), purpose, consumedAt: null, expiresAt: { gt: new Date() } },
       orderBy: { createdAt: 'desc' },
     });
   }
