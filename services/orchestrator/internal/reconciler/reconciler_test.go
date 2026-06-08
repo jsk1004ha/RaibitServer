@@ -41,7 +41,7 @@ func TestRunOnceAppliesImageReadyDeploymentAndPersistsReadyState(t *testing.T) {
 		"deployments": []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "IMAGE_READY", "deploymentType": "production", "imageUrl": "registry.local/demo/web:abc123", "imageDigest": "sha256:abc123"}},
 	})
 	runner := &fakeRunner{}
-	r := NewServiceReconcilerWithStore(Config{DryRun: true, OutputDir: t.TempDir(), BaseDomain: "apps.test.local", Timeout: time.Minute}, store.NewFileStore(stateFile), runner)
+	r := NewServiceReconcilerWithStore(Config{DryRun: true, OutputDir: t.TempDir(), BaseDomain: "test.local", Timeout: time.Minute}, store.NewFileStore(stateFile), runner)
 	result, err := r.RunOnceResult(context.Background())
 	if err != nil {
 		t.Fatalf("RunOnceResult failed: %v", err)
@@ -54,7 +54,7 @@ func TestRunOnceAppliesImageReadyDeploymentAndPersistsReadyState(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(manifest)
-	if !strings.Contains(text, "registry.local/demo/web:abc123") || !strings.Contains(text, "NetworkPolicy") || !strings.Contains(text, "Ingress") {
+	if !strings.Contains(text, "registry.local/demo/web:abc123") || !strings.Contains(text, "NetworkPolicy") || !strings.Contains(text, "Ingress") || !strings.Contains(text, "org-1--demo.apps.test.local") {
 		t.Fatalf("manifest missing expected workload pieces: %s", text)
 	}
 	state := readState(t, stateFile)
@@ -79,7 +79,7 @@ func TestRunOnceCleansPreviewDeployment(t *testing.T) {
 		"deployments": []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "PREVIEW_CLEANUP_REQUESTED", "deploymentType": "preview", "pullRequestNumber": 42, "imageUrl": "registry.local/demo/web:pr42"}},
 	})
 	runner := &fakeRunner{}
-	r := NewServiceReconcilerWithStore(Config{DryRun: true, OutputDir: t.TempDir(), BaseDomain: "apps.test.local"}, store.NewFileStore(stateFile), runner)
+	r := NewServiceReconcilerWithStore(Config{DryRun: true, OutputDir: t.TempDir(), BaseDomain: "test.local"}, store.NewFileStore(stateFile), runner)
 	result, err := r.RunOnceResult(context.Background())
 	if err != nil {
 		t.Fatalf("cleanup failed: %v", err)
@@ -91,7 +91,7 @@ func TestRunOnceCleansPreviewDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(manifest), "pr-42-web") || !strings.Contains(string(manifest), "raibitserver.io/preview") {
+	if !strings.Contains(string(manifest), "pr-42-web") || !strings.Contains(string(manifest), "pr-42-org-1--demo.preview.test.local") || !strings.Contains(string(manifest), "raibitserver.io/preview") {
 		t.Fatalf("preview cleanup manifest must target isolated preview workload: %s", string(manifest))
 	}
 	deployment := firstByID(t, readState(t, stateFile), "deployments", "dep_1")

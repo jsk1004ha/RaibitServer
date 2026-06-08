@@ -16,26 +16,31 @@ export const SUBDOMAIN_ZONES = Object.freeze({
 });
 
 function joinLabel(...parts: any[]) {
-  return parts.filter(Boolean).map((part) => slugify(part)).join('--');
+  return parts.filter(Boolean).map((part) => slugify(part)).join('-');
+}
+
+export function tenantProjectLabel(organizationSlug: any, projectSlug: any) {
+  return [organizationSlug, projectSlug].map((part) => slugify(part)).join('--');
 }
 
 export function serviceHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'service', baseDomain = DEFAULT_DOMAIN, customDomain = null, preview = null }: AnyRecord = {}) {
   if (customDomain) return customDomain;
-  const label = joinLabel(preview, serviceName, projectSlug, organizationSlug);
+  const tenantLabel = tenantProjectLabel(organizationSlug, projectSlug);
+  const label = preview ? `${slugify(preview)}-${tenantLabel}` : tenantLabel;
   const zone = preview ? SUBDOMAIN_ZONES.PREVIEW : SUBDOMAIN_ZONES.APPS;
   return `${label}.${zone}.${baseDomain}`;
 }
 
 export function serviceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'service', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
-  return `${joinLabel(serviceName, projectSlug, organizationSlug)}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
+  return `${tenantProjectLabel(organizationSlug, projectSlug)}-${slugify(serviceName)}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
 }
 
 export function resourceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', resourceName = 'resource', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
-  return `${joinLabel(resourceName, projectSlug, organizationSlug)}.${SUBDOMAIN_ZONES.RESOURCES}.${baseDomain}`;
+  return `${tenantProjectLabel(organizationSlug, projectSlug)}-${slugify(resourceName)}.${SUBDOMAIN_ZONES.RESOURCES}.${baseDomain}`;
 }
 
 export function projectConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
-  return `${joinLabel(projectSlug, organizationSlug)}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
+  return `${tenantProjectLabel(organizationSlug, projectSlug)}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
 }
 
 export function workspaceConsoleHostname({ organizationSlug = 'org', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
@@ -70,7 +75,7 @@ export function domainPlanForProject(spec: AnyRecord = {}) {
       publicHostname: service.type === 'web' || !service.type
         ? serviceHostname({ organizationSlug, projectSlug, serviceName: service.name, baseDomain, customDomain: service.domain || null })
         : null,
-      previewPattern: `pr-{number}--${joinLabel(service.name, projectSlug, organizationSlug)}.${SUBDOMAIN_ZONES.PREVIEW}.${baseDomain}`,
+      previewPattern: `pr-{number}-${tenantProjectLabel(organizationSlug, projectSlug)}.${SUBDOMAIN_ZONES.PREVIEW}.${baseDomain}`,
       consoleHostname: serviceConsoleHostname({ organizationSlug, projectSlug, serviceName: service.name, baseDomain }),
       internalHostname: internalServiceHostname({ projectSlug, serviceName: service.name }),
     })),

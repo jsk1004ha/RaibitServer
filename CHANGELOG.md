@@ -6,6 +6,7 @@
 
 ### 보안
 
+- 앱/preview/console/resource hostname과 Kubernetes namespace의 tenant-project label에서 user와 project slug 사이를 `--`로 구분해, 하이픈이 포함된 slug 조합 간 Host/Ingress 충돌을 차단했습니다.
 - 동일 이메일 signup을 다시 시작하면 기존 pending signup 인증 코드와 payload를 무효화하고, pending 조회는 만료되지 않은 코드만 반환하도록 수정해 악의적 pre-registration payload가 피해자 가입을 차단하거나 인증 후 적용되는 계정 탈취 경로를 차단했습니다.
 - 빌드 실행 시 tenant 입력 경로(`localPath`, `buildContext`, `dockerfilePath`)를 workspace/source 디렉터리 경계 안의 안전한 상대 경로로만 해석하도록 강제했습니다.
 - Go builder 엔트리포인트/worker 양쪽에 경로 이탈 및 절대 경로 Dockerfile 주입 차단 회귀 테스트를 추가해 실제 `docker buildx` 실행 경계에서 호스트 파일 노출을 차단했습니다.

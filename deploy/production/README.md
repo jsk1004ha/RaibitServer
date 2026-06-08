@@ -84,7 +84,7 @@ Disposable local cluster smoke test가 필요하면 [Live E2E](../../docs/live-e
 Cloudflare Tunnel을 production ingress 앞단으로 사용할 수 있지만, Tunnel은 HTTP/HTTPS edge 진입점으로만 둡니다.
 
 - `*.apps.<BASE_DOMAIN>`, `*.preview.<BASE_DOMAIN>`, `*.console.<BASE_DOMAIN>`, `*.resources.<BASE_DOMAIN>`를 내부 Kubernetes Ingress Controller 하나로 보냅니다.
-- `web--project--org.apps.<BASE_DOMAIN>` 같은 개별 tenant host는 Kubernetes Ingress Host rule이 처리합니다.
+- `<user>--<project>.apps.<BASE_DOMAIN>` 같은 개별 tenant host는 Kubernetes Ingress Host rule이 처리합니다.
 - `test.*.<BASE_DOMAIN>` 같은 중간 wildcard는 tunnel rule로 설계하지 않습니다.
 - `admin`, `console`, `*.console`, `*.resources`에는 Cloudflare Access를 붙이고, Dashboard 앱의 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`도 유지합니다.
 - `/api/*`, `/api/*/stream`, `/github/webhooks`, `/api/github/webhooks`는 Cloudflare cache bypass로 둡니다.

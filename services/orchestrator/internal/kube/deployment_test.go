@@ -83,10 +83,53 @@ func TestSpecFromStateReadsPublicEgressIntent(t *testing.T) {
 		&store.Project{ID: "project-1", OrganizationID: "org-1", Name: "Project", Slug: "project"},
 		&store.Service{ID: "svc-1", ProjectID: "project-1", Name: "api", Slug: "api", ImageURL: "registry.local/api:1", DesiredSpec: map[string]any{"egress": map[string]any{"publicInternet": true}}},
 		&store.Deployment{ID: "dep-1", ServiceID: "svc-1", ProjectID: "project-1", ImageURL: "registry.local/api:1"},
-		"apps.raibitserver.local",
+		"raibitserver.local",
 	)
 	if !spec.PublicEgress {
 		t.Fatalf("expected SpecFromState to carry service egress.publicInternet intent into AppServiceSpec")
+	}
+}
+
+func TestSpecFromStateUsesUserProjectAppsHostnames(t *testing.T) {
+	production := SpecFromState(
+		&store.Project{ID: "project-1", OrganizationID: "gdg-hongik", Name: "Festival", Slug: "festival-2026"},
+		&store.Service{ID: "svc-1", ProjectID: "project-1", Name: "web", Slug: "web", ImageURL: "registry.local/web:1"},
+		&store.Deployment{ID: "dep-1", ServiceID: "svc-1", ProjectID: "project-1", ImageURL: "registry.local/web:1"},
+		"raibitserver.local",
+	)
+	if production.Host != "gdg-hongik--festival-2026.apps.raibitserver.local" {
+		t.Fatalf("expected user-project apps host, got %q", production.Host)
+	}
+
+	preview := SpecFromState(
+		&store.Project{ID: "project-1", OrganizationID: "gdg-hongik", Name: "Festival", Slug: "festival-2026"},
+		&store.Service{ID: "svc-1", ProjectID: "project-1", Name: "web", Slug: "web", ImageURL: "registry.local/web:1"},
+		&store.Deployment{ID: "dep-2", ServiceID: "svc-1", ProjectID: "project-1", ImageURL: "registry.local/web:1", DeploymentType: "preview", PullRequestNumber: 32},
+		"raibitserver.local",
+	)
+	if preview.Host != "pr-32-gdg-hongik--festival-2026.preview.raibitserver.local" {
+		t.Fatalf("expected preview user-project host, got %q", preview.Host)
+	}
+}
+
+func TestSpecFromStatePreservesTenantProjectHostBoundaries(t *testing.T) {
+	victim := SpecFromState(
+		&store.Project{ID: "project-1", OrganizationID: "victim-team", Name: "API", Slug: "api"},
+		&store.Service{ID: "svc-1", ProjectID: "project-1", Name: "web", Slug: "web", ImageURL: "registry.local/web:1"},
+		&store.Deployment{ID: "dep-1", ServiceID: "svc-1", ProjectID: "project-1", ImageURL: "registry.local/web:1"},
+		"example.test",
+	)
+	attacker := SpecFromState(
+		&store.Project{ID: "project-2", OrganizationID: "victim", Name: "Team API", Slug: "team-api"},
+		&store.Service{ID: "svc-2", ProjectID: "project-2", Name: "web", Slug: "web", ImageURL: "registry.local/web:1"},
+		&store.Deployment{ID: "dep-2", ServiceID: "svc-2", ProjectID: "project-2", ImageURL: "registry.local/web:1"},
+		"example.test",
+	)
+	if victim.Host != "victim-team--api.apps.example.test" || attacker.Host != "victim--team-api.apps.example.test" {
+		t.Fatalf("expected boundary-safe hosts, got %q and %q", victim.Host, attacker.Host)
+	}
+	if victim.Host == attacker.Host || victim.Namespace == attacker.Namespace {
+		t.Fatalf("tenant/project boundaries must not collide: %#v %#v", victim, attacker)
 	}
 }
 

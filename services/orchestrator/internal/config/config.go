@@ -29,7 +29,7 @@ func FromEnv() Config {
 		KubeContext: os.Getenv("RAIBITSERVER_KUBE_CONTEXT"),
 		StateFile:   firstNonEmpty(os.Getenv("RAIBITSERVER_CONTROL_PLANE_FILE"), os.Getenv("RAIBITSERVER_STATE_FILE"), os.Getenv("RAIBITSERVER_WORKFLOW_STATE")),
 		OutputDir:   firstNonEmpty(os.Getenv("RAIBITSERVER_ORCHESTRATOR_OUTPUT_DIR"), ".raibitserver-work/orchestrator"),
-		BaseDomain:  firstNonEmpty(os.Getenv("BASE_DOMAIN"), os.Getenv("RAIBITSERVER_BASE_DOMAIN"), "apps.raibitserver.local"),
+		BaseDomain:  firstNonEmpty(os.Getenv("BASE_DOMAIN"), os.Getenv("RAIBITSERVER_BASE_DOMAIN"), "raibitserver.local"),
 		DryRun:      os.Getenv("RAIBITSERVER_DRY_RUN") != "0" && os.Getenv("RAIBITSERVER_EXECUTE") != "1",
 		Timeout:     timeout,
 	}

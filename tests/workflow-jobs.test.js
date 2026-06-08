@@ -112,7 +112,7 @@ test('deployment builder workflow stores image digest, logs, events, and rollout
   assert.equal(store.listDeploymentLogs(deployment.id).some((row) => /docker buildx build/.test(row.line)), true);
   assert.equal(store.listDeploymentEvents(deployment.id).some((row) => row.type === 'build.image_ready'), true);
 
-  const rollout = await reconcileDeploymentRollout(store, deployment.id, { dryRun: true, host: 'web--demo--builder-org.apps.local' });
+  const rollout = await reconcileDeploymentRollout(store, deployment.id, { dryRun: true, host: 'builder-org-demo.apps.local' });
   assert.equal(rollout.status, DEPLOYMENT_STATUSES.READY);
   const ready = store.snapshot().deployments.find((row) => row.id === deployment.id);
   assert.equal(ready.status, DEPLOYMENT_STATUSES.READY);

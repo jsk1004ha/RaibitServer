@@ -81,7 +81,7 @@ test('GitHub App contract endpoints import/list/sync and webhook push/PR flows',
       const pr = await webhook(server.port, 'pull_request', delivery, prPayload(action, sha));
       assert.equal(pr.statusCode, 202);
       assert.equal(pr.body.actions[0].type, 'preview-deployment-enqueued');
-      assert.match(pr.body.actions[0].previewUrl, /^https:\/\/pr-7--web--github-project--github-org\.preview\.raibitserver\.app$/);
+      assert.match(pr.body.actions[0].previewUrl, /^https:\/\/pr-7-github-org--github-project\.preview\.raibitserver\.app$/);
       assert.equal(pr.body.actions[0].previewWorkloadName, 'pr-7-web');
       assert.equal(pr.body.outbound.commitStatus.targetUrl, pr.body.actions[0].previewUrl);
       assert.equal(pr.body.outbound.pullRequestComment.pullRequestNumber, 7);
