@@ -34,6 +34,17 @@ test('CI dry-run CLI smoke commands return stable PaaS and DBaaS artifacts', asy
   const destructiveQuery = await runCli(['guard-query', 'DROP']);
   assert.equal(destructiveQuery.allowed, false);
   assert.equal(destructiveQuery.destructive, true);
+
+  const legacyFile = `SELECT.${process.pid}.sql`;
+  await fs.writeFile(new URL(`../${legacyFile}`, import.meta.url), 'DROP TABLE users;');
+  try {
+    const guardedFile = await runCli(['guard-query', legacyFile]);
+    assert.equal(guardedFile.allowed, false);
+    assert.equal(guardedFile.destructive, true);
+    assert.equal(guardedFile.readOnly, false);
+  } finally {
+    await fs.rm(new URL(`../${legacyFile}`, import.meta.url), { force: true });
+  }
 });
 
 test('CI workflow keeps local smoke checks and Prisma validation environment', async () => {

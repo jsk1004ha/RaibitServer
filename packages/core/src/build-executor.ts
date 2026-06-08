@@ -88,9 +88,10 @@ export function buildExecutionPlan(service: Record<string, any>, files: Record<s
   const push = Boolean(options.push || service.push);
   const builder = options.builder || 'docker-buildx';
   const cachePlan = buildCachePlan(service, options, buildPlan.image);
+  const metadataFile = trustedMetadataFile(options);
   const buildCommand = builder === 'buildctl'
     ? buildctlCommand({ image: buildPlan.image, context, dockerfile: path.dirname(dockerfilePath), push })
-    : dockerBuildxCommand({ image: buildPlan.image, context, dockerfile: dockerfilePath, push, load: !push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, cache: cachePlan.enabled, cacheFrom: cachePlan.cacheFrom, cacheTo: cachePlan.cacheTo, metadataFile: options.metadataFile || service.metadataFile || null });
+    : dockerBuildxCommand({ image: buildPlan.image, context, dockerfile: dockerfilePath, push, load: !push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, cache: cachePlan.enabled, cacheFrom: cachePlan.cacheFrom, cacheTo: cachePlan.cacheTo, metadataFile });
 
   return {
     service: buildPlan.service,
@@ -146,10 +147,10 @@ export async function executeBuildWorkflow(service: Record<string, any>, files: 
 
   const buildCommand = options.builder === 'buildctl'
     ? buildctlCommand({ image: plan.image, context: plan.context, dockerfile: path.dirname(plan.dockerfile), push: plan.push })
-    : dockerBuildxCommand({ image: plan.image, context: plan.context, dockerfile: plan.dockerfile, push: plan.push, load: !plan.push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, cache: plan.cache?.enabled !== false, cacheFrom: plan.cache?.cacheFrom || [], cacheTo: plan.cache?.cacheTo || [], metadataFile: options.metadataFile || service.metadataFile || null });
+    : dockerBuildxCommand({ image: plan.image, context: plan.context, dockerfile: plan.dockerfile, push: plan.push, load: !plan.push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, cache: plan.cache?.enabled !== false, cacheFrom: plan.cache?.cacheFrom || [], cacheTo: plan.cache?.cacheTo || [], metadataFile: trustedMetadataFile(options) });
   await ensureSyntheticDockerfileIfNeeded(plan, service, { dryRun });
   const result = await runCommand(buildCommand, { dryRun, timeoutMs: options.timeoutMs || 30 * 60 * 1000 });
-  const imageDigest = await resolveBuildDigest(options.metadataFile || service.metadataFile, plan.image, dryRun);
+  const imageDigest = await resolveBuildDigest(trustedMetadataFile(options), plan.image, dryRun);
   steps.push({ type: 'buildkit-build', command: result.command, dryRun: result.dryRun, imageDigest, ...safeCommandOutput(result, options) });
 
   if (!plan.push && options.pushAfterBuild) {
@@ -186,6 +187,10 @@ function packageManagerCacheMounts(service: Record<string, any>) {
   ];
   if (requested === 'auto') return all;
   return all.filter((entry) => String(requested).toLowerCase().includes(entry.manager));
+}
+
+function trustedMetadataFile(options: Record<string, any> = {}) {
+  return options.metadataFile || null;
 }
 
 

@@ -112,17 +112,18 @@ test('resource plans expose catalog lifecycle and env variable names', () => {
   assert.equal(postgres.env.includes('DATABASE_URL'), true);
 });
 
-test('compiler can emit safe image pre-pull DaemonSet for rollout latency reduction', () => {
+test('tenant pre-pull image hints do not create DaemonSets', () => {
   const prePull = compileProject({
     organization: { slug: 'gdg' },
     project: { name: 'warm' },
-    performance: { prePullImages: ['node:24-alpine', 'python:3.13-alpine'] },
+    prePullImages: ['attacker.example/evil-shell:latest'],
+    performance: { prePullImages: ['node:24-alpine', 'python:3.13-alpine'], prePullBuildImages: true },
+    runtime: { prePullImages: ['busybox:1.36'] },
     services: [{ name: 'web', sourceType: 'image', image: 'registry.local/web:1' }],
   });
   const daemonSet = prePull.manifests.find((manifest) => manifest.kind === 'DaemonSet' && manifest.metadata.name === 'image-prepull');
-  assert.ok(daemonSet);
-  assert.equal(prePull.prePullPlan.enabled, true);
-  assert.deepEqual(daemonSet.spec.template.spec.initContainers.map((container) => container.image), ['node:24-alpine', 'python:3.13-alpine']);
-  assert.equal(daemonSet.spec.template.spec.automountServiceAccountToken, false);
-  assert.equal(daemonSet.spec.template.spec.initContainers[0].securityContext.runAsNonRoot, true);
+  assert.equal(daemonSet, undefined);
+  assert.equal(prePull.prePullPlan.enabled, false);
+  assert.equal(prePull.prePullPlan.strategy, 'disabled-tenant-prepull-not-supported');
+  assert.deepEqual(prePull.prePullPlan.ignoredImages.sort(), ['attacker.example/evil-shell:latest', 'busybox:1.36', 'node:24-alpine', 'python:3.13-alpine', 'registry.local/web:1'].sort());
 });

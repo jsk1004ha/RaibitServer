@@ -175,7 +175,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, { projects: [...controlPlane.store.projects.values()].filter((project) => String(project.organizationId) === String(organizationId)) });
       }
       if (organizationProjectsMatch && method === 'POST') {
-        const subject = authorizeAction(req, 'project:update', auth);
+        const subject = authorizeAction(req, 'project:create', auth);
         const organizationId = decodeURIComponent(organizationProjectsMatch[1]);
         requireScope(subject, { organizationId });
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'project:create', metric: 'maxProjects', increment: 1 });
@@ -398,6 +398,10 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
         await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
         const body = await readJson(req);
+        if (action === 'rollback') {
+          controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
+          if ((deployment.deploymentType || body.deploymentType || body.type) === 'preview') controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
+        }
         const result = action === 'cancel'
           ? controlPlane.store.cancelDeployment(deploymentId, { ...body, actorUserId: subject.id })
           : controlPlane.store.rollbackDeployment(deploymentId, { ...body, actorUserId: subject.id });

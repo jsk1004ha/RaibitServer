@@ -27,6 +27,26 @@ test('project create derives scope from nested organization before persistence',
   }
 });
 
+test('nested organization project creation requires project:create, not project:update', async () => {
+  const secret = 'nested-project-create-rbac-secret';
+  const server = http.createServer(createApiHandler(new RAIBITSERVERControlPlane(), { auth: { mode: 'jwt', jwtSecret: secret } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const maintainerToken = signJwtHs256({ sub: 'maintainer-1', role: 'maintainer', organizationId: 'org-victim' }, secret);
+    const denied = await request(port, 'POST', '/organizations/org-victim/projects', { name: 'nested-created', slug: 'nested-created' }, maintainerToken);
+    assert.equal(denied.statusCode, 403);
+    assert.match(denied.body.error, /project:create/);
+
+    const ownerToken = signJwtHs256({ sub: 'owner-1', role: 'owner', organizationId: 'org-victim' }, secret);
+    const created = await request(port, 'POST', '/organizations/org-victim/projects', { name: 'nested-created', slug: 'nested-created' }, ownerToken);
+    assert.equal(created.statusCode, 201);
+  } finally {
+    server.close();
+  }
+});
+
 function request(port, method, requestPath, body, token = null) {
   return new Promise((resolve, reject) => {
     const payload = body ? JSON.stringify(body) : null;

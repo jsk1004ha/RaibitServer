@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { listCatalog } from '../packages/core/src/catalog.ts';
 import { connectionEnvForResource, injectResourceEnv } from '../packages/core/src/env-injection.ts';
+import { compileResourceProvisioningPlan } from '../packages/core/src/provisioner.ts';
 import { maskSecrets } from '../packages/core/src/secrets.ts';
 
 test('catalog includes relational, cache, storage, vector, and queue resources', () => {
@@ -32,6 +33,27 @@ test('provider connection env is deterministic when provider owns the live secre
   const second = connectionEnvForResource({ name: 'todo-postgres', engine: 'postgresql', plan: 'shared-small' }, 'todo');
   assert.equal(first.DATABASE_URL, second.DATABASE_URL);
   assert.match(first.DATABASE_URL, /provider-managed-todo-todo-postgres/);
+});
+
+test('resource provisioner never emits deterministic provider placeholders as live credentials', () => {
+  const plan = compileResourceProvisioningPlan(
+    { name: 'db', engine: 'postgresql', plan: 'shared-small' },
+    { namespace: 'victim', projectSlug: 'victim', organizationSlug: 'org' },
+  );
+  const managed = plan.manifests.find((manifest) => manifest.kind === 'ManagedDatabase');
+  const secret = plan.manifests.find((manifest) => manifest.kind === 'Secret');
+  assert.equal(secret, undefined, 'provider-generated resources must not apply predictable placeholder Secrets');
+  assert.equal(managed.spec.credentialsSecretName, undefined);
+  assert.equal(managed.spec.generatedCredentialsSecretName, 'db-connection');
+  assert.equal(managed.spec.credentialsMode, 'provider-generated');
+
+  const explicit = compileResourceProvisioningPlan(
+    { name: 'db', engine: 'postgresql', username: 'app', generatedPassword: 'random-from-provider' },
+    { namespace: 'victim', projectSlug: 'victim', organizationSlug: 'org' },
+  );
+  const explicitSecret = explicit.manifests.find((manifest) => manifest.kind === 'Secret');
+  assert.equal(explicitSecret.metadata.annotations?.['raibitserver.io/provider-contract'], undefined);
+  assert.equal(explicitSecret.stringData.PGPASSWORD, 'random-from-provider');
 });
 
 test('service env injection attaches selected resources only', () => {

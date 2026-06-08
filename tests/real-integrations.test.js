@@ -88,6 +88,22 @@ test('build execution plan rejects escaping build context and Dockerfile paths',
   assert.throws(() => buildExecutionPlan({ ...service, dockerfilePath: '../Dockerfile' }, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo' }), /dockerfilePath must stay within source directory/);
 });
 
+test('tenant service metadataFile is ignored by the TypeScript build executor', async () => {
+  const untrusted = { ...service, metadataFile: '/tmp/attacker-controlled-buildx-metadata.json' };
+  const plan = buildExecutionPlan(untrusted, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true });
+  assert.match(plan.buildCommand, /docker buildx build/);
+  assert.doesNotMatch(plan.buildCommand, /attacker-controlled-buildx-metadata/);
+  assert.doesNotMatch(plan.buildCommand, /--metadata-file/);
+
+  const trusted = buildExecutionPlan(untrusted, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, metadataFile: '/tmp/executor-owned-metadata.json' });
+  assert.match(trusted.buildCommand, /--metadata-file/);
+  assert.match(trusted.buildCommand, /executor-owned-metadata/);
+
+  const result = await executeBuildWorkflow(untrusted, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true });
+  const buildStep = result.steps.find((step) => step.type === 'buildkit-build');
+  assert.doesNotMatch(buildStep.command, /attacker-controlled-buildx-metadata/);
+});
+
 test('kubectl apply and DB provisioning paths create executable dry-run artifacts', async () => {
   const apply = await applyProject(project, { web: { Dockerfile: 'FROM scratch' } });
   assert.equal(apply.apply.dryRun, true);

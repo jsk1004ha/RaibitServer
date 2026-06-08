@@ -277,7 +277,7 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 
 - Nest API는 부팅 시 `PORT`, `RAIBITSERVER_AUTH_RATE_LIMIT`, production auth/secret 설정을 먼저 검증합니다. `NODE_ENV=production`에서는 32자 미만 `RAIBITSERVER_AUTH_JWT_SECRET`, 32자 미만 `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS`가 있는데 32자 미만 `RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN`, `RAIBITSERVER_AUTH_DISABLED=1`, `RAIBITSERVER_AUTH_DEV_HEADERS=1`, `RAIBITSERVER_AUTH_DEV_TOKEN=1`이 모두 fail-fast로 차단됩니다.
 - `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다. 특히 인증 비활성화는 `NODE_ENV=production`에서는 무시되며, 로컬에서도 `RAIBITSERVER_AUTH_DISABLED_CONFIRM=I_UNDERSTAND_THIS_GRANTS_GLOBAL_OWNER` 확인값이 있어야만 활성화됩니다. dev header 인증은 추가로 `RAIBITSERVER_DEV_HEADER_BIND_LOCAL=1`이 있어야만 켜집니다.
-- 인증 rate limit은 기본적으로 소켓 원격 주소를 사용하고 `X-Forwarded-For`를 신뢰하지 않습니다. Cloudflare Access/Tunnel, Nginx, Ingress처럼 신뢰된 프록시만 API 앞에 있고 origin bypass가 방화벽으로 막힌 경우에만 `RAIBITSERVER_TRUST_PROXY_HEADERS=1`을 설정하세요.
+- 인증 rate limit은 기본적으로 소켓 원격 주소를 사용하고 `X-Forwarded-For`를 신뢰하지 않습니다. 로그인 실패는 비밀번호 검증 후에만 source-scoped 실패 bucket에 기록하므로 다른 네트워크 위치의 잘못된 시도로 같은 이메일의 정상 로그인을 잠그지 않습니다. Cloudflare Access/Tunnel, Nginx, Ingress처럼 신뢰된 프록시만 API 앞에 있고 origin bypass가 방화벽으로 막힌 경우에만 `RAIBITSERVER_TRUST_PROXY_HEADERS=1`을 설정하세요.
 - 운영 첫 admin은 더 이상 “첫 가입자”만으로 자동 승격되지 않습니다. `ADMIN_EMAILS`에 포함된 이메일이 `RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN`을 함께 제출할 때만 admin bootstrap이 허용됩니다.
 - 이메일/비밀번호 signup은 6자리 이메일 인증 코드를 먼저 발송하고, `/auth/email/verify` 성공 후에만 세션 토큰을 발급합니다. 같은 이메일로 signup을 다시 시작하면 이전에 소비되지 않은 signup 인증 코드와 payload를 무효화하고 새 payload/코드를 발급해, 악의적이거나 오래된 pending signup이 정상 가입을 계속 막거나 피해자가 공격자 지정 비밀번호/조직으로 계정을 만들게 하지 않습니다. `/auth/email/resend`는 아직 만료되지 않은 최신 pending signup payload에 대해서만 코드를 재발급합니다. 발신자는 발송 전용 주소(`RAIBITSERVER_EMAIL_FROM`, 예: `RAIBITSERVER <email-verification@raibitserver.app>`)이고, `RAIBITSERVER_EMAIL_DOMAIN`/`RAIBITSERVER_BASE_DOMAIN`/`BASE_DOMAIN`에서 자동 생성할 수도 있습니다. 이 기능은 사용자 메일함/MX를 운영하지 않으며 production은 `RAIBITSERVER_EMAIL_WEBHOOK_URL` 같은 실제 mail bridge와 발신 도메인의 SPF/DKIM/DMARC 설정이 필요합니다.
 - DB console 권한은 `db:schema:read`, `db:data:read`, `db:query:write`로 분리됩니다. 기본 developer는 schema metadata만 볼 수 있고 row data `SELECT`는 maintainer/db-admin 이상 권한이 필요합니다.
@@ -324,7 +324,8 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 
 - platform component는 `raibitserver-system` 같은 전용 namespace에 두고, 사용자 workload는 조직/프로젝트별 namespace로 분리합니다.
 - tenant workload에는 restricted Pod Security, non-root 실행, resource requests/limits, Secret ref, NetworkPolicy를 적용합니다.
-- manifest planner가 provider-owned managed resource 연결값을 미리 계산해야 할 때는 deterministic `provider-managed-*` placeholder를 쓰고 Secret에 `raibitserver.io/provider-contract=not-live-secret` annotation을 붙입니다. 이 값은 apply 가능한 live credential이 아니라 provisioner가 sealed provider secret으로 대체해야 하는 계약입니다.
+- manifest planner가 provider-owned managed resource 연결값을 미리 계산해야 할 때는 deterministic `provider-managed-*` placeholder를 쓰고 Secret에 `raibitserver.io/provider-contract=not-live-secret` annotation을 붙입니다. 이 값은 apply 가능한 live credential이 아니라 provisioner가 sealed provider secret으로 대체해야 하는 계약입니다. resource provisioner는 이런 placeholder를 Kubernetes Secret으로 apply하지 않고 `credentialsMode=provider-generated`와 provider 출력 secret 이름만 기록합니다.
+- tenant spec의 `prePullImages`/`runtime.prePullImages`/`performance.prePullImages`는 DaemonSet을 만들지 않습니다. node-wide image warming은 tenant manifest가 아니라 operator-controlled 배포 정책에서만 허용해야 합니다.
 - privileged container, hostPath, hostNetwork, root 실행, quota 초과 배포는 배포 전 차단되어야 합니다.
 - orchestrator service account는 필요한 namespace/resource에만 권한을 주고 cluster-admin 상시 권한은 피합니다.
 - registry pull secret과 provider credential은 사용자가 API body로 직접 넘기는 값이 아니라 platform secret/ref로 관리합니다.

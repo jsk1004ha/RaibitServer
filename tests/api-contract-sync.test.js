@@ -130,6 +130,10 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.ok(coreApi.includes('assertEnvironmentWriteAllowed(subject, parsed.entries)'), 'core env-file writes must use the shared limited-secret write guard');
   assert.ok(raibitserverService.includes('assertNestEnvironmentWriteAllowed(subject, entries)'), 'Nest env writes must use the shared limited-secret write guard');
   assert.ok(raibitserverService.includes('assertNestEnvironmentWriteAllowed(subject, parsed.entries)'), 'Nest env-file writes must use the shared limited-secret write guard');
+  const loginMethod = raibitserverService.slice(raibitserverService.indexOf('async login'), raibitserverService.indexOf('  async createProject'));
+  assert.doesNotMatch(loginMethod, /assertRateLimit\(authLimiter,\s*`login:\$\{email\}`\)/, 'Nest login limiter must not use a global email-only key');
+  assert.ok(loginMethod.indexOf('verifyPassword') >= 0 && loginMethod.indexOf('verifyPassword') < loginMethod.indexOf('assertRateLimit'), 'Nest login must verify the password before counting failed-login rate limit attempts');
+  assert.match(authController, /login\(@Body\(\) input: Record<string, any>, @Req\(\) req: any\)/, 'Nest auth controller must pass request context for auth rate-limit source keys');
   assert.ok(persistence.includes('if (integrationIds.length === 0) return { installationId: String(input.installationId), repositories: [] };'), 'Prisma GitHub installation repository listing must not leak all repos when scope filters out integrations');
   assert.ok(persistence.includes('return redactUser(user);'), 'Prisma user creation/update surfaces must redact passwordHash');
   assert.ok(!persistence.includes('integrationIds.length === 0 || integrationIds.includes'), 'Prisma GitHub installation repository listing must not use broad fallback matching');

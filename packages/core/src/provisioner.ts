@@ -20,6 +20,8 @@ export function compileResourceProvisioningPlan(resource: Record<string, any>, {
   };
   const env = connectionEnvForResource(resource, projectSlug);
   const { secret } = splitEnvForSecret(env);
+  const providerGeneratedCredentials = secretContainsProviderPlaceholder(secret);
+  const credentialsSecretName = `${name}-connection`;
   const manifests: any[] = [
     {
       apiVersion: 'raibitserver.io/v1alpha1',
@@ -39,15 +41,17 @@ export function compileResourceProvisioningPlan(resource: Record<string, any>, {
         username: supportsUsername(entry.type) ? (resource.username || slugify(resource.username || resource.name || 'app')) : undefined,
         provider: resource.provider || 'shared-provider',
         backup: resource.backup || defaultBackup(entry.type),
-        credentialsSecretName: `${name}-connection`,
+        credentialsMode: providerGeneratedCredentials ? 'provider-generated' : (Object.keys(secret).length ? 'provided-secret' : 'none'),
+        ...(providerGeneratedCredentials ? { generatedCredentialsSecretName: credentialsSecretName } : {}),
+        ...(!providerGeneratedCredentials && Object.keys(secret).length ? { credentialsSecretName } : {}),
       },
     },
   ];
-  if (Object.keys(secret).length) {
+  if (Object.keys(secret).length && !providerGeneratedCredentials) {
     manifests.push({
       apiVersion: 'v1',
       kind: 'Secret',
-      metadata: { name: `${name}-connection`, namespace, labels },
+      metadata: { name: credentialsSecretName, namespace, labels },
       type: 'Opaque',
       stringData: secret,
     });
@@ -67,6 +71,10 @@ export function compileResourceProvisioningPlan(resource: Record<string, any>, {
     consoleSurface: providerConsoleSurface(resource),
     manifests,
   };
+}
+
+function secretContainsProviderPlaceholder(secret: Record<string, any>) {
+  return Object.values(secret || {}).some((value) => String(value).includes('provider-managed-'));
 }
 
 export function compileProjectProvisioning(projectSpec: Record<string, any>) {

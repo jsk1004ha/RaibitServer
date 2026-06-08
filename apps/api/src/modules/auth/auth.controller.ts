@@ -7,23 +7,23 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('signup')
-  signup(@Body() input: Record<string, any>) {
-    return this.authService.signup(input);
+  signup(@Body() input: Record<string, any>, @Req() req: any) {
+    return this.authService.signup(input, req);
   }
 
   @Post('login')
-  login(@Body() input: Record<string, any>) {
-    return this.authService.login(input);
+  login(@Body() input: Record<string, any>, @Req() req: any) {
+    return this.authService.login(input, req);
   }
 
   @Post('email/verify')
-  verifyEmail(@Body() input: Record<string, any>) {
-    return this.authService.verifyEmail(input);
+  verifyEmail(@Body() input: Record<string, any>, @Req() req: any) {
+    return this.authService.verifyEmail(input, req);
   }
 
   @Post('email/resend')
-  resendEmailVerification(@Body() input: Record<string, any>) {
-    return this.authService.resendEmailVerification(input);
+  resendEmailVerification(@Body() input: Record<string, any>, @Req() req: any) {
+    return this.authService.resendEmailVerification(input, req);
   }
 
   @Get('github/login')

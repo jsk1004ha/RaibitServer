@@ -541,13 +541,12 @@ export class ControlPlaneStore {
     const previous = input.previousDeploymentId
       ? this.deployments.get(String(input.previousDeploymentId))
       : latestReadyDeploymentForService([...this.deployments.values()], current);
-    const imageUrl = input.imageUrl || previous?.imageUrl || previous?.image || null;
+    validateRollbackSource(current, previous, input.previousDeploymentId);
+    const imageUrl = previous?.imageUrl || previous?.image || null;
     if (!imageUrl) {
-      const error = new Error('no previous READY deployment image is available for rollback');
-      (error as any).statusCode = 409;
-      throw error;
+      throw conflict('no previous READY deployment image is available for rollback');
     }
-    const imageDigest = input.imageDigest || previous?.imageDigest || null;
+    const imageDigest = previous?.imageDigest || null;
     const rollback = this.createDeployment({
       id: stableId('dep', current.serviceId, 'rollback', current.id, nowIso()),
       serviceId: current.serviceId,
@@ -1061,6 +1060,19 @@ export class ControlPlaneStore {
   }
 }
 
+function validateRollbackSource(current: Record<string, any>, previous: Record<string, any> | undefined, explicitPreviousDeploymentId: any) {
+  if (!previous) {
+    if (explicitPreviousDeploymentId) throw notFound(`rollback source deployment not found: ${explicitPreviousDeploymentId}`);
+    throw conflict('no previous READY deployment image is available for rollback');
+  }
+  if (String(previous.projectId || '') !== String(current.projectId || '') || String(previous.serviceId || '') !== String(current.serviceId || '')) {
+    throw forbidden('rollback source deployment must belong to the same service and project');
+  }
+  if (String(previous.status || '').toUpperCase() !== 'READY' || !(previous.imageUrl || previous.image)) {
+    throw conflict('rollback source deployment must be READY and have an image');
+  }
+}
+
 
 function publicSecret(row: Record<string, any>) {
   return publicSecretRecord(row);
@@ -1120,6 +1132,12 @@ function notFound(message: string) {
 function forbidden(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 403;
+  return error;
+}
+
+function conflict(message: string) {
+  const error = new Error(message);
+  (error as any).statusCode = 409;
   return error;
 }
 

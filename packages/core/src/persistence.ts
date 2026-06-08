@@ -422,13 +422,12 @@ export class PrismaControlPlaneRepository {
           where: { serviceId: current.serviceId, id: { not: current.id }, status: 'READY', imageUrl: { not: null } },
           orderBy: [{ deployedAt: 'desc' }, { finishedAt: 'desc' }, { createdAt: 'desc' }],
         });
-    const imageUrl = input.imageUrl || previous?.imageUrl || null;
+    validateRollbackSource(current, previous, input.previousDeploymentId);
+    const imageUrl = previous?.imageUrl || null;
     if (!imageUrl) {
-      const error = new Error('no previous READY deployment image is available for rollback');
-      (error as any).statusCode = 409;
-      throw error;
+      throw conflictError('no previous READY deployment image is available for rollback');
     }
-    const imageDigest = input.imageDigest || previous?.imageDigest || null;
+    const imageDigest = previous?.imageDigest || null;
     const rollback = await this.createDeployment({
       serviceId: current.serviceId,
       projectId: current.projectId,
@@ -1321,6 +1320,25 @@ function forbiddenError(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 403;
   return error;
+}
+
+function conflictError(message: string) {
+  const error = new Error(message);
+  (error as any).statusCode = 409;
+  return error;
+}
+
+function validateRollbackSource(current: Record<string, any>, previous: Record<string, any> | null | undefined, explicitPreviousDeploymentId: any) {
+  if (!previous) {
+    if (explicitPreviousDeploymentId) throw notFoundError(`rollback source deployment not found: ${explicitPreviousDeploymentId}`);
+    throw conflictError('no previous READY deployment image is available for rollback');
+  }
+  if (String(previous.projectId || '') !== String(current.projectId || '') || String(previous.serviceId || '') !== String(current.serviceId || '')) {
+    throw forbiddenError('rollback source deployment must belong to the same service and project');
+  }
+  if (String(previous.status || '').toUpperCase() !== 'READY' || !previous.imageUrl) {
+    throw conflictError('rollback source deployment must be READY and have an image');
+  }
 }
 
 function notFoundError(message: string) {

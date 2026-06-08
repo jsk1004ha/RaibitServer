@@ -12,6 +12,19 @@ import { assertEnvironmentWriteAllowed, assertRateLimit, assertSystemDeploymentA
  */
 const authLimiter = createFixedWindowRateLimiter({ limit: Number(process.env.RAIBITSERVER_AUTH_RATE_LIMIT || 10), windowMs: 60_000 });
 
+function authRateKey(label: string, email: string, context: Record<string, any> = {}) {
+  return `${label}:${email}:${authRateSource(context)}`;
+}
+
+function authRateSource(context: Record<string, any> = {}) {
+  const request = context.request || context.req || null;
+  if (!request) return 'direct';
+  const headers = request.headers || {};
+  const trustedProxy = process.env.RAIBITSERVER_TRUST_PROXY_HEADERS === '1' || process.env.RAIBITSERVER_AUTH_RATE_LIMIT_TRUST_PROXY === '1';
+  const forwarded = trustedProxy ? String(headers['x-forwarded-for'] || headers['X-Forwarded-For'] || '').split(',')[0]?.trim() : '';
+  return forwarded || request.ip || request.socket?.remoteAddress || request.connection?.remoteAddress || 'unknown';
+}
+
 @Injectable()
 export class RAIBITSERVERService implements OnModuleDestroy {
   private readonly repositoryPromise: Promise<InMemoryControlPlaneRepository | PrismaControlPlaneRepository>;
@@ -25,11 +38,11 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     if ('disconnect' in repository) await repository.disconnect();
   }
 
-  async signup(input: Record<string, any>) {
+  async signup(input: Record<string, any>, context: Record<string, any> = {}) {
     const repository: any = await this.repositoryPromise;
     const jwtSecret = jwtSecretOrThrow();
     const email = normalizeEmail(input.email);
-    assertRateLimit(authLimiter, `signup:${email}`);
+    assertRateLimit(authLimiter, authRateKey('signup', email, context));
     try {
       const emailVerification = await issueSignupEmailVerificationCode(repository, { ...input, email }, { jwtSecret, issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', env: process.env });
       return { emailVerification, signup: { email, status: 'verification_required' } };
@@ -38,25 +51,26 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     }
   }
 
-  async verifyEmail(input: Record<string, any>) {
+  async verifyEmail(input: Record<string, any>, context: Record<string, any> = {}) {
     const repository: any = await this.repositoryPromise;
     const jwtSecret = jwtSecretOrThrow();
     const email = normalizeEmail(input.email);
-    assertRateLimit(authLimiter, `email-verify:${email}`);
+    const rateKey = authRateKey('email-verify', email, context);
+    assertRateLimit(authLimiter, rateKey);
     try {
       const result = await verifyEmailCodeAndCreateSession(repository, input, { jwtSecret, issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', env: process.env });
-      authLimiter.reset(`email-verify:${email}`);
+      authLimiter.reset(rateKey);
       return { ...result, user: publicUser(result.user) };
     } catch (error) {
       throw nestAuthError(error);
     }
   }
 
-  async resendEmailVerification(input: Record<string, any>) {
+  async resendEmailVerification(input: Record<string, any>, context: Record<string, any> = {}) {
     const repository: any = await this.repositoryPromise;
     const jwtSecret = jwtSecretOrThrow();
     const email = normalizeEmail(input.email);
-    assertRateLimit(authLimiter, `email-resend:${email}`);
+    assertRateLimit(authLimiter, authRateKey('email-resend', email, context));
     try {
       const emailVerification = await resendEmailVerificationCode(repository, input, { jwtSecret, issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', env: process.env });
       return { emailVerification };
@@ -65,19 +79,23 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     }
   }
 
-  async login(input: Record<string, any>) {
+  async login(input: Record<string, any>, context: Record<string, any> = {}) {
     const repository: any = await this.repositoryPromise;
     const jwtSecret = jwtSecretOrThrow();
     const email = normalizeEmail(input.email);
-    assertRateLimit(authLimiter, `login:${email}`);
+    const rateKey = authRateKey('login', email, context);
     let user = repository.findUserByEmail ? await repository.findUserByEmail(email) : repository.store.findUserByEmail(email);
-    if (!user || !verifyPassword(input.password, user.passwordHash)) throw new ForbiddenException('invalid credentials');
+    const passwordValid = user ? verifyPassword(input.password, user.passwordHash) : false;
+    if (!user || !passwordValid) {
+      assertRateLimit(authLimiter, rateKey);
+      throw new ForbiddenException('invalid credentials');
+    }
     assertNestEmailVerified(user);
     if (shouldPromoteFirstLogin(user, await usersForRepository(repository))) {
       user = await repository.approveUser(user.id, { accountType: 'NON_CLUB', role: 'ADMIN', actorUserId: 'system' });
     }
     const memberships = repository.listMembershipsForUser ? await repository.listMembershipsForUser(user.id) : repository.store.listMembershipsForUser(user.id);
-    authLimiter.reset(`login:${email}`);
+    authLimiter.reset(rateKey);
     const token = createSessionToken(user, memberships, jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver' });
     const { passwordHash, ...publicUser } = user;
     return { user: publicUser, memberships, token };
@@ -301,7 +319,9 @@ export class RAIBITSERVERService implements OnModuleDestroy {
 
   async rollbackDeployment(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
-    await this.getDeployment(deploymentId, subject);
+    const deployment = await this.getDeployment(deploymentId, subject);
+    if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
+    if ((deployment.deploymentType || input.deploymentType || input.type) === 'preview' && repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
     try {
       return repository.rollbackDeployment
         ? await repository.rollbackDeployment(deploymentId, { ...input, actorUserId: subject.id })

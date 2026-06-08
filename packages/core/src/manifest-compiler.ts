@@ -36,8 +36,7 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
     manifests.push(...serviceManifests);
   }
 
-  const prePullImages = imagePrePullList(spec, buildPlans);
-  if (prePullImages.length) manifests.push(imagePrePullDaemonSetManifest(namespace, projectSlug, prePullImages));
+  const ignoredPrePullImages = imagePrePullList(spec, buildPlans);
   manifests.push(...networkPolicyManifests(namespace, projectSlug, services, resources));
   return {
     apiVersion: 'raibitserver.io/v1alpha1',
@@ -49,9 +48,10 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
     },
     buildPlans,
     prePullPlan: {
-      enabled: prePullImages.length > 0,
-      images: prePullImages,
-      strategy: prePullImages.length ? 'tenant-daemonset-init-container-cache-warmup' : 'disabled',
+      enabled: false,
+      images: [],
+      ignoredImages: ignoredPrePullImages,
+      strategy: ignoredPrePullImages.length ? 'disabled-tenant-prepull-not-supported' : 'disabled',
     },
     resourcePlans,
     domainPlan: domainPlanForProject(spec),
@@ -402,53 +402,17 @@ const PRIVATE_IPV4_EGRESS_EXCEPTIONS = Object.freeze(['10.0.0.0/8', '100.64.0.0/
 const PRIVATE_IPV6_EGRESS_EXCEPTIONS = Object.freeze(['::1/128', 'fc00::/7', 'fe80::/10', 'fd00:ec2::254/128']);
 
 function imagePrePullList(spec: AnyRecord, buildPlans: AnyRecord[]) {
-  const explicit = spec.prePullImages || spec.performance?.prePullImages || spec.runtime?.prePullImages || [];
+  const explicit = [
+    ...arrayStrings(spec.prePullImages),
+    ...arrayStrings(spec.performance?.prePullImages),
+    ...arrayStrings(spec.runtime?.prePullImages),
+  ];
   const includeBuildOutputs = spec.performance?.prePullBuildImages === true || spec.runtime?.prePullBuildImages === true;
   const images = [
-    ...arrayStrings(explicit),
+    ...explicit,
     ...(includeBuildOutputs ? buildPlans.map((plan) => plan.image) : []),
   ];
   return [...new Set(images.filter(Boolean).map(String))].slice(0, 20);
-}
-
-function imagePrePullDaemonSetManifest(namespace: string, projectSlug: string, images: string[]): AnyRecord {
-  const labels = {
-    'app.kubernetes.io/name': 'image-prepull',
-    'app.kubernetes.io/managed-by': 'raibitserver',
-    'raibitserver.io/project': projectSlug,
-    'raibitserver.io/performance': 'image-prepull',
-  };
-  return {
-    apiVersion: 'apps/v1',
-    kind: 'DaemonSet',
-    metadata: { name: 'image-prepull', namespace, labels },
-    spec: {
-      selector: { matchLabels: { 'app.kubernetes.io/name': 'image-prepull' } },
-      template: {
-        metadata: { labels, annotations: { 'raibitserver.io/prepull-images': images.join(',') } },
-        spec: {
-          securityContext: DEFAULT_POD_SECURITY_CONTEXT,
-          automountServiceAccountToken: false,
-          restartPolicy: 'Always',
-          initContainers: images.map((image, index) => ({
-            name: `pull-${index + 1}`,
-            image,
-            imagePullPolicy: 'IfNotPresent',
-            command: ['sh', '-lc', 'true'],
-            resources: { requests: { cpu: '10m', memory: '16Mi' }, limits: { cpu: '50m', memory: '64Mi' } },
-            securityContext: DEFAULT_CONTAINER_SECURITY_CONTEXT,
-          })),
-          containers: [{
-            name: 'pause',
-            image: 'registry.k8s.io/pause:3.10',
-            imagePullPolicy: 'IfNotPresent',
-            resources: { requests: { cpu: '10m', memory: '16Mi' }, limits: { cpu: '50m', memory: '64Mi' } },
-            securityContext: DEFAULT_CONTAINER_SECURITY_CONTEXT,
-          }],
-        },
-      },
-    },
-  };
 }
 
 function arrayStrings(value: any) {

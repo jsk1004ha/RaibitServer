@@ -94,7 +94,12 @@ async function main(argv: string[]) {
   if (command === 'guard-query') {
     const queryArgs = [file, ...rest].filter(Boolean) as string[];
     const queryFile = valueForFlag(queryArgs, '--file');
-    const query = queryFile ? await fs.readFile(queryFile, 'utf8') : queryArgs.join(' ');
+    const legacyQueryFile = !queryFile && queryArgs.length === 1 && await readableFile(queryArgs[0]);
+    const query = queryFile
+      ? await fs.readFile(queryFile, 'utf8')
+      : legacyQueryFile
+        ? await fs.readFile(queryArgs[0], 'utf8')
+        : queryArgs.join(' ');
     return print(controlPlane.guardQuery(query, { role: process.env.RAIBITSERVER_ROLE || 'developer', confirmed: process.env.RAIBITSERVER_CONFIRMED === '1' }));
   }
   if (command === 'auth-token') {
@@ -141,6 +146,15 @@ function hasFlag(args: string[], flag: string) {
 function valueForFlag(args: string[], flag: string) {
   const index = args.indexOf(flag);
   return index >= 0 ? args[index + 1] : undefined;
+}
+
+async function readableFile(filePath: string) {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
 }
 
 function print(value: unknown) {

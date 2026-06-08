@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { InMemoryControlPlaneRepository } from '../packages/core/src/persistence.ts';
+import { signJwtHs256 } from '../packages/core/src/auth.ts';
 
 test('HTTP API serves health, catalog, and manifest planning', async () => {
   const controlPlane = new RAIBITSERVERControlPlane();
@@ -61,10 +62,12 @@ function request(port, method, path, body) {
   });
 }
 
-function requestWithStatus(port, method, path, body) {
+function requestWithStatus(port, method, path, body, token = null) {
   return new Promise((resolve, reject) => {
     const payload = body ? JSON.stringify(body) : null;
-    const req = http.request({ port, path, method, headers: payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {} }, (res) => {
+    const headers = payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {};
+    if (token) headers.authorization = `Bearer ${token}`;
+    const req = http.request({ port, path, method, headers }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => {
@@ -152,6 +155,43 @@ test('HTTP API exposes deployment detail, status transition, cancel, and rollbac
     assert.match(deploymentStream.body, /event: deployment\.snapshot/);
     const runtimeStream = await requestRaw(port, 'GET', `/services/${service.id}/logs/stream`);
     assert.match(runtimeStream.body, /event: service\.logs\.snapshot/);
+  } finally {
+    server.close();
+  }
+});
+
+test('rollback cannot use unscoped deployments or bypass deployment quotas', async () => {
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const orgA = controlPlane.store.createOrganization({ name: 'Org A', slug: 'org-a' });
+  const orgB = controlPlane.store.createOrganization({ name: 'Org B', slug: 'org-b' });
+  const projectA = controlPlane.store.createProject({ organizationId: orgA.id, name: 'attacker', slug: 'attacker' });
+  const projectB = controlPlane.store.createProject({ organizationId: orgB.id, name: 'victim', slug: 'victim' });
+  const serviceA = controlPlane.store.createService({ projectId: projectA.id, name: 'api', sourceType: 'image', imageUrl: 'registry.local/attacker/api:new' });
+  const serviceB = controlPlane.store.createService({ projectId: projectB.id, name: 'api', sourceType: 'image', imageUrl: 'registry.local/victim/api:secret' });
+  const previousA = controlPlane.store.createDeployment({ serviceId: serviceA.id, projectId: projectA.id, status: 'READY', imageUrl: 'registry.local/attacker/api:old' });
+  const currentA = controlPlane.store.createDeployment({ serviceId: serviceA.id, projectId: projectA.id, status: 'READY', imageUrl: 'registry.local/attacker/api:new' });
+  const previousB = controlPlane.store.createDeployment({ serviceId: serviceB.id, projectId: projectB.id, status: 'READY', imageUrl: 'registry.local/victim/api:secret', commitSha: 'victim-private-commit' });
+
+  assert.throws(
+    () => controlPlane.store.rollbackDeployment(currentA.id, { previousDeploymentId: previousB.id }),
+    /same service/,
+  );
+  assert.equal(controlPlane.store.rollbackDeployment(currentA.id, { previousDeploymentId: previousA.id }).previousDeployment.projectId, projectA.id);
+
+  const secret = 'rollback-quota-secret';
+  const user = controlPlane.store.createUser({ email: 'deployer@example.com', name: 'Deployer', role: 'USER', accountType: 'NON_CLUB', approvalStatus: 'APPROVED' });
+  controlPlane.store.addMember({ organizationId: orgA.id, userId: user.id, role: 'maintainer' });
+  controlPlane.store.setQuota({ userId: user.id, accountType: 'NON_CLUB', maxDeploymentsPerDay: 2 });
+
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const token = signJwtHs256({ sub: user.id, role: 'maintainer', organizationId: orgA.id }, secret);
+    const denied = await requestWithStatus(port, 'POST', `/deployments/${currentA.id}/rollback`, { previousDeploymentId: previousA.id }, token);
+    assert.equal(denied.statusCode, 403);
+    assert.match(denied.body.error, /maxDeploymentsPerDay/);
   } finally {
     server.close();
   }
