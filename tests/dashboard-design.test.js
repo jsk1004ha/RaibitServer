@@ -165,9 +165,9 @@ test('project list is a compact Korean row-card view scoped to its organization'
   assert.ok(projects.includes('프로젝트 만들기'));
   assert.ok(projects.includes('첫 프로젝트 만들기'));
   assert.match(projects, /<ProjectCard\s+key=\{project\.id\}/);
-  assert.ok(projects.includes('href={`/org/${params.orgSlug}/projects/${project.id}`}'));
-  assert.ok(projects.includes('href={`/org/${params.orgSlug}/projects/new`}'));
-  for (const marker of ['loadDashboardOverview()', 'project.organizationSlug', 'project.organizationId', "params.orgSlug === 'all'"]) {
+  assert.ok(projects.includes('href={`/org/${orgSlug}/projects/${project.id}`}'));
+  assert.ok(projects.includes('href={`/org/${orgSlug}/projects/new`}'));
+  for (const marker of ['loadDashboardOverview()', 'project.organizationSlug', 'project.organizationId', "orgSlug === 'all'"]) {
     assert.ok(projects.includes(marker), `${marker} project data marker missing`);
   }
   for (const oldCopy of ['Workspace', 'Create project', 'projects</h1>', 'No projects returned']) {
@@ -194,7 +194,7 @@ test('project workflows keep their operational contracts behind a Korean console
     assert.ok(createProject.includes(`name="${name}"`), `${name} create-project field missing`);
   }
   for (const contract of [
-    'defaultValue={params.orgSlug}', 'defaultValue="github"', 'value="github"', 'value="image"',
+    'value={orgSlug}', 'defaultValue="github"', 'value="github"', 'value="image"',
     'defaultValue="web"', 'value="web"', 'value="worker"', 'value="cron"', 'value="job"',
   ]) {
     assert.ok(createProject.includes(contract), `${contract} create-project value/default missing`);
@@ -220,20 +220,20 @@ test('project workflows keep their operational contracts behind a Korean console
   }
 
   for (const action of [
-    'apiAction(`/projects/${params.projectId}/services`, state.context)',
-    'apiAction(`/projects/${params.projectId}/resources`, state.context)',
-    'apiAction(`/projects/${params.projectId}/services/${service.id}/deployments`, state.context)',
+    'apiAction(`/projects/${projectId}/services`, state.context)',
+    'apiAction(`/projects/${projectId}/resources`, state.context)',
+    'apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)',
   ]) {
     assert.ok(projectDetail.includes(action), `${action} project form action missing`);
   }
   assert.ok(projectDetail.includes('<input type="hidden" name="deploymentType" value="production" />'));
   assert.ok(projectDetail.includes('<input type="hidden" name="deploymentType" value="preview" />'));
-  assert.ok(projectDetail.includes('href={`/org/${params.orgSlug}/projects/${params.projectId}/deployments/${deployment.id}`}'));
-  assert.ok(projectDetail.includes('href={`/org/${params.orgSlug}/projects/${params.projectId}/resources/${resource.id}/console`}'));
+  assert.ok(projectDetail.includes('href={`/org/${orgSlug}/projects/${projectId}/deployments/${deployment.id}`}'));
+  assert.ok(projectDetail.includes('href={`/org/${orgSlug}/projects/${projectId}/resources/${resource.id}/console`}'));
   for (const name of ['name', 'type', 'sourceType', 'repoUrl', 'branch', 'imageUrl', 'dockerfilePath', 'buildContext', 'engine']) {
     assert.ok(projectDetail.includes(`name="${name}"`), `${name} project-detail field missing`);
   }
-  for (const deferred of ['loadProjectConsole(params.projectId)', 'state.resources.map', '/console/query', '/console/schema']) {
+  for (const deferred of ['loadProjectConsole(projectId)', 'state.resources.map', '/console/query', '/console/schema']) {
     assert.ok(projectDetail.includes(deferred), `${deferred} deferred project data marker missing`);
   }
   for (const eagerData of ['state.resourceConsoles', 'state.buildLogs', 'state.deploymentEvents', 'state.runtimeLogs', 'Promise.all(']) {
@@ -241,6 +241,75 @@ test('project workflows keep their operational contracts behind a Korean console
   }
   for (const oldCopy of ['>Project console<', '>New service<', '>Deploy<', '>Overview<', '>Create service<', '>Deployments<', '>Create resource<', '>Danger zone<', '>Build logs<', '>Deployment events<', '>Runtime logs<']) {
     assert.ok(!projectDetail.includes(oldCopy), `${oldCopy} old visible project-detail copy remains`);
+  }
+});
+
+test('dynamic project routes await Next 16 params before rendering route-bound UI', async () => {
+  const [projects, createProject, projectDetail] = await Promise.all([
+    read('../apps/dashboard/app/org/[orgSlug]/projects/page.tsx'),
+    read('../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx'),
+    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
+  ]);
+
+  assert.match(projects, /params:\s*Promise<\{\s*orgSlug:\s*string\s*\}>/);
+  assert.ok(projects.includes('const { orgSlug } = await params;'));
+  assert.ok(projects.includes('orgValue={orgSlug}'));
+  assert.ok(projects.includes('crumbs={`${orgSlug} / 프로젝트`}'));
+
+  assert.match(createProject, /params:\s*Promise<\{\s*orgSlug:\s*string\s*\}>/);
+  assert.ok(createProject.includes('const { orgSlug } = await params;'));
+  assert.ok(createProject.includes('orgValue={orgSlug}'));
+  assert.ok(createProject.includes('crumbs={`${orgSlug} / 프로젝트 만들기`}'));
+
+  assert.match(projectDetail, /params:\s*Promise<\{\s*orgSlug:\s*string;\s*projectId:\s*string\s*\}>/);
+  assert.ok(projectDetail.includes('const { orgSlug, projectId } = await params;'));
+  assert.ok(projectDetail.includes('orgValue={orgSlug}'));
+  assert.ok(projectDetail.includes('crumbs={`${orgSlug} / ${projectName} / 개요`}'));
+
+  for (const [path, source] of [
+    ['projects', projects],
+    ['projects/new', createProject],
+    ['projects/[projectId]', projectDetail],
+  ]) {
+    assert.doesNotMatch(source, /params\.(?:orgSlug|projectId)/, `${path} reads unresolved params`);
+    assert.doesNotMatch(source, /crumbs=\{`[^`]*undefined/, `${path} can render undefined crumbs`);
+  }
+});
+
+test('project workflow controls bind tenant scope and expose accessible labels without inert buttons', async () => {
+  const [createProject, projectDetail] = await Promise.all([
+    read('../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx'),
+    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
+  ]);
+
+  assert.ok(createProject.includes('<label>조직 <input value={orgSlug} readOnly /></label>'));
+  assert.ok(createProject.includes('<input type="hidden" name="organizationId" value={orgSlug} />'));
+  assert.doesNotMatch(createProject, /<input(?![^>]*type="hidden")[^>]*name="organizationId"/);
+  assert.match(createProject, /<ol\s+className="tabs"[^>]*>/);
+  assert.doesNotMatch(createProject, /<button[^>]*className="tab/);
+
+  assert.match(projectDetail, /<ol\s+className="tabs"[^>]*>/);
+  assert.doesNotMatch(projectDetail, /<button[^>]*className="tab/);
+  for (const field of [
+    '<label>서비스 이름 <input name="name"',
+    '<label>서비스 유형 <select name="type"',
+    '<label>소스 유형 <select name="sourceType"',
+    '<label>저장소 URL <input name="repoUrl"',
+    '<label>브랜치 <input name="branch"',
+    '<label>이미지 <input name="imageUrl"',
+    '<label>Dockerfile 경로 <input name="dockerfilePath"',
+    '<label>빌드 컨텍스트 <input name="buildContext"',
+    '<label>리소스 이름 <input name="name"',
+    '<label>엔진 <select name="engine"',
+  ]) {
+    assert.ok(projectDetail.includes(field), `${field} explicit label missing`);
+  }
+  for (const option of [
+    '<option value="web">웹</option>', '<option value="private">비공개 서비스</option>',
+    '<option value="worker">워커</option>', '<option value="cron">예약 작업</option>',
+    '<option value="job">일회성 작업</option>', '<option value="object-storage">객체 저장소</option>',
+  ]) {
+    assert.ok(projectDetail.includes(option), `${option} localized enum label missing`);
   }
 });
 
