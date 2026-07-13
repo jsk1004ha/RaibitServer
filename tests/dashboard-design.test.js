@@ -540,9 +540,23 @@ test('GitHub console keeps integration contracts behind a compact Korean workflo
   for (const field of ['organizationId', 'accountLogin', 'installationId', 'token', 'projectId', 'integrationId', 'repository', 'serviceName', 'repoUrl', 'branch']) {
     assert.ok(github.includes(`name="${field}"`), `${field} GitHub field missing`);
   }
-  for (const identifier of ['firstRepository.fullName', 'encodeURIComponent(firstRepository.fullName)', 'x-github-event', 'x-github-delivery', 'x-hub-signature-256', 'Webhook / Preview contract']) {
+  for (const identifier of ['firstRepository.fullName', 'encodeURIComponent(firstRepository.fullName)', 'x-github-event', 'x-github-delivery', 'x-hub-signature-256', '웹훅 / 미리보기 계약']) {
     assert.ok(github.includes(identifier), `${identifier} GitHub evidence missing`);
   }
+  assert.ok(github.includes('`/projects/${firstService.projectId}/services/${firstService.id}/github`'), 'attach action must pair a service with its own project');
+  assert.ok(!github.includes('`/projects/${firstProject.id}/services/${firstService.id}/github`'), 'attach action must not cross-pair independent project and service rows');
+  assert.ok(github.includes('action={canAttachRepository ? apiAction('));
+  assert.ok(github.includes(': undefined} className="card stack"'));
+  assert.ok(github.includes('<fieldset className="stack" disabled={!canAttachRepository}>'));
+  assert.ok(github.includes('<button type="submit" disabled={!canAttachRepository}>서비스에 연결</button>'));
+  assert.ok(github.includes('연결할 서비스가 없습니다. 먼저 프로젝트에 서비스를 만드세요.'));
+  assert.ok(github.includes('action={canSyncRepository ? apiAction('));
+  assert.ok(github.includes('<fieldset className="stack" disabled={!canSyncRepository}>'));
+  assert.ok(github.includes('<button type="submit" disabled={!canSyncRepository}>정보 동기화</button>'));
+  assert.ok(github.includes('동기화할 저장소가 없습니다. 먼저 저장소를 가져오세요.'));
+  assert.ok(!github.includes("'/projects/project-id/services/service-id/github'"));
+  assert.ok(!github.includes("'/github/repositories/owner%2Frepo/sync'"));
+  assert.ok(github.includes('name="token" type="password" autoComplete="off"'));
   assert.doesNotMatch(github, /(?:minHeight|height):\s*['"]?\d/);
   for (const oldCopy of ['Repository import and preview deployments', 'Connect integration', 'Import repository', 'Attach repository to service', 'Sync repository metadata']) {
     assert.ok(!github.includes(oldCopy), `${oldCopy} old GitHub copy remains`);
@@ -575,6 +589,13 @@ test('admin console preserves approval, quota, and audit actions with explicit K
   for (const evidence of ['state.quotas', 'state.usage', 'state.auditLogs']) {
     assert.ok(admin.includes(evidence), `${evidence} admin evidence missing`);
   }
+  for (const label of ["ADMIN: '관리자'", "USER: '사용자'", "CLUB_MEMBER: '클럽 회원'", "NON_CLUB: '일반 사용자'"]) {
+    assert.ok(admin.includes(label), `${label} admin display label missing`);
+  }
+  assert.ok(admin.includes('roleLabels[user.role ||'));
+  assert.ok(admin.includes('accountTypeLabels[user.accountType]'));
+  assert.doesNotMatch(admin, /<td>\{user\.role\s*\|\|\s*'USER'\}\s*\/\s*\{user\.accountType\}<\/td>/);
+  assert.ok(!admin.includes('새 가입은 NON_CLUB / PENDING'));
 });
 
 test('login console keeps same-origin auth endpoints and explains verification before approval', async () => {
@@ -596,6 +617,34 @@ test('login console keeps same-origin auth endpoints and explains verification b
   assert.ok(login.includes('name="localDev" type="hidden" value="1"'));
   assert.ok(login.includes('인증 코드를 확인한 뒤에만 계정이 만들어집니다.'));
   assert.ok(login.includes('관리자 승인 결과가 계정의 사용 가능 기능을 결정합니다.'));
-  assert.match(login, /className="grid grid-2"/);
+  assert.ok(login.includes("const githubLoginEndpoint = apiAction('/auth/github/login');"));
+  assert.ok(login.includes("const githubCallbackEndpoint = apiAction('/auth/github/callback');"));
+  assert.doesNotMatch(login, /href=\{(?:githubLoginEndpoint|apiAction\('\/auth\/github\/login'\))/);
+  assert.doesNotMatch(login, /<form[^>]+(?:githubCallbackEndpoint|auth\/github\/callback)/s);
+  assert.ok(login.includes('<button className="btn btn-primary" type="button" disabled aria-describedby="github-oauth-status">GitHub로 계속하기</button>'));
+  assert.ok(login.includes('id="github-oauth-status"'));
+  assert.ok(login.includes('GitHub OAuth 연결은 준비 중입니다.'));
+  assert.ok(login.includes('<fieldset disabled>'));
+  assert.ok(login.includes('<button type="button" disabled>GitHub 연결</button>'));
+  assert.ok(login.includes('현재 API는 OAuth 계획과 연결 대기 상태만 제공합니다.'));
+  assert.ok(login.includes('name="password" type="password" autoComplete="current-password"'));
+  assert.ok(login.includes('name="password" type="password" autoComplete="new-password"'));
+  assert.ok(login.includes('name="code" inputMode="numeric" autoComplete="one-time-code"'));
+  assert.match(login, /className="grid grid-2 grid-start"/);
   assert.doesNotMatch(login, /<main\s+className="hero"/);
+});
+
+test('Task 8 form grids opt out of card stretching without changing the shared grid', async () => {
+  const [css, github, login] = await Promise.all([
+    read('../apps/dashboard/app/globals.css'),
+    read('../apps/dashboard/app/github/page.tsx'),
+    read('../apps/dashboard/app/login/page.tsx'),
+  ]);
+
+  const gridStart = extractCssBlock(css, /^\.grid-start\s*(?=\{)/m);
+  assert.match(gridStart, /align-items:\s*start/);
+  const gridTwo = extractCssBlock(css, /^\.grid-2\s*(?=\{)/m);
+  assert.doesNotMatch(gridTwo, /align-items/);
+  assert.match(github, /className="grid grid-2 grid-start"/);
+  assert.match(login, /className="grid grid-2 grid-start"/);
 });

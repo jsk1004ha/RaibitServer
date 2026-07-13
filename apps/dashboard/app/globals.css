@@ -409,6 +409,10 @@ input[type="submit"]:hover {
   align-items: start;
 }
 
+.grid-start {
+  align-items: start;
+}
+
 .grid + .grid,
 .grid + .card,
 .card + .grid,
