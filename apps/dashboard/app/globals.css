@@ -5,6 +5,7 @@
   --color-surface-raised: #1b2128;
   --color-surface-strong: #222932;
   --color-border: #2b333c;
+  --color-control-border: #65717d;
   --color-text: #eef2f6;
   --color-text-soft: #aeb7c0;
   --color-text-muted: #87929e;
@@ -316,7 +317,7 @@ p {
 }
 
 .btn,
-button:not(.btn),
+button[type="submit"]:not(.btn),
 input[type="submit"] {
   min-height: 34px;
   display: inline-flex;
@@ -324,7 +325,7 @@ input[type="submit"] {
   justify-content: center;
   gap: 7px;
   padding: 6px 11px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-control-border);
   border-radius: var(--radius-control);
   background: var(--color-surface-raised);
   color: var(--color-text-soft);
@@ -334,9 +335,9 @@ input[type="submit"] {
 }
 
 .btn:hover,
-button:not(.btn):hover,
+button[type="submit"]:not(.btn):hover,
 input[type="submit"]:hover {
-  border-color: #46515d;
+  border-color: #7d8994;
   background: var(--color-surface-strong);
   color: var(--color-text);
 }
@@ -349,7 +350,7 @@ input[type="submit"]:hover {
 }
 
 .btn-primary,
-button:not(.btn),
+button[type="submit"]:not(.btn),
 input[type="submit"] {
   border-color: var(--color-primary);
   background: var(--color-primary);
@@ -357,7 +358,7 @@ input[type="submit"] {
 }
 
 .btn-primary:hover,
-button:not(.btn):hover,
+button[type="submit"]:not(.btn):hover,
 input[type="submit"]:hover {
   border-color: #8bea9f;
   background: #8bea9f;
@@ -386,13 +387,13 @@ input[type="submit"]:hover {
   align-items: center;
   gap: 9px;
   padding: 0 12px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-control-border);
   border-radius: 10px;
   background: var(--color-surface-raised);
 }
 
 .quick-action:hover {
-  border-color: #46515d;
+  border-color: #7d8994;
   background: var(--color-surface-strong);
 }
 
@@ -715,13 +716,13 @@ label {
 .input,
 .textarea,
 .select,
-input:not([type="checkbox"]):not([type="radio"]),
+input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="hidden"]),
 select,
 textarea {
   width: 100%;
   min-height: 36px;
   padding: 7px 9px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-control-border);
   border-radius: var(--radius-control);
   background: var(--color-surface-raised);
   color: var(--color-text);
@@ -730,16 +731,16 @@ textarea {
 .input:hover,
 .textarea:hover,
 .select:hover,
-input:not([type="checkbox"]):not([type="radio"]):hover,
+input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="hidden"]):hover,
 select:hover,
 textarea:hover {
-  border-color: #46515d;
+  border-color: #7d8994;
 }
 
 .input:focus,
 .textarea:focus,
 .select:focus,
-input:not([type="checkbox"]):not([type="radio"]):focus,
+input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="hidden"]):focus,
 select:focus,
 textarea:focus {
   border-color: var(--color-primary);
@@ -964,7 +965,13 @@ a:hover > .project-row-card,
 
 @media (max-width: 1180px) {
   .metric-strip {
+    display: flex;
+    flex-wrap: nowrap;
     overflow-x: auto;
+  }
+
+  .metric-item {
+    flex: 1 0 150px;
   }
 
   .grid-main,
@@ -1007,8 +1014,7 @@ a:hover > .project-row-card,
   }
 
   .mobile-nav {
-    position: sticky;
-    top: 54px;
+    position: static;
     z-index: 14;
     display: flex;
     gap: 6px;
@@ -1047,10 +1053,6 @@ a:hover > .project-row-card,
   .topbar {
     min-height: 50px;
     padding: 7px 14px;
-  }
-
-  .mobile-nav {
-    top: 50px;
   }
 
   .page-header {
@@ -1099,10 +1101,6 @@ a:hover > .project-row-card,
 
   .topbar {
     position: relative;
-  }
-
-  .mobile-nav {
-    top: 0;
   }
 
   .toolbar > .btn {

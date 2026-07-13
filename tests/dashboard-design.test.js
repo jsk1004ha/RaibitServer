@@ -127,7 +127,7 @@ test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
     read('../apps/dashboard/app/globals.css'),
     read('../apps/dashboard/app/layout.tsx'),
   ]);
-  for (const token of ['--color-canvas: #0b0e12', '--color-primary: #68df88', '--sidebar: 238px']) {
+  for (const token of ['--color-canvas: #0b0e12', '--color-primary: #68df88', '--color-control-border: #65717d', '--sidebar: 238px']) {
     assert.ok(css.includes(token), `${token} token missing`);
   }
   assert.match(css, /\.metric-strip\s*\{/);
@@ -149,10 +149,17 @@ test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
   assert.match(metricLabel, /text-overflow:\s*ellipsis/);
 
   const desktopBreakpoint = extractCssBlock(css, /@media\s*\(max-width:\s*1180px\)\s*/);
-  const responsiveScroller = extractCssBlock(desktopBreakpoint, /\.(?:metric-strip|quick-actions)\s*/);
+  const responsiveScroller = extractCssBlock(desktopBreakpoint, /\.metric-strip\s*/);
+  assert.match(responsiveScroller, /display:\s*flex/);
   assert.match(responsiveScroller, /overflow-x:\s*auto/);
+  const responsiveMetric = extractCssBlock(desktopBreakpoint, /\.metric-item\s*/);
+  assert.match(responsiveMetric, /flex:\s*1\s+0\s+150px/);
 
   assert.match(css, /@media\s*\(max-width:\s*900px\)/);
+  const tabletBreakpoint = extractCssBlock(css, /@media\s*\(max-width:\s*900px\)\s*/);
+  const tabletNavigation = extractCssBlock(tabletBreakpoint, /\.mobile-nav\s*/);
+  assert.match(tabletNavigation, /position:\s*static/);
+  assert.doesNotMatch(css, /\.mobile-nav\s*\{[^}]*\btop\s*:/gs);
   const mobileBreakpoint = extractCssBlock(css, /@media\s*\(max-width:\s*720px\)\s*/);
   const mobileMetrics = extractCssBlock(mobileBreakpoint, /\.metric-strip\s*/);
   assert.match(mobileMetrics, /display:\s*flex/);
@@ -173,6 +180,23 @@ test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
   assert.match(reducedMotion, /scroll-behavior:\s*auto\s*!important/);
   assert.match(reducedMotion, /transition-duration:\s*0\.01ms\s*!important/);
   assert.match(reducedMotion, /animation-duration:\s*0\.01ms\s*!important/);
+
+  assert.match(css, /button\[type="submit"\]:not\(\.btn\)/);
+  assert.doesNotMatch(css, /button:not\(\.btn\)/);
+  const textInputSelector = /input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="submit"\]\):not\(\[type="hidden"\]\)/;
+  assert.match(css, textInputSelector);
+
+  const neutralControls = extractCssBlock(css, /\.btn,\s*button\[type="submit"\]:not\(\.btn\)\s*/);
+  assert.match(neutralControls, /border:\s*1px\s+solid\s+var\(--color-control-border\)/);
+  const textControls = extractCssBlock(
+    css,
+    new RegExp(`^\\.input,[\\s\\S]*?${textInputSelector.source},\\s*select,`, 'm'),
+  );
+  assert.match(textControls, /border:\s*1px\s+solid\s+var\(--color-control-border\)/);
+  const quickAction = extractCssBlock(css, /^\.quick-action\s*(?=\{)/m);
+  assert.match(quickAction, /border:\s*1px\s+solid\s+var\(--color-control-border\)/);
+  const panel = extractCssBlock(css, /^\.card\s*(?=\{)/m);
+  assert.match(panel, /border:\s*1px\s+solid\s+var\(--color-border\)/);
 
   assert.ok(
     layout.includes("description: '클럽, 학교, 소규모 팀을 위한 컨테이너 기반 PaaS 및 DBaaS.'"),
