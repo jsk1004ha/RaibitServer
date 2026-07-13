@@ -52,6 +52,7 @@ test('shared dashboard primitives keep localized deterministic contracts', async
     ['../apps/dashboard/app/page.tsx', 'overview'],
     ['../apps/dashboard/app/admin/page.tsx', 'admin'],
     ['../apps/dashboard/app/github/page.tsx', 'github'],
+    ['../apps/dashboard/app/login/page.tsx', 'auth'],
     ['../apps/dashboard/app/org/[orgSlug]/projects/page.tsx', 'projects'],
     ['../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx', 'create-project'],
     ['../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', 'projects'],
@@ -160,7 +161,7 @@ test('project list is a compact Korean row-card view scoped to its organization'
   const projects = await read('../apps/dashboard/app/org/[orgSlug]/projects/page.tsx');
 
   assert.ok(projects.includes('<ConsoleShell active="projects"'));
-  assert.ok(projects.includes('crumbs={`${params.orgSlug} / 프로젝트`}'));
+  assert.ok(projects.includes('crumbs={`${orgSlug} / 프로젝트`}'));
   assert.match(projects, /<h1\s+className="page-title">프로젝트<\/h1>/);
   assert.ok(projects.includes('프로젝트 만들기'));
   assert.ok(projects.includes('첫 프로젝트 만들기'));
@@ -510,6 +511,11 @@ test('primary dashboard pages expose Korean visible headings', async () => {
   ];
   const files = await Promise.all(routes.map(([path]) => read(path)));
   for (const [index, [path, heading]] of routes.entries()) {
+    if (heading === '프로젝트 콘솔') {
+      assert.match(files[index], /<p\s+className="eyebrow">프로젝트 콘솔<\/p>/, `프로젝트 콘솔 route label missing from ${path}`);
+      assert.match(files[index], /<h1\s+className="page-title">\{projectName\}<\/h1>/, `dynamic project heading missing from ${path}`);
+      continue;
+    }
     const visibleHeading = new RegExp(`<h[12][^>]*>\\s*${heading}\\s*</h[12]>`);
     assert.match(files[index], visibleHeading, `${heading} heading missing from ${path}`);
   }
@@ -517,4 +523,79 @@ test('primary dashboard pages expose Korean visible headings', async () => {
   for (const label of ['운영 현황', '사용자 관리', '저장소 연결', '로그인', '프로젝트 만들기', '배포 상세', '리소스 콘솔']) {
     assert.ok(combined.includes(label), `${label} visible heading missing`);
   }
+});
+
+test('GitHub console keeps integration contracts behind a compact Korean workflow', async () => {
+  const github = await read('../apps/dashboard/app/github/page.tsx');
+
+  assert.ok(github.includes('<ConsoleShell active="github"'));
+  assert.match(github, /import\s+\{\s*Icon\s*\}\s+from\s+'\.\.\/\.\.\/components\/icon'/);
+  assert.match(github, /<h1\s+className="page-title">저장소 연결과 미리보기 배포<\/h1>/);
+  for (const heading of ['GitHub 연결', '저장소 가져오기', '서비스에 저장소 연결', '저장소 정보 동기화']) {
+    assert.ok(github.includes(`<h2>${heading}</h2>`), `${heading} GitHub section missing`);
+  }
+  for (const path of ['/integrations/github', '/github/repositories/import', '/projects/:projectId/services/:serviceId/github', '/github/repositories/:repositoryId/sync']) {
+    assert.ok(github.includes(path), `${path} GitHub action path missing`);
+  }
+  for (const field of ['organizationId', 'accountLogin', 'installationId', 'token', 'projectId', 'integrationId', 'repository', 'serviceName', 'repoUrl', 'branch']) {
+    assert.ok(github.includes(`name="${field}"`), `${field} GitHub field missing`);
+  }
+  for (const identifier of ['firstRepository.fullName', 'encodeURIComponent(firstRepository.fullName)', 'x-github-event', 'x-github-delivery', 'x-hub-signature-256', 'Webhook / Preview contract']) {
+    assert.ok(github.includes(identifier), `${identifier} GitHub evidence missing`);
+  }
+  assert.doesNotMatch(github, /(?:minHeight|height):\s*['"]?\d/);
+  for (const oldCopy of ['Repository import and preview deployments', 'Connect integration', 'Import repository', 'Attach repository to service', 'Sync repository metadata']) {
+    assert.ok(!github.includes(oldCopy), `${oldCopy} old GitHub copy remains`);
+  }
+});
+
+test('admin console preserves approval, quota, and audit actions with explicit Korean controls', async () => {
+  const admin = await read('../apps/dashboard/app/admin/page.tsx');
+
+  assert.ok(admin.includes('<ConsoleShell active="admin"'));
+  assert.match(admin, /<h1\s+className="page-title">사용자 관리<\/h1>/);
+  for (const heading of ['사용자', '할당량 편집', '거절 확인']) {
+    assert.ok(admin.includes(`<h2>${heading}</h2>`), `${heading} admin section missing`);
+  }
+  for (const action of ['클럽 회원으로 승인', '일반 사용자로 승인', '거절', '할당량 저장']) {
+    assert.match(admin, new RegExp(`>\\s*${action}\\s*<`), `${action} admin action missing`);
+  }
+  for (const path of ['/approve', '/reject', '/quota']) {
+    assert.ok(admin.includes(path), `${path} admin action path missing`);
+  }
+  for (const value of ['CLUB_MEMBER', 'NON_CLUB']) {
+    assert.ok(admin.includes(`name="accountType" value="${value}"`), `${value} hidden account type missing`);
+  }
+  for (const field of ['maxProjects', 'maxServices']) {
+    assert.ok(admin.includes(`name="${field}"`), `${field} quota field missing`);
+  }
+  assert.match(admin, /className="inline-actions danger-zone"/);
+  assert.match(admin, /<label>프로젝트 수\s*<input\s+name="maxProjects"/);
+  assert.match(admin, /<label>서비스 수\s*<input\s+name="maxServices"/);
+  for (const evidence of ['state.quotas', 'state.usage', 'state.auditLogs']) {
+    assert.ok(admin.includes(evidence), `${evidence} admin evidence missing`);
+  }
+});
+
+test('login console keeps same-origin auth endpoints and explains verification before approval', async () => {
+  const login = await read('../apps/dashboard/app/login/page.tsx');
+
+  assert.ok(login.includes('<ConsoleShell active="auth"'));
+  assert.match(login, /import\s+\{\s*ConsoleShell\s*\}\s+from\s+'\.\.\/\.\.\/components\/console-ui'/);
+  assert.doesNotMatch(login, /dashboardApiContext/);
+  for (const endpoint of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend', '/auth/github/login', '/auth/github/callback']) {
+    assert.ok(login.includes(`apiAction('${endpoint}')`), `${endpoint} must keep same-origin apiAction`);
+  }
+  for (const heading of ['로그인', '가입 신청', '이메일 인증', '인증 코드 다시 보내기', 'GitHub 연결']) {
+    assert.match(login, new RegExp(`<h[12][^>]*>\\s*${heading}\\s*</h[12]>`), `${heading} login heading missing`);
+  }
+  assert.match(login, />\s*GitHub로 계속하기\s*</);
+  for (const field of ['email', 'password', 'organizationSlug', 'code', 'githubId', 'login']) {
+    assert.ok(login.includes(`name="${field}"`), `${field} auth field missing`);
+  }
+  assert.ok(login.includes('name="localDev" type="hidden" value="1"'));
+  assert.ok(login.includes('인증 코드를 확인한 뒤에만 계정이 만들어집니다.'));
+  assert.ok(login.includes('관리자 승인 결과가 계정의 사용 가능 기능을 결정합니다.'));
+  assert.match(login, /className="grid grid-2"/);
+  assert.doesNotMatch(login, /<main\s+className="hero"/);
 });
