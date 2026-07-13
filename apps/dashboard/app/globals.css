@@ -405,6 +405,10 @@ input[type="submit"]:hover {
   gap: 13px;
 }
 
+.dashboard-grid {
+  align-items: start;
+}
+
 .grid + .grid,
 .grid + .card,
 .card + .grid,

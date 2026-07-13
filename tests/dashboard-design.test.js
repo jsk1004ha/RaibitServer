@@ -407,6 +407,13 @@ test('resource console awaits route params and links localized tabs to real oper
   assert.ok(resource.includes('<h2>프로비저닝 계획</h2>'));
 });
 
+test('dashboard two-column layouts align independent panels to the top', async () => {
+  const css = await read('../apps/dashboard/app/globals.css');
+  const dashboardGrid = extractCssBlock(css, /^\.dashboard-grid\s*(?=\{)/m);
+
+  assert.match(dashboardGrid, /align-items:\s*start/);
+});
+
 test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
   const [css, layout] = await Promise.all([
     read('../apps/dashboard/app/globals.css'),
