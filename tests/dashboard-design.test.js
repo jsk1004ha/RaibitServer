@@ -25,7 +25,7 @@ test('dashboard shell is Korean-first and uses typed Heroicons', async () => {
     read('../apps/dashboard/components/icon.tsx'),
   ]);
 
-  for (const label of ['개요', '프로젝트', '배포', '리소스', '콘솔', 'GitHub 연결', '관리자']) {
+  for (const label of ['개요', '프로젝트', '프로젝트 만들기', 'GitHub 연결', '관리자', '로그인']) {
     assert.ok(shell.includes(label), `${label} navigation label missing`);
   }
   for (const icon of ['squares-2x2', 'folder', 'rocket-launch', 'circle-stack', 'command-line', 'cog-6-tooth', 'magnifying-glass', 'bell', 'plus', 'server-stack']) {
@@ -45,6 +45,58 @@ test('dashboard shell is Korean-first and uses typed Heroicons', async () => {
   assert.match(icons, /strokeWidth=\{1\.5\}/);
   assert.doesNotMatch(shell, />Dashboard</);
   assert.doesNotMatch(shell, />Create project</);
+});
+
+test('shared dashboard primitives keep localized deterministic contracts', async () => {
+  const shell = await read('../apps/dashboard/components/console-ui.tsx');
+
+  assert.match(shell, /import\s+\{\s*Icon\s*\}\s+from\s+'\.\/icon'/);
+  assert.match(shell, /import\s+type\s+\{\s*IconName\s*\}\s+from\s+'\.\/icon'/);
+  for (const [id, label, href, icon] of [
+    ['overview', '개요', '/', 'squares-2x2'],
+    ['projects', '프로젝트', '/org/default/projects', 'folder'],
+    ['create-project', '프로젝트 만들기', '/org/default/projects/new', 'plus'],
+    ['github', 'GitHub 연결', '/github', 'arrow-top-right-on-square'],
+    ['admin', '관리자', '/admin', 'user-group'],
+    ['auth', '로그인', '/login', 'shield-check'],
+  ]) {
+    assert.ok(shell.includes(`id: '${id}'`), `${id} navigation id missing`);
+    assert.ok(shell.includes(`label: '${label}'`), `${label} navigation label missing`);
+    assert.ok(shell.includes(`href: '${href}'`), `${href} navigation href missing`);
+    assert.ok(shell.includes(`icon: '${icon}'`), `${icon} navigation icon missing`);
+  }
+  assert.match(shell, /active\s*=\s*'overview'/);
+  assert.match(shell, /active\s*===\s*item\.id/);
+  assert.match(shell, /<Icon\s+name=\{item\.icon\}/);
+
+  assert.match(shell, /export\s+function\s+MetricStrip/);
+  for (const contract of ['metric-strip', '주요 지표', 'metric-item', 'metric-label', 'metric-value', 'metric-detail', 'metric-meter']) {
+    assert.ok(shell.includes(contract), `${contract} metric contract missing`);
+  }
+  assert.match(shell, /Math\.min\(100,\s*Math\.max\(0,/);
+
+  for (const [status, label] of [
+    ['active', '활성'], ['ready', '준비됨'], ['healthy', '정상'], ['running', '실행 중'],
+    ['pending', '대기 중'], ['queued', '대기열'], ['building', '빌드 중'], ['failed', '실패'],
+    ['rejected', '거절됨'], ['blocked', '차단됨'], ['offline', '오프라인'],
+  ]) {
+    assert.ok(shell.includes(`${status}: '${label}'`), `${status} localized status missing`);
+  }
+  assert.match(shell, /data-status=\{text\}/);
+  assert.match(shell, /<i\s*\/>/);
+  assert.ok(shell.includes("empty = '표시할 로그가 없습니다.'"));
+  assert.ok(shell.includes("row.level || row.type || '정보'"));
+});
+
+test('project cards render compact Korean console rows', async () => {
+  const card = await read('../apps/dashboard/components/project-card.tsx');
+
+  assert.match(card, /import\s+\{\s*Icon\s*\}\s+from\s+'\.\/icon'/);
+  assert.match(card, /className="project-row-card"/);
+  assert.match(card, /<Icon\s+name="folder"/);
+  assert.ok(card.includes('서비스 {project.services ?? 0}개 · 리소스 {project.resources ?? 0}개'));
+  assert.ok(card.includes('콘솔 열기 →'));
+  assert.match(card, /<h2>/);
 });
 
 test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
