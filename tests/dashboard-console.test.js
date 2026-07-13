@@ -8,7 +8,7 @@ test('dashboard project detail is API-backed instead of hardcoded prototype arra
   const detail = await fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(detail, /const\s+services\s*=\s*\[/);
   assert.doesNotMatch(detail, /const\s+resources\s*=\s*\[/);
-  for (const marker of ['loadProjectConsole', '/deployments', '/console/schema', '/console/query', 'Create service', 'sourceType', 'imageUrl', 'dockerfilePath', 'Create resource', 'Deploy production', 'Preview deployment list', 'Build logs', 'Runtime logs']) {
+  for (const marker of ['loadProjectConsole', '/deployments', '/console/schema', '/console/query', 'sourceType', 'imageUrl', 'dockerfilePath', '서비스 만들기', '리소스 추가', '운영 환경에 배포', '미리보기 배포', '빌드 로그', '런타임 로그']) {
     assert.ok(detail.includes(marker), `${marker} missing from project console page`);
   }
 });
@@ -22,7 +22,7 @@ test('dashboard exposes auth, admin, GitHub, deployment log, and resource consol
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx', import.meta.url), 'utf8'),
   ]);
   const combined = files.join('\n');
-  for (const marker of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend', '/auth/github/login', '/auth/github/callback', '/admin/users/', '/github/repositories/import', '/github/repositories/:repositoryId/sync', '/projects/:projectId/services/:serviceId/github', '/integrations/github', 'Webhook / Preview contract', '/deployments/', '/status', '/cancel', '/rollback', 'Image digest', 'errorCode', '/console/command', '/console/tables', '/console/keys']) {
+  for (const marker of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend', '/auth/github/login', '/auth/github/callback', '/admin/users/', '/github/repositories/import', '/github/repositories/:repositoryId/sync', '/projects/:projectId/services/:serviceId/github', '/integrations/github', '웹훅 / 미리보기 계약', '/deployments/', '/status', '/cancel', '/rollback', 'imageDigest', 'errorCode', '/console/query', '/console/command', '/console/tables', '/console/keys', '/provision', '/attach', 'confirmed', '배포 상세', '상태와 이미지', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소', '리소스 콘솔', '스키마', '쿼리', '백업', '연결', '자격 증명 교체', '공급자 명령 실행', '프로비저닝 계획 만들기', '서비스에 연결', '저장소 연결과 미리보기 배포', 'GitHub 연결', '저장소 가져오기', '서비스에 저장소 연결', '저장소 정보 동기화', '사용자 관리', '클럽 회원으로 승인', '일반 사용자로 승인', '할당량 저장', '가입 신청', '이메일 인증', '인증 코드 다시 보내기', 'GitHub로 계속하기', 'GitHub OAuth 연결은 준비 중입니다.', '연결할 서비스가 없습니다.', '동기화할 저장소가 없습니다.']) {
     assert.ok(combined.includes(marker), `${marker} missing from dashboard routes`);
   }
 });
