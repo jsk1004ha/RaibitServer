@@ -122,6 +122,59 @@ test('project cards render compact Korean console rows', async () => {
   assert.match(card, /<h2>/);
 });
 
+test('overview prioritizes compact Korean operations data and four quick actions', async () => {
+  const home = await read('../apps/dashboard/app/page.tsx');
+
+  assert.match(home, /import\s+\{\s*ConsoleShell,\s*MetricStrip,\s*StatusBadge\s*\}\s+from\s+'\.\.\/components\/console-ui'/);
+  assert.doesNotMatch(home, /\bMetricCard\b/);
+  assert.ok(home.includes('crumbs={`${createOrgSlug} / 운영 현황`}'));
+  assert.match(home, /<h1\s+className="page-title">운영 현황<\/h1>/);
+  assert.ok(home.includes('프로젝트, 배포, 관리형 리소스 상태를 확인하세요.'));
+  assert.match(home, /<MetricStrip\s+items=\{\[/);
+  for (const marker of [
+    "label: '운영 중인 프로젝트'",
+    "detail: '제어 영역 기준'",
+    'progress: Math.min(projects.length * 10, 100)',
+    "label: 'GitHub 연결'",
+    "detail: '설치 및 저장소'",
+    "tone: 'info'",
+    "label: '사용량 기록'",
+    "detail: '현재 할당량'",
+    "tone: 'warn'",
+  ]) {
+    assert.ok(home.includes(marker), `${marker} overview metric missing`);
+  }
+  assert.equal(home.match(/className="quick-action"/g)?.length, 4);
+  for (const label of ['새 프로젝트', 'GitHub 연결', '로그인', 'API 상태']) {
+    assert.ok(home.includes(label), `${label} quick action missing`);
+  }
+  for (const apiMarker of ['loadDashboardOverview', "apiAction('/health')", 'state.context.baseUrl', 'state.health.error', 'user?.email', 'subject?.id']) {
+    assert.ok(home.includes(apiMarker), `${apiMarker} live data marker missing`);
+  }
+  for (const oldCopy of ['API connection', 'Project consoles', 'Console routes', 'Create project', 'No projects returned', 'PRODUCT CONSOLE']) {
+    assert.ok(!home.includes(oldCopy), `${oldCopy} old visible copy remains`);
+  }
+});
+
+test('project list is a compact Korean row-card view scoped to its organization', async () => {
+  const projects = await read('../apps/dashboard/app/org/[orgSlug]/projects/page.tsx');
+
+  assert.ok(projects.includes('<ConsoleShell active="projects"'));
+  assert.ok(projects.includes('crumbs={`${params.orgSlug} / 프로젝트`}'));
+  assert.match(projects, /<h1\s+className="page-title">프로젝트<\/h1>/);
+  assert.ok(projects.includes('프로젝트 만들기'));
+  assert.ok(projects.includes('첫 프로젝트 만들기'));
+  assert.match(projects, /<ProjectCard\s+key=\{project\.id\}/);
+  assert.ok(projects.includes('href={`/org/${params.orgSlug}/projects/${project.id}`}'));
+  assert.ok(projects.includes('href={`/org/${params.orgSlug}/projects/new`}'));
+  for (const marker of ['loadDashboardOverview()', 'project.organizationSlug', 'project.organizationId', "params.orgSlug === 'all'"]) {
+    assert.ok(projects.includes(marker), `${marker} project data marker missing`);
+  }
+  for (const oldCopy of ['Workspace', 'Create project', 'projects</h1>', 'No projects returned']) {
+    assert.ok(!projects.includes(oldCopy), `${oldCopy} old visible copy remains`);
+  }
+});
+
 test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
   const [css, layout] = await Promise.all([
     read('../apps/dashboard/app/globals.css'),

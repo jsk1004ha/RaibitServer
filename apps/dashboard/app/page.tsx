@@ -1,5 +1,6 @@
 import { loadDashboardOverview, apiAction } from '../lib/api';
-import { ConsoleShell, MetricCard, StatusBadge } from '../components/console-ui';
+import { ConsoleShell, MetricStrip, StatusBadge } from '../components/console-ui';
+import { Icon } from '../components/icon';
 import { ProjectCard } from '../components/project-card';
 
 export default async function HomePage() {
@@ -10,45 +11,60 @@ export default async function HomePage() {
   const createOrgSlug = projects[0]?.organizationSlug || projects[0]?.organizationId || subject?.organizationSlug || subject?.organizationId || 'default';
   const health = state.health.body?.status === 'ok';
   return (
-    <ConsoleShell active="Dashboard" orgValue={createOrgSlug} crumbs={`${createOrgSlug} / Dashboard`} actions={<><a className="btn" href="/github">GitHub 연결</a><a className="btn btn-primary" href={`/org/${createOrgSlug}/projects/new`}>새 프로젝트</a></>}>
+    <ConsoleShell active="overview" orgValue={createOrgSlug} crumbs={`${createOrgSlug} / 운영 현황`} actions={<><a className="btn" href="/github">GitHub 연결</a><a className="btn btn-primary" href={`/org/${createOrgSlug}/projects/new`}>새 프로젝트</a></>}>
       <section className="page" data-od-id="org-dashboard">
         <header className="page-header">
           <div>
-            <p className="eyebrow">RAIBITSERVER · PRODUCT CONSOLE</p>
-            <h1 className="page-title">Repo에서 runtime URL까지, 안전한 기본값으로 배포하세요.</h1>
-            <p className="page-subtitle">Projects, services, deployments, resources, logs, GitHub previews, and admin quota flows are rendered from the control-plane API.</p>
+            <p className="eyebrow">RAIBITSERVER · 제어 영역</p>
+            <h1 className="page-title">운영 현황</h1>
+            <p className="page-subtitle">프로젝트, 배포, 관리형 리소스 상태를 확인하세요.</p>
           </div>
-          <StatusBadge status={health ? 'connected' : 'offline'} />
+          <StatusBadge status={health ? 'healthy' : 'offline'} />
         </header>
 
-        <section className="card callout">
-          <div className="card-title"><h2>API connection</h2><span className="badge info">API health</span></div>
-          <div className="grid grid-3">
-            <p><span className="label">Endpoint</span><br /><span className="mono">{state.context.baseUrl}</span></p>
-            <p><span className="label">Status</span><br />{health ? 'connected' : `offline (${state.health.error || 'token missing or API unavailable'})`}</p>
-            <p><span className="label">Current user</span><br />{user?.email || subject?.id || 'No dashboard token'}</p>
-            <p><span className="label">Account</span><br />{subject?.accountType || user?.accountType || 'unknown'} / {subject?.approvalStatus || user?.approvalStatus || 'unknown'}</p>
-          </div>
-        </section>
+        <MetricStrip items={[
+          { label: '운영 중인 프로젝트', value: projects.length, detail: '제어 영역 기준', progress: Math.min(projects.length * 10, 100) },
+          { label: 'GitHub 연결', value: state.github?.integrations?.length || 0, detail: '설치 및 저장소', tone: 'info', progress: 60 },
+          { label: '사용량 기록', value: state.usage?.usage?.length || 0, detail: '현재 할당량', tone: 'warn', progress: 42 },
+        ]} />
 
-        <section className="grid grid-3">
-          <MetricCard title="Projects" value={projects.length} detail="Loaded with GET /projects" tone="ok" />
-          <MetricCard title="GitHub integrations" value={state.github?.integrations?.length || 0} detail="Installations, repo import, webhooks" />
-          <MetricCard title="Usage records" value={state.usage?.usage?.length || 0} detail="GET /usage/me quota surface" tone="warn" />
-        </section>
-
-        <section className="grid grid-main">
-          <article className="card">
-            <div className="card-title"><h2>Project consoles</h2><a className="btn btn-primary" href={`/org/${createOrgSlug}/projects/new`}>Create project</a></div>
-            <div className="grid grid-2">
+        <section className="dashboard-grid">
+          <div className="stack">
+            <article className="card">
+              <div className="card-title"><h2>프로젝트</h2><span className="badge info">{projects.length}개</span></div>
+              <div className="stack">
               {projects.length ? projects.map((project: any) => (
                 <ProjectCard key={project.id} project={{ ...project, services: project.serviceCount, resources: project.resourceCount }} href={`/org/${project.organizationSlug || project.organizationId || 'org'}/projects/${project.id}`} />
-              )) : <p className="muted">No projects returned. Add RAIBITSERVER_DASHBOARD_TOKEN or create one through the form/API.</p>}
-            </div>
-          </article>
+              )) : <div><p className="muted">아직 프로젝트가 없습니다. 첫 서비스를 배포할 프로젝트를 만드세요.</p><a className="subtle-link" href={`/org/${createOrgSlug}/projects/new`}>첫 프로젝트 만들기 →</a></div>}
+              </div>
+            </article>
+            <article className="card">
+              <div className="card-title"><h2>API 및 런타임 활동</h2><StatusBadge status={health ? 'healthy' : 'offline'} /></div>
+              <div className="grid grid-2">
+                <p><span className="label">제어 영역 상태</span><br />{health ? '정상' : state.health.error || '토큰 없음 또는 API에 연결할 수 없음'}</p>
+                <p><span className="label">최근 조회</span><br />프로젝트 {projects.length}개 · 사용량 {state.usage?.usage?.length || 0}건</p>
+              </div>
+            </article>
+          </div>
           <aside className="stack">
-            <article className="card"><div className="card-title"><h2>다음 추천 행동</h2><span className="badge info">Guide</span></div><p className="muted">GitHub App을 설치하면 push deploy와 PR preview가 자동으로 연결됩니다.</p><a className="btn btn-primary" href="/github" style={{ marginTop: 12 }}>GitHub import</a></article>
-            <article className="card"><div className="card-title"><h2>Console routes</h2><span className="badge ok">Ready</span></div><nav className="stack"><a className="subtle-link" href="/login">Login / Signup</a><a className="subtle-link" href="/github">GitHub import</a><a className="subtle-link" href="/admin">Admin</a><a className="subtle-link" href={apiAction('/health')}>API health</a></nav></article>
+            <article className="card">
+              <div className="card-title"><h2>빠른 작업</h2><span className="badge info">4개</span></div>
+              <nav className="stack" aria-label="빠른 작업">
+                <a className="quick-action" href={`/org/${createOrgSlug}/projects/new`}><Icon name="plus" /><span>새 프로젝트</span></a>
+                <a className="quick-action" href="/github"><Icon name="arrow-top-right-on-square" /><span>GitHub 연결</span></a>
+                <a className="quick-action" href="/login"><Icon name="shield-check" /><span>로그인</span></a>
+                <a className="quick-action" href={apiAction('/health')}><Icon name="server-stack" /><span>API 상태</span></a>
+              </nav>
+            </article>
+            <article className="card">
+              <div className="card-title"><h2>제어 영역 정보</h2><StatusBadge status={health ? 'healthy' : 'offline'} /></div>
+              <div className="stack">
+                <p><span className="label">엔드포인트</span><br /><span className="mono">{state.context.baseUrl}</span></p>
+                <p><span className="label">상태</span><br />{health ? '정상' : state.health.error || '토큰 없음 또는 API에 연결할 수 없음'}</p>
+                <p><span className="label">현재 사용자</span><br />{user?.email || subject?.id || '대시보드 토큰 없음'}</p>
+                <p><span className="label">계정</span><br />{subject?.accountType || user?.accountType || '알 수 없음'} / {subject?.approvalStatus || user?.approvalStatus || '알 수 없음'}</p>
+              </div>
+            </article>
           </aside>
         </section>
       </section>

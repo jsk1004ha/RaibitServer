@@ -6,14 +6,17 @@ export default async function ProjectsPage({ params }: { params: { orgSlug: stri
   const state = await loadDashboardOverview();
   const projects = (state.projects || []).filter((project: any) => [project.organizationSlug, project.organizationId, 'default'].includes(params.orgSlug) || params.orgSlug === 'all');
   return (
-    <ConsoleShell active="Projects" orgValue={params.orgSlug} crumbs={`${params.orgSlug} / Projects`} actions={<a className="btn btn-primary" href={`/org/${params.orgSlug}/projects/new`}>Create project</a>}>
+    <ConsoleShell active="projects" orgValue={params.orgSlug} crumbs={`${params.orgSlug} / 프로젝트`} actions={<a className="btn btn-primary" href={`/org/${params.orgSlug}/projects/new`}>프로젝트 만들기</a>}>
       <section className="page">
         <header className="page-header">
-          <div><p className="eyebrow">Workspace</p><h1 className="page-title">{params.orgSlug} projects</h1><p className="page-subtitle">Project list is loaded from GET /projects and links into API-backed management screens.</p></div>
-          <span className="badge ok">{projects.length} projects</span>
+          <div><p className="eyebrow">{params.orgSlug} · 워크스페이스</p><h1 className="page-title">프로젝트</h1><p className="page-subtitle">워크스페이스의 프로젝트와 서비스 운영 상태를 확인하세요.</p></div>
+          <span className="badge ok">{projects.length}개</span>
         </header>
-        <section className="grid grid-3">
-          {projects.length ? projects.map((project: any) => <ProjectCard key={project.id} project={project} href={`/org/${params.orgSlug}/projects/${project.id}`} />) : <article className="card callout"><h2>첫 repo를 배포하세요</h2><p className="muted">No projects returned for this workspace.</p><a className="btn btn-primary" href={`/org/${params.orgSlug}/projects/new`} style={{ marginTop: 12 }}>새 프로젝트</a></article>}
+        <section className="card">
+          <div className="card-title"><h2>프로젝트 목록</h2><span className="badge info">{projects.length}개</span></div>
+          <div className="stack">
+            {projects.length ? projects.map((project: any) => <ProjectCard key={project.id} project={project} href={`/org/${params.orgSlug}/projects/${project.id}`} />) : <div><p className="muted">이 워크스페이스에는 아직 프로젝트가 없습니다.</p><a className="btn btn-primary" href={`/org/${params.orgSlug}/projects/new`}>첫 프로젝트 만들기</a></div>}
+          </div>
         </section>
       </section>
     </ConsoleShell>
