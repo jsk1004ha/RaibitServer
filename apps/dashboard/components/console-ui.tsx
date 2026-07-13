@@ -7,6 +7,8 @@ type JsonCardProps = {
   value: any;
 };
 
+type NavItemId = 'overview' | 'projects' | 'create-project' | 'github' | 'admin' | 'auth';
+
 type ShellProps = {
   children: ReactNode;
   eyebrow?: string;
@@ -14,12 +16,12 @@ type ShellProps = {
   orgValue?: string;
   projectLabel?: string;
   projectValue?: string;
-  active?: string;
+  active?: NavItemId;
   crumbs?: string;
   actions?: ReactNode;
 };
 
-const navItems: Array<{ id: string; label: string; href: string; icon: IconName }> = [
+const navItems: Array<{ id: NavItemId; label: string; href: string; icon: IconName }> = [
   { id: 'overview', label: '개요', href: '/', icon: 'squares-2x2' },
   { id: 'projects', label: '프로젝트', href: '/org/default/projects', icon: 'folder' },
   { id: 'create-project', label: '프로젝트 만들기', href: '/org/default/projects/new', icon: 'plus' },
@@ -35,11 +37,11 @@ export function ConsoleShell({ children, eyebrow = '운영', orgLabel = '현재 
         <a className="brand" href="/"><span className="brand-mark">RS</span><span>RAIBITSERVER</span></a>
         <div className="switcher"><p className="switcher-label">{orgLabel}</p><div className="switcher-title">{orgValue}<span>⌄</span></div></div>
         <div className="switcher"><p className="switcher-label">{projectLabel}</p><div className="switcher-title">{projectValue}<span>⌄</span></div></div>
-        <nav className="nav-group"><p className="nav-title">{eyebrow}</p>{navItems.map((item) => <a key={item.id} className={`nav-link ${active === item.id ? 'active' : ''}`} href={item.href}><Icon name={item.icon} /><span>{item.label}</span><span>›</span></a>)}</nav>
+        <nav className="nav-group"><p className="nav-title">{eyebrow}</p>{navItems.map((item) => <a key={item.id} className={`nav-link ${active === item.id ? 'active' : ''}`} aria-current={active === item.id ? 'page' : undefined} href={item.href}><Icon name={item.icon} /><span>{item.label}</span><span>›</span></a>)}</nav>
       </aside>
       <main className="main">
         <div className="topbar"><div className="crumbs">{crumbs}</div><div className="toolbar">{actions}</div></div>
-        <nav className="mobile-nav">{navItems.map((item) => <a key={item.id} className={`btn ${active === item.id ? 'active' : ''}`} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></a>)}</nav>
+        <nav className="mobile-nav">{navItems.map((item) => <a key={item.id} className={`btn ${active === item.id ? 'active' : ''}`} aria-current={active === item.id ? 'page' : undefined} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></a>)}</nav>
         {children}
       </main>
     </div>
@@ -63,6 +65,11 @@ type MetricItem = {
   progress?: number;
 };
 
+function clampProgress(progress?: number) {
+  if (!Number.isFinite(progress)) return 0;
+  return Math.min(100, Math.max(0, Number(progress)));
+}
+
 export function MetricStrip({ items }: { items: MetricItem[] }) {
   return (
     <section className="metric-strip" aria-label="주요 지표">
@@ -72,7 +79,7 @@ export function MetricStrip({ items }: { items: MetricItem[] }) {
           <strong className="metric-value">{item.value}</strong>
           <span className="metric-detail">{item.detail || '—'}</span>
           <div className={`metric-meter ${item.tone || 'ok'}`} aria-hidden="true">
-            <i style={{ width: `${Math.min(100, Math.max(0, item.progress ?? 0))}%` }} />
+            <i style={{ width: `${clampProgress(item.progress)}%` }} />
           </div>
         </article>
       ))}
@@ -113,5 +120,5 @@ export function MetricCard({ title, value, detail, tone = 'info' }: { title: str
 
 export function LogViewer({ rows, field = 'line', empty = '표시할 로그가 없습니다.' }: { rows: any[]; field?: string; empty?: string }) {
   if (!rows.length) return <p className="muted">{empty}</p>;
-  return <div className="log-viewer">{rows.map((row, index) => <div className="log-line" key={row.id || index}><span>{row.createdAt || row.timestamp || 'event'}</span><span className="info">{row.level || row.type || '정보'}</span><span>{row[field] || row.message || row.line || JSON.stringify(row)}</span></div>)}</div>;
+  return <div className="log-viewer">{rows.map((row, index) => <div className="log-line" key={row.id || index}><span>{row.createdAt || row.timestamp || '이벤트'}</span><span className="info">{row.level || row.type || '정보'}</span><span>{row[field] || row.message || row.line || JSON.stringify(row)}</span></div>)}</div>;
 }

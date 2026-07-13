@@ -48,10 +48,26 @@ test('dashboard shell is Korean-first and uses typed Heroicons', async () => {
 });
 
 test('shared dashboard primitives keep localized deterministic contracts', async () => {
-  const shell = await read('../apps/dashboard/components/console-ui.tsx');
+  const callerContracts = [
+    ['../apps/dashboard/app/page.tsx', 'overview'],
+    ['../apps/dashboard/app/admin/page.tsx', 'admin'],
+    ['../apps/dashboard/app/github/page.tsx', 'github'],
+    ['../apps/dashboard/app/org/[orgSlug]/projects/page.tsx', 'projects'],
+    ['../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx', 'create-project'],
+    ['../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', 'projects'],
+    ['../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx', 'projects'],
+    ['../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx', 'projects'],
+  ];
+  const [shell, ...callers] = await Promise.all([
+    read('../apps/dashboard/components/console-ui.tsx'),
+    ...callerContracts.map(([path]) => read(path)),
+  ]);
 
   assert.match(shell, /import\s+\{\s*Icon\s*\}\s+from\s+'\.\/icon'/);
   assert.match(shell, /import\s+type\s+\{\s*IconName\s*\}\s+from\s+'\.\/icon'/);
+  assert.match(shell, /type\s+NavItemId\s*=\s*'overview'\s*\|\s*'projects'\s*\|\s*'create-project'\s*\|\s*'github'\s*\|\s*'admin'\s*\|\s*'auth'/);
+  assert.match(shell, /active\?:\s*NavItemId/);
+  assert.match(shell, /id:\s*NavItemId/);
   for (const [id, label, href, icon] of [
     ['overview', '개요', '/', 'squares-2x2'],
     ['projects', '프로젝트', '/org/default/projects', 'folder'],
@@ -68,6 +84,10 @@ test('shared dashboard primitives keep localized deterministic contracts', async
   assert.match(shell, /active\s*=\s*'overview'/);
   assert.match(shell, /active\s*===\s*item\.id/);
   assert.match(shell, /<Icon\s+name=\{item\.icon\}/);
+  assert.equal(shell.match(/aria-current=\{active === item\.id \? 'page' : undefined\}/g)?.length, 2);
+  for (const [index, [path, active]] of callerContracts.entries()) {
+    assert.ok(callers[index].includes(`<ConsoleShell active="${active}"`), `${path} must use active id ${active}`);
+  }
 
   assert.match(shell, /export\s+function\s+MetricStrip/);
   assert.match(shell, /title=\{item\.label\}/);
@@ -75,6 +95,7 @@ test('shared dashboard primitives keep localized deterministic contracts', async
     assert.ok(shell.includes(contract), `${contract} metric contract missing`);
   }
   assert.match(shell, /Math\.min\(100,\s*Math\.max\(0,/);
+  assert.match(shell, /Number\.isFinite\(/);
 
   for (const [status, label] of [
     ['active', '활성'], ['ready', '준비됨'], ['healthy', '정상'], ['running', '실행 중'],
@@ -86,6 +107,7 @@ test('shared dashboard primitives keep localized deterministic contracts', async
   assert.match(shell, /data-status=\{text\}/);
   assert.match(shell, /<i\s*\/>/);
   assert.ok(shell.includes("empty = '표시할 로그가 없습니다.'"));
+  assert.ok(shell.includes("row.createdAt || row.timestamp || '이벤트'"));
   assert.ok(shell.includes("row.level || row.type || '정보'"));
 });
 
