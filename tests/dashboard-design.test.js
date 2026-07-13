@@ -31,7 +31,8 @@ test('dashboard shell is Korean-first and uses typed Heroicons', async () => {
   for (const icon of ['squares-2x2', 'folder', 'rocket-launch', 'circle-stack', 'command-line', 'cog-6-tooth', 'magnifying-glass', 'bell', 'plus', 'server-stack']) {
     assert.ok(icons.includes(`'${icon}'`), `${icon} Heroicon missing`);
   }
-  assert.match(icons, /export\s+type\s+IconName\s*=/);
+  assert.match(icons, /type\s+IconName\s*=/);
+  assert.match(icons, /export\s+type\s+(?:IconName\s*=|\{\s*IconName\s*\})/);
   assert.match(icons, /const\s+iconPaths:\s*Record<IconName,\s*readonly\s+string\[\]>\s*=\s*\{/);
   assert.match(icons, /iconPaths\[name\]\.map\(/);
   for (const signature of [
