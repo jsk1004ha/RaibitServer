@@ -175,6 +175,75 @@ test('project list is a compact Korean row-card view scoped to its organization'
   }
 });
 
+test('project workflows keep their operational contracts behind a Korean console surface', async () => {
+  const [createProject, projectDetail] = await Promise.all([
+    read('../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx'),
+    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
+  ]);
+
+  for (const marker of [
+    '프로젝트 만들기', '1 소스', '2 서비스', '3 리소스', '프로젝트 이름', '조직',
+    '저장소 URL', '브랜치', 'Dockerfile 경로', '빌드 컨텍스트', '서비스 유형',
+    '데이터베이스', '캐시', '생성될 원하는 상태', '할당량 미리보기',
+  ]) {
+    assert.ok(createProject.includes(marker), `${marker} create-project marker missing`);
+  }
+  assert.ok(createProject.includes('<ConsoleShell active="create-project"'));
+  assert.match(createProject, /<form\s+method="post"\s+action=\{apiAction\('\/projects'\)\}/);
+  for (const name of ['name', 'slug', 'organizationId', 'repoUrl', 'branch', 'sourceType', 'image', 'dockerfilePath', 'buildContext', 'type', 'database', 'cache']) {
+    assert.ok(createProject.includes(`name="${name}"`), `${name} create-project field missing`);
+  }
+  for (const contract of [
+    'defaultValue={params.orgSlug}', 'defaultValue="github"', 'value="github"', 'value="image"',
+    'defaultValue="web"', 'value="web"', 'value="worker"', 'value="cron"', 'value="job"',
+  ]) {
+    assert.ok(createProject.includes(contract), `${contract} create-project value/default missing`);
+  }
+  for (const oldCopy of ['>Create project<', '>1 Source<', '>2 Service<', '>3 Resource<', '>POST /projects<']) {
+    assert.ok(!createProject.includes(oldCopy), `${oldCopy} old visible create-project copy remains`);
+  }
+
+  for (const marker of [
+    '프로젝트 콘솔', '새 서비스', '배포', '개요', '서비스', '리소스', '도메인',
+    '환경 변수', '감사', '설정', '서비스 만들기', 'Dockerfile 우선', '서비스와 배포',
+    '운영 환경에 배포', '미리보기 만들기', '배포 내역', '미리보기 배포',
+    '리소스 추가', '관리형 리소스', '위험 영역', '감사 로그 필수', '빌드 로그',
+    '배포 이벤트', '런타임 로그', '상세 화면에서 불러오기',
+  ]) {
+    assert.ok(projectDetail.includes(marker), `${marker} project-detail marker missing`);
+  }
+  assert.match(projectDetail, /import\s+\{\s*ConsoleShell,\s*MetricStrip,\s*StatusBadge\s*\}/);
+  assert.doesNotMatch(projectDetail, /\bMetricCard\b/);
+  assert.match(projectDetail, /<MetricStrip\s+items=\{\[/);
+  for (const metric of ["label: '서비스'", "label: '리소스'", "label: '배포'", 'state.services.length', 'state.resources.length', 'state.deployments.length', 'state.previewDeployments.length']) {
+    assert.ok(projectDetail.includes(metric), `${metric} project metric missing`);
+  }
+
+  for (const action of [
+    'apiAction(`/projects/${params.projectId}/services`, state.context)',
+    'apiAction(`/projects/${params.projectId}/resources`, state.context)',
+    'apiAction(`/projects/${params.projectId}/services/${service.id}/deployments`, state.context)',
+  ]) {
+    assert.ok(projectDetail.includes(action), `${action} project form action missing`);
+  }
+  assert.ok(projectDetail.includes('<input type="hidden" name="deploymentType" value="production" />'));
+  assert.ok(projectDetail.includes('<input type="hidden" name="deploymentType" value="preview" />'));
+  assert.ok(projectDetail.includes('href={`/org/${params.orgSlug}/projects/${params.projectId}/deployments/${deployment.id}`}'));
+  assert.ok(projectDetail.includes('href={`/org/${params.orgSlug}/projects/${params.projectId}/resources/${resource.id}/console`}'));
+  for (const name of ['name', 'type', 'sourceType', 'repoUrl', 'branch', 'imageUrl', 'dockerfilePath', 'buildContext', 'engine']) {
+    assert.ok(projectDetail.includes(`name="${name}"`), `${name} project-detail field missing`);
+  }
+  for (const deferred of ['loadProjectConsole(params.projectId)', 'state.resources.map', '/console/query', '/console/schema']) {
+    assert.ok(projectDetail.includes(deferred), `${deferred} deferred project data marker missing`);
+  }
+  for (const eagerData of ['state.resourceConsoles', 'state.buildLogs', 'state.deploymentEvents', 'state.runtimeLogs', 'Promise.all(']) {
+    assert.ok(!projectDetail.includes(eagerData), `${eagerData} eager detail loading must remain absent`);
+  }
+  for (const oldCopy of ['>Project console<', '>New service<', '>Deploy<', '>Overview<', '>Create service<', '>Deployments<', '>Create resource<', '>Danger zone<', '>Build logs<', '>Deployment events<', '>Runtime logs<']) {
+    assert.ok(!projectDetail.includes(oldCopy), `${oldCopy} old visible project-detail copy remains`);
+  }
+});
+
 test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
   const [css, layout] = await Promise.all([
     read('../apps/dashboard/app/globals.css'),
