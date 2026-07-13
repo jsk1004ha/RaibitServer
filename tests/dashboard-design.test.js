@@ -313,6 +313,82 @@ test('project workflow controls bind tenant scope and expose accessible labels w
   }
 });
 
+test('deployment detail awaits route params and keeps operational controls on a compact Korean surface', async () => {
+  const deployment = await read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx');
+
+  assert.match(deployment, /params:\s*Promise<\{\s*orgSlug:\s*string;\s*projectId:\s*string;\s*deploymentId:\s*string\s*\}>/);
+  assert.ok(deployment.includes('const { orgSlug, projectId, deploymentId } = await params;'));
+  assert.doesNotMatch(deployment, /params\.(?:orgSlug|projectId|deploymentId)/);
+  assert.match(deployment, /await\s+Promise\.all\(\[/);
+  for (const apiMarker of [
+    'dashboardApiContext()',
+    'getJson(`/deployments/${encodeURIComponent(deploymentId)}`',
+    'getJson(`/deployments/${encodeURIComponent(deploymentId)}/logs`',
+    'getJson(`/deployments/${encodeURIComponent(deploymentId)}/events`',
+    'apiAction(`/deployments/${deploymentId}/status`, context)',
+    'apiAction(`/deployments/${deploymentId}/rollback`, context)',
+    'apiAction(`/deployments/${deploymentId}/cancel`, context)',
+  ]) {
+    assert.ok(deployment.includes(apiMarker), `${apiMarker} deployment operation missing`);
+  }
+  for (const marker of [
+    '배포 상세', '상태와 이미지', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소',
+    '프로젝트 콘솔', '롤백', '상태 업데이트', 'detail.errorCode', 'detail.errorMessage',
+  ]) {
+    assert.ok(deployment.includes(marker), `${marker} deployment marker missing`);
+  }
+  for (const field of ['status', 'imageUrl', 'imageDigest', 'errorMessage', 'reason']) {
+    assert.ok(deployment.includes(`name="${field}"`), `${field} deployment field missing`);
+  }
+  assert.ok(deployment.includes('id="rollback-deployment"'));
+  assert.match(deployment, /import\s+\{\s*ConsoleShell,\s*LogViewer,\s*MetricCard,\s*StatusBadge\s*\}/);
+  assert.doesNotMatch(deployment, /<button[^>]*type="button"[^>]*>(?:Copy|Download)<\/button>/);
+});
+
+test('resource console awaits route params and links localized tabs to real operational sections', async () => {
+  const resource = await read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx');
+
+  assert.match(resource, /params:\s*Promise<\{\s*orgSlug:\s*string;\s*projectId:\s*string;\s*resourceId:\s*string\s*\}>/);
+  assert.ok(resource.includes('const { orgSlug, projectId, resourceId } = await params;'));
+  assert.doesNotMatch(resource, /params\.(?:orgSlug|projectId|resourceId)/);
+  assert.ok(resource.includes('loadResourceConsole(resourceId)'));
+  for (const engineDefault of [
+    "postgresql: { query: 'SELECT 1', command: 'SELECT 1'",
+    "mongodb: { query: 'db.health.find({})', command: 'db.getCollectionNames()'",
+    "redis: { query: 'SCAN 0 MATCH * COUNT 100', command: 'GET health:ready'",
+    "'object-storage': { query: 'LIST objects', command: 'mc ls'",
+    "nats: { query: 'subjects', command: 'nats stream ls'",
+  ]) {
+    assert.ok(resource.includes(engineDefault), `${engineDefault} resource default missing`);
+  }
+  for (const action of [
+    'apiAction(`/resources/${resourceId}/console/query`, state.context)',
+    'apiAction(`/resources/${resourceId}/console/command`, state.context)',
+    'apiAction(`/resources/${resourceId}/provision`, state.context)',
+    'apiAction(`/resources/${resourceId}/attach`, state.context)',
+  ]) {
+    assert.ok(resource.includes(action), `${action} resource operation missing`);
+  }
+  for (const [label, target] of [
+    ['스키마', '#schema'], ['쿼리', '#query'], ['백업', '#backups'], ['연결', '#connection'],
+  ]) {
+    assert.ok(resource.includes(`href="${target}"`), `${target} resource tab target missing`);
+    assert.ok(resource.includes(`>${label}</a>`), `${label} resource tab label missing`);
+    assert.ok(resource.includes(`id="${target.slice(1)}"`), `${target} resource section missing`);
+  }
+  assert.doesNotMatch(resource, /<button[^>]*className="tab/);
+  for (const marker of [
+    '리소스 콘솔', '자격 증명 교체', '쿼리 실행', '공급자 명령 실행',
+    '프로비저닝 계획 만들기', '서비스에 연결', 'provider-owned-secret',
+  ]) {
+    assert.ok(resource.includes(marker), `${marker} resource marker missing`);
+  }
+  for (const field of ['query', 'command', 'confirmed', 'dryRun', 'serviceId', 'envPrefix']) {
+    assert.ok(resource.includes(`name="${field}"`), `${field} resource field missing`);
+  }
+  assert.equal(resource.match(/name="confirmed"/g)?.length, 2);
+});
+
 test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
   const [css, layout] = await Promise.all([
     read('../apps/dashboard/app/globals.css'),
