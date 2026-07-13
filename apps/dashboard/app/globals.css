@@ -365,6 +365,29 @@ input[type="submit"]:hover {
   color: var(--color-primary-ink);
 }
 
+button:disabled,
+input[type="submit"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+  filter: saturate(0.2);
+}
+
+.btn-primary:disabled,
+button[type="submit"]:not(.btn):disabled,
+input[type="submit"]:disabled {
+  border-color: var(--color-control-border);
+  background: var(--color-surface-strong);
+  color: var(--color-text-muted);
+}
+
+button:disabled:hover,
+input[type="submit"]:disabled:hover {
+  transform: none;
+  border-color: var(--color-control-border);
+  background: var(--color-surface-strong);
+  color: var(--color-text-muted);
+}
+
 .btn-danger {
   border-color: rgb(255 133 125 / 42%);
   background: rgb(255 133 125 / 8%);
@@ -711,6 +734,14 @@ code {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 11px;
+}
+
+.card fieldset:disabled,
+.stack > fieldset:disabled {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .field,

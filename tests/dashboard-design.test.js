@@ -648,3 +648,29 @@ test('Task 8 form grids opt out of card stretching without changing the shared g
   assert.match(github, /className="grid grid-2 grid-start"/);
   assert.match(login, /className="grid grid-2 grid-start"/);
 });
+
+test('disabled Task 8 controls look inactive and reset only disabled card fieldsets', async () => {
+  const css = await read('../apps/dashboard/app/globals.css');
+
+  const disabledButton = extractCssBlock(css, /^button:disabled,\s*\ninput\[type="submit"\]:disabled\s*(?=\{)/m);
+  const opacity = Number(/opacity:\s*([\d.]+)/.exec(disabledButton)?.[1]);
+  assert.ok(opacity > 0 && opacity < 1, 'disabled button opacity must be below 1');
+  assert.match(disabledButton, /cursor:\s*not-allowed/);
+  assert.match(disabledButton, /filter:\s*saturate\([\d.]+\)/);
+
+  const disabledPrimary = extractCssBlock(css, /^\.btn-primary:disabled,\s*\nbutton\[type="submit"\]:not\(\.btn\):disabled,\s*\ninput\[type="submit"\]:disabled\s*(?=\{)/m);
+  assert.match(disabledPrimary, /border-color:\s*var\(--color-control-border\)/);
+  assert.match(disabledPrimary, /background:\s*var\(--color-surface-strong\)/);
+  assert.match(disabledPrimary, /color:\s*var\(--color-text-muted\)/);
+  assert.doesNotMatch(disabledPrimary, /var\(--color-primary\)/);
+
+  const disabledHover = extractCssBlock(css, /^button:disabled:hover,\s*\ninput\[type="submit"\]:disabled:hover\s*(?=\{)/m);
+  assert.match(disabledHover, /transform:\s*none/);
+  assert.match(disabledHover, /background:\s*var\(--color-surface-strong\)/);
+
+  const disabledFieldset = extractCssBlock(css, /^\.card fieldset:disabled,\s*\n\.stack > fieldset:disabled\s*(?=\{)/m);
+  for (const reset of [/margin:\s*0/, /padding:\s*0/, /border:\s*0/, /min-width:\s*0/]) {
+    assert.match(disabledFieldset, reset);
+  }
+  assert.doesNotMatch(css, /^fieldset\s*(?=\{)/m, 'general fieldsets must remain unchanged');
+});
