@@ -387,6 +387,24 @@ test('resource console awaits route params and links localized tabs to real oper
     assert.ok(resource.includes(`name="${field}"`), `${field} resource field missing`);
   }
   assert.equal(resource.match(/name="confirmed"/g)?.length, 2);
+
+  const credentialAction = resource.match(/<button[^>]*>자격 증명 교체<\/button>/)?.[0];
+  assert.ok(credentialAction, 'credential rotation action missing');
+  assert.match(credentialAction, /type="button"/);
+  assert.match(credentialAction, /\sdisabled(?:\s|>)/);
+  assert.match(credentialAction, /aria-describedby="credential-rotation-note"/);
+  assert.doesNotMatch(credentialAction, /type="submit"|form="provider-command"/);
+  assert.ok(resource.includes('id="credential-rotation-note"'));
+  assert.ok(resource.includes('공급자 교체 API 준비 중'));
+  assert.match(resource, /id="provider-command"[\s\S]*?<button type="submit">공급자 명령 실행<\/button>/);
+
+  const backupSection = resource.match(/<section className="card" id="backups">[\s\S]*?<\/section>/)?.[0];
+  assert.ok(backupSection, 'independent backup empty state missing');
+  assert.ok(backupSection.includes('백업 API 준비 중'));
+  assert.doesNotMatch(backupSection, /\/provision|apiAction\(/);
+  assert.doesNotMatch(resource, /<form[^>]*id="backups"/);
+  assert.match(resource, /<form id="provisioning"[^>]*action=\{apiAction\(`\/resources\/\$\{resourceId\}\/provision`/);
+  assert.ok(resource.includes('<h2>프로비저닝 계획</h2>'));
 });
 
 test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
