@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata = {
   title: 'RAIBITSERVER',
-  description: 'Container-first PaaS + DBaaS for clubs, schools, and small teams.',
+  description: '클럽, 학교, 소규모 팀을 위한 컨테이너 기반 PaaS 및 DBaaS.',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

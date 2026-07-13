@@ -123,7 +123,10 @@ test('project cards render compact Korean console rows', async () => {
 });
 
 test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
-  const css = await read('../apps/dashboard/app/globals.css');
+  const [css, layout] = await Promise.all([
+    read('../apps/dashboard/app/globals.css'),
+    read('../apps/dashboard/app/layout.tsx'),
+  ]);
   for (const token of ['--color-canvas: #0b0e12', '--color-primary: #68df88', '--sidebar: 238px']) {
     assert.ok(css.includes(token), `${token} token missing`);
   }
@@ -137,9 +140,44 @@ test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
   assert.match(metricStrip, /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(150px,\s*1fr\)\)/);
   assert.match(metricStrip, /min-height:\s*78px/);
 
+  const finalMetric = extractCssBlock(css, /\.metric-item:last-child\s*/);
+  assert.match(finalMetric, /border-right:\s*(?:0|none)/);
+
+  const metricLabel = extractCssBlock(css, /\.metric-label\s*/);
+  assert.match(metricLabel, /white-space:\s*nowrap/);
+  assert.match(metricLabel, /overflow:\s*hidden/);
+  assert.match(metricLabel, /text-overflow:\s*ellipsis/);
+
   const desktopBreakpoint = extractCssBlock(css, /@media\s*\(max-width:\s*1180px\)\s*/);
   const responsiveScroller = extractCssBlock(desktopBreakpoint, /\.(?:metric-strip|quick-actions)\s*/);
   assert.match(responsiveScroller, /overflow-x:\s*auto/);
+
+  assert.match(css, /@media\s*\(max-width:\s*900px\)/);
+  const mobileBreakpoint = extractCssBlock(css, /@media\s*\(max-width:\s*720px\)\s*/);
+  const mobileMetrics = extractCssBlock(mobileBreakpoint, /\.metric-strip\s*/);
+  assert.match(mobileMetrics, /display:\s*flex/);
+  assert.match(mobileMetrics, /overflow-x:\s*auto/);
+  assert.match(mobileMetrics, /scroll-snap-type:\s*x\s+proximity/);
+  assert.match(mobileBreakpoint, /scroll-snap-align:\s*start/);
+
+  const focusVisible = extractCssBlock(css, /:focus-visible\s*/);
+  assert.match(focusVisible, /outline:\s*2px\s+solid\s+var\(--color-primary\)/);
+  assert.match(focusVisible, /outline-offset:\s*2px/);
+
+  const icon = extractCssBlock(css, /\.icon\s*/);
+  assert.match(icon, /width:\s*18px/);
+  assert.match(icon, /height:\s*18px/);
+  assert.match(icon, /flex:\s*0\s+0\s+auto/);
+
+  const reducedMotion = extractCssBlock(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*/);
+  assert.match(reducedMotion, /scroll-behavior:\s*auto\s*!important/);
+  assert.match(reducedMotion, /transition-duration:\s*0\.01ms\s*!important/);
+  assert.match(reducedMotion, /animation-duration:\s*0\.01ms\s*!important/);
+
+  assert.ok(
+    layout.includes("description: '클럽, 학교, 소규모 팀을 위한 컨테이너 기반 PaaS 및 DBaaS.'"),
+    'Korean metadata description missing',
+  );
 });
 
 test('primary dashboard pages expose Korean visible headings', async () => {
