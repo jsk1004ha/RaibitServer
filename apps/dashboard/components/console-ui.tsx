@@ -67,7 +67,7 @@ export function MetricStrip({ items }: { items: MetricItem[] }) {
   return (
     <section className="metric-strip" aria-label="주요 지표">
       {items.map((item) => (
-        <article className="metric-item" key={item.label} title={item.detail || item.label}>
+        <article className="metric-item" key={item.label} title={item.label}>
           <span className="metric-label">{item.label}</span>
           <strong className="metric-value">{item.value}</strong>
           <span className="metric-detail">{item.detail || '—'}</span>

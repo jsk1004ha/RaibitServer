@@ -70,6 +70,7 @@ test('shared dashboard primitives keep localized deterministic contracts', async
   assert.match(shell, /<Icon\s+name=\{item\.icon\}/);
 
   assert.match(shell, /export\s+function\s+MetricStrip/);
+  assert.match(shell, /title=\{item\.label\}/);
   for (const contract of ['metric-strip', '주요 지표', 'metric-item', 'metric-label', 'metric-value', 'metric-detail', 'metric-meter']) {
     assert.ok(shell.includes(contract), `${contract} metric contract missing`);
   }
