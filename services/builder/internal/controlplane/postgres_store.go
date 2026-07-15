@@ -18,21 +18,162 @@ import (
 const postgresDriverName = "pgx"
 
 const claimWorkflowJobSQL = `
+WITH exhausted AS (
+  SELECT wj.id,
+    CASE
+      WHEN BTRIM(COALESCE(wj.payload ->> 'deploymentId', '')) <> ''
+        AND LOWER(BTRIM(wj."targetType")) = 'deployment'
+        AND BTRIM(wj."targetId") <> ''
+        AND BTRIM(wj.payload ->> 'deploymentId') <> BTRIM(wj."targetId")
+      THEN NULL
+      ELSE COALESCE(
+        NULLIF(BTRIM(wj.payload ->> 'deploymentId'), ''),
+        CASE WHEN LOWER(BTRIM(wj."targetType")) = 'deployment' THEN NULLIF(BTRIM(wj."targetId"), '') END
+      )
+    END AS deployment_id
+  FROM "WorkflowJob" AS wj
+  WHERE wj.type IN ('build-and-deploy', 'preview-deploy', 'build', 'builder')
+    AND wj.status = $4
+    AND wj."lockedAt" IS NOT NULL
+    AND wj."lockedAt" <= $3
+    AND wj.attempts >= CASE WHEN wj."maxAttempts" > 0 THEN wj."maxAttempts" ELSE 3 END
+  ORDER BY wj."lockedAt" ASC, wj."createdAt" ASC, wj.id ASC
+  FOR UPDATE SKIP LOCKED
+  LIMIT $5
+), failed_jobs AS (
+  UPDATE "WorkflowJob" AS wj
+  SET status = 'failed',
+    payload = jsonb_set(
+      jsonb_set(
+        jsonb_set(COALESCE(wj.payload, '{}'::jsonb), '{lastError}', to_jsonb($6::text), true),
+        '{lastErrorSpec}', $7::jsonb, true
+      ),
+      '{failedAt}', to_jsonb($8::text), true
+    ),
+    "lockedBy" = NULL,
+    "lockedAt" = NULL,
+    "updatedAt" = $2
+  FROM exhausted
+  WHERE wj.id = exhausted.id
+    AND wj.status = $4
+    AND wj."lockedAt" <= $3
+    AND wj.attempts >= CASE WHEN wj."maxAttempts" > 0 THEN wj."maxAttempts" ELSE 3 END
+  RETURNING wj.id, exhausted.deployment_id
+), failed_deployments AS (
+  UPDATE "Deployment" AS d
+  SET status = 'BUILD_FAILED',
+    "buildFinishedAt" = $2,
+    "errorCode" = 'BUILD_FAILED',
+    "errorMessage" = $6,
+    "updatedAt" = $2
+  FROM failed_jobs
+  WHERE d.id = failed_jobs.deployment_id
+    AND UPPER(d.status) IN ('QUEUED', 'BUILDING')
+  RETURNING d.id
+), candidate AS (
+  SELECT wj.id
+  FROM "WorkflowJob" AS wj
+  WHERE wj.type IN ('build-and-deploy', 'preview-deploy', 'build', 'builder')
+    AND (
+      (
+        wj.status = $1
+        AND wj."runAfter" <= $2
+        AND (wj."lockedAt" IS NULL OR wj."lockedAt" <= $3)
+      )
+      OR (
+        wj.status = $4
+        AND wj."lockedAt" <= $3
+        AND wj.attempts < CASE WHEN wj."maxAttempts" > 0 THEN wj."maxAttempts" ELSE 3 END
+      )
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM "Deployment" AS d
+      JOIN "Service" AS s ON s.id = d."serviceId"
+      JOIN "Project" AS p ON p.id = d."projectId"
+      WHERE d.id = CASE
+        WHEN BTRIM(COALESCE(wj.payload ->> 'deploymentId', '')) <> ''
+          AND LOWER(BTRIM(wj."targetType")) = 'deployment'
+          AND BTRIM(wj."targetId") <> ''
+          AND BTRIM(wj.payload ->> 'deploymentId') <> BTRIM(wj."targetId")
+        THEN NULL
+        ELSE COALESCE(
+          NULLIF(BTRIM(wj.payload ->> 'deploymentId'), ''),
+          CASE WHEN LOWER(BTRIM(wj."targetType")) = 'deployment' THEN NULLIF(BTRIM(wj."targetId"), '') END
+        )
+      END
+        AND (
+          UPPER(COALESCE(s.status, '')) IN ('DELETE_REQUESTED', 'DELETING', 'DELETE_FAILED')
+          OR UPPER(COALESCE(p.status, '')) IN ('DELETE_REQUESTED', 'DELETING', 'DELETE_FAILED')
+        )
+    )
+  ORDER BY wj."runAfter" ASC, wj."createdAt" ASC, wj.id ASC
+  FOR UPDATE SKIP LOCKED
+  LIMIT 1
+), claimed AS (
+  UPDATE "WorkflowJob" AS wj
+  SET status = $4,
+    attempts = wj.attempts + 1,
+    "lockedBy" = $9,
+    "lockedAt" = $2,
+    "updatedAt" = $2
+  FROM candidate
+  WHERE wj.id = candidate.id
+  RETURNING wj.id, wj.type, wj.status, wj."targetType", wj."targetId", wj.payload, wj.attempts, wj."maxAttempts"
+)
 SELECT id, type, status, "targetType", "targetId", payload, attempts, "maxAttempts"
+FROM claimed`
+
+const updateWorkflowJobSQL = `
+UPDATE "WorkflowJob"
+SET status = $1, payload = $2, "runAfter" = COALESCE($3, "runAfter"), "lockedBy" = NULL, "lockedAt" = NULL, "updatedAt" = $4
+WHERE id = $5 AND status = 'running' AND "lockedBy" = $6 AND attempts = $7`
+
+const renewWorkflowLeaseSQL = `
+UPDATE "WorkflowJob"
+SET "lockedAt" = $1, "updatedAt" = $1
+WHERE id = $2 AND status = 'running' AND "lockedBy" = $3 AND attempts = $4`
+
+const lockWorkflowLeaseSQL = `
+SELECT status, "lockedBy", attempts
 FROM "WorkflowJob"
-WHERE (
-    status = $1
-    AND "runAfter" <= $2
-    AND ("lockedAt" IS NULL OR "lockedAt" <= $3)
-  )
-  OR (
-    status = $4
-    AND "lockedAt" <= $3
-    AND attempts < "maxAttempts"
-  )
-ORDER BY "runAfter" ASC, "createdAt" ASC, id ASC
-FOR UPDATE SKIP LOCKED
-LIMIT 1`
+WHERE id = $1
+FOR UPDATE`
+
+const lockBuildWorkflowLeaseSQL = `
+SELECT id, status, payload, attempts, "maxAttempts", "lockedBy"
+FROM "WorkflowJob" AS wj
+WHERE wj.id = $1
+  AND wj.type IN ('build-and-deploy', 'preview-deploy', 'build', 'builder')
+  AND (
+    CASE
+      WHEN BTRIM(COALESCE(wj.payload ->> 'deploymentId', '')) <> ''
+        AND LOWER(BTRIM(wj."targetType")) = 'deployment'
+        AND BTRIM(wj."targetId") <> ''
+        AND BTRIM(wj.payload ->> 'deploymentId') <> BTRIM(wj."targetId")
+      THEN NULL
+      ELSE COALESCE(
+        NULLIF(BTRIM(wj.payload ->> 'deploymentId'), ''),
+        CASE WHEN LOWER(BTRIM(wj."targetType")) = 'deployment' THEN NULLIF(BTRIM(wj."targetId"), '') END
+      )
+    END
+  ) = $2
+FOR UPDATE`
+
+const lockImagePublicationTargetSQL = `
+SELECT d.status, s.status, p.status
+FROM "Deployment" AS d
+JOIN "Service" AS s ON s.id = d."serviceId"
+JOIN "Project" AS p ON p.id = d."projectId"
+WHERE d.id = $1 AND s.id = $2 AND p.id = $3 AND s."projectId" = p.id
+FOR UPDATE OF d, s, p`
+
+const lockBuildStartTargetSQL = lockImagePublicationTargetSQL
+
+const startBuildSQL = `
+UPDATE "Deployment"
+SET status = 'BUILDING', "buildStartedAt" = $1, "updatedAt" = $1
+WHERE id = $2 AND UPPER(BTRIM(status)) = 'QUEUED'`
 
 type PostgresStore struct {
 	db *sql.DB
@@ -105,8 +246,24 @@ func (s *PostgresStore) ClaimNextWorkflowJob(ctx context.Context, options ClaimO
 		workerID = "raibitserver-builder"
 	}
 	lockCutoff := now.Add(-time.Duration(leaseSeconds) * time.Second)
+	errorSpec, err := json.Marshal(ErrorSpecForFailure(errors.New(exhaustedWorkflowFailureMessage), ErrorCodeBuildFailed))
+	if err != nil {
+		return nil, err
+	}
 
-	job, err := scanWorkflowJob(tx.QueryRowContext(ctx, claimWorkflowJobSQL, WorkflowQueued, now, lockCutoff, WorkflowRunning))
+	job, err := scanWorkflowJob(tx.QueryRowContext(
+		ctx,
+		claimWorkflowJobSQL,
+		WorkflowQueued,
+		now,
+		lockCutoff,
+		WorkflowRunning,
+		exhaustedWorkflowReapLimit,
+		exhaustedWorkflowFailureMessage,
+		string(errorSpec),
+		now.Format(time.RFC3339Nano),
+		workerID,
+	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if err := tx.Commit(); err != nil {
@@ -117,22 +274,15 @@ func (s *PostgresStore) ClaimNextWorkflowJob(ctx context.Context, options ClaimO
 		return nil, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-UPDATE "WorkflowJob"
-SET status = $1, attempts = attempts + 1, "lockedBy" = $2, "lockedAt" = $3, "updatedAt" = $3
-WHERE id = $4`, WorkflowRunning, workerID, now, job.ID); err != nil {
-		return nil, err
-	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	job.Status = WorkflowRunning
-	job.Attempts++
+	job.LockedBy = workerID
 	return job, nil
 }
 
-func (s *PostgresStore) CompleteWorkflowJob(ctx context.Context, jobID string, result map[string]any) error {
-	return s.updateWorkflowJob(ctx, jobID, func(job *workflowJobUpdate, now time.Time) {
+func (s *PostgresStore) CompleteWorkflowJob(ctx context.Context, lease WorkflowLease, result map[string]any) error {
+	return s.updateWorkflowJob(ctx, lease, func(job *workflowJobUpdate, now time.Time) {
 		job.Payload["lastResult"] = MaskSecrets(result)
 		job.Payload["completedAt"] = now.Format(time.RFC3339Nano)
 		job.Status = WorkflowSucceeded
@@ -140,8 +290,8 @@ func (s *PostgresStore) CompleteWorkflowJob(ctx context.Context, jobID string, r
 	})
 }
 
-func (s *PostgresStore) FailWorkflowJob(ctx context.Context, jobID string, failure error) error {
-	return s.updateWorkflowJob(ctx, jobID, func(job *workflowJobUpdate, now time.Time) {
+func (s *PostgresStore) FailWorkflowJob(ctx context.Context, lease WorkflowLease, failure error) error {
+	return s.updateWorkflowJob(ctx, lease, func(job *workflowJobUpdate, now time.Time) {
 		job.Payload["lastError"] = Redact(failureMessage(failure))
 		job.Payload["lastErrorSpec"] = ErrorSpecForFailure(failure, ErrorCodeUnknownInfra)
 		job.Payload["failedAt"] = now.Format(time.RFC3339Nano)
@@ -160,13 +310,44 @@ func (s *PostgresStore) FailWorkflowJob(ctx context.Context, jobID string, failu
 	})
 }
 
+func (s *PostgresStore) CancelWorkflowJob(ctx context.Context, lease WorkflowLease, reason error) error {
+	return s.updateWorkflowJob(ctx, lease, func(job *workflowJobUpdate, now time.Time) {
+		job.Payload["lastError"] = Redact(failureMessage(reason))
+		job.Payload["lastErrorSpec"] = ErrorSpecForFailure(reason, ErrorCodeDeploymentCancelled)
+		job.Payload["cancelledAt"] = now.Format(time.RFC3339Nano)
+		job.Status = WorkflowFailed
+		job.RunAfter = nil
+	})
+}
+
+func (s *PostgresStore) RenewWorkflowJobLease(ctx context.Context, lease WorkflowLease, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	result, err := s.db.ExecContext(ctx, renewWorkflowLeaseSQL, now, lease.JobID, lease.WorkerID, lease.Attempt)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrWorkflowLeaseLost
+	}
+	return nil
+}
+
 func (s *PostgresStore) GetProject(ctx context.Context, projectID string) (*Project, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	var project Project
-	err := s.db.QueryRowContext(ctx, `SELECT id, "organizationId", name, slug FROM "Project" WHERE id = $1`, projectID).
-		Scan(&project.ID, &project.OrganizationID, &project.Name, &project.Slug)
+	err := s.db.QueryRowContext(ctx, `SELECT id, "organizationId", name, slug, status FROM "Project" WHERE id = $1`, projectID).
+		Scan(&project.ID, &project.OrganizationID, &project.Name, &project.Slug, &project.Status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, notFound("project", projectID)
 	}
@@ -183,7 +364,7 @@ func (s *PostgresStore) GetService(ctx context.Context, serviceID string) (*Serv
 	service, err := scanService(s.db.QueryRowContext(ctx, `
 SELECT id, "projectId", name, slug, type, "runtimeType", "sourceType", "buildMode", "repoUrl", branch,
        "rootDirectory", "buildContext", "dockerfilePath", "installCommand", "buildCommand", "startCommand",
-       "outputDirectory", image, "imageUrl", port, "desiredSpec", "desiredState"
+       "outputDirectory", image, "imageUrl", port, status, "desiredSpec", "desiredState"
 FROM "Service"
 WHERE id = $1`, serviceID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -210,6 +391,33 @@ func (s *PostgresStore) GetDeployment(ctx context.Context, deploymentID string) 
 }
 
 func (s *PostgresStore) UpdateDeployment(ctx context.Context, deploymentID string, updates map[string]any) (*Deployment, error) {
+	return updateDeploymentRow(ctx, s.db, deploymentID, updates)
+}
+
+func (s *PostgresStore) updateDeploymentForLease(ctx context.Context, lease WorkflowLease, deploymentID string, updates map[string]any) (*Deployment, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	defer rollbackUnlessCommitted(tx)
+	if err := assertWorkflowLeaseLocked(ctx, tx, lease); err != nil {
+		return nil, err
+	}
+	deployment, err := updateDeploymentRow(ctx, tx, deploymentID, updates)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return deployment, nil
+}
+
+func (s *PostgresStore) UpdateDeploymentForLease(ctx context.Context, lease WorkflowLease, deploymentID string, updates map[string]any) (*Deployment, error) {
+	return s.updateDeploymentForLease(ctx, lease, deploymentID, updates)
+}
+
+func updateDeploymentRow(ctx context.Context, queryer rowQueryer, deploymentID string, updates map[string]any) (*Deployment, error) {
 	assignments, args, err := updateAssignments(updates, deploymentUpdateColumns)
 	if err != nil {
 		return nil, err
@@ -221,7 +429,7 @@ SET ` + strings.Join(append(assignments, `"updatedAt" = $`+strconv.Itoa(len(args
 WHERE id = $` + strconv.Itoa(len(args)) + `
 RETURNING id, "serviceId", "projectId", status, "deploymentType", "triggerType", branch, "commitSha", "commitHash",
           "pullRequestNumber", "previewUrl", "imageUrl", "imageDigest"`
-	deployment, err := scanDeployment(s.db.QueryRowContext(ctx, sqlText, args...))
+	deployment, err := scanDeployment(queryer.QueryRowContext(ctx, sqlText, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, notFound("deployment", deploymentID)
 	}
@@ -232,6 +440,29 @@ RETURNING id, "serviceId", "projectId", status, "deploymentType", "triggerType",
 }
 
 func (s *PostgresStore) UpdateService(ctx context.Context, serviceID string, updates map[string]any) (*Service, error) {
+	return updateServiceRow(ctx, s.db, serviceID, updates)
+}
+
+func (s *PostgresStore) updateServiceForLease(ctx context.Context, lease WorkflowLease, serviceID string, updates map[string]any) (*Service, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	defer rollbackUnlessCommitted(tx)
+	if err := assertWorkflowLeaseLocked(ctx, tx, lease); err != nil {
+		return nil, err
+	}
+	service, err := updateServiceRow(ctx, tx, serviceID, updates)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return service, nil
+}
+
+func updateServiceRow(ctx context.Context, queryer rowQueryer, serviceID string, updates map[string]any) (*Service, error) {
 	assignments, args, err := updateAssignments(updates, serviceUpdateColumns)
 	if err != nil {
 		return nil, err
@@ -243,8 +474,8 @@ SET ` + strings.Join(append(assignments, `"updatedAt" = $`+strconv.Itoa(len(args
 WHERE id = $` + strconv.Itoa(len(args)) + `
 RETURNING id, "projectId", name, slug, type, "runtimeType", "sourceType", "buildMode", "repoUrl", branch,
           "rootDirectory", "buildContext", "dockerfilePath", "installCommand", "buildCommand", "startCommand",
-          "outputDirectory", image, "imageUrl", port, "desiredSpec", "desiredState"`
-	service, err := scanService(s.db.QueryRowContext(ctx, sqlText, args...))
+          "outputDirectory", image, "imageUrl", port, status, "desiredSpec", "desiredState"`
+	service, err := scanService(queryer.QueryRowContext(ctx, sqlText, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, notFound("service", serviceID)
 	}
@@ -254,12 +485,204 @@ RETURNING id, "projectId", name, slug, type, "runtimeType", "sourceType", "build
 	return service, nil
 }
 
+type rowQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type sqlExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func assertWorkflowLeaseLocked(ctx context.Context, tx *sql.Tx, lease WorkflowLease) error {
+	var jobStatus string
+	var lockedBy sql.NullString
+	var attempts int
+	err := tx.QueryRowContext(ctx, lockWorkflowLeaseSQL, lease.JobID).Scan(&jobStatus, &lockedBy, &attempts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrWorkflowLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	if jobStatus != WorkflowRunning || nullString(lockedBy) != lease.WorkerID || attempts != lease.Attempt {
+		return ErrWorkflowLeaseLost
+	}
+	return nil
+}
+
+func (s *PostgresStore) StartBuild(ctx context.Context, input BuildStartInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	job, err := scanWorkflowJobUpdate(tx.QueryRowContext(ctx, lockBuildWorkflowLeaseSQL, input.Lease.JobID, input.DeploymentID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrWorkflowLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	if job.Status != WorkflowRunning || job.LockedBy != input.Lease.WorkerID || job.Attempts != input.Lease.Attempt {
+		return ErrWorkflowLeaseLost
+	}
+
+	var deploymentStatus, serviceStatus, projectStatus string
+	err = tx.QueryRowContext(ctx, lockBuildStartTargetSQL, input.DeploymentID, input.ServiceID, input.ProjectID).Scan(&deploymentStatus, &serviceStatus, &projectStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		return notFound("build start target", input.DeploymentID)
+	}
+	if err != nil {
+		return err
+	}
+	if err := deletingTargetError(serviceStatus, projectStatus); err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(deploymentStatus), "QUEUED") {
+		return ErrWorkflowLeaseLost
+	}
+
+	startedAt := input.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	result, err := tx.ExecContext(ctx, startBuildSQL, startedAt, input.DeploymentID)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrWorkflowLeaseLost
+	}
+	return tx.Commit()
+}
+
+func (s *PostgresStore) PublishImageReady(ctx context.Context, input ImagePublicationInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	job, err := scanWorkflowJobUpdate(tx.QueryRowContext(ctx, lockBuildWorkflowLeaseSQL, input.Lease.JobID, input.DeploymentID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrWorkflowLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	if job.Status != WorkflowRunning || job.LockedBy != input.Lease.WorkerID || job.Attempts != input.Lease.Attempt {
+		return ErrWorkflowLeaseLost
+	}
+
+	var deploymentStatus, serviceStatus, projectStatus string
+	err = tx.QueryRowContext(ctx, lockImagePublicationTargetSQL, input.DeploymentID, input.ServiceID, input.ProjectID).Scan(&deploymentStatus, &serviceStatus, &projectStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		return notFound("image publication target", input.DeploymentID)
+	}
+	if err != nil {
+		return err
+	}
+	if err := deletingTargetError(serviceStatus, projectStatus); err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(deploymentStatus), "BUILDING") {
+		return ErrWorkflowLeaseLost
+	}
+
+	finishedAt := input.BuildFinishedAt
+	if finishedAt.IsZero() {
+		finishedAt = time.Now().UTC()
+	}
+	deploymentResult, err := tx.ExecContext(ctx, `
+UPDATE "Deployment"
+SET status = $1, "imageUrl" = $2, "imageDigest" = $3, "buildFinishedAt" = $4,
+    "errorCode" = NULL, "errorMessage" = NULL, "updatedAt" = $4
+WHERE id = $5 AND UPPER(BTRIM(status)) = 'BUILDING'`, "IMAGE_READY", input.ImageURL, input.ImageDigest, finishedAt, input.DeploymentID)
+	if err != nil {
+		return err
+	}
+	updatedDeployment, err := deploymentResult.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updatedDeployment != 1 {
+		return ErrWorkflowLeaseLost
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE "Service"
+SET image = $1, "imageUrl" = $1, status = 'image-ready', "updatedAt" = $2
+WHERE id = $3`, input.ImageURL, finishedAt, input.ServiceID); err != nil {
+		return err
+	}
+	if job.Payload == nil {
+		job.Payload = map[string]any{}
+	}
+	job.Payload["lastResult"] = MaskSecrets(imagePublicationResult(input))
+	job.Payload["completedAt"] = finishedAt.Format(time.RFC3339Nano)
+	payload, err := json.Marshal(MaskSecrets(job.Payload))
+	if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE "WorkflowJob"
+SET status = $1, payload = $2, "lockedBy" = NULL, "lockedAt" = NULL, "updatedAt" = $3
+WHERE id = $4 AND status = 'running' AND "lockedBy" = $5 AND attempts = $6`,
+		WorkflowSucceeded, payload, finishedAt, input.Lease.JobID, input.Lease.WorkerID, input.Lease.Attempt)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrWorkflowLeaseLost
+	}
+	if err := appendDeploymentEventRow(ctx, tx, imagePublicationEvent(input)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *PostgresStore) AppendBuildLog(ctx context.Context, input BuildLogInput) error {
+	return appendBuildLogRow(ctx, s.db, input)
+}
+
+func (s *PostgresStore) appendBuildLogForLease(ctx context.Context, lease WorkflowLease, input BuildLogInput) error {
+	if strings.TrimSpace(input.Line) == "" {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer rollbackUnlessCommitted(tx)
+	if err := assertWorkflowLeaseLocked(ctx, tx, lease); err != nil {
+		return err
+	}
+	if err := appendBuildLogRow(ctx, tx, input); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func appendBuildLogRow(ctx context.Context, execer sqlExecer, input BuildLogInput) error {
 	if strings.TrimSpace(input.Line) == "" {
 		return nil
 	}
 	now := time.Now().UTC()
-	_, err := s.db.ExecContext(ctx, `
+	_, err := execer.ExecContext(ctx, `
 INSERT INTO "BuildLog" (id, "deploymentId", step, line, level, timestamp)
 VALUES ($1, $2, $3, $4, $5, $6)`,
 		stableID("blog", input.DeploymentID, input.Step, input.Line, now.Format(time.RFC3339Nano)),
@@ -272,12 +695,31 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 }
 
 func (s *PostgresStore) AppendDeploymentEvent(ctx context.Context, input DeploymentEventInput) error {
+	return appendDeploymentEventRow(ctx, s.db, input)
+}
+
+func (s *PostgresStore) appendDeploymentEventForLease(ctx context.Context, lease WorkflowLease, input DeploymentEventInput) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer rollbackUnlessCommitted(tx)
+	if err := assertWorkflowLeaseLocked(ctx, tx, lease); err != nil {
+		return err
+	}
+	if err := appendDeploymentEventRow(ctx, tx, input); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func appendDeploymentEventRow(ctx context.Context, execer sqlExecer, input DeploymentEventInput) error {
 	now := time.Now().UTC()
 	metadata, err := json.Marshal(MaskSecrets(input.Metadata))
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 INSERT INTO "DeploymentEvent" (id, "deploymentId", type, message, metadata, timestamp)
 VALUES ($1, $2, $3, $4, $5, $6)`,
 		stableID("devevt", input.DeploymentID, input.Type, input.Message, now.Format(time.RFC3339Nano)),
@@ -289,7 +731,7 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 	return err
 }
 
-func (s *PostgresStore) updateWorkflowJob(ctx context.Context, jobID string, mutate func(job *workflowJobUpdate, now time.Time)) error {
+func (s *PostgresStore) updateWorkflowJob(ctx context.Context, lease WorkflowLease, mutate func(job *workflowJobUpdate, now time.Time)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -300,15 +742,18 @@ func (s *PostgresStore) updateWorkflowJob(ctx context.Context, jobID string, mut
 	defer rollbackUnlessCommitted(tx)
 
 	job, err := scanWorkflowJobUpdate(tx.QueryRowContext(ctx, `
-SELECT id, status, payload, attempts, "maxAttempts"
+SELECT id, status, payload, attempts, "maxAttempts", "lockedBy"
 FROM "WorkflowJob"
 WHERE id = $1
-FOR UPDATE`, jobID))
+FOR UPDATE`, lease.JobID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return notFound("workflow job", jobID)
+		return notFound("workflow job", lease.JobID)
 	}
 	if err != nil {
 		return err
+	}
+	if job.Status != WorkflowRunning || job.LockedBy != lease.WorkerID || job.Attempts != lease.Attempt {
+		return ErrWorkflowLeaseLost
 	}
 	now := time.Now().UTC()
 	mutate(job, now)
@@ -316,12 +761,16 @@ FOR UPDATE`, jobID))
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
-UPDATE "WorkflowJob"
-SET status = $1, payload = $2, "runAfter" = COALESCE($3, "runAfter"), "lockedBy" = NULL, "lockedAt" = NULL, "updatedAt" = $4
-WHERE id = $5`, job.Status, payload, job.RunAfter, now, jobID)
+	result, err := tx.ExecContext(ctx, updateWorkflowJobSQL, job.Status, payload, job.RunAfter, now, lease.JobID, lease.WorkerID, lease.Attempt)
 	if err != nil {
 		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrWorkflowLeaseLost
 	}
 	return tx.Commit()
 }
@@ -333,6 +782,7 @@ type workflowJobUpdate struct {
 	Attempts    int
 	MaxAttempts int
 	RunAfter    *time.Time
+	LockedBy    string
 }
 
 type scanner interface {
@@ -352,10 +802,12 @@ func scanWorkflowJob(row scanner) (*WorkflowJob, error) {
 func scanWorkflowJobUpdate(row scanner) (*workflowJobUpdate, error) {
 	var job workflowJobUpdate
 	var payload []byte
-	if err := row.Scan(&job.ID, &job.Status, &payload, &job.Attempts, &job.MaxAttempts); err != nil {
+	var lockedBy sql.NullString
+	if err := row.Scan(&job.ID, &job.Status, &payload, &job.Attempts, &job.MaxAttempts, &lockedBy); err != nil {
 		return nil, err
 	}
 	job.Payload = jsonMap(payload)
+	job.LockedBy = nullString(lockedBy)
 	return &job, nil
 }
 
@@ -369,7 +821,7 @@ func scanService(row scanner) (*Service, error) {
 	err := row.Scan(
 		&service.ID, &service.ProjectID, &service.Name, &service.Slug, &service.Type, &service.RuntimeType, &service.SourceType, &service.BuildMode,
 		&repoURL, &branch, &rootDirectory, &buildContext, &dockerfilePath, &installCommand, &buildCommand, &startCommand,
-		&outputDirectory, &image, &imageURL, &port, &desiredSpec, &desiredState,
+		&outputDirectory, &image, &imageURL, &port, &service.Status, &desiredSpec, &desiredState,
 	)
 	if err != nil {
 		return nil, err
@@ -390,6 +842,13 @@ func scanService(row scanner) (*Service, error) {
 	}
 	service.DesiredSpec = jsonMap(desiredSpec)
 	service.DesiredState = jsonMap(desiredState)
+	github := mapField(service.DesiredState, "github")
+	service.GitHubIntegrationID = coalesceString(stringField(service.DesiredState, "githubIntegrationId"), stringField(github, "integrationId"))
+	service.GitHubInstallationID = coalesceString(stringField(service.DesiredState, "githubInstallationId"), stringField(github, "installationId"))
+	service.GitHubRepositoryID = coalesceString(stringField(service.DesiredState, "githubRepositoryId"), stringField(github, "repositoryId"))
+	service.GitHubRepository = coalesceString(stringField(service.DesiredState, "githubRepository"), stringField(github, "repository"))
+	service.GitHubRepositoryVisibility = coalesceString(stringField(service.DesiredState, "githubRepositoryVisibility"), stringField(github, "visibility"))
+	service.SourceAccess = stringField(service.DesiredState, "sourceAccess")
 	service.Registry = coalesceString(stringField(service.DesiredState, "registry"), stringField(service.DesiredSpec, "registry"))
 	service.LocalPath = coalesceString(stringField(service.DesiredState, "localPath"), stringField(service.DesiredSpec, "localPath"))
 	if service.Port == 0 {
@@ -440,6 +899,7 @@ var serviceUpdateColumns = map[string]updateColumn{
 	"status":   {Name: "status"},
 	"image":    {Name: "image"},
 	"imageUrl": {Name: `"imageUrl"`},
+	"repoUrl":  {Name: `"repoUrl"`},
 }
 
 type updateColumn struct {

@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import { can } from './rbac.ts';
 
+const REQUEST_ACTION = Symbol('raibitserver.requestAction');
+const RESOLVED_ORGANIZATION = Symbol('raibitserver.resolvedOrganization');
+
 function base64url(input: any) {
   return Buffer.from(input).toString('base64url');
 }
@@ -68,24 +71,49 @@ export function subjectFromRequest(req: any, auth: Record<string, any> = {}) {
   }
   if (!token) throw unauthorized('missing bearer token');
   const payload = verifyJwtHs256(token, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', audience: auth.audience || 'raibitserver-api' });
-  return {
+  const subject: Record<string, any> = {
     id: payload.sub || payload.userId || payload.email || 'user',
     role: payload.role || payload.orgRole || 'viewer',
     organizationId: payload.organizationId || payload.orgId || null,
     organizationIds: payload.organizationIds || null,
+    rolesByOrganization: roleMap(payload.rolesByOrganization),
     projectId: payload.projectId || null,
     projectIds: payload.projectIds || null,
     global: payload.global === true,
     authMode: 'jwt',
     accountType: payload.accountType || null,
     approvalStatus: payload.approvalStatus || null,
+    sessionVersion: payload.sessionVersion === undefined ? null : Number(payload.sessionVersion),
     userRole: payload.userRole || null,
     claims: payload,
   };
+  if (typeof auth.currentUser === 'function') {
+    assertCurrentSession(subject, auth.currentUser(subject.id));
+  }
+  return subject;
+}
+
+export function assertCurrentSession(subject: Record<string, any>, user: Record<string, any> | null | undefined) {
+  if (subject?.authMode !== 'jwt' || subject?.global === true || subject?.claims?.global === true) return true;
+  if (!user) throw unauthorized('session user no longer exists');
+  if (String(user.approvalStatus || 'PENDING').toUpperCase() !== 'APPROVED') {
+    throw unauthorized('account is not approved');
+  }
+  const tokenVersion = Number(subject?.claims?.sessionVersion || 0);
+  const currentVersion = Number(user.sessionVersion || 0);
+  if (!Number.isInteger(tokenVersion) || tokenVersion !== currentVersion) {
+    throw unauthorized('session has been revoked');
+  }
+  return true;
 }
 
 export function requireAction(subject: Record<string, any>, action: string) {
-  if (!can(subject.role, action)) {
+  const authorizationState = subject as any;
+  authorizationState[REQUEST_ACTION] = action;
+  const roles = authorizationState[RESOLVED_ORGANIZATION]
+    ? [subject.role]
+    : [subject.role, ...Object.values(subject.rolesByOrganization || {})];
+  if (!roles.some((role) => can(normalizeRole(role), action))) {
     const error = new Error(`role ${subject.role} cannot perform ${action}`);
     (error as any).statusCode = 403;
     throw error;
@@ -100,6 +128,17 @@ export function requireScope(subject: Record<string, any>, scope: Record<string,
   if (organizationId && !matchesScope(subject.organizationId, subject.organizationIds, organizationId)) {
     throw forbidden(`subject is not scoped to organization ${organizationId}`);
   }
+  if (organizationId) {
+    const organizationRole = roleForOrganization(subject, organizationId);
+    if (!organizationRole) throw forbidden(`subject has no role in organization ${organizationId}`);
+    subject.role = organizationRole;
+    const authorizationState = subject as any;
+    authorizationState[RESOLVED_ORGANIZATION] = String(organizationId);
+    const action = authorizationState[REQUEST_ACTION];
+    if (action && !can(normalizeRole(organizationRole), action)) {
+      throw forbidden(`role ${organizationRole} cannot perform ${action}`);
+    }
+  }
   if (projectId && !matchesScope(subject.projectId, subject.projectIds, projectId)) {
     throw forbidden(`subject is not scoped to project ${projectId}`);
   }
@@ -108,9 +147,24 @@ export function requireScope(subject: Record<string, any>, scope: Record<string,
 
 export function authorizeRequest(req: any, action: string, auth: Record<string, any> = {}, scope: Record<string, any> = {}) {
   const subject = subjectFromRequest(req, auth);
+  return authorizeSubject(subject, action, { ...(req.params || {}), ...scope });
+}
+
+export function authorizeSubject(subject: Record<string, any>, action: string, scope: Record<string, any> = {}) {
+  const organizationId = scope.organizationId || scope.orgId || null;
+  if (organizationId) requireScope(subject, scope);
   requireAction(subject, action);
-  requireScope(subject, { ...(req.params || {}), ...scope });
+  if (!organizationId) requireScope(subject, scope);
   return subject;
+}
+
+export function roleForOrganization(subject: Record<string, any>, organizationId: any) {
+  const expected = String(organizationId);
+  const roles = subject?.rolesByOrganization;
+  if (roles && Object.prototype.hasOwnProperty.call(roles, expected) && roles[expected]) return roles[expected];
+  const organizationIds = [...new Set([subject?.organizationId, ...(Array.isArray(subject?.organizationIds) ? subject.organizationIds : [])].filter(Boolean).map(String))];
+  if ((!roles || Object.keys(roles).length === 0) && organizationIds.length === 1 && organizationIds[0] === expected) return subject.role;
+  return null;
 }
 
 function matchesScope(single: any, many: any, expected: any) {
@@ -118,6 +172,15 @@ function matchesScope(single: any, many: any, expected: any) {
   if (single && String(single) === value) return true;
   if (Array.isArray(many) && many.map(String).includes(value)) return true;
   return false;
+}
+
+function roleMap(value: any) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return Object.fromEntries(Object.entries(value).filter(([organizationId, role]) => organizationId && typeof role === 'string' && role.trim()));
+}
+
+function normalizeRole(role: any) {
+  return String(role || 'viewer').trim().toLowerCase();
 }
 
 function unauthorized(message: string) {

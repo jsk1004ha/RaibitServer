@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { Suspense, type ReactNode } from 'react';
+import { FlashBanner } from './flash-banner';
 import { Icon } from './icon';
 import type { IconName } from './icon';
 
@@ -35,16 +36,34 @@ export function ConsoleShell({ children, eyebrow = '운영', orgLabel = '현재 
     <div className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="/"><span className="brand-mark">RS</span><span>RAIBITSERVER</span></a>
-        <div className="switcher"><p className="switcher-label">{orgLabel}</p><div className="switcher-title">{orgValue}<span>⌄</span></div></div>
-        <div className="switcher"><p className="switcher-label">{projectLabel}</p><div className="switcher-title">{projectValue}<span>⌄</span></div></div>
+        <div className="switcher"><p className="switcher-label">{orgLabel}</p><div className="switcher-title">{orgValue}</div></div>
+        <div className="switcher"><p className="switcher-label">{projectLabel}</p><div className="switcher-title">{projectValue}</div></div>
         <nav className="nav-group"><p className="nav-title">{eyebrow}</p>{navItems.map((item) => <a key={item.id} className={`nav-link ${active === item.id ? 'active' : ''}`} aria-current={active === item.id ? 'page' : undefined} href={item.href}><Icon name={item.icon} /><span>{item.label}</span><span>›</span></a>)}</nav>
       </aside>
       <main className="main">
         <div className="topbar"><div className="crumbs">{crumbs}</div><div className="toolbar">{actions}</div></div>
         <nav className="mobile-nav">{navItems.map((item) => <a key={item.id} className={`btn ${active === item.id ? 'active' : ''}`} aria-current={active === item.id ? 'page' : undefined} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></a>)}</nav>
+        <div className="flash-stack"><Suspense fallback={null}><FlashBanner /></Suspense></div>
         {children}
       </main>
     </div>
+  );
+}
+
+export type LoadIssue = {
+  label: string;
+  message: string;
+  status: number;
+};
+
+export function LoadErrorSummary({ issues }: { issues?: LoadIssue[] }) {
+  if (!issues?.length) return null;
+  return (
+    <aside className="load-error-summary" role="alert" aria-live="polite">
+      <strong>일부 정보를 불러오지 못했습니다.</strong>
+      <ul>{issues.map((issue, index) => <li key={`${issue.label}-${issue.status}-${index}`}><span>{issue.label}</span>: {issue.message}</li>)}</ul>
+      <p className="muted">나머지 정보는 계속 표시됩니다. 잠시 후 새로고침하거나 로그인 상태를 확인하세요.</p>
+    </aside>
   );
 }
 

@@ -50,18 +50,20 @@ Production persistence는 Prisma/PostgreSQL을 기본으로 사용합니다. In-
 ### 확인
 
 ```sh
-pnpm dev:up
-cat .raibitserver-work/local-stack.json
+docker version
+kind version
+kubectl version --client=true
+helm version
+go version
 ```
 
 ### 해결
 
 - Docker가 실행 중인지 확인합니다.
-- `kubectl`이 설치되어 있는지 확인합니다.
-- `kind` 또는 `k3d`가 설치되어 있는지 확인합니다.
-- 기본 registry가 맞지 않으면 `REGISTRY_URL`을 설정합니다.
+- `kind`, `kubectl`, Helm, curl, Go, base64가 설치되어 있는지 확인합니다. 현재 live gate는 k3d를 사용하지 않습니다.
+- 같은 이름의 kind cluster가 있으면 삭제하거나 `RAIBITSERVER_LIVE_E2E_CLUSTER`에 사용하지 않는 이름을 지정합니다.
 
-kind image pull 문제가 있으면 `.raibitserver-work/e2e-report.json`의 `liveSetupResults`에서 containerd registry mirror, Docker network 연결, `kube-public/local-registry-hosting` ConfigMap 결과를 먼저 확인합니다.
+스크립트는 별도 live report 파일을 만들지 않습니다. 실패 시 표준 오류에 출력되는 control-plane/provider resource와 Pod log diagnostics에서 최초 실패 지점을 확인합니다.
 
 ## Deployment가 보안 정책에 차단됨
 

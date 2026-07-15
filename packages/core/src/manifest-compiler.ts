@@ -1,20 +1,28 @@
 import { DEFAULT_CONTAINER_SECURITY_CONTEXT, DEFAULT_POD_SECURITY_CONTEXT, secureContainerDefaults, splitEnvForSecret, validateServiceSecurity } from './security.ts';
 import { connectionEnvForResource, injectResourceEnv } from './env-injection.ts';
 import { resolveBuildStrategy } from './build-strategy.ts';
-import { DEFAULT_DOMAIN, DEFAULT_PORT, SERVICE_TYPES } from './constants.ts';
+import { DEFAULT_DOMAIN, DEFAULT_PORT, SERVICE_TYPES, trustedIngressGatewayNamespace } from './constants.ts';
 import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
 import { slugify } from './ids.ts';
-import { domainPlanForProject, serviceHostname, tenantProjectLabel } from './domain-router.ts';
+import { boundedDnsLabel, domainPlanForProject, serviceHostname, tenantProjectLabel } from './domain-router.ts';
 
 type AnyRecord = Record<string, any>;
 
-export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord = {}) {
+export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord = {}, trustedOptions: AnyRecord = {}) {
   const organization = spec.organization || { slug: spec.organizationSlug || 'default' };
   const project = spec.project || { name: spec.name || 'project', slug: spec.slug || spec.name || 'project' };
+  const projectRouteSlug = project.slug || project.name || 'project';
+  const organizationRouteSlug = organization.slug || organization.name || 'org';
+  const organizationNamespaceIdentity = organization.id || spec.organizationId || organizationRouteSlug;
+  const projectNamespaceIdentity = project.id || spec.projectId || null;
   const projectSlug = slugify(project.slug || project.name);
-  const organizationSlug = slugify(organization.slug || organization.name || 'org');
   const baseDomain = spec.baseDomain || DEFAULT_DOMAIN;
-  const namespace = tenantProjectLabel(organizationSlug, projectSlug);
+  const ingressGatewayNamespace = trustedIngressGatewayNamespace(trustedOptions.ingressGatewayNamespace);
+  const namespace = tenantProjectLabel(
+    organizationNamespaceIdentity,
+    projectRouteSlug,
+    projectNamespaceIdentity ? `${organizationNamespaceIdentity}\0${projectNamespaceIdentity}` : undefined,
+  );
   const services: AnyRecord[] = spec.services || [];
   const resources: AnyRecord[] = spec.resources || [];
   const manifests: AnyRecord[] = [namespaceManifest(namespace, projectSlug)];
@@ -23,7 +31,8 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   const resourceEnvByName = Object.fromEntries(resources.map((resource) => [resource.name, connectionEnvForResource(resource, projectSlug)]));
 
   for (const service of services) {
-    const serviceName = slugify(service.name);
+    const serviceName = kubernetesServiceName(service);
+    const serviceRouteName = service.slug || service.name || serviceName;
     const fullService = {
       projectSlug,
       registry: spec.registry,
@@ -32,12 +41,12 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
     };
     const buildPlan = resolveBuildStrategy(fullService, filesByService[service.name] || filesByService[serviceName] || {});
     buildPlans.push(buildPlan);
-    const serviceManifests = compileService({ namespace, organizationSlug, projectSlug, baseDomain, service: fullService, resources, resourceEnvByName, image: buildPlan.image });
+    const serviceManifests = compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service: fullService, resources, resourceEnvByName, image: buildPlan.image });
     manifests.push(...serviceManifests);
   }
 
   const ignoredPrePullImages = imagePrePullList(spec, buildPlans);
-  manifests.push(...networkPolicyManifests(namespace, projectSlug, services, resources));
+  manifests.push(...networkPolicyManifests(namespace, projectSlug, services, resources, ingressGatewayNamespace));
   return {
     apiVersion: 'raibitserver.io/v1alpha1',
     kind: 'ProjectDeploymentPlan',
@@ -68,8 +77,8 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   };
 }
 
-function compileService({ namespace, organizationSlug, projectSlug, baseDomain, service, resources, resourceEnvByName, image }: AnyRecord) {
-  const serviceName = slugify(service.name);
+function compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service, resources, resourceEnvByName, image }: AnyRecord) {
+  const serviceName = kubernetesServiceName(service);
   const type = service.type || SERVICE_TYPES.WEB;
   const port = Number(service.port || DEFAULT_PORT);
   const env = injectResourceEnv(service, resources, projectSlug, { resourceEnvByName });
@@ -77,8 +86,8 @@ function compileService({ namespace, organizationSlug, projectSlug, baseDomain, 
   const labels = labelsFor(projectSlug, serviceName, type);
   const out: AnyRecord[] = [];
 
-  if (Object.keys(secret).length) out.push(secretManifest(namespace, `${serviceName}-env`, labels, secret));
-  if (Object.keys(plain).length) out.push(configMapManifest(namespace, `${serviceName}-config`, labels, plain));
+  if (Object.keys(secret).length) out.push(secretManifest(namespace, derivedServiceObjectName(service, 'env'), labels, secret));
+  if (Object.keys(plain).length) out.push(configMapManifest(namespace, derivedServiceObjectName(service, 'config'), labels, plain));
 
   if (type === SERVICE_TYPES.CRON) {
     out.push(cronJobManifest(namespace, service, labels, image, port, plain, secret));
@@ -94,12 +103,12 @@ function compileService({ namespace, organizationSlug, projectSlug, baseDomain, 
     out.push(serviceManifest(namespace, serviceName, labels, port));
   }
   if (type === SERVICE_TYPES.WEB) {
-    out.push(ingressManifest(namespace, service, organizationSlug, projectSlug, baseDomain, labels, port));
+    out.push(ingressManifest(namespace, service, serviceRouteName, organizationRouteSlug, projectRouteSlug, baseDomain, labels, port));
   }
   if (service.scaling?.maxReplicas && Number(service.scaling.maxReplicas) > Number(service.scaling.minReplicas || 1)) {
-    out.push(hpaManifest(namespace, serviceName, service.scaling));
+    out.push(hpaManifest(namespace, service, service.scaling));
   }
-  out.push(pdbManifest(namespace, serviceName, labels, service.availability));
+  out.push(pdbManifest(namespace, service, labels, service.availability));
   return out;
 }
 
@@ -127,25 +136,35 @@ function labelsFor(projectSlug: string, serviceName: string, type: string): AnyR
   };
 }
 
-function envRefs(plain: AnyRecord, secret: AnyRecord, secretName: string): AnyRecord[] {
-  const values = Object.keys(plain).map((key) => ({ name: key, valueFrom: { configMapKeyRef: { name: secretName.replace('-env', '-config'), key } } }));
+function envRefs(plain: AnyRecord, secret: AnyRecord, secretName: string, configMapName: string): AnyRecord[] {
+  const values = Object.keys(plain).map((key) => ({ name: key, valueFrom: { configMapKeyRef: { name: configMapName, key } } }));
   const secrets = Object.keys(secret).map((key) => ({ name: key, valueFrom: { secretKeyRef: { name: secretName, key } } }));
   return [...values, ...secrets];
 }
 
 function containerFor(service: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord): AnyRecord {
-  const serviceName = slugify(service.name);
+  const serviceName = kubernetesServiceName(service);
+  const configuredRequests = service.resources?.requests || {};
+  const configuredLimits = service.resources?.limits || {};
   return {
     name: serviceName,
     image,
     imagePullPolicy: 'IfNotPresent',
     ports: port ? [{ name: 'http', containerPort: port }] : [],
-    env: envRefs(plain, secret, `${serviceName}-env`),
+    env: envRefs(plain, secret, derivedServiceObjectName(service, 'env'), derivedServiceObjectName(service, 'config')),
     command: service.command || undefined,
     args: service.args || undefined,
-    resources: service.resources || {
-      requests: { cpu: '100m', memory: '128Mi' },
-      limits: { cpu: '500m', memory: '512Mi' },
+    resources: {
+      requests: {
+        cpu: configuredRequests.cpu || '100m',
+        memory: configuredRequests.memory || '128Mi',
+        'ephemeral-storage': '64Mi',
+      },
+      limits: {
+        cpu: configuredLimits.cpu || '500m',
+        memory: configuredLimits.memory || '512Mi',
+        'ephemeral-storage': '256Mi',
+      },
     },
     volumeMounts: [{ name: 'tmp', mountPath: '/tmp' }],
     securityContext: secureContainerDefaults(service),
@@ -159,13 +178,13 @@ function podSpec(service: AnyRecord, image: string, port: number, plain: AnyReco
     securityContext: DEFAULT_POD_SECURITY_CONTEXT,
     restartPolicy,
     containers: [containerFor(service, image, port, plain, secret)],
-    volumes: [{ name: 'tmp', emptyDir: {} }],
+    volumes: [{ name: 'tmp', emptyDir: { sizeLimit: '128Mi' } }],
     automountServiceAccountToken: false,
   };
 }
 
 function deploymentManifest(namespace: string, service: AnyRecord, labels: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord): AnyRecord {
-  const serviceName = slugify(service.name);
+  const serviceName = kubernetesServiceName(service);
   const replicas = service.sleepPolicy === 'scale-to-zero' ? 0 : Number(service.scaling?.minReplicas ?? service.replicas ?? 1);
   return {
     apiVersion: 'apps/v1',
@@ -184,7 +203,7 @@ function deploymentManifest(namespace: string, service: AnyRecord, labels: AnyRe
 }
 
 function cronJobManifest(namespace: string, service: AnyRecord, labels: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord): AnyRecord {
-  const serviceName = slugify(service.name);
+  const serviceName = kubernetesServiceName(service);
   return {
     apiVersion: 'batch/v1',
     kind: 'CronJob',
@@ -205,7 +224,7 @@ function cronJobManifest(namespace: string, service: AnyRecord, labels: AnyRecor
 }
 
 function jobManifest(namespace: string, service: AnyRecord, labels: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord): AnyRecord {
-  const serviceName = slugify(service.name);
+  const serviceName = kubernetesServiceName(service);
   return {
     apiVersion: 'batch/v1',
     kind: 'Job',
@@ -230,12 +249,12 @@ function serviceManifest(namespace: string, serviceName: string, labels: AnyReco
   };
 }
 
-function ingressManifest(namespace: string, service: AnyRecord, organizationSlug: string, projectSlug: string, baseDomain: string, labels: AnyRecord, port: number): AnyRecord {
-  const serviceName = slugify(service.name);
+function ingressManifest(namespace: string, service: AnyRecord, serviceRouteName: string, organizationSlug: string, projectSlug: string, baseDomain: string, labels: AnyRecord, port: number): AnyRecord {
+  const serviceName = kubernetesServiceName(service);
   const host = serviceHostname({
     organizationSlug,
     projectSlug,
-    serviceName,
+    serviceName: serviceRouteName,
     baseDomain: service.baseDomain || baseDomain || DEFAULT_DOMAIN,
     customDomain: service.domain || null,
   });
@@ -253,17 +272,18 @@ function ingressManifest(namespace: string, service: AnyRecord, organizationSlug
       },
     },
     spec: {
-      tls: [{ hosts: [host], secretName: `${serviceName}-tls` }],
+      tls: [{ hosts: [host], secretName: derivedServiceObjectName(service, 'tls') }],
       rules: [{ host, http: { paths: [{ path: '/', pathType: 'Prefix', backend: { service: { name: serviceName, port: { number: port } } } }] } }],
     },
   };
 }
 
-function hpaManifest(namespace: string, serviceName: string, scaling: AnyRecord): AnyRecord {
+function hpaManifest(namespace: string, service: AnyRecord, scaling: AnyRecord): AnyRecord {
+  const serviceName = kubernetesServiceName(service);
   return {
     apiVersion: 'autoscaling/v2',
     kind: 'HorizontalPodAutoscaler',
-    metadata: { name: `${serviceName}-hpa`, namespace },
+    metadata: { name: derivedServiceObjectName(service, 'hpa'), namespace },
     spec: {
       scaleTargetRef: { apiVersion: 'apps/v1', kind: 'Deployment', name: serviceName },
       minReplicas: scaling.minReplicas ?? 1,
@@ -273,11 +293,12 @@ function hpaManifest(namespace: string, serviceName: string, scaling: AnyRecord)
   };
 }
 
-function pdbManifest(namespace: string, serviceName: string, labels: AnyRecord, availability: AnyRecord = {}): AnyRecord {
+function pdbManifest(namespace: string, service: AnyRecord, labels: AnyRecord, availability: AnyRecord = {}): AnyRecord {
+  const serviceName = kubernetesServiceName(service);
   return {
     apiVersion: 'policy/v1',
     kind: 'PodDisruptionBudget',
-    metadata: { name: `${serviceName}-pdb`, namespace, labels },
+    metadata: { name: derivedServiceObjectName(service, 'pdb'), namespace, labels },
     spec: {
       minAvailable: availability.minAvailable ?? 0,
       selector: { matchLabels: { 'app.kubernetes.io/name': serviceName } },
@@ -324,17 +345,17 @@ function httpProbe(path: string, port: number): AnyRecord {
   };
 }
 
-function networkPolicyManifests(namespace: string, projectSlug: string, services: AnyRecord[], resources: AnyRecord[]): AnyRecord[] {
-  const base = tenantIsolationNetworkPolicy(namespace, services, resources);
+function networkPolicyManifests(namespace: string, projectSlug: string, services: AnyRecord[], resources: AnyRecord[], ingressGatewayNamespace: string): AnyRecord[] {
+  const base = tenantIsolationNetworkPolicy(namespace, services, resources, ingressGatewayNamespace);
   const publicEgress = services
     .filter((service) => service.allowPublicEgress === true || service.publicEgress === true || service.egress?.publicInternet === true)
-    .map((service) => servicePublicEgressPolicy(namespace, projectSlug, slugify(service.name)));
+    .map((service) => servicePublicEgressPolicy(namespace, projectSlug, service));
   base.raibitserver.publicEgressServices = publicEgress.map((policy) => policy.raibitserver.service);
   return [base, ...publicEgress];
 }
 
-function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], resources: AnyRecord[]): AnyRecord {
-  const serviceNames = services.map((service) => slugify(service.name));
+function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], resources: AnyRecord[], ingressGatewayNamespace: string): AnyRecord {
+  const serviceNames = services.map((service) => kubernetesServiceName(service));
   const resourceNames = resources.map((resource) => slugify(resource.name));
   const egress: AnyRecord[] = [
     {
@@ -356,12 +377,13 @@ function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], 
       podSelector: {},
       policyTypes: ['Ingress', 'Egress'],
       ingress: [
-        { from: [{ namespaceSelector: { matchLabels: { 'raibitserver.io/ingress-gateway': 'true' } } }] },
+        { from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': ingressGatewayNamespace } } }] },
       ],
       egress,
     },
     raibitserver: {
       ingressFromGatewayOnly: true,
+      ingressGatewayNamespace,
       blocksSameNamespaceIngressByDefault: true,
       allowsSameNamespaceEgressToServices: serviceNames,
       allowsSameNamespaceEgressToResources: resourceNames,
@@ -374,12 +396,13 @@ function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], 
   };
 }
 
-function servicePublicEgressPolicy(namespace: string, projectSlug: string, serviceName: string): AnyRecord {
+function servicePublicEgressPolicy(namespace: string, projectSlug: string, service: AnyRecord): AnyRecord {
+  const serviceName = kubernetesServiceName(service);
   const labels = labelsFor(projectSlug, serviceName, 'egress-policy');
   return {
     apiVersion: 'networking.k8s.io/v1',
     kind: 'NetworkPolicy',
-    metadata: { name: `${serviceName}-public-egress`, namespace, labels },
+    metadata: { name: derivedServiceObjectName(service, 'public-egress'), namespace, labels },
     spec: {
       podSelector: { matchLabels: { 'app.kubernetes.io/name': serviceName } },
       policyTypes: ['Egress'],
@@ -396,6 +419,15 @@ function servicePublicEgressPolicy(namespace: string, projectSlug: string, servi
       ipv6Except: PRIVATE_IPV6_EGRESS_EXCEPTIONS,
     },
   };
+}
+
+function kubernetesServiceName(service: AnyRecord) {
+  return boundedDnsLabel(service?.name || service?.slug || service?.id || 'service', 63, service?.id || service?.name || service?.slug);
+}
+
+function derivedServiceObjectName(service: AnyRecord, suffix: string) {
+  const serviceName = kubernetesServiceName(service);
+  return boundedDnsLabel(`${serviceName}-${suffix}`, 63, `${service?.id || serviceName}\0${suffix}`);
 }
 
 const PRIVATE_IPV4_EGRESS_EXCEPTIONS = Object.freeze(['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']);

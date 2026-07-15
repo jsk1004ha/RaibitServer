@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 test('CI dry-run CLI smoke commands return stable PaaS and DBaaS artifacts', async () => {
   const validation = await runCli(['validate', 'examples/project.json']);
@@ -66,11 +67,22 @@ test('CI workflow keeps local smoke checks and Prisma validation environment', a
     assert.match(ci, new RegExp(escapeRegExp(command)));
   }
   assert.match(ci, /DATABASE_URL:\s*postgresql:\/\/raibitserver:raibitserver@localhost:5432\/raibitserver/);
+  assert.match(ci, /YAML\.parseAllDocuments\(fs\.readFileSync\(f,'utf8'\)\)/);
+});
+
+test('Prisma package scripts run without a platform-specific shell', async () => {
+  const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(packageJson.scripts['prisma:validate'], 'node scripts/prisma-cli.mjs validate');
+  assert.equal(packageJson.scripts['prisma:generate'], 'node scripts/prisma-cli.mjs generate');
+
+  const result = await runProcess(['scripts/prisma-cli.mjs', 'validate'], { DATABASE_URL: '' });
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /schema.*valid/i);
 });
 
 function runCli(args) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, ['src/cli.js', ...args], { cwd: new URL('..', import.meta.url).pathname });
+    const proc = spawn(process.execPath, ['src/cli.js', ...args], { cwd: fileURLToPath(new URL('..', import.meta.url)) });
     const stdout = [];
     const stderr = [];
     proc.stdout.on('data', (chunk) => stdout.push(chunk));
@@ -88,6 +100,25 @@ function runCli(args) {
         reject(new Error(`failed to parse CLI JSON for ${args.join(' ')}: ${error.message}\n${errorOutput}`));
       }
     });
+  });
+}
+
+function runProcess(args, env = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(process.execPath, args, {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: { ...process.env, ...env },
+    });
+    const stdout = [];
+    const stderr = [];
+    proc.stdout.on('data', (chunk) => stdout.push(chunk));
+    proc.stderr.on('data', (chunk) => stderr.push(chunk));
+    proc.on('error', reject);
+    proc.on('close', (code) => resolve({
+      code,
+      stdout: Buffer.concat(stdout).toString('utf8'),
+      stderr: Buffer.concat(stderr).toString('utf8'),
+    }));
   });
 }
 

@@ -1,0 +1,222 @@
+{{- $logs := .Values.observability.logIngester -}}
+{{- $metrics := .Values.observability.metricsIngester -}}
+{{- $network := .Values.observability.networkPolicy -}}
+{{- $enabled := and .Values.production (or $logs.enabled $metrics.enabled) -}}
+{{- if $enabled -}}
+{{- range $name, $digest := dict "logIngester" (ternary $.Values.image.digests.logIngester "sha256:disabled" $logs.enabled) "metricsIngester" (ternary $.Values.image.digests.metricsIngester "sha256:disabled" $metrics.enabled) -}}
+{{- if and (ne $digest "sha256:disabled") (not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" $digest))) -}}
+{{- fail (printf "production observability image %s requires a valid sha256 digest" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if $logs.enabled -}}
+{{- range $name, $value := dict "replicas" $logs.replicas "dbMaxOpenConns" $logs.dbMaxOpenConns "dbMaxIdleConns" $logs.dbMaxIdleConns "pageSize" $logs.pageSize "maxPods" $logs.maxPods "maxContainers" $logs.maxContainers "maxLines" $logs.maxLines "maxLineBytes" $logs.maxLineBytes "maxReadBytes" $logs.maxReadBytes "maxRecords" $logs.maxRecords "maxBytes" $logs.maxBytes -}}
+{{- if lt (int $value) 1 -}}
+{{- fail (printf "production log ingester %s must be positive" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if gt (int $logs.dbMaxIdleConns) (int $logs.dbMaxOpenConns) -}}
+{{- fail "production log ingester idle database connections cannot exceed open connections" -}}
+{{- end -}}
+{{- range $name, $value := dict "dbConnMaxLifetime" $logs.dbConnMaxLifetime "maxDuration" $logs.maxDuration "interval" $logs.interval "retention" $logs.retention -}}
+{{- if empty $value -}}
+{{- fail (printf "production log ingester %s is required" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $metrics.enabled -}}
+{{- range $name, $value := dict "replicas" $metrics.replicas "dbMaxOpenConns" $metrics.dbMaxOpenConns "dbMaxIdleConns" $metrics.dbMaxIdleConns "pageSize" $metrics.pageSize "maxPods" $metrics.maxPods "maxContainers" $metrics.maxContainers "maxSamples" $metrics.maxSamples -}}
+{{- if lt (int $value) 1 -}}
+{{- fail (printf "production metrics ingester %s must be positive" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if gt (int $metrics.dbMaxIdleConns) (int $metrics.dbMaxOpenConns) -}}
+{{- fail "production metrics ingester idle database connections cannot exceed open connections" -}}
+{{- end -}}
+{{- range $name, $value := dict "dbConnMaxLifetime" $metrics.dbConnMaxLifetime "maxDuration" $metrics.maxDuration "interval" $metrics.interval "retention" $metrics.retention -}}
+{{- if empty $value -}}
+{{- fail (printf "production metrics ingester %s is required" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $component, $resources := dict "logIngester" $logs.resources "metricsIngester" $metrics.resources -}}
+{{- $componentEnabled := ternary $logs.enabled $metrics.enabled (eq $component "logIngester") -}}
+{{- if $componentEnabled -}}
+{{- range $name, $quantity := dict "requestCpu" $resources.requests.cpu "requestMemory" $resources.requests.memory "limitCpu" $resources.limits.cpu "limitMemory" $resources.limits.memory -}}
+{{- if not (regexMatch "^[1-9][0-9]*(m|Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$" (default "" $quantity)) -}}
+{{- fail (printf "production observability %s resource %s must be a positive Kubernetes quantity" $component $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if or (lt (int $network.kubernetesApiEgress.port) 1) (gt (int $network.kubernetesApiEgress.port) 65535) -}}
+{{- fail "production observability Kubernetes API egress port must be between 1 and 65535" -}}
+{{- end -}}
+{{- if empty $network.kubernetesApiEgress.cidrs -}}
+{{- fail "production observability Kubernetes API egress requires at least one CIDR" -}}
+{{- end -}}
+{{- range $cidr := $network.kubernetesApiEgress.cidrs -}}
+{{- if empty $cidr -}}
+{{- fail "production observability Kubernetes API egress CIDRs must be non-empty" -}}
+{{- end -}}
+{{- end -}}
+{{- if or (lt (int $network.databaseEgress.port) 1) (gt (int $network.databaseEgress.port) 65535) -}}
+{{- fail "production observability database egress port must be between 1 and 65535" -}}
+{{- end -}}
+{{- if and (empty $network.databaseEgress.selectorPeers) (empty $network.databaseEgress.cidrs) -}}
+{{- fail "production observability database egress requires at least one selector peer or CIDR" -}}
+{{- end -}}
+{{- range $peer := $network.databaseEgress.selectorPeers -}}
+{{- if and (empty $peer.namespaceSelector) (empty $peer.podSelector) -}}
+{{- fail "production observability database egress selector peers require a namespaceSelector or podSelector" -}}
+{{- end -}}
+{{- end -}}
+{{- range $cidr := $network.databaseEgress.cidrs -}}
+{{- if empty $cidr -}}
+{{- fail "production observability database egress CIDRs must be non-empty" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.production $logs.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-log-ingester
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-log-ingester
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-log-ingester
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "raibitserver.fullname" . }}-log-ingester
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "raibitserver.fullname" . }}-log-ingester
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if and .Values.production $metrics.enabled }}
+{{- if $logs.enabled }}
+---
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-metrics-ingester
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-metrics-ingester
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+rules:
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-metrics-ingester
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "raibitserver.fullname" . }}-metrics-ingester
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "raibitserver.fullname" . }}-metrics-ingester
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if $enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-observability-ingesters
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          {{- if $logs.enabled }}
+          - log-ingester
+          {{- end }}
+          {{- if $metrics.enabled }}
+          - metrics-ingester
+          {{- end }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+{{- range $cidr := $network.kubernetesApiEgress.cidrs }}
+        - ipBlock:
+            cidr: {{ $cidr | quote }}
+{{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $network.kubernetesApiEgress.port }}
+    - to:
+{{- range $peer := $network.databaseEgress.selectorPeers }}
+{{- if $peer.namespaceSelector }}
+        - namespaceSelector:
+            matchLabels:
+{{ toYaml $peer.namespaceSelector | indent 14 }}
+{{- if $peer.podSelector }}
+          podSelector:
+            matchLabels:
+{{ toYaml $peer.podSelector | indent 14 }}
+{{- end }}
+{{- else }}
+        - podSelector:
+            matchLabels:
+{{ toYaml $peer.podSelector | indent 14 }}
+{{- end }}
+{{- end }}
+{{- range $cidr := $network.databaseEgress.cidrs }}
+        - ipBlock:
+            cidr: {{ $cidr | quote }}
+{{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $network.databaseEgress.port }}
+{{- end }}

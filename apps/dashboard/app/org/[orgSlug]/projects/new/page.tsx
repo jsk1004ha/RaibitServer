@@ -9,13 +9,15 @@ export default async function NewProjectPage({ params }: { params: Promise<{ org
         <header className="page-header"><div><p className="eyebrow">새 프로젝트</p><h1 className="page-title">프로젝트 만들기</h1><p className="page-subtitle">소스와 첫 서비스를 정하고 필요한 관리형 리소스를 선택하세요.</p></div><span className="badge info">3단계</span></header>
         <div className="dashboard-grid">
           <form method="post" action={apiAction('/projects')} className="card stack">
+            <input type="hidden" name="_returnTo" value={`/org/${orgSlug}/projects`} />
             <ol className="tabs" aria-label="프로젝트 만들기 단계" style={{ listStyle: 'none', paddingLeft: 0 }}><li className="tab active">1 소스</li><li className="tab">2 서비스</li><li className="tab">3 리소스</li></ol>
             <section className="stack">
               <div className="card-title"><h2>프로젝트와 소스</h2><span className="badge info">필수</span></div>
               <div className="form-grid">
                 <label>프로젝트 이름 <input name="name" required placeholder="동아리 웹사이트" /></label>
                 <label>슬러그 <input name="slug" placeholder="club-website" /></label>
-                <label>조직 <input value={orgSlug} readOnly /></label><input type="hidden" name="organizationId" value={orgSlug} />
+                <label>조직 <input value={orgSlug} readOnly aria-describedby="organization-scope-note" /></label>
+                <p className="muted" id="organization-scope-note">실제 조직 권한은 로그인한 계정에서 확인합니다.</p>
                 <label>저장소 URL <input name="repoUrl" placeholder="https://github.com/rabbit-club/club-api" /></label>
                 <label>브랜치 <input name="branch" defaultValue="main" /></label>
                 <label>소스 유형 <select name="sourceType" defaultValue="github"><option value="github">GitHub / Git 저장소</option><option value="image">빌드된 이미지</option><option value="local">로컬 Dockerfile</option></select></label>
@@ -24,6 +26,7 @@ export default async function NewProjectPage({ params }: { params: Promise<{ org
             <section className="stack">
               <div className="card-title"><h2>첫 서비스</h2><span className="badge ok">컨테이너</span></div>
               <div className="form-grid">
+                <label>서비스 이름 <input name="serviceName" defaultValue="web" required /></label>
                 <label>서비스 유형 <select name="type" defaultValue="web"><option value="web">웹</option><option value="private">비공개 서비스</option><option value="worker">워커</option><option value="cron">예약 작업</option><option value="job">일회성 작업</option></select></label>
                 <label>이미지 <input name="image" placeholder="registry.example.com/team/web:tag" /></label>
                 <label>Dockerfile 경로 <input name="dockerfilePath" placeholder="Dockerfile" /></label>

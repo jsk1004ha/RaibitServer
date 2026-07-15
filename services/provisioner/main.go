@@ -17,9 +17,14 @@ func main() {
 	}
 	args := []string{"apply", "--server-side", "-f", os.Args[2]}
 	fmt.Println("$ kubectl", args)
-	if os.Getenv("RAIBITSERVER_EXECUTE") != "1" { return }
+	if os.Getenv("RAIBITSERVER_EXECUTE") != "1" {
+		return
+	}
 	cmd := exec.Command("kubectl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

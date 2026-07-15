@@ -119,20 +119,21 @@ test('developer can browse schema but cannot read DB row data by default', async
   );
 });
 
-test('provider-owned connection secrets resolve without exposing tenant input', async () => {
+test('provider-owned connection secrets cannot be injected into control-plane console state', async () => {
   const store = new ControlPlaneStore();
   const resource = store.createResource({ projectId: 'prj_1', name: 'pg-secret', engine: 'postgresql' });
-  const attached = store.attachProviderConnectionSecret({
-    resourceId: resource.id,
-    databaseUrl: 'postgresql://provider:secret@127.0.0.1:1/app',
-  });
-  assert.equal(Boolean(attached.connectionSecretName), true);
-  assert.equal(attached.providerConnection, undefined);
-  assert.equal(attached.databaseUrl, undefined);
+  assert.throws(
+    () => store.attachProviderConnectionSecret({
+      resourceId: resource.id,
+      databaseUrl: 'postgresql://provider:secret@127.0.0.1:1/app',
+    }),
+    /credentials are written only by the Go provisioner/,
+  );
   const snapshotResource = store.snapshot().resources.find((row) => row.id === resource.id);
   assert.equal(snapshotResource.providerConnection, undefined);
-  const consoleResource = store.resourceForConsole(attached);
-  assert.equal(consoleResource.providerConnection.databaseUrl, 'postgresql://provider:secret@127.0.0.1:1/app');
+  assert.equal(snapshotResource.connectionSecretName, undefined);
+  const consoleResource = store.resourceForConsole(snapshotResource);
+  assert.equal(consoleResource.providerConnection, undefined);
   assert.equal(store.snapshot().secrets.some((secret) => /provider:secret/.test(JSON.stringify(secret))), false);
 });
 

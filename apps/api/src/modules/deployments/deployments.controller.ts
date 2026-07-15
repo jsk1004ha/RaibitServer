@@ -1,4 +1,5 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
+import { startBoundedSseStream } from '@raibitserver/core';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { DeploymentsService } from './deployments.service';
 
@@ -8,8 +9,8 @@ export class DeploymentsController {
 
   @RequirePermission('project:read')
   @Get()
-  list(@Param('projectId') projectId: string, @Param('serviceId') serviceId: string, @Req() req: any) {
-    return this.deploymentsService.listDeployments(projectId, serviceId, req.raibitSubject);
+  list(@Param('projectId') projectId: string, @Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.listDeployments(projectId, serviceId, req.raibitSubject, query);
   }
 
   @RequirePermission('deploy:run')
@@ -26,8 +27,8 @@ export class ServiceDeploymentsController {
 
   @RequirePermission('project:read')
   @Get()
-  list(@Param('serviceId') serviceId: string, @Req() req: any) {
-    return this.deploymentsService.listDeploymentsForService(serviceId, req.raibitSubject);
+  list(@Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.listDeploymentsForService(serviceId, req.raibitSubject, query);
   }
 
   @RequirePermission('deploy:run')
@@ -62,7 +63,7 @@ export class DeploymentLogsController {
 
   @RequirePermission('deploy:run')
   @Post('deployments/:deploymentId/cancel')
-  @HttpCode(202)
+  @HttpCode(200)
   cancel(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
     return this.deploymentsService.cancelDeployment(deploymentId, input || {}, req.raibitSubject);
   }
@@ -76,44 +77,52 @@ export class DeploymentLogsController {
 
   @RequirePermission('logs:read')
   @Get('deployments/:deploymentId/logs')
-  logs(@Param('deploymentId') deploymentId: string, @Req() req: any) {
-    return this.deploymentsService.listDeploymentLogs(deploymentId, req.raibitSubject);
+  logs(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.listDeploymentLogs(deploymentId, req.raibitSubject, query);
   }
 
   @RequirePermission('logs:read')
   @Get('deployments/:deploymentId/events')
-  events(@Param('deploymentId') deploymentId: string, @Req() req: any) {
-    return this.deploymentsService.listDeploymentEvents(deploymentId, req.raibitSubject);
+  events(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.listDeploymentEvents(deploymentId, req.raibitSubject, query);
   }
 
   @RequirePermission('logs:read')
   @Get('deployments/:deploymentId/stream')
   async deploymentStream(@Param('deploymentId') deploymentId: string, @Req() req: any, @Res() res: any) {
     const snapshot = await this.deploymentsService.deploymentActivitySnapshot(deploymentId, req.raibitSubject);
-    writeSseSnapshot(res, 'deployment.snapshot', snapshot);
+    startBoundedSseStream({
+      req,
+      res,
+      event: 'deployment.snapshot',
+      initialPayload: snapshot,
+      load: (cursors) => this.deploymentsService.deploymentActivitySnapshot(deploymentId, req.raibitSubject, {
+        deploymentCursor: cursors.deploymentCursor,
+        logCursor: cursors.logCursor,
+        eventCursor: cursors.eventCursor,
+      }),
+    });
   }
 
   @RequirePermission('logs:read')
   @Get('services/:serviceId/logs')
-  runtime(@Param('serviceId') serviceId: string, @Req() req: any) {
-    return this.deploymentsService.listRuntimeLogs(serviceId, req.raibitSubject);
+  runtime(@Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.listRuntimeLogs(serviceId, req.raibitSubject, query);
   }
 
   @RequirePermission('logs:read')
   @Get('services/:serviceId/logs/stream')
   async runtimeStream(@Param('serviceId') serviceId: string, @Req() req: any, @Res() res: any) {
     const snapshot = await this.deploymentsService.serviceLogSnapshot(serviceId, req.raibitSubject);
-    writeSseSnapshot(res, 'service.logs.snapshot', snapshot);
+    startBoundedSseStream({
+      req,
+      res,
+      event: 'service.logs.snapshot',
+      initialPayload: snapshot,
+      load: (cursors) => this.deploymentsService.serviceLogSnapshot(serviceId, req.raibitSubject, {
+        serviceCursor: cursors.serviceCursor,
+        logCursor: cursors.logCursor,
+      }),
+    });
   }
-}
-
-function writeSseSnapshot(res: any, event: string, payload: Record<string, any>) {
-  res.status(200);
-  res.setHeader('content-type', 'text/event-stream; charset=utf-8');
-  res.setHeader('cache-control', 'no-cache, no-transform');
-  res.setHeader('connection', 'keep-alive');
-  res.write(`retry: ${payload.stream?.retryMs || 3000}\n`);
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  res.end();
 }

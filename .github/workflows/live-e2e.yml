@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       runner_labels_json:
-        description: 'JSON array for a Docker/kubectl/kind-capable runner'
+        description: 'JSON array for a Docker-capable Linux runner'
         required: true
         default: '["self-hosted","linux"]'
 
@@ -13,11 +13,14 @@ permissions:
 
 jobs:
   live-e2e:
-    name: Local PaaS bootstrap smoke
+    name: kind / Helm reconciliation gate
     runs-on: ${{ fromJSON(inputs.runner_labels_json) }}
-    timeout-minutes: 45
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.2
@@ -25,25 +28,24 @@ jobs:
         with:
           node-version: '24'
           cache: pnpm
-      - name: Verify live E2E tools
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.35.0
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.2.3
+      - name: Install pinned kind
+        run: |
+          go install sigs.k8s.io/kind@v0.31.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Verify live gate tools
         run: |
           docker version
+          kind version
           kubectl version --client=true
-          if ! command -v kind >/dev/null 2>&1 && ! command -v k3d >/dev/null 2>&1; then
-            echo "Live E2E requires kind or k3d on this runner" >&2
-            exit 1
-          fi
-      - run: pnpm install --frozen-lockfile
-      - name: Run live E2E
+          helm version
+          go version
+          curl --version
+          base64 --version
+      - name: Run public live Helm command
         run: pnpm e2e:live
-        env:
-          RAIBITSERVER_EXECUTE: '1'
-          REGISTRY_URL: localhost:5000
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: raibitserver-live-e2e-report
-          path: |
-            .raibitserver-work/e2e-report.json
-            .raibitserver-work/live-e2e-report.json
-          if-no-files-found: ignore

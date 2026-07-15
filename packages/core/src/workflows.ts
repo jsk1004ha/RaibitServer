@@ -161,6 +161,36 @@ export async function processNextWorkflowJob(queue: any, handlers: Record<string
 
 export const processWorkflowQueue = processNextWorkflowJob;
 
+export async function drainWorkflowQueue(queue: any, handlers: Record<string, any> = {}, options: Record<string, any> = {}) {
+  const maxJobs = boundedInteger(options.maxJobs, 25, 1, 100);
+  const concurrency = boundedInteger(options.concurrency, 4, 1, 16);
+  const results: any[] = [];
+  let reservations = 0;
+  let exhausted = false;
+
+  const workers = Array.from({ length: Math.min(concurrency, maxJobs) }, async () => {
+    while (!exhausted && !options.signal?.aborted) {
+      if (reservations >= maxJobs) return;
+      reservations += 1;
+      const result = await processNextWorkflowJob(queue, handlers, options);
+      if (!result.processed) {
+        exhausted = true;
+        return;
+      }
+      results.push(result);
+    }
+  });
+  await Promise.all(workers);
+  return {
+    processed: results.length,
+    succeeded: results.filter((result) => result.ok).length,
+    failed: results.filter((result) => !result.ok).length,
+    exhausted,
+    aborted: Boolean(options.signal?.aborted),
+    results,
+  };
+}
+
 export function sanitizeWorkflowValue(input: any): any {
   if (typeof input === 'string') return sanitizeLogRecord(input);
   if (Array.isArray(input)) return input.map((item) => sanitizeWorkflowValue(item));
@@ -224,4 +254,10 @@ function dateMillis(value: any) {
 
 function isoTimestamp(value: any) {
   return new Date(dateMillis(value)).toISOString();
+}
+
+function boundedInteger(value: any, fallback: number, minimum: number, maximum: number) {
+  const parsed = Number.parseInt(String(value ?? fallback), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.min(maximum, parsed));
 }

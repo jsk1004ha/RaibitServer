@@ -27,12 +27,13 @@
     "dev:down": "node scripts/dev-down.mjs",
     "e2e": "pnpm e2e:dry",
     "e2e:local": "pnpm e2e:dry",
-    "prisma:validate": "sh -c 'DATABASE_URL=${DATABASE_URL:-postgresql://raibitserver:raibitserver@localhost:5432/raibitserver} prisma validate --schema prisma/schema.prisma'",
-    "prisma:generate": "sh -c 'DATABASE_URL=${DATABASE_URL:-postgresql://raibitserver:raibitserver@localhost:5432/raibitserver} prisma generate --schema prisma/schema.prisma'",
+    "prisma:validate": "node scripts/prisma-cli.mjs validate",
+    "prisma:generate": "node scripts/prisma-cli.mjs generate",
     "e2e:dry": "node scripts/dev-e2e.mjs --mode dry",
-    "e2e:live": "node scripts/dev-e2e.mjs --mode live --execute",
+    "e2e:live": "pnpm e2e:live:helm",
+    "e2e:live:helm": "bash scripts/live-helm-e2e.sh",
     "dev:e2e:dry": "node scripts/dev-e2e.mjs --mode dry",
-    "dev:e2e:live": "node scripts/dev-e2e.mjs --mode live --execute",
+    "dev:e2e:live": "pnpm e2e:live:helm",
     "dev-up": "pnpm dev:up",
     "dev-e2e": "pnpm dev:e2e",
     "dev-down": "pnpm dev:down"
@@ -61,19 +62,5 @@
     "go-controller"
   ],
   "license": "Apache-2.0",
-  "packageManager": "pnpm@11.1.2",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@nestjs/core",
-      "@prisma/client",
-      "@prisma/engines",
-      "prisma",
-      "sharp",
-      "msgpackr-extract"
-    ],
-    "overrides": {
-      "effect@<3.20.0": "3.20.0",
-      "postcss@<8.5.10": "8.5.10"
-    }
-  }
+  "packageManager": "pnpm@11.1.2"
 }

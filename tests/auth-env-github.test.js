@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { parseDotEnv } from '../packages/core/src/env-file.ts';
@@ -62,7 +63,7 @@ test('first auth user bootstraps as admin non-club and GitHub callback remains p
     assert.equal(secondVerified.body.user.accountType, 'NON_CLUB');
     assert.equal(secondVerified.body.user.approvalStatus, 'PENDING');
     const secondBlocked = await request(port, 'POST', '/projects', { name: 'blocked', slug: 'blocked' }, secondVerified.body.token);
-    assert.equal(secondBlocked.statusCode, 403);
+    assert.equal(secondBlocked.statusCode, 401);
 
     const githubOnly = new RAIBITSERVERControlPlane();
     const githubServer = http.createServer(createApiHandler(githubOnly, { auth: { mode: 'jwt', jwtSecret: secret } }));
@@ -109,6 +110,66 @@ test('legacy first user is promoted to admin on first login when no admin exists
   }
 });
 
+test('approval changes revoke existing sessions and rejected users cannot log in', async () => {
+  const secret = 'approval-session-revocation-secret';
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const org = controlPlane.store.createOrganization({ name: 'Session Org', slug: 'session-org' });
+  const admin = controlPlane.store.createUser({
+    email: 'session-admin@example.com',
+    name: 'Session Admin',
+    passwordHash: hashPassword('correct-horse'),
+    role: 'ADMIN',
+    accountType: 'NON_CLUB',
+    approvalStatus: 'APPROVED',
+  });
+  const member = controlPlane.store.createUser({
+    email: 'session-member@example.com',
+    name: 'Session Member',
+    passwordHash: hashPassword('correct-horse'),
+    role: 'USER',
+    accountType: 'NON_CLUB',
+    approvalStatus: 'APPROVED',
+  });
+  controlPlane.store.addMember({ organizationId: org.id, userId: admin.id, role: 'owner' });
+  controlPlane.store.addMember({ organizationId: org.id, userId: member.id, role: 'owner' });
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const adminLogin = await request(port, 'POST', '/auth/login', { email: admin.email, password: 'correct-horse' });
+    const memberLogin = await request(port, 'POST', '/auth/login', { email: member.email, password: 'correct-horse' });
+    assert.equal(adminLogin.statusCode, 200);
+    assert.equal(memberLogin.statusCode, 200);
+
+    const unconfirmedReject = await request(port, 'POST', `/admin/users/${member.id}/reject`, {}, adminLogin.body.token);
+    assert.equal(unconfirmedReject.statusCode, 400);
+    assert.equal(unconfirmedReject.body.error, 'confirmation_required');
+
+    const rejected = await request(port, 'POST', `/admin/users/${member.id}/reject`, { confirmed: true }, adminLogin.body.token);
+    assert.equal(rejected.statusCode, 200);
+    assert.equal(rejected.body.approvalStatus, 'REJECTED');
+
+    const staleRejectedSession = await request(port, 'GET', '/projects', null, memberLogin.body.token);
+    assert.equal(staleRejectedSession.statusCode, 401);
+    const rejectedLogin = await request(port, 'POST', '/auth/login', { email: member.email, password: 'correct-horse' });
+    assert.equal(rejectedLogin.statusCode, 403);
+
+    const approved = await request(port, 'POST', `/admin/users/${member.id}/approve`, { accountType: 'NON_CLUB' }, adminLogin.body.token);
+    assert.equal(approved.statusCode, 200);
+    assert.equal(approved.body.approvalStatus, 'APPROVED');
+
+    const staleApprovedSession = await request(port, 'GET', '/projects', null, memberLogin.body.token);
+    assert.equal(staleApprovedSession.statusCode, 401);
+    const freshLogin = await request(port, 'POST', '/auth/login', { email: member.email, password: 'correct-horse' });
+    assert.equal(freshLogin.statusCode, 200);
+    const freshSession = await request(port, 'GET', '/projects', null, freshLogin.body.token);
+    assert.equal(freshSession.statusCode, 200);
+  } finally {
+    server.close();
+  }
+});
+
 test('signup sends an email code and requires verification before login issues a session', async () => {
   const secret = 'email-verification-secret';
   const previousCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE;
@@ -128,8 +189,8 @@ test('signup sends an email code and requires verification before login issues a
     assert.equal(signup.body.organization, undefined);
     assert.equal(controlPlane.store.users.size, 0);
     assert.equal(controlPlane.store.organizations.size, 0);
-    assert.equal(signup.body.emailVerification.required, true);
-    assert.equal(signup.body.emailVerification.sent, true);
+    assert.deepEqual(signup.body.emailVerification, { accepted: true });
+    await waitForEmailDeliveries(controlPlane.store, 1);
     assert.equal(controlPlane.store.emailDeliveries.length, 1);
     assert.equal(controlPlane.store.emailDeliveries[0].from, 'RAIBITSERVER <email-verification@example.com>');
     assert.equal(controlPlane.store.emailDeliveries[0].to, 'verify@example.com');
@@ -243,7 +304,9 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(eveVerified.body.user.approvalStatus, 'PENDING');
 
     const duplicateOrg = await request(port, 'POST', '/auth/signup', { email: 'mallory@example.com', password: 'correct-horse', organizationSlug: 'alice-org' });
-    assert.equal(duplicateOrg.statusCode, 409);
+    assert.equal(duplicateOrg.statusCode, 201);
+    assert.deepEqual(duplicateOrg.body.emailVerification, { accepted: true });
+    assert.equal(controlPlane.store.emailVerificationCodes.some((row) => row.email === 'mallory@example.com' && row.purpose === 'signup' && !row.consumedAt), false);
 
     const aliceLogin = await request(port, 'POST', '/auth/login', { email: 'alice@example.com', password: 'correct-horse' });
     assert.equal(aliceLogin.statusCode, 200);
@@ -256,14 +319,13 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(aliceService.statusCode, 201);
 
     const bobDenied = await request(port, 'POST', '/services', { projectId: aliceProject.body.id, name: 'steal' }, bobVerified.body.token);
-    assert.equal(bobDenied.statusCode, 403);
+    assert.equal(bobDenied.statusCode, 401);
 
     const bobOwnProjectBlocked = await request(port, 'POST', '/projects', { name: 'blocked', slug: 'blocked' }, bobVerified.body.token);
-    assert.equal(bobOwnProjectBlocked.statusCode, 403);
+    assert.equal(bobOwnProjectBlocked.statusCode, 401);
 
     const bobProjects = await request(port, 'GET', '/projects', null, bobVerified.body.token);
-    assert.equal(bobProjects.statusCode, 200);
-    assert.equal(bobProjects.body.projects.some((project) => project.id === aliceProject.body.id), false);
+    assert.equal(bobProjects.statusCode, 401);
 
     const bobGithub = await request(port, 'GET', '/auth/github/callback?email=bob%40example.com&githubId=gh-bob&login=bob&state=link-existing');
     assert.equal(bobGithub.statusCode, 200);
@@ -277,11 +339,13 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(approveBob.body.approvalStatus, 'APPROVED');
     const bobQuota = await request(port, 'PATCH', `/admin/users/${bobVerified.body.user.id}/quota`, { maxProjects: 1, maxServices: 1 }, aliceLogin.body.token);
     assert.equal(bobQuota.statusCode, 200);
-    const bobProject = await request(port, 'POST', '/projects', { name: 'Bob API', slug: 'bob-api' }, bobVerified.body.token);
+    const bobLogin = await request(port, 'POST', '/auth/login', { email: 'bob@example.com', password: 'correct-horse' });
+    assert.equal(bobLogin.statusCode, 200);
+    const bobProject = await request(port, 'POST', '/projects', { name: 'Bob API', slug: 'bob-api' }, bobLogin.body.token);
     assert.equal(bobProject.statusCode, 201);
-    const bobService = await request(port, 'POST', `/projects/${bobProject.body.id}/services`, { name: 'web', type: 'web', sourceType: 'image', image: 'localhost:5000/bob/web:latest' }, bobVerified.body.token);
+    const bobService = await request(port, 'POST', `/projects/${bobProject.body.id}/services`, { name: 'web', type: 'web', sourceType: 'image', image: 'localhost:5000/bob/web:latest' }, bobLogin.body.token);
     assert.equal(bobService.statusCode, 201);
-    const bobQuotaDenied = await request(port, 'POST', `/projects/${bobProject.body.id}/services`, { name: 'worker', type: 'worker', sourceType: 'image', image: 'localhost:5000/bob/worker:latest' }, bobVerified.body.token);
+    const bobQuotaDenied = await request(port, 'POST', `/projects/${bobProject.body.id}/services`, { name: 'worker', type: 'worker', sourceType: 'image', image: 'localhost:5000/bob/worker:latest' }, bobLogin.body.token);
     assert.equal(bobQuotaDenied.statusCode, 403);
 
     const bobClub = await request(port, 'POST', `/admin/users/${bobVerified.body.user.id}/approve`, { accountType: 'CLUB_MEMBER' }, aliceLogin.body.token);
@@ -291,11 +355,13 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(bobClubLogin.statusCode, 200);
     assert.equal(bobClubLogin.body.user.accountType, 'CLUB_MEMBER');
 
-    const rejectEve = await request(port, 'POST', `/admin/users/${eveVerified.body.user.id}/reject`, {}, aliceLogin.body.token);
+    const rejectEve = await request(port, 'POST', `/admin/users/${eveVerified.body.user.id}/reject`, { confirmed: true }, aliceLogin.body.token);
     assert.equal(rejectEve.statusCode, 200);
     assert.equal(rejectEve.body.approvalStatus, 'REJECTED');
     const eveRejectedProject = await request(port, 'POST', '/projects', { name: 'eve', slug: 'eve' }, eveVerified.body.token);
-    assert.equal(eveRejectedProject.statusCode, 403);
+    assert.equal(eveRejectedProject.statusCode, 401);
+    const eveRejectedLogin = await request(port, 'POST', '/auth/login', { email: 'eve@example.com', password: 'correct-horse' });
+    assert.equal(eveRejectedLogin.statusCode, 403);
 
     const envUpload = await request(port, 'POST', `/projects/${aliceProject.body.id}/services/${aliceService.body.id}/env-file`, {
       filename: '.env.production',
@@ -316,9 +382,9 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(JSON.stringify(github.body).includes('ghp_private_token'), false);
 
     const attached = await request(port, 'POST', `/projects/${aliceProject.body.id}/services/${aliceService.body.id}/github`, { integrationId: github.body.id, repoUrl: 'https://github.com/alice/web', branch: 'main' }, aliceLogin.body.token);
-    assert.equal(attached.statusCode, 200);
-    assert.equal(attached.body.github.repository, 'alice/web');
-    assert.equal(controlPlane.store.services.get(aliceService.body.id).repoUrl, 'https://github.com/alice/web.git');
+    assert.equal(attached.statusCode, 403);
+    assert.match(attached.body.error, /verified GitHub App installation/i);
+    assert.equal(controlPlane.store.services.get(aliceService.body.id).repoUrl, undefined);
   } finally {
     server.close();
     if (previousAdminEmails === undefined) delete process.env.ADMIN_EMAILS; else process.env.ADMIN_EMAILS = previousAdminEmails;
@@ -364,11 +430,21 @@ function request(port, method, requestPath, body = null, token = null) {
   });
 }
 
+async function waitForEmailDeliveries(store, expected, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (store.emailDeliveries.length < expected) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${expected} email deliveries`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 function runCli(args) {
   return new Promise((resolve, reject) => {
     const child = process.execPath;
     import('node:child_process').then(({ spawn }) => {
-      const proc = spawn(child, ['src/cli.js', ...args], { cwd: new URL('..', import.meta.url).pathname });
+      const proc = spawn(child, ['src/cli.js', ...args], { cwd: fileURLToPath(new URL('..', import.meta.url)) });
       const stdout = [];
       const stderr = [];
       proc.stdout.on('data', (chunk) => stdout.push(chunk));

@@ -17,6 +17,7 @@ model User {
   role           String       @default("USER")
   accountType    String       @default("NON_CLUB")
   approvalStatus String       @default("PENDING")
+  sessionVersion Int          @default(0)
   emailVerifiedAt DateTime?   @default(now())
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -46,6 +47,16 @@ model EmailVerificationCode {
 
   @@index([email, purpose, consumedAt, createdAt])
   @@index([userId, consumedAt])
+  @@index([expiresAt])
+}
+
+model AuthRateLimit {
+  key             String   @id
+  count           Int      @default(0)
+  windowStartedAt DateTime
+  expiresAt       DateTime
+  updatedAt       DateTime @updatedAt
+
   @@index([expiresAt])
 }
 
@@ -82,6 +93,7 @@ model Project {
   slug           String
   description    String       @default("")
   status         String       @default("ACTIVE")
+  deletionRequestedAt DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -93,6 +105,8 @@ model Project {
   usageRecords   UsageRecord[]
 
   @@unique([organizationId, slug])
+  @@index([status, updatedAt, createdAt])
+  @@index([organizationId, createdAt, id])
 }
 
 model Service {
@@ -120,6 +134,7 @@ model Service {
   desiredSpec        Json         @default("{}")
   desiredState       Json         @default("{}")
   status             String       @default("CREATED")
+  deletionRequestedAt DateTime?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
   project            Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -127,10 +142,13 @@ model Service {
   domains            Domain[]
   environmentVariables EnvironmentVariable[]
   runtimeLogs        RuntimeLog[]
+  runtimeMetrics     RuntimeMetric[]
   attachments        ResourceAttachment[]
   usageRecords       UsageRecord[]
 
   @@unique([projectId, slug])
+  @@index([status, updatedAt, createdAt])
+  @@index([projectId, createdAt, id])
 }
 
 model Deployment {
@@ -153,16 +171,24 @@ model Deployment {
   finishedAt        DateTime?
   errorCode         String?
   errorMessage      String?
+  reconcileAction   String?
+  reconcileLockedBy String?
+  reconcileLockedAt DateTime?
+  reconcileAttempts Int       @default(0)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   service           Service   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
   project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   buildLogs         BuildLog[]
   runtimeLogs       RuntimeLog[]
+  runtimeMetrics    RuntimeMetric[]
   events            DeploymentEvent[]
 
   @@index([serviceId, status])
   @@index([projectId, deploymentType])
+  @@index([status, reconcileLockedAt, createdAt])
+  @@index([serviceId, createdAt, id])
+  @@index([projectId, createdAt, id])
 }
 
 model BuildLog {
@@ -175,6 +201,7 @@ model BuildLog {
   deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
 
   @@index([deploymentId, timestamp])
+  @@index([deploymentId, timestamp, id])
 }
 
 model RuntimeLog {
@@ -182,15 +209,50 @@ model RuntimeLog {
   serviceId     String
   deploymentId  String?
   podName       String
+  podUid        String?
   containerName String
   line          String
   level         String      @default("info")
+  sourceKey     String?     @unique
   timestamp     DateTime    @default(now())
   service       Service     @relation(fields: [serviceId], references: [id], onDelete: Cascade)
   deployment    Deployment? @relation(fields: [deploymentId], references: [id], onDelete: SetNull)
 
   @@index([serviceId, timestamp])
   @@index([deploymentId, timestamp])
+  @@index([serviceId, timestamp, id])
+  @@index([deploymentId, timestamp, id])
+	@@index([timestamp])
+}
+
+model RuntimeMetric {
+  id            String      @id @default(cuid())
+  serviceId     String
+  deploymentId  String?
+  podName       String
+  podUid        String?
+  containerName String
+  metric        String
+  value         Float
+  unit          String
+  sourceKey     String      @unique
+  timestamp     DateTime    @default(now())
+  service       Service     @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  deployment    Deployment? @relation(fields: [deploymentId], references: [id], onDelete: SetNull)
+
+  @@index([serviceId, metric, timestamp])
+  @@index([deploymentId, metric, timestamp])
+  @@index([serviceId, timestamp, id])
+  @@index([deploymentId, timestamp, id])
+	@@index([timestamp])
+}
+
+model IngestionCursor {
+  key       String   @id
+  cursor    String
+  updatedAt DateTime @updatedAt
+
+	@@index([updatedAt])
 }
 
 model DeploymentEvent {
@@ -203,6 +265,7 @@ model DeploymentEvent {
   deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
 
   @@index([deploymentId, timestamp])
+  @@index([deploymentId, timestamp, id])
 }
 
 model Resource {
@@ -217,6 +280,7 @@ model Resource {
   region               String
   version              String?
   status               String   @default("PROVISIONING")
+  deletionRequestedAt  DateTime?
   desiredSpec          Json     @default("{}")
   desiredState         Json     @default("{}")
   connectionSecretName String?
@@ -229,6 +293,8 @@ model Resource {
 
   @@unique([projectId, name])
   @@unique([projectId, slug])
+  @@index([status, updatedAt, createdAt])
+  @@index([projectId, createdAt, id])
 }
 
 model ResourceAttachment {
@@ -303,6 +369,7 @@ model GitHubIntegration {
   tokenSecretId    String?
   scopes           Json?
   defaultBranch    String       @default("main")
+  verifiedAt       DateTime?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
   organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

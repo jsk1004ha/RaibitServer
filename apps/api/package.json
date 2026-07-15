@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "nest start --watch",
-    "build": "nest build",
+    "build": "tsc -p tsconfig.build.json",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test"
@@ -15,13 +15,13 @@
     "@nestjs/core": "11.1.21",
     "@nestjs/platform-express": "11.1.21",
     "@prisma/client": "6.19.0",
+    "prisma": "6.19.0",
     "bullmq": "5.76.10",
     "zod": "4.4.3",
     "@raibitserver/core": "workspace:*"
   },
   "devDependencies": {
     "@nestjs/cli": "11.0.21",
-    "prisma": "6.19.0",
     "typescript": "6.0.3",
     "@types/node": "25.9.0"
   }

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { ServicesService } from './services.service';
 import type { ServiceSpec } from '@raibitserver/schemas';
@@ -9,8 +9,8 @@ export class ServicesController {
 
   @RequirePermission('project:read')
   @Get()
-  list(@Param('projectId') projectId: string, @Req() req: any) {
-    return this.servicesService.listServices(projectId, req.raibitSubject);
+  list(@Param('projectId') projectId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.servicesService.listServices(projectId, req.raibitSubject, query);
   }
 
   @RequirePermission('service:create')

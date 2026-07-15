@@ -8,11 +8,12 @@ import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { applyManifests, applyProject, commandExists, executeBuildWorkflow, provisionProjectResources, pushImage, runCommand } from '../packages/core/src/execution.ts';
 import { injectResourceEnv } from '../packages/core/src/env-injection.ts';
-import { parseE2EOptions, resolveE2EPlan } from './e2e-mode.mjs';
+import { assertLegacyDevE2EDryRun, parseE2EOptions, resolveE2EPlan } from './e2e-mode.mjs';
 import { serviceHostname } from '../packages/core/src/domain-router.ts';
 import { createDeploymentWorkflowHandlers, reconcileDeploymentRollout } from '../packages/core/src/deployment-workflow.ts';
 
 const e2eOptions = parseE2EOptions(process.argv.slice(2), process.env);
+if (e2eOptions.requestedMode === 'live') assertLegacyDevE2EDryRun({ dryRun: false });
 const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET || 'local-e2e-secret-at-least-32-chars';
 const githubWebhookSecret = process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || 'local-e2e-github-webhook-secret';
 const emailVerificationCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE || '424242';
@@ -36,6 +37,7 @@ const evidence = { apiPort, appPort, checks: [], tools: {}, mode: 'deterministic
 try {
   for (const tool of ['docker', 'kubectl', 'kind', 'k3d', 'git', 'go']) evidence.tools[tool] = await commandExists(tool);
   const e2ePlan = resolveE2EPlan({ ...e2eOptions, tools: evidence.tools });
+  assertLegacyDevE2EDryRun(e2ePlan);
   evidence.mode = e2ePlan.label;
   evidence.requestedMode = e2ePlan.requestedMode;
   evidence.dryRun = e2ePlan.dryRun;
@@ -58,13 +60,16 @@ try {
   assertStatus(pending, 201, 'non-club signup');
   const pendingVerified = await request('POST', '/auth/email/verify', { email: 'student@example.com', code: emailVerificationCode });
   assertStatus(pendingVerified, 200, 'non-club email verification');
-  const pendingToken = pendingVerified.body.token;
+  let pendingToken = pendingVerified.body.token;
   const blocked = await request('POST', '/projects', { name: 'blocked', slug: 'blocked' }, pendingToken);
-  assertStatus(blocked, 403, 'non-club pending blocked');
+  assertStatus(blocked, 401, 'non-club pending session blocked');
 
   const approved = await request('POST', `/admin/users/${pendingVerified.body.user.id}/approve`, { accountType: 'NON_CLUB' }, adminToken);
   assertStatus(approved, 200, 'admin approve non-club');
-  const quota = await request('PATCH', `/admin/users/${pendingVerified.body.user.id}/quota`, { maxProjects: 3, maxServices: 4, maxDeploymentsPerDay: 10, maxDbStorageMb: 2048 }, adminToken);
+  const approvedLogin = await request('POST', '/auth/login', { email: 'student@example.com', password: 'correct-horse-battery' });
+  assertStatus(approvedLogin, 200, 'approved non-club login refreshes session');
+  pendingToken = approvedLogin.body.token;
+  const quota = await request('PATCH', `/admin/users/${pendingVerified.body.user.id}/quota`, { maxProjects: 3, maxServices: 4, maxDeploymentsPerDay: 10, maxPreviewDeployments: 10, maxDbStorageMb: 2048 }, adminToken);
   assertStatus(quota, 200, 'admin quota set');
 
   const project = await request('POST', '/projects', { name: 'local-e2e', slug: 'local-e2e' }, pendingToken);
@@ -116,20 +121,28 @@ try {
 
   const preview = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'preview', triggerType: 'pull_request', pullRequestNumber: 42, branch: 'feature/local-e2e', previewUrl: `http://pr-42--${urlHost.replace(/^express-api--/, '')}` }, pendingToken);
   assertStatus(preview, 202, 'PR preview deployment enqueue');
-  controlPlane.store.updateService(service.body.id, { githubRepository: 'student-org/local-e2e', repoUrl: 'https://github.com/student-org/local-e2e.git', githubIntegrationId: 'local-e2e' });
-  const pushPayload = { repository: { full_name: 'student-org/local-e2e' }, ref: 'refs/heads/main', after: 'push-e2e' };
+  const githubIntegration = controlPlane.store.createGitHubIntegration({ organizationId: project.body.organizationId, userId: pendingVerified.body.user.id, accountLogin: 'student-org', installationId: '4200' });
+  controlPlane.store.verifyGitHubIntegration({ integrationId: githubIntegration.id, installationId: '4200', accountLogin: 'student-org' });
+  controlPlane.store.registerGitHubRepository({ installationId: '4200', githubRepoId: '42001', fullName: 'student-org/local-e2e', private: false, defaultBranch: 'main' });
+  controlPlane.store.attachGitHubRepositoryToService({ projectId: project.body.id, serviceId: service.body.id, integrationId: githubIntegration.id, repositoryId: '42001', branch: 'main' });
+  const githubRepository = { id: 42001, full_name: 'student-org/local-e2e', default_branch: 'main' };
+  const githubInstallation = { id: 4200 };
+  const pushPayload = { installation: githubInstallation, repository: githubRepository, ref: 'refs/heads/main', after: 'a'.repeat(40) };
   const githubPush = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('push', 'local-e2e-push-main', pushPayload));
   if (!githubPush.actions.some((action) => action.type === 'production-deployment-enqueued')) throw new Error('GitHub push webhook did not enqueue production deployment');
   const githubPreviewActions = [];
-  for (const action of ['opened', 'synchronize', 'reopened']) {
+  for (const [action, sha] of [['opened', 'b'.repeat(40)], ['synchronize', 'c'.repeat(40)], ['reopened', 'd'.repeat(40)]]) {
     const deliveryId = `local-e2e-pr-${action}`;
-    const payload = { action, number: 42, repository: { full_name: 'student-org/local-e2e' }, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: `sha-${action}` } } };
+    const payload = { action, number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha } } };
     const result = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', deliveryId, payload));
     const queued = result.actions.find((item) => item.type === 'preview-deployment-enqueued');
-    if (!queued?.previewUrl || queued.previewWorkloadName !== 'pr-42-express-api') throw new Error(`GitHub PR ${action} did not enqueue deterministic preview workload`);
+    const queuedJob = controlPlane.store.workflowJobs.find((item) => item.id === queued?.workflowJobId);
+    if (!queued?.previewUrl || !/^pr-42-express-api-[a-f0-9]{12}$/.test(queued.previewWorkloadName || '') || queuedJob?.payload?.kubernetes?.workloadName !== queued.previewWorkloadName) {
+      throw new Error(`GitHub PR ${action} did not enqueue deterministic preview workload`);
+    }
     githubPreviewActions.push({ action, deliveryId, previewUrl: queued.previewUrl, previewWorkloadName: queued.previewWorkloadName });
   }
-  const cleanupPayload = { action: 'closed', number: 42, repository: { full_name: 'student-org/local-e2e' }, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: 'local-e2e' } } };
+  const cleanupPayload = { action: 'closed', number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: 'e'.repeat(40) } } };
   const previewCleanup = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', 'local-e2e-pr-closed', cleanupPayload));
   if (!previewCleanup.actions.some((action) => action.type === 'preview-cleanup-enqueued')) throw new Error('preview cleanup webhook did not enqueue cleanup');
 
@@ -221,11 +234,11 @@ async function createBetaResourceEvidence(projectId, serviceId, token) {
     const provisioned = await request('POST', `/resources/${created.body.id}/provision`, { dryRun: true }, token);
     assertStatus(provisioned, 202, `${spec.engine} resource provision`);
     const attached = await request('POST', `/resources/${created.body.id}/attach`, { serviceId }, token);
-    assertStatus(attached, 200, `${spec.engine} resource attach`);
+    assertStatus(attached, 409, `${spec.engine} dry-run resource attach gate`);
     const console = await request('POST', `/resources/${created.body.id}/console/command`, { command: spec.command }, token);
     assertStatus(console, 200, `${spec.engine} console command`);
-    if (!Object.keys(attached.body.injectedEnv || {}).includes(spec.envKey)) throw new Error(`${spec.engine} did not inject ${spec.envKey}`);
-    evidence.push({ engine: spec.engine, resourceId: created.body.id, envKey: spec.envKey, consoleRows: console.body.rowCount || console.body.rows?.length || 0 });
+    if (!/READY/.test(String(attached.body.error || ''))) throw new Error(`${spec.engine} dry-run attachment was not fenced by READY state`);
+    evidence.push({ engine: spec.engine, resourceId: created.body.id, envKey: spec.envKey, attachment: 'blocked-until-ready', consoleRows: console.body.rowCount || console.body.rows?.length || 0 });
   }
   return evidence;
 }

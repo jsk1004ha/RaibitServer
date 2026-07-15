@@ -51,7 +51,7 @@ Dry mode는 다음 작업을 실제로 수행하지 않습니다.
 | `pnpm dev-e2e` | `pnpm dev:e2e` dry path |
 | `pnpm dev-down` | `pnpm dev:down` |
 | `pnpm dev:e2e:dry` | deterministic dry proof |
-| `pnpm dev:e2e:live` | live execute-mode proof |
+| `pnpm dev:e2e:live` | `pnpm e2e:live:helm` kind/Helm reconciliation gate alias |
 
 ## 실패 시 확인할 것
 

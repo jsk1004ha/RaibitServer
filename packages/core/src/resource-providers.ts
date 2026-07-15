@@ -80,7 +80,7 @@ export function buildPostgresProviderPlan(resource: AnyRecord = {}, options: Any
 }
 
 export async function provisionPostgresProvider(resource: AnyRecord = {}, options: AnyRecord = {}) {
-  const liveProvisioningEnabled = process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING === 'true';
+	  if (options.execute === true || options.dryRun === false) throw new Error('live provider execution is handled exclusively by the authoritative Go provisioner');
   const sanitized: AnyRecord = {
     ...options,
     providerHost: undefined,
@@ -91,16 +91,14 @@ export async function provisionPostgresProvider(resource: AnyRecord = {}, option
     providerAdminUrl: undefined,
   };
   const plan = buildPostgresProviderPlan(resource, { generatePassword: true, ...sanitized });
-  const dryRun = options.dryRun !== false || options.execute !== true || !liveProvisioningEnabled;
-  if (options.execute === true && options.dryRun === false && !liveProvisioningEnabled) throw new Error('live PostgreSQL provisioning is disabled; set RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING=true to allow execute=true');
-  if (!dryRun && !plan.internal.adminUrl) throw new Error('RAIBITSERVER_POSTGRES_PROVIDER_URL or POSTGRES_PROVIDER_URL is required for live PostgreSQL provisioning');
+	  const dryRun = true;
   const steps = [];
   steps.push({ type: 'postgres-create-user-database-grants', ...(await runCommand(plan.internal.adminCommand, { dryRun, timeoutMs: sanitized.timeoutMs || 30_000 })) });
   steps.push({ type: 'postgres-connection-test', ...(await runCommand(plan.internal.testCommand, { dryRun, timeoutMs: sanitized.timeoutMs || 10_000 })) });
   const result = {
     engine: 'postgresql',
     provider: plan.provider,
-    status: 'ready',
+	    status: 'provisioning',
     dryRun,
     databaseName: plan.databaseName,
     username: plan.username,
@@ -153,17 +151,18 @@ export function buildResourceProviderPlan(resource: AnyRecord = {}, options: Any
 }
 
 export async function provisionResourceProvider(resource: AnyRecord = {}, options: AnyRecord = {}) {
+	  if (options.execute === true || options.dryRun === false) throw new Error('live provider execution is handled exclusively by the authoritative Go provisioner');
   const engine = normalizedEngine(resource.engine || resource.type);
   if (engine === 'postgresql') return provisionPostgresProvider(resource, options);
   const plan = buildResourceProviderPlan(resource, { generatePassword: true, ...options });
-  const dryRun = options.dryRun !== false || options.execute !== true;
+	  const dryRun = true;
   const steps = [];
   if (plan.internal.commands.create) steps.push({ type: `${engine}-create`, ...(await runCommand(plan.internal.commands.create, { dryRun, timeoutMs: options.timeoutMs || 30_000 })) });
   if (plan.internal.commands.test) steps.push({ type: `${engine}-connection-test`, ...(await runCommand(plan.internal.commands.test, { dryRun, timeoutMs: options.timeoutMs || 10_000 })) });
   const result = {
     engine,
     provider: plan.provider,
-    status: 'ready',
+	    status: 'provisioning',
     dryRun,
     connectionSecret: plan.connectionSecret,
     backup: { command: plan.commands.backup },

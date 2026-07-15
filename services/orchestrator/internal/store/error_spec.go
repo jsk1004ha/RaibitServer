@@ -3,15 +3,15 @@ package store
 import "strings"
 
 const (
-	ErrorCodeBuildFailed              = "BUILD_FAILED"
-	ErrorCodeRolloutFailed            = "ROLLOUT_FAILED"
+	ErrorCodeBuildFailed               = "BUILD_FAILED"
+	ErrorCodeRolloutFailed             = "ROLLOUT_FAILED"
 	ErrorCodeKubernetesReconcileFailed = "KUBERNETES_RECONCILE_FAILED"
-	ErrorCodeImagePullBackoff         = "IMAGE_PULL_BACKOFF"
-	ErrorCodeInsufficientQuota        = "INSUFFICIENT_QUOTA"
-	ErrorCodeProviderCredentialFailed = "PROVIDER_CREDENTIAL_FAILED"
-	ErrorCodeDeploymentCancelled      = "DEPLOYMENT_CANCELLED"
-	ErrorCodeWorkflowHandlerMissing   = "WORKFLOW_HANDLER_MISSING"
-	ErrorCodeUnknownInfra             = "UNKNOWN_INFRA_ERROR"
+	ErrorCodeImagePullBackoff          = "IMAGE_PULL_BACKOFF"
+	ErrorCodeInsufficientQuota         = "INSUFFICIENT_QUOTA"
+	ErrorCodeProviderCredentialFailed  = "PROVIDER_CREDENTIAL_FAILED"
+	ErrorCodeDeploymentCancelled       = "DEPLOYMENT_CANCELLED"
+	ErrorCodeWorkflowHandlerMissing    = "WORKFLOW_HANDLER_MISSING"
+	ErrorCodeUnknownInfra              = "UNKNOWN_INFRA_ERROR"
 )
 
 type ErrorSpec struct {

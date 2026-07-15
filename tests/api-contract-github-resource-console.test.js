@@ -44,16 +44,23 @@ test('GitHub App contract endpoints import/list/sync and webhook push/PR flows',
   process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET = 'fixture-webhook-secret';
   const controlPlane = new RAIBITSERVERControlPlane();
   const org = controlPlane.store.createOrganization({ name: 'GitHub Org', slug: 'github-org' });
+  const owner = controlPlane.store.createUser({ email: 'github-owner@example.com', approvalStatus: 'APPROVED', accountType: 'NON_CLUB' });
+  controlPlane.store.addMember({ organizationId: org.id, userId: owner.id, role: 'owner' });
+  controlPlane.store.setQuota({ userId: owner.id, accountType: 'NON_CLUB', maxDeploymentsPerDay: 10, maxPreviewDeployments: 10 });
   const project = controlPlane.store.createProject({ organizationId: org.id, name: 'GitHub Project', slug: 'github-project' });
-  const integration = controlPlane.store.createGitHubIntegration({ organizationId: org.id, accountLogin: 'alice', installationId: 'inst_1', token: 'ghp_fixture_secret' });
-  const service = controlPlane.store.createService({ projectId: project.id, name: 'web', sourceType: 'github', repoUrl: 'https://github.com/alice/web.git', githubRepository: 'alice/web', githubIntegrationId: integration.id, branch: 'main' });
+  const integration = controlPlane.store.createGitHubIntegration({ organizationId: org.id, userId: owner.id, accountLogin: 'alice', installationId: '900', token: 'ghp_fixture_secret' });
+  controlPlane.store.verifyGitHubIntegration({ integrationId: integration.id, installationId: '900', accountLogin: 'alice' });
+  controlPlane.store.registerGitHubRepository({ installationId: '900', githubRepoId: '101', fullName: 'alice/web', private: false, defaultBranch: 'main' });
+  controlPlane.store.registerGitHubRepository({ installationId: '900', githubRepoId: '102', fullName: 'alice/worker', private: false, defaultBranch: 'main' });
+  const pendingService = controlPlane.store.createService({ projectId: project.id, name: 'web', sourceType: 'image', imageUrl: 'registry.example/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
+  const service = controlPlane.store.attachGitHubRepositoryToService({ projectId: project.id, serviceId: pendingService.id, integrationId: integration.id, repositoryId: '101', branch: 'main' }).service;
   const server = await serve(controlPlane);
   try {
     const installations = await request(server.port, 'GET', `/github/installations?organizationId=${org.id}`);
     assert.equal(installations.statusCode, 200);
-    assert.equal(installations.body.installations[0].installationId, 'inst_1');
+    assert.equal(installations.body.installations[0].installationId, '900');
 
-    const repositories = await request(server.port, 'GET', '/github/installations/inst_1/repositories');
+    const repositories = await request(server.port, 'GET', '/github/installations/900/repositories');
     assert.equal(repositories.statusCode, 200);
     assert.equal(repositories.body.repositories[0].fullName, 'alice/web');
 
@@ -65,32 +72,33 @@ test('GitHub App contract endpoints import/list/sync and webhook push/PR flows',
     assert.equal(sync.statusCode, 202);
     assert.equal(sync.body.workflowJob.type, 'github-repository-sync');
 
-    const push = await webhook(server.port, 'push', 'delivery-push-1', { repository: { full_name: 'alice/web' }, ref: 'refs/heads/main', after: 'abc123' });
+    const pushPayload = { installation: { id: 900 }, repository: { id: 101, full_name: 'alice/web', default_branch: 'main' }, ref: 'refs/heads/main', after: 'a'.repeat(40) };
+    const push = await webhook(server.port, 'push', 'delivery-push-1', pushPayload);
     assert.equal(push.statusCode, 202);
     assert.equal(push.body.actions[0].type, 'production-deployment-enqueued');
     assert.equal(controlPlane.store.workflowJobs.some((job) => job.type === 'build-and-deploy'), true);
 
-    const duplicate = await webhook(server.port, 'push', 'delivery-push-1', { repository: { full_name: 'alice/web' }, ref: 'refs/heads/main', after: 'abc123' });
+    const duplicate = await webhook(server.port, 'push', 'delivery-push-1', pushPayload);
     assert.equal(duplicate.statusCode, 202);
     assert.equal(duplicate.body.duplicate, true);
 
-    const bad = await webhook(server.port, 'push', 'delivery-bad-1', { repository: { full_name: 'alice/web' }, ref: 'refs/heads/main', after: 'bad' }, 'wrong-secret');
+    const bad = await webhook(server.port, 'push', 'delivery-bad-1', pushPayload, 'wrong-secret');
     assert.equal(bad.statusCode, 401);
 
-    for (const [action, delivery, sha] of [['opened', 'delivery-pr-opened', 'def456'], ['synchronize', 'delivery-pr-sync', 'fed654'], ['reopened', 'delivery-pr-reopened', 'abc789']]) {
+    for (const [action, delivery, sha] of [['opened', 'delivery-pr-opened', 'b'.repeat(40)], ['synchronize', 'delivery-pr-sync', 'c'.repeat(40)], ['reopened', 'delivery-pr-reopened', 'd'.repeat(40)]]) {
       const pr = await webhook(server.port, 'pull_request', delivery, prPayload(action, sha));
       assert.equal(pr.statusCode, 202);
       assert.equal(pr.body.actions[0].type, 'preview-deployment-enqueued');
       assert.match(pr.body.actions[0].previewUrl, /^https:\/\/pr-7-github-org--github-project\.preview\.raibitserver\.app$/);
-      assert.equal(pr.body.actions[0].previewWorkloadName, 'pr-7-web');
+      assert.match(pr.body.actions[0].previewWorkloadName, /^pr-7-web-[a-f0-9]{12}$/);
       assert.equal(pr.body.outbound.commitStatus.targetUrl, pr.body.actions[0].previewUrl);
       assert.equal(pr.body.outbound.pullRequestComment.pullRequestNumber, 7);
       const job = controlPlane.store.workflowJobs.find((item) => item.id === pr.body.actions[0].workflowJobId);
-      assert.equal(job.payload.kubernetes.workloadName, 'pr-7-web');
+      assert.equal(job.payload.kubernetes.workloadName, pr.body.actions[0].previewWorkloadName);
       assert.equal(job.payload.kubernetes.labels['raibitserver.io/preview'], 'true');
     }
 
-    const closed = await webhook(server.port, 'pull_request', 'delivery-pr-closed', prPayload('closed', 'def456'));
+    const closed = await webhook(server.port, 'pull_request', 'delivery-pr-closed', prPayload('closed', 'e'.repeat(40)));
     assert.equal(closed.statusCode, 202);
     assert.equal(closed.body.actions[0].type, 'preview-cleanup-enqueued');
     assert.equal(controlPlane.store.workflowJobs.some((job) => job.type === 'preview-cleanup'), true);
@@ -115,12 +123,20 @@ test('GitHub installation repositories and sync are scoped to the caller organiz
   const projectB = controlPlane.store.createProject({ organizationId: orgB.id, name: 'Project B', slug: 'project-b' });
   const integrationA = controlPlane.store.createGitHubIntegration({ organizationId: orgA.id, accountLogin: 'alice', installationId: 'inst_a' });
   const integrationB = controlPlane.store.createGitHubIntegration({ organizationId: orgB.id, accountLogin: 'bob', installationId: 'inst_b' });
-  const serviceA = controlPlane.store.createService({ projectId: projectA.id, name: 'web-a', sourceType: 'github', repoUrl: 'https://github.com/alice/web.git', githubRepository: 'alice/web', githubIntegrationId: integrationA.id });
-  controlPlane.store.createService({ projectId: projectB.id, name: 'web-b', sourceType: 'github', repoUrl: 'https://github.com/bob/secret.git', githubRepository: 'bob/secret', githubIntegrationId: integrationB.id });
+  controlPlane.store.verifyGitHubIntegration({ integrationId: integrationA.id, installationId: 'inst_a', accountLogin: 'alice' });
+  controlPlane.store.verifyGitHubIntegration({ integrationId: integrationB.id, installationId: 'inst_b', accountLogin: 'bob' });
+  controlPlane.store.registerGitHubRepository({ installationId: 'inst_a', githubRepoId: '201', fullName: 'alice/web', private: false });
+  controlPlane.store.registerGitHubRepository({ installationId: 'inst_b', githubRepoId: '202', fullName: 'bob/secret', private: true });
+  const pendingServiceA = controlPlane.store.createService({ projectId: projectA.id, name: 'web-a', sourceType: 'image', imageUrl: 'registry.example/web-a@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
+  const serviceA = controlPlane.store.attachGitHubRepositoryToService({ projectId: projectA.id, serviceId: pendingServiceA.id, integrationId: integrationA.id, repositoryId: '201' }).service;
+  const pendingServiceB = controlPlane.store.createService({ projectId: projectB.id, name: 'web-b', sourceType: 'image', imageUrl: 'registry.example/web-b@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' });
+  controlPlane.store.attachGitHubRepositoryToService({ projectId: projectB.id, serviceId: pendingServiceB.id, integrationId: integrationB.id, repositoryId: '202' });
+  const userA = controlPlane.store.createUser({ id: 'user-a', email: 'user-a@example.com', approvalStatus: 'APPROVED' });
+  controlPlane.store.addMember({ organizationId: orgA.id, userId: userA.id, role: 'developer' });
   assert.throws(() => controlPlane.store.importGitHubRepository({ projectId: projectA.id, integrationId: integrationB.id, repository: 'bob/secret' }), /does not belong/);
   assert.throws(() => controlPlane.store.attachGitHubRepositoryToService({ projectId: projectA.id, serviceId: serviceA.id, integrationId: integrationB.id, repoUrl: 'https://github.com/bob/secret.git' }), /does not belong/);
   const server = await serve(controlPlane, { mode: 'jwt', jwtSecret, issuer: 'raibitserver' });
-  const tokenA = signJwtHs256({ sub: 'user-a', role: 'developer', organizationId: orgA.id }, jwtSecret, { issuer: 'raibitserver' });
+  const tokenA = signJwtHs256({ sub: userA.id, role: 'developer', organizationId: orgA.id }, jwtSecret, { issuer: 'raibitserver' });
   try {
     const own = await request(server.port, 'GET', '/github/installations/inst_a/repositories', null, tokenA);
     assert.equal(own.statusCode, 200);
@@ -133,6 +149,109 @@ test('GitHub installation repositories and sync are scoped to the caller organiz
     const crossSync = await request(server.port, 'POST', '/github/repositories/bob%2Fsecret/sync', {}, tokenA);
     assert.equal(crossSync.statusCode, 202);
     assert.deepEqual(crossSync.body.services, []);
+  } finally {
+    server.close();
+  }
+});
+
+test('GitHub repository sync authorizes every matched service organization before enqueueing', async () => {
+  const jwtSecret = 'github-target-role-secret-at-least-32-chars';
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const orgA = controlPlane.store.createOrganization({ name: 'Owner Org', slug: 'github-owner-org' });
+  const orgB = controlPlane.store.createOrganization({ name: 'Viewer Org', slug: 'github-viewer-org' });
+  const projectA = controlPlane.store.createProject({ organizationId: orgA.id, name: 'Owner Project', slug: 'github-owner-project' });
+  const projectB = controlPlane.store.createProject({ organizationId: orgB.id, name: 'Viewer Project', slug: 'github-viewer-project' });
+  const serviceA = controlPlane.store.createService({ projectId: projectA.id, name: 'owner-web', sourceType: 'github', repoUrl: 'https://github.com/shared/app.git' });
+  const serviceB = controlPlane.store.createService({ projectId: projectB.id, name: 'viewer-web', sourceType: 'github', repoUrl: 'https://github.com/shared/app.git' });
+  const user = controlPlane.store.createUser({ id: 'multi-org-user', email: 'multi-org@example.com', approvalStatus: 'APPROVED' });
+  controlPlane.store.addMember({ organizationId: orgA.id, userId: user.id, role: 'OWNER' });
+  controlPlane.store.addMember({ organizationId: orgB.id, userId: user.id, role: 'VIEWER' });
+  const server = await serve(controlPlane, { mode: 'jwt', jwtSecret, issuer: 'raibitserver' });
+  const mixedRoleToken = signJwtHs256({
+    sub: user.id,
+    role: 'OWNER',
+    organizationId: orgA.id,
+    organizationIds: [orgA.id, orgB.id],
+    rolesByOrganization: { [orgA.id]: 'OWNER', [orgB.id]: 'VIEWER' },
+  }, jwtSecret, { issuer: 'raibitserver' });
+  try {
+    const jobsBefore = controlPlane.store.workflowJobs.length;
+    const denied = await request(server.port, 'POST', '/github/repositories/shared%2Fapp/sync', {}, mixedRoleToken);
+    assert.equal(denied.statusCode, 403);
+    assert.match(denied.body.error, /VIEWER.*deploy:run/);
+    assert.equal(controlPlane.store.workflowJobs.length, jobsBefore);
+
+    const globalAdmin = signJwtHs256({ sub: 'global-admin', role: 'owner', global: true }, jwtSecret, { issuer: 'raibitserver' });
+    const allowed = await request(server.port, 'POST', '/github/repositories/shared%2Fapp/sync', {}, globalAdmin);
+    assert.equal(allowed.statusCode, 202);
+    assert.deepEqual(allowed.body.workflowJob.payload.serviceIds.sort(), [serviceA.id, serviceB.id].sort());
+  } finally {
+    server.close();
+  }
+});
+
+test('GitHub repository sync treats the path repository as authoritative', async () => {
+  const jwtSecret = 'github-path-authority-secret-at-least-32-chars';
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const orgA = controlPlane.store.createOrganization({ name: 'Path Owner Org', slug: 'github-path-owner-org' });
+  const orgB = controlPlane.store.createOrganization({ name: 'Path Viewer Org', slug: 'github-path-viewer-org' });
+  const projectA = controlPlane.store.createProject({ organizationId: orgA.id, name: 'Path Owner Project', slug: 'github-path-owner-project' });
+  const projectB = controlPlane.store.createProject({ organizationId: orgB.id, name: 'Path Viewer Project', slug: 'github-path-viewer-project' });
+  controlPlane.store.createService({ projectId: projectA.id, name: 'path-owner-web', sourceType: 'github', repoUrl: 'https://github.com/shared/path-target.git' });
+  controlPlane.store.createService({ projectId: projectB.id, name: 'path-viewer-web', sourceType: 'github', repoUrl: 'https://github.com/shared/path-target.git' });
+  const user = controlPlane.store.createUser({ email: 'github-path-authority@example.com', approvalStatus: 'APPROVED' });
+  controlPlane.store.addMember({ organizationId: orgA.id, userId: user.id, role: 'OWNER' });
+  controlPlane.store.addMember({ organizationId: orgB.id, userId: user.id, role: 'VIEWER' });
+  const server = await serve(controlPlane, { mode: 'jwt', jwtSecret, issuer: 'raibitserver' });
+  const token = signJwtHs256({
+    sub: user.id,
+    role: 'OWNER',
+    organizationId: orgA.id,
+    organizationIds: [orgA.id, orgB.id],
+    rolesByOrganization: { [orgA.id]: 'OWNER', [orgB.id]: 'VIEWER' },
+  }, jwtSecret, { issuer: 'raibitserver' });
+  try {
+    const response = await request(server.port, 'POST', '/github/repositories/innocent%2Frepo/sync', { repository: 'shared/path-target' }, token);
+    assert.equal(response.statusCode, 202);
+    assert.equal(response.body.repository, 'innocent/repo');
+    assert.deepEqual(response.body.workflowJob.payload.serviceIds, []);
+  } finally {
+    server.close();
+  }
+});
+
+test('GitHub repository sync enqueues only the service set authorized before the write', async () => {
+  const jwtSecret = 'github-authorized-set-secret-at-least-32-chars';
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const orgA = controlPlane.store.createOrganization({ name: 'Authorized Org', slug: 'github-authorized-org' });
+  const orgB = controlPlane.store.createOrganization({ name: 'Late Viewer Org', slug: 'github-late-viewer-org' });
+  const projectA = controlPlane.store.createProject({ organizationId: orgA.id, name: 'Authorized Project', slug: 'github-authorized-project' });
+  const projectB = controlPlane.store.createProject({ organizationId: orgB.id, name: 'Late Viewer Project', slug: 'github-late-viewer-project' });
+  const authorizedService = controlPlane.store.createService({ projectId: projectA.id, name: 'authorized-web', sourceType: 'github', repoUrl: 'https://github.com/shared/race.git' });
+  const user = controlPlane.store.createUser({ email: 'github-race@example.com', approvalStatus: 'APPROVED' });
+  controlPlane.store.addMember({ organizationId: orgA.id, userId: user.id, role: 'OWNER' });
+  controlPlane.store.addMember({ organizationId: orgB.id, userId: user.id, role: 'VIEWER' });
+
+  const originalSync = controlPlane.store.syncGitHubRepository.bind(controlPlane.store);
+  let lateUnauthorizedService;
+  controlPlane.store.syncGitHubRepository = (input) => {
+    lateUnauthorizedService = controlPlane.store.createService({ projectId: projectB.id, name: 'late-viewer-web', sourceType: 'github', repoUrl: 'https://github.com/shared/race.git' });
+    return originalSync(input);
+  };
+
+  const server = await serve(controlPlane, { mode: 'jwt', jwtSecret, issuer: 'raibitserver' });
+  const token = signJwtHs256({
+    sub: user.id,
+    role: 'OWNER',
+    organizationId: orgA.id,
+    organizationIds: [orgA.id, orgB.id],
+    rolesByOrganization: { [orgA.id]: 'OWNER', [orgB.id]: 'VIEWER' },
+  }, jwtSecret, { issuer: 'raibitserver' });
+  try {
+    const response = await request(server.port, 'POST', '/github/repositories/shared%2Frace/sync', {}, token);
+    assert.equal(response.statusCode, 202);
+    assert.deepEqual(response.body.workflowJob.payload.serviceIds, [authorizedService.id]);
+    assert.equal(response.body.workflowJob.payload.serviceIds.includes(lateUnauthorizedService.id), false);
   } finally {
     server.close();
   }
@@ -165,7 +284,8 @@ function prPayload(action, sha) {
   return {
     action,
     number: 7,
-    repository: { full_name: 'alice/web' },
+    installation: { id: 900 },
+    repository: { id: 101, full_name: 'alice/web', default_branch: 'main' },
     pull_request: { number: 7, head: { ref: 'feature/demo', sha } },
   };
 }

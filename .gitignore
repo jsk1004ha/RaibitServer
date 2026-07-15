@@ -24,6 +24,7 @@ yarn-error.log*
 .DS_Store
 /tmp/
 .omx/
+.playwright-cli/
 
 # RAIBITSERVER local execution workspace
 .raibitserver-work/

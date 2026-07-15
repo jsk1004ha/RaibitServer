@@ -9,11 +9,13 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /health: { get: { summary: Public control-plane health check, security: [], responses: { '200': { description: API process is healthy } } } }
+  /snapshot: { get: { summary: Return a bounded administrative overview, parameters: [ { $ref: '#/components/parameters/limit' } ], responses: { '200': { description: Bounded users, quotas, and recent audit logs }, '403': { description: Administrator permission required } } } }
   /auth/github/login: { get: { summary: Start GitHub OAuth login, responses: { '302': { description: Redirect } } } }
   /auth/github/callback: { get: { summary: Complete GitHub OAuth login, responses: { '302': { description: Session created } } } }
-  /auth/signup: { post: { summary: Start email/password signup and send a 6-digit email verification code without creating the account, security: [], responses: { '201': { description: Pending signup and emailVerification delivery summary } } } }
+  /auth/signup: { post: { summary: Start email/password signup and request a 6-digit verification code without disclosing account state, security: [], responses: { '201': { description: Generic accepted response; account existence and delivery status are intentionally not disclosed } } } }
   /auth/email/verify: { post: { summary: Verify signup email code, create the account, and return scoped JWT, security: [], responses: { '200': { description: Created verified session } } } }
-  /auth/email/resend: { post: { summary: Resend signup email verification code, security: [], responses: { '200': { description: Email verification delivery summary } } } }
+  /auth/email/resend: { post: { summary: Request another signup verification code without disclosing account or pending-signup state, security: [], responses: { '200': { description: Generic accepted response; account existence and delivery status are intentionally not disclosed } } } }
   /auth/login: { post: { summary: Log in and return scoped JWT, security: [], responses: { '200': { description: Session } } } }
   /auth/logout: { post: { summary: Invalidate current session, responses: { '200': { description: Logged out } } } }
   /auth/me: { get: { summary: Return current user/account/quota subject, responses: { '200': { description: Current user } } } }
@@ -21,22 +23,23 @@ paths:
   /organizations/{organizationId}: { get: { summary: Get organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Organization } } }, patch: { summary: Update organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Updated } } } }
   /organizations/{organizationId}/members: { get: { summary: List members, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Members } } }, post: { summary: Add member, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '201': { description: Added } } } }
   /organizations/{organizationId}/projects: { get: { summary: List organization projects, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Projects } } }, post: { summary: Create project in organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '201': { description: Created } } } }
-  /projects: { get: { summary: List visible projects, responses: { '200': { description: Projects } } }, post: { summary: Create project using subject organization, responses: { '201': { description: Created } } } }
+  /projects: { get: { summary: List visible projects, parameters: [ { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated projects } } }, post: { summary: Create project using subject organization, responses: { '201': { description: Created } } } }
   /projects/{projectId}: { get: { summary: Get project, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Project } } }, patch: { summary: Update project, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Updated } } }, delete: { summary: Delete project, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '204': { description: Deleted } } } }
+  /projects/{projectId}/overview: { get: { summary: Get bounded project console overview, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Project, services, deployments, resources, and recent activity in project scope }, '403': { description: Project access denied }, '404': { description: Project not found } } } }
   /projects/{projectId}/services: { get: { summary: List services, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Services } } }, post: { summary: Create service desired state, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '201': { description: Created } } } }
   /projects/{projectId}/services/{serviceId}/deployments: { get: { summary: List deployments for a service in a project, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Deployments } } }, post: { summary: Queue production/manual/preview deployment in project scope, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '202': { description: Deployment and workflow job queued with preview URL/workload metadata when requested } } } }
   /services/{serviceId}: { get: { summary: Get service, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Service } } }, patch: { summary: Update service, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Updated } } }, delete: { summary: Delete service, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '204': { description: Deleted } } } }
-  /services/{serviceId}/deployments: { get: { summary: List deployments, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Deployments } } }, post: { summary: Queue production/manual/preview deployment, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '202': { description: Deployment and workflow job queued } } } }
+  /services/{serviceId}/deployments: { get: { summary: List deployments, parameters: [ { $ref: '#/components/parameters/serviceId' }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated deployments } } }, post: { summary: Queue production/manual/preview deployment, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '202': { description: Deployment and workflow job queued } } } }
   /deployments/{deploymentId}: { get: { summary: Get deployment, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Deployment } } } }
   /deployments/{deploymentId}/status: { patch: { summary: Update deployment status/image/error fields, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Updated deployment } } }, post: { summary: Update deployment status/image/error fields from HTML forms, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Updated deployment } } } }
-  /deployments/{deploymentId}/cancel: { post: { summary: Cancel deployment, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '202': { description: Cancellation queued } } } }
-  /deployments/{deploymentId}/rollback: { post: { summary: Roll back to previous READY image, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '202': { description: Rollback queued } } } }
-  /deployments/{deploymentId}/logs: { get: { summary: List build logs, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Build logs } } } }
-  /deployments/{deploymentId}/events: { get: { summary: List deployment events, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Events } } } }
+  /deployments/{deploymentId}/cancel: { post: { summary: Cancel a deployment before runtime reconciliation starts, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Deployment cancelled atomically }, '409': { description: Deployment can no longer be cancelled safely } } } }
+  /deployments/{deploymentId}/rollback: { post: { summary: Roll back to previous READY image after explicit confirmation, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [confirmed], properties: { confirmed: { type: boolean, const: true }, previousDeploymentId: { type: string }, imageUrl: { type: string } } } } } }, responses: { '202': { description: Rollback queued }, '400': { description: Explicit confirmation is required } } } }
+  /deployments/{deploymentId}/logs: { get: { summary: List build logs, parameters: [ { $ref: '#/components/parameters/deploymentId' }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated build logs } } } }
+  /deployments/{deploymentId}/events: { get: { summary: List deployment events, parameters: [ { $ref: '#/components/parameters/deploymentId' }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated deployment events } } } }
   /deployments/{deploymentId}/stream: { get: { summary: Stream deployment logs and events as Server-Sent Events, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: SSE deployment activity stream } } } }
   /projects/{projectId}/services/{serviceId}/env: { get: { summary: List masked service environment, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Environment entries } } }, post: { summary: Upsert service environment, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Updated environment } } } }
   /projects/{projectId}/services/{serviceId}/env-file: { post: { summary: Parse and upload service .env file, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Parsed and stored environment } } } }
-  /services/{serviceId}/logs: { get: { summary: List runtime logs, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Runtime logs } } } }
+  /services/{serviceId}/logs: { get: { summary: List runtime logs, parameters: [ { $ref: '#/components/parameters/serviceId' }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated runtime logs } } } }
   /services/{serviceId}/logs/stream: { get: { summary: Stream service runtime logs as Server-Sent Events, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: SSE runtime log stream } } } }
   /projects/{projectId}/resources: { get: { summary: List resources, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Resources } } }, post: { summary: Create managed resource, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '201': { description: Created } } } }
   /resources/{resourceId}: { get: { summary: Get resource, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Resource } } }, patch: { summary: Update resource, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Updated } } }, delete: { summary: Delete resource and provider-owned secrets, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Deleted } } } }
@@ -59,18 +62,51 @@ paths:
   /domains/{domainId}/verify: { post: { summary: Verify domain, parameters: [ { $ref: '#/components/parameters/domainId' } ], responses: { '202': { description: Verification queued } } } }
   /domains/{domainId}: { delete: { summary: Delete domain, parameters: [ { $ref: '#/components/parameters/domainId' } ], responses: { '204': { description: Deleted } } } }
   /github/installations: { get: { summary: List GitHub App installations, responses: { '200': { description: Installations } } } }
-  /integrations/github: { get: { summary: List stored GitHub integrations for an organization, parameters: [ { name: organizationId, in: query, required: false, schema: { type: string } } ], responses: { '200': { description: Integrations } } }, post: { summary: Connect a GitHub integration, responses: { '201': { description: Integration created } } } }
-  /projects/{projectId}/services/{serviceId}/github: { post: { summary: Attach a GitHub repository to a service, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Repository attached } } } }
+  /integrations/github: { get: { summary: List stored GitHub integrations for an organization, parameters: [ { name: organizationId, in: query, required: false, schema: { type: string } } ], responses: { '200': { description: Integrations } } }, post: { summary: Create an unverified GitHub integration placeholder; repository access still requires a trusted App callback, responses: { '201': { description: Unverified integration created } } } }
+  /projects/{projectId}/services/{serviceId}/github:
+    post:
+      summary: Attach an authoritative repository from a verified same-organization GitHub App installation
+      parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [integrationId, repositoryId]
+              additionalProperties: false
+              properties:
+                integrationId: { type: string }
+                repositoryId: { type: string, description: Immutable GitHub repository ID from the installation catalog }
+                branch: { type: string }
+      responses: { '200': { description: Repository attached } }
   /github/installations/{installationId}/repositories: { get: { summary: List installation repositories, parameters: [ { name: installationId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Repositories } } } }
   /github/webhooks: { post: { summary: GitHub webhook receiver with raw-body signature verification, delivery dedupe, push deploy, and PR preview/cleanup workflow planning, security: [], responses: { '202': { description: Accepted } } } }
-  /github/repositories/import: { post: { summary: Import GitHub repo as service, responses: { '201': { description: Imported } } } }
+  /github/repositories/import:
+    post:
+      summary: Import an authoritative repository from a verified same-organization GitHub App installation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, integrationId, repositoryId]
+              additionalProperties: false
+              properties:
+                projectId: { type: string }
+                integrationId: { type: string }
+                repositoryId: { type: string, description: GitHub repository ID from the installation catalog }
+                serviceName: { type: string }
+                branch: { type: string }
+      responses: { '201': { description: Imported } }
   /github/repositories/{repositoryId}/sync: { post: { summary: Sync repository metadata, parameters: [ { name: repositoryId, in: path, required: true, schema: { type: string } } ], responses: { '202': { description: Sync queued } } } }
   /usage/me: { get: { summary: Current user usage/quota, responses: { '200': { description: Usage } } } }
   /organizations/{organizationId}/usage: { get: { summary: Organization usage, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Usage } } } }
   /admin/users: { get: { summary: Admin list users, responses: { '200': { description: Users } } } }
   /admin/users/pending: { get: { summary: Admin pending users, responses: { '200': { description: Pending users } } } }
   /admin/users/{userId}/approve: { post: { summary: Approve user, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Approved } } } }
-  /admin/users/{userId}/reject: { post: { summary: Reject user, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Rejected } } } }
+  /admin/users/{userId}/reject: { post: { summary: Reject user after explicit confirmation, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [confirmed], properties: { confirmed: { type: boolean, const: true } } } } } }, responses: { '200': { description: Rejected }, '400': { description: Explicit confirmation is required } } } }
   /admin/users/{userId}/quota: { patch: { summary: Update user quota, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Updated } } } }
   /admin/users/{userId}/account-type: { patch: { summary: Update account type, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Updated } } } }
   /admin/usage: { get: { summary: Admin global usage, responses: { '200': { description: Usage } } } }
@@ -87,6 +123,8 @@ components:
     deploymentId: { name: deploymentId, in: path, required: true, schema: { type: string } }
     resourceId: { name: resourceId, in: path, required: true, schema: { type: string } }
     domainId: { name: domainId, in: path, required: true, schema: { type: string } }
+    limit: { name: limit, in: query, required: false, description: Maximum rows per page, schema: { type: integer, minimum: 1, maximum: 1000, default: 200 } }
+    cursor: { name: cursor, in: query, required: false, description: Opaque versioned keyset cursor returned by the previous page, schema: { type: string, maxLength: 1024 } }
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   schemas:

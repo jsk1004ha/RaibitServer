@@ -1,5 +1,5 @@
 import { apiAction, loadResourceConsole } from '../../../../../../../../lib/api';
-import { ConsoleShell, JsonCard, MetricCard, StatusBadge } from '../../../../../../../../components/console-ui';
+import { ConsoleShell, JsonCard, LoadErrorSummary, MetricCard, StatusBadge } from '../../../../../../../../components/console-ui';
 
 const ENGINE_COMMANDS: Record<string, { query: string; command: string; help: string }> = {
   postgresql: { query: 'SELECT 1', command: 'SELECT 1', help: 'SQL 쿼리, 스키마·테이블 탐색, 백업·복원 명령을 지원합니다' },
@@ -24,6 +24,7 @@ export default async function ResourceConsolePage({ params }: { params: Promise<
     <ConsoleShell active="projects" orgValue={orgSlug} projectValue={projectId} crumbs={`${projectId} / 리소스 / ${resource.name || resourceId}`} actions={<><a className="btn" href={`/org/${orgSlug}/projects/${projectId}`}>프로젝트 콘솔</a><button className="btn btn-danger" type="button" disabled aria-describedby="credential-rotation-note" title="공급자 교체 API 준비 중">자격 증명 교체</button><span className="muted" id="credential-rotation-note">공급자 교체 API 준비 중</span></>}>
       <section className="page" data-od-id="resource-console">
         <header className="page-header"><div><p className="eyebrow">{resource.name || resourceId}</p><h1 className="page-title">리소스 콘솔</h1><p className="page-subtitle">{defaults.help}. 실행에는 공급자 소유 보안 정보만 사용하며 사용자가 입력한 연결 URL은 반영하지 않습니다.</p></div><StatusBadge status={resource.status || 'provisioning'} /></header>
+        <LoadErrorSummary issues={state.loadErrors} />
         <section className="grid grid-3">
           <MetricCard title="엔진" value={engine || 'resource'} detail={`공급자 ${resource.provider || 'managed'}`} />
           <MetricCard title="연결된 서비스" value={(resource.attachedServices || []).length || 0} detail="마스킹된 환경 변수 주입" tone="ok" />
@@ -35,14 +36,14 @@ export default async function ResourceConsolePage({ params }: { params: Promise<
             <div className="card-title"><h2>쿼리</h2><span className="badge info">엔진별 기본값</span></div>
             <form method="post" action={apiAction(`/resources/${resourceId}/console/query`, state.context)} className="stack">
               <label className="field"><span className="label">조회·탐색 쿼리</span><textarea name="query" defaultValue={defaults.query} rows={5} className="textarea mono" /></label>
-              <label><span><input type="checkbox" name="confirmed" value="true" /> 파괴적 쿼리 실행 확인</span></label>
+              <label className="confirmation-control"><input type="checkbox" name="confirmed" value="true" /><span><strong>{resource.name || resourceId}</strong>에서 파괴적 쿼리를 실행할 때 확인</span></label>
               <button type="submit">쿼리 실행</button>
             </form>
             {/* GET /console/tables /console/keys /console/collections */}
           </article>
           <aside className="stack">
             <form id="provider-command" method="post" action={apiAction(`/resources/${resourceId}/console/command`, state.context)} className="card danger-zone">
-              <h2>공급자 명령</h2><label>명령 <input name="command" defaultValue={defaults.command} /></label><label><span><input type="checkbox" name="confirmed" value="true" /> 변경·삭제 명령 실행 확인</span></label><button type="submit">공급자 명령 실행</button>
+              <h2>공급자 명령</h2><label>명령 <input name="command" defaultValue={defaults.command} /></label><label className="confirmation-control"><input type="checkbox" name="confirmed" value="true" required /><span><strong>{resource.name || resourceId}</strong>에서 변경·삭제 명령 실행 확인</span></label><button type="submit">공급자 명령 실행</button>
             </form>
             <section className="card" id="backups"><div className="card-title"><h2>백업</h2><span className="badge info">준비 중</span></div><p className="muted">백업 API 준비 중입니다. 공급자 백업 기능이 연결되면 이 영역에서 실행 내역을 확인할 수 있습니다.</p></section>
             <form id="provisioning" method="post" action={apiAction(`/resources/${resourceId}/provision`, state.context)} className="card"><h2>프로비저닝 계획</h2><input type="hidden" name="dryRun" value="true" /><button type="submit">프로비저닝 계획 만들기</button></form>

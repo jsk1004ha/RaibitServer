@@ -1,0 +1,31 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: manageddatabases.raibitserver.io
+spec:
+  group: raibitserver.io
+  names:
+    kind: ManagedDatabase
+    plural: manageddatabases
+    singular: manageddatabase
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                engine: { type: string }
+                version: { type: string }
+                plan: { type: string }
+                storageGb: { type: integer }
+            status:
+              type: object
+              properties:
+                phase: { type: string }
+                endpointSecret: { type: string }

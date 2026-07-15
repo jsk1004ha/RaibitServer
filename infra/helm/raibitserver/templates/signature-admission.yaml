@@ -1,0 +1,57 @@
+{{- if and .Values.security.imageVerification.enabled .Values.security.imageVerification.policy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-image-verification-contract
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: raibitserver-image-verification
+  annotations:
+    raibitserver.io/signature-verification-controller: {{ printf "%s/%s" .Values.security.imageVerification.admissionController.namespace .Values.security.imageVerification.admissionController.name | quote }}
+    raibitserver.io/signature-verification-webhook: {{ .Values.security.imageVerification.admissionController.existingWebhookConfiguration | quote }}
+    raibitserver.io/signature-verification-webhook-name: {{ .Values.security.imageVerification.admissionController.webhookName | quote }}
+    raibitserver.io/signature-trust-root: {{ printf "%s/%s#%s" .Values.security.imageVerification.trustRoot.namespace .Values.security.imageVerification.trustRoot.existingSecret .Values.security.imageVerification.trustRoot.key | quote }}
+data:
+  provider: {{ .Values.security.imageVerification.provider | quote }}
+  admissionController: {{ printf "%s/%s" .Values.security.imageVerification.admissionController.namespace .Values.security.imageVerification.admissionController.name | quote }}
+  existingWebhookConfiguration: {{ .Values.security.imageVerification.admissionController.existingWebhookConfiguration | quote }}
+  webhookName: {{ .Values.security.imageVerification.admissionController.webhookName | quote }}
+  trustRoot: {{ printf "%s/%s#%s" .Values.security.imageVerification.trustRoot.namespace .Values.security.imageVerification.trustRoot.existingSecret .Values.security.imageVerification.trustRoot.key | quote }}
+  requiredPodAnnotation: "raibitserver.io/verify-image-signatures=required"
+  responsibility: "The configured external admission controller verifies signatures against the configured trust root. The CEL policy only enforces digest pins and the verification-request annotation."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-image-supply-chain
+  annotations:
+    raibitserver.io/signature-verification-controller: {{ printf "%s/%s" .Values.security.imageVerification.admissionController.namespace .Values.security.imageVerification.admissionController.name | quote }}
+    raibitserver.io/signature-verification-webhook-name: {{ .Values.security.imageVerification.admissionController.webhookName | quote }}
+    raibitserver.io/signature-trust-root: {{ printf "%s/%s#%s" .Values.security.imageVerification.trustRoot.namespace .Values.security.imageVerification.trustRoot.existingSecret .Values.security.imageVerification.trustRoot.key | quote }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  matchConditions:
+    - name: raibitserver-managed-workload
+      expression: "has(object.metadata.labels) && object.metadata.labels.exists(key, key == 'app.kubernetes.io/managed-by' && object.metadata.labels[key] == 'raibitserver')"
+  validations:
+    - expression: "object.spec.containers.all(container, container.image.matches('^.+@sha256:[a-f0-9]{64}$'))"
+      message: "RAIBITSERVER-managed containers must use sha256 digest-pinned images"
+    - expression: "!has(object.spec.initContainers) || object.spec.initContainers.all(container, container.image.matches('^.+@sha256:[a-f0-9]{64}$'))"
+      message: "RAIBITSERVER-managed init containers must use sha256 digest-pinned images"
+    - expression: "has(object.metadata.annotations) && object.metadata.annotations.exists(key, key == 'raibitserver.io/verify-image-signatures' && object.metadata.annotations[key] == 'required')"
+      message: "RAIBITSERVER-managed pods must request external image signature verification"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-image-supply-chain
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-image-supply-chain
+  validationActions: ["Deny"]
+{{- end }}

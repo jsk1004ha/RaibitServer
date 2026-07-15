@@ -1,4 +1,4 @@
-import { executeBuildWorkflow } from './build-executor.ts';
+import { assertLegacyBuildDryRun, executeBuildWorkflow } from './build-executor.ts';
 import { deepClone, nowIso } from './ids.ts';
 import { sanitizeLogRecord } from './security.ts';
 import { maskSecrets } from './secrets.ts';
@@ -18,6 +18,7 @@ export function createDeploymentWorkflowHandlers(repository: any, options: AnyRe
 }
 
 export async function processBuilderWorkflowJob(repository: any, job: AnyRecord, options: AnyRecord = {}) {
+  assertLegacyBuildDryRun(options);
   if (!BUILD_WORKFLOW_TYPES.has(String(job.type || WORKFLOW_TYPES.BUILD_AND_DEPLOY))) {
     throw new Error(`unsupported deployment workflow type: ${job.type}`);
   }
@@ -110,6 +111,7 @@ export async function processBuilderWorkflowJob(repository: any, job: AnyRecord,
 }
 
 export async function reconcileDeploymentRollout(repository: any, deploymentId: string, options: AnyRecord = {}) {
+  assertLegacyRolloutDryRun(options);
   const deployment = await getDeployment(repository, deploymentId);
   if (!deployment) throw new Error(`deployment not found: ${deploymentId}`);
   const status = normalizeDeploymentStatus(deployment.status);
@@ -138,6 +140,12 @@ export async function reconcileDeploymentRollout(repository: any, deploymentId: 
     await updateDeployment(repository, deploymentId, { status: DEPLOYMENT_STATUSES.FAILED, finishedAt: nowIso(), errorCode: errorSpec.code, errorMessage: safeMessage });
     await appendDeploymentEvent(repository, { deploymentId, type: 'rollout.failed', message: safeMessage, metadata: { dryRun, errorSpec } });
     throw error;
+  }
+}
+
+export function assertLegacyRolloutDryRun(options: AnyRecord = {}) {
+  if (options.dryRun === false) {
+    throw new Error('legacy TypeScript rollout is dry-run only; use the Go orchestrator control-plane worker for live deployments');
   }
 }
 

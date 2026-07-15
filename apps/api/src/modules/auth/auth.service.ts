@@ -12,4 +12,5 @@ export class AuthService {
   githubLogin(input: Record<string, any>) { return this.controlPlane.githubLogin(input); }
   githubCallback(input: Record<string, any>) { return this.controlPlane.githubCallback(input); }
   currentUser(subject: Record<string, any>) { return this.controlPlane.currentUser(subject); }
+  logout(subject: Record<string, any>) { return this.controlPlane.logout(subject); }
 }

@@ -56,41 +56,75 @@ export function githubWebhookActionPlan(event: any, payload: Record<string, any>
   const eventName = String(event || payload.event || '').toLowerCase();
   const action = String(payload.action || (eventName === 'push' ? 'push' : '')).toLowerCase();
   const repository = webhookRepository(payload);
+  const repositoryId = String(payload.repository?.id || '').trim();
+  const installationId = String(payload.installation?.id || '').trim();
   if (eventName === 'push') {
+    const ref = String(payload.ref || '');
+    const branch = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : '';
+    const commitSha = payload.after || payload.head_commit?.id || null;
+    const ignoredReason = !repositoryId || !installationId
+      ? 'missing-repository-identity'
+      : !branch
+        ? 'non-head-ref'
+        : payload.deleted === true || /^0+$/.test(String(commitSha || ''))
+          ? 'deleted-ref'
+          : payload.forced === true
+            ? 'forced-update'
+            : !validGitHubCommitSha(commitSha)
+              ? 'invalid-commit'
+              : null;
     return {
-      kind: 'production-deploy',
+      kind: ignoredReason ? 'ignored' : 'production-deploy',
       event: eventName,
       action: 'push',
       repository,
-      branch: String(payload.ref || '').replace(/^refs\/heads\//, '') || payload.repository?.default_branch || 'main',
-      commitSha: payload.after || payload.head_commit?.id || null,
+      repositoryId,
+      installationId,
+      branch,
+      baseBranch: branch,
+      commitSha,
+      ignoredReason,
     };
   }
   if (eventName === 'pull_request' && ['opened', 'synchronize', 'reopened'].includes(action)) {
     const pr = payload.pull_request || {};
+    const commitSha = pr.head?.sha || payload.after || null;
+    const ignoredReason = !repositoryId || !installationId
+      ? 'missing-repository-identity'
+      : !validGitHubCommitSha(commitSha)
+        ? 'invalid-commit'
+        : null;
     return {
-      kind: 'preview-deploy',
+      kind: ignoredReason ? 'ignored' : 'preview-deploy',
       event: eventName,
       action,
       repository,
+      repositoryId,
+      installationId,
       branch: pr.head?.ref || payload.branch || 'preview',
-      commitSha: pr.head?.sha || payload.after || null,
+      baseBranch: pr.base?.ref || payload.repository?.default_branch || '',
+      commitSha,
       pullRequestNumber: Number(payload.number || pr.number || 0),
+      ignoredReason,
     };
   }
   if (eventName === 'pull_request' && action === 'closed') {
     const pr = payload.pull_request || {};
     return {
-      kind: 'preview-cleanup',
+      kind: repositoryId && installationId ? 'preview-cleanup' : 'ignored',
       event: eventName,
       action,
       repository,
+      repositoryId,
+      installationId,
       branch: pr.head?.ref || payload.branch || 'preview',
+      baseBranch: pr.base?.ref || payload.repository?.default_branch || '',
       commitSha: pr.head?.sha || null,
       pullRequestNumber: Number(payload.number || pr.number || 0),
+      ignoredReason: repositoryId && installationId ? null : 'missing-repository-identity',
     };
   }
-  return { kind: 'ignored', event: eventName || 'unknown', action, repository, branch: null, commitSha: null, pullRequestNumber: null };
+  return { kind: 'ignored', event: eventName || 'unknown', action, repository, repositoryId, installationId, branch: null, baseBranch: null, commitSha: null, pullRequestNumber: null, ignoredReason: 'unsupported-event' };
 }
 
 export function githubWebhookOutboundPlan(actionPlan: Record<string, any>, actions: Array<Record<string, any>> = []) {
@@ -140,4 +174,8 @@ function webhookRepository(payload: Record<string, any>) {
   if (fullName) return parseGitHubRepository(String(fullName)).fullName;
   if (payload.repository?.owner?.login && payload.repository?.name) return parseGitHubRepository(`${payload.repository.owner.login}/${payload.repository.name}`).fullName;
   return '';
+}
+
+function validGitHubCommitSha(value: any) {
+  return /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(String(value || ''));
 }

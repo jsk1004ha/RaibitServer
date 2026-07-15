@@ -1,5 +1,7 @@
+import crypto from 'node:crypto';
 import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { can } from './rbac.ts';
+import { canonicalizeProviderDesiredSpec, sanitizeResourceValue } from './resource-sanitizer.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -16,6 +18,9 @@ const SAFE_SERVICE_KEYS = new Set([
   'githubRepositoryId',
   'githubRepository',
   'githubIntegrationId',
+  'githubInstallationId',
+  'githubRepositoryVisibility',
+  'sourceAccess',
   'branch',
   'rootDirectory',
   'buildContext',
@@ -24,6 +29,8 @@ const SAFE_SERVICE_KEYS = new Set([
   'installCommand',
   'buildCommand',
   'startCommand',
+  'command',
+  'args',
   'outputDirectory',
   'image',
   'imageUrl',
@@ -64,6 +71,10 @@ const SAFE_RESOURCE_API_KEYS = new Set([
   'desiredSpec',
 ]);
 
+const RESOURCE_TYPES = new Set(['database', 'cache', 'storage', 'vector', 'queue']);
+const RESOURCE_ENGINES = new Set(['postgresql', 'postgres', 'pg', 'mysql', 'mariadb', 'mongodb', 'mongo', 'redis', 'valkey', 'sqlite', 'sqlite3', 'object-storage', 's3', 'minio', 'qdrant', 'vector-db', 'weaviate', 'milvus', 'nats', 'message-queue', 'rabbitmq', 'kafka', 'redpanda']);
+const RESOURCE_PLANS = new Set(['shared-small', 'dedicated-local']);
+
 const SAFE_DEPLOYMENT_CREATE_KEYS = new Set([
   'serviceId',
   'projectId',
@@ -98,6 +109,14 @@ const SAFE_DEPLOYMENT_STATUS_KEYS = new Set([
 ]);
 
 const DEFAULT_ALLOWED_GIT_HOSTS = ['github.com', 'gitlab.com', 'bitbucket.org'];
+const GITHUB_BINDING_KEYS = new Set([
+  'githubIntegrationId',
+  'githubInstallationId',
+  'githubRepositoryId',
+  'githubRepository',
+  'githubRepositoryPrivate',
+  'githubRepositoryVisibility',
+]);
 
 export const DEFAULT_CONTAINER_SECURITY_CONTEXT = Object.freeze({
   runAsNonRoot: true,
@@ -235,8 +254,76 @@ export function assertRateLimit(limiter: ReturnType<typeof createFixedWindowRate
   return result;
 }
 
+export async function enforceAuthAbuseLimits(repository: AnyRecord, input: AnyRecord = {}) {
+  if (!repository || typeof repository.consumeAuthRateLimit !== 'function') {
+    const error = new Error('durable_auth_rate_limiter_not_configured');
+    (error as any).statusCode = 500;
+    throw error;
+  }
+  const env = input.env || process.env;
+  const action = String(input.action || 'auth').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-') || 'auth';
+  const email = String(input.email || '').trim().toLowerCase();
+  const source = String(input.source || 'unknown').trim().toLowerCase() || 'unknown';
+  const now = Number(input.now === undefined ? Date.now() : input.now);
+  const windowMs = boundedPositiveInteger(env.RAIBITSERVER_AUTH_RATE_WINDOW_MS, 60_000, 1_000, 60 * 60_000);
+  const globalDimension = {
+    key: authRateLimitKey('global', 'all', env),
+    limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_GLOBAL_RATE_LIMIT, 5_000, 1, 50_000),
+    windowMs,
+  };
+  if (typeof repository.peekAuthRateLimit === 'function') {
+    const globalState = await repository.peekAuthRateLimit({ ...globalDimension, now });
+    if (!globalState.allowed) throwAuthRateLimitExceeded(globalState, now);
+  }
+  const dimensions = [
+    { key: authRateLimitKey(`source:${action}`, source, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_SOURCE_RATE_LIMIT, 30, 1, 100_000), windowMs },
+    { key: authRateLimitKey('flow-source', source, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_FLOW_SOURCE_RATE_LIMIT, 60, 1, 100_000), windowMs },
+    globalDimension,
+  ];
+  if (action === 'email-resend' && email) {
+    dimensions.push({
+      key: authRateLimitKey('resend-cooldown', email, env),
+      limit: 1,
+      windowMs: boundedPositiveInteger(env.RAIBITSERVER_EMAIL_RESEND_COOLDOWN_MS, 60_000, 1_000, 24 * 60 * 60_000),
+    });
+  }
+  if (email) dimensions.push({ key: authRateLimitKey(`email:${action}`, email, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_EMAIL_RATE_LIMIT, 10, 1, 10_000), windowMs });
+  const results = [];
+  for (const dimension of dimensions) {
+    const result = await repository.consumeAuthRateLimit({ ...dimension, now });
+    results.push(result);
+    if (!result.allowed) throwAuthRateLimitExceeded(result, now);
+  }
+  return results;
+}
+
+function throwAuthRateLimitExceeded(result: AnyRecord, now: number): never {
+  const error = new Error('rate_limit_exceeded');
+  (error as any).statusCode = 429;
+  (error as any).retryAfterSeconds = Math.max(1, Math.ceil((Number(result.resetAt || now) - now) / 1_000));
+  throw error;
+}
+
+function authRateLimitKey(dimension: string, value: string, env: AnyRecord) {
+  const material = `${dimension}\u0000${value}`;
+  const secret = String(env.RAIBITSERVER_AUTH_RATE_LIMIT_KEY_SECRET || env.RAIBITSERVER_AUTH_JWT_SECRET || '');
+  const digest = secret
+    ? crypto.createHmac('sha256', secret).update(material).digest('base64url')
+    : crypto.createHash('sha256').update(material).digest('base64url');
+  return `auth:${dimension.split(':')[0]}:${digest}`;
+}
+
+function boundedPositiveInteger(value: any, fallback: number, minimum: number, maximum: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
+}
+
 export function sanitizeTenantServiceInput(input: AnyRecord = {}, options: AnyRecord = {}) {
+  if (options.allowGitHubBinding !== true) assertNoTenantGitHubBinding(input);
   const output = pickKnown(input, SAFE_SERVICE_KEYS);
+
+  sanitizeRuntimeCommandFields(output);
   if (output.name !== undefined) output.name = String(output.name || '').trim();
   if (output.sourceType !== undefined) output.sourceType = String(output.sourceType || 'github').toLowerCase();
   if (output.port !== undefined && output.port !== null && output.port !== '') output.port = Number(output.port);
@@ -252,6 +339,7 @@ export function sanitizeTenantServiceInput(input: AnyRecord = {}, options: AnyRe
   }
   if (output.desiredSpec && typeof output.desiredSpec === 'object') {
     output.desiredSpec = pickKnown(output.desiredSpec, SAFE_SERVICE_KEYS);
+    sanitizeRuntimeCommandFields(output.desiredSpec);
     delete output.desiredSpec.status;
     delete output.desiredSpec.desiredState;
   }
@@ -259,6 +347,25 @@ export function sanitizeTenantServiceInput(input: AnyRecord = {}, options: AnyRe
   delete output.desiredState;
   delete output.id;
   return output;
+}
+
+export function assertNoTenantGitHubBinding(input: AnyRecord) {
+  const candidates = [input, input?.desiredSpec].filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+  if (candidates.some((candidate) => [...GITHUB_BINDING_KEYS].some((key) => Object.prototype.hasOwnProperty.call(candidate, key)))) {
+    badRequest('GitHub repository bindings must be created through the verified attach or import flow');
+  }
+}
+
+function sanitizeRuntimeCommandFields(output: AnyRecord) {
+  for (const key of ['command', 'args']) {
+    if (!Object.prototype.hasOwnProperty.call(output, key)) continue;
+    const value = output[key];
+    if (!Array.isArray(value) || value.length === 0 || value.length > 64 || value.some((entry) => typeof entry !== 'string' || !entry.trim() || entry.length > 4096 || /[\u0000-\u001f\u007f]/.test(entry))) {
+      delete output[key];
+      continue;
+    }
+    output[key] = [...value];
+  }
 }
 
 export function sanitizeTenantServiceUpdate(input: AnyRecord = {}, options: AnyRecord = {}) {
@@ -269,10 +376,36 @@ export function sanitizeTenantServiceUpdate(input: AnyRecord = {}, options: AnyR
 
 export function sanitizeTenantResourceApiInput(input: AnyRecord = {}) {
   const output = pickKnown(input, SAFE_RESOURCE_API_KEYS);
+  validateManagedResourceRouteFields(output);
+  if (output.desiredSpec && typeof output.desiredSpec === 'object' && !Array.isArray(output.desiredSpec)) {
+    output.desiredSpec = sanitizeResourceValue(output.desiredSpec);
+  }
+  if (['sqlite', 'sqlite3'].includes(String(output.engine || '').toLowerCase()) && output.desiredSpec && typeof output.desiredSpec === 'object' && !Array.isArray(output.desiredSpec)) {
+    output.desiredSpec = { ...output.desiredSpec };
+    delete output.desiredSpec.sqlitePath;
+  }
+  output.desiredSpec = canonicalizeProviderDesiredSpec(output, { rejectUnknown: true });
+  for (const key of ['storageMb', 'storageGb', 'databaseName', 'database', 'username', 'bucket', 'collection', 'topic', 'backup']) delete output[key];
   delete output.status;
   delete output.desiredState;
   delete output.connectionSecretName;
   return output;
+}
+
+function validateManagedResourceRouteFields(input: AnyRecord) {
+  if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 128)) badRequest('resource name must be a non-empty string of at most 128 characters');
+  if (input.type !== undefined && !RESOURCE_TYPES.has(String(input.type).toLowerCase())) badRequest(`unsupported managed resource type: ${input.type}`);
+  if (input.engine !== undefined && !RESOURCE_ENGINES.has(String(input.engine).toLowerCase())) badRequest(`unsupported managed resource engine: ${input.engine}`);
+  if (input.plan !== undefined && !RESOURCE_PLANS.has(String(input.plan).toLowerCase())) badRequest(`unsupported managed resource plan: ${input.plan}`);
+  if (input.region !== undefined && String(input.region).trim().toLowerCase() !== 'local') badRequest(`unsupported managed resource region: ${input.region}`);
+  if (input.version !== undefined && String(input.version).trim() !== '') badRequest('managed resource version selection is not implemented');
+  if (input.provider !== undefined) {
+    const provider = String(input.provider).trim().toLowerCase();
+    const localSqlite = provider === 'local-pvc' && ['sqlite', 'sqlite3'].includes(String(input.engine || '').trim().toLowerCase());
+    if (!localSqlite && !['local', 'raibitserver', 'managed-catalog', 'shared-provider', 'dedicated-local'].includes(provider) && !/^raibitserver-local-[a-z0-9-]+$/.test(provider)) {
+      badRequest(`unsupported managed resource provider: ${input.provider}`);
+    }
+  }
 }
 
 export function sanitizeTenantResourceApiUpdate(input: AnyRecord = {}) {
@@ -319,7 +452,9 @@ export function tenantLocalSourceAllowed(env: AnyRecord = process.env) {
 export function normalizeTenantGitUrl(repoUrl: any, options: AnyRecord = {}) {
   const value = String(repoUrl || '').trim();
   if (!value) return value;
-  if (/^https:\/\/[^/@\s]+@/i.test(value)) badRequest('credentialed git URLs are not allowed; pass tokens through integration secrets');
+  if (hasGitUrlCredentials(value)) {
+    badRequest('credentialed git URLs are not allowed; pass tokens through integration secrets');
+  }
   if (isLocalOrFileSource(value)) {
     if (tenantLocalSourceAllowed(options.env || process.env)) return value;
     badRequest('local/file git URLs are not allowed for tenant API requests');
@@ -338,12 +473,12 @@ export function normalizeTenantGitUrl(repoUrl: any, options: AnyRecord = {}) {
   try {
     parsed = new URL(value);
   } catch {
-    badRequest(`unsupported git URL: ${value}`);
+    badRequest('unsupported git URL');
   }
   if (parsed.protocol !== 'https:') badRequest('git URLs must use https');
   const host = parsed.hostname.toLowerCase();
   if (!allowedHosts.has(host)) badRequest(`git host is not allowed: ${host}`);
-  if (!/\/[^/]+\/[^/]+/.test(parsed.pathname)) badRequest(`unsupported git URL: ${value}`);
+  if (!/\/[^/]+\/[^/]+/.test(parsed.pathname)) badRequest('unsupported git URL');
   return value;
 }
 
@@ -377,7 +512,22 @@ function pickKnown(input: AnyRecord = {}, allowed: Set<string>) {
 
 function isLocalOrFileSource(value: any) {
   const text = String(value || '').trim();
-  return text.startsWith('/') || text.startsWith('./') || text.startsWith('../') || /^file:\/\//i.test(text);
+  return text.startsWith('/') || text.startsWith('./') || text.startsWith('../') || /^[a-z]:[\\/]/i.test(text) || /^\\\\/.test(text) || /^file:\/\//i.test(text);
+}
+
+function hasGitUrlCredentials(value: string) {
+  if (/^[a-z][a-z0-9+.-]*:\/\/[^/?#\s]*@/i.test(value)) return true;
+  try {
+    const parsed = new URL(value);
+    return Boolean(parsed.username || parsed.password || [...parsed.searchParams.keys()].some(isGitCredentialQueryKey));
+  } catch {
+    const query = value.split('#', 1)[0].split('?', 2)[1];
+    return Boolean(query && [...new URLSearchParams(query).keys()].some(isGitCredentialQueryKey));
+  }
+}
+
+function isGitCredentialQueryKey(key: string) {
+  return /(?:secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)/i.test(key);
 }
 
 function badRequest(message: string): never {

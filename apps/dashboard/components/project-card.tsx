@@ -9,6 +9,8 @@ type ProjectCardProps = {
     status?: string;
     services?: number;
     resources?: number;
+    serviceCount?: number;
+    resourceCount?: number;
   };
   href?: string;
 };
@@ -19,7 +21,7 @@ export function ProjectCard({ project, href }: ProjectCardProps) {
       <Icon name="folder" />
       <div className="project-identity">
         <h2>{project.name || project.slug || project.id}</h2>
-        <p className="muted">서비스 {project.services ?? 0}개 · 리소스 {project.resources ?? 0}개</p>
+        <p className="muted">서비스 {project.services ?? project.serviceCount ?? 0}개 · 리소스 {project.resources ?? project.resourceCount ?? 0}개</p>
       </div>
       <StatusBadge status={project.status || 'active'} />
       {href ? <span className="subtle-link">콘솔 열기 →</span> : null}

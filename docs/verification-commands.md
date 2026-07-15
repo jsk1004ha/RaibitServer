@@ -44,17 +44,17 @@ Production control-plane store처럼 Go package가 바뀌면 변경 package 옆�
 ### Live E2E bootstrap과 CI workflow contract
 
 ```sh
-node --test tests/e2e-mode.test.js tests/local-e2e.test.js tests/ci-cli-smoke.test.js
+node --test tests/e2e-mode.test.js tests/local-e2e.test.js tests/live-helm-e2e.test.js tests/ci-cli-smoke.test.js
 pnpm e2e:dry
 ```
 
-Docker/kubectl/kind 또는 k3d side effect를 의도할 때만 live proof를 실행합니다.
+Docker/kind/kubectl/Helm/Go side effect를 의도할 때만 live Helm reconciliation gate를 실행합니다. 스크립트가 disposable cluster의 생성과 정리를 담당하므로 `pnpm dev:up`/`pnpm dev:down`은 필요하지 않습니다.
 
 ```sh
-pnpm dev:up
 pnpm e2e:live
-pnpm dev:down
 ```
+
+이 명령은 API migration/health, 관리형 PostgreSQL Provisioner, Orchestrator deletion을 검증합니다. Go Builder source build/registry push/signing, tenant workload HTTP 200, runtime log, preview cleanup은 별도 전체 앱 lifecycle evidence가 필요합니다.
 
 ### TypeScript control plane, API, auth, GitHub, workflow jobs
 
@@ -116,5 +116,5 @@ pnpm --filter @raibitserver/cli typecheck
 
 - `pnpm lint`는 현재 `git diff --check`와 `node scripts/check-structure.js`를 실행하며, 모든 package의 full ESLint가 아닙니다.
 - root `pnpm typecheck`는 `packages/core`, `apps/api`, `apps/cli`, `apps/dashboard`를 중심으로 검증합니다.
-- `pnpm e2e:live`는 side-effecting proof이므로 기본 CI 밖에 둡니다. 기본 proof는 `pnpm e2e:dry`입니다.
+- `pnpm e2e:live`는 CI의 bounded kind/Helm job에도 포함되지만 전체 앱 lifecycle gate는 아닙니다. 로컬 기본 proof는 계속 `pnpm e2e:dry`입니다.
 - Go service validation은 root script가 아니라 수동/CI loop입니다.

@@ -1,35 +1,51 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: raibitserver-orchestrator
+  name: {{ include "raibitserver.fullname" . }}-orchestrator
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-orchestrator
 spec:
   replicas: {{ .Values.orchestrator.replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: raibitserver-orchestrator
+      app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
         app.kubernetes.io/name: raibitserver-orchestrator
+        app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
-      serviceAccountName: raibitserver-orchestrator
+      serviceAccountName: {{ include "raibitserver.fullname" . }}-orchestrator
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: orchestrator
-          image: "{{ .Values.image.registry }}/raibitserver/orchestrator:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}/raibitserver/orchestrator{{ if .Values.image.digests.orchestrator }}@{{ .Values.image.digests.orchestrator }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: RAIBITSERVER_DRY_RUN
-              value: "0"
+              value: {{ ternary "0" "1" .Values.orchestrator.execute | quote }}
+            - name: RAIBITSERVER_EXECUTE
+              value: {{ ternary "1" "0" .Values.orchestrator.execute | quote }}
+            - { name: RAIBITSERVER_ORCHESTRATOR_OUTPUT_DIR, value: /tmp/raibitserver-orchestrator }
+            - name: RAIBITSERVER_RECONCILE_INTERVAL_SECONDS
+              value: {{ .Values.orchestrator.reconcileIntervalSeconds | quote }}
+            - name: RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE
+              value: {{ .Values.ingress.gatewayNamespace | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | quote }}
+                  key: {{ .Values.database.urlKey | quote }}
           resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
           securityContext:
             readOnlyRootFilesystem: true
             runAsUser: 10001
@@ -42,4 +58,4 @@ spec:
               mountPath: /tmp
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir: { sizeLimit: 128Mi }

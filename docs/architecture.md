@@ -65,6 +65,33 @@
 
 자세한 내용은 [보안 문서](security.md)를 참고하세요.
 
+## Builder 격리와 registry credential
+
+Production Builder는 DB 연결 권한과 tenant Dockerfile 실행 권한을 같은 Pod에 두지 않습니다. 장기 실행 `builder-dispatcher` Deployment만 control-plane PostgreSQL에 연결하고, 기본적으로 매분 예약되는 CronJob batch는 최대 4개의 disposable `builder-executor` Pod를 병렬 실행합니다. CronJob batch 중첩은 `Forbid`로 막고 active executor 수는 `builder.isolation.parallelism`으로 제한합니다. 각 Pod는 mTLS RPC로 WorkflowJob 하나만 처리합니다. Executor에는 `DATABASE_URL`이나 Kubernetes service-account token이 없으며 executor NetworkPolicy에도 PostgreSQL egress가 없습니다. BuildKit은 executor의 Kubernetes native sidecar로만 살아 있으며 workspace, metadata, cache state와 함께 Pod 종료 시 폐기됩니다. Pod마다 Downward API의 UID를 worker ID로 사용하고, 재시작은 `Never`, Job backoff는 `0`입니다.
+
+Dispatcher RPC는 TLS 1.3과 client certificate 검증을 강제하고, claim마다 암호학적 난수 session token을 발급해 verified client certificate fingerprint와 project/service/deployment/WorkflowLease에 묶습니다. Lease 기간과 갱신 시각은 client 입력이 아니라 dispatcher의 300초 정책과 server clock으로 결정합니다. Raw update RPC는 terminal build failure 기록과 credentialed repository URL redaction만 허용합니다. Raw update, build log, deployment event를 포함한 모든 DB-writing RPC는 PostgreSQL workflow lease row를 같은 transaction에서 잠그고 현재 attempt를 다시 확인합니다. 따라서 회수된 이전 attempt는 더 긴 session TTL이 남아 있어도 상태나 기록을 덮어쓸 수 없고 `IMAGE_READY` 전이는 scan/sign 뒤의 atomic publication RPC를 거쳐야 합니다. Helm `builder.dispatch.existingSecret`은 이 release 전용 CA와 `server.crt`/`server.key`/`client.crt`/`client.key`를 제공해야 하며 server certificate SAN은 `<release>-builder-dispatcher` Service DNS를 포함해야 합니다. Executor volume에는 CA와 client keypair만 선택적으로 투영되므로 server private key와 DB Secret은 들어가지 않습니다. Dispatcher가 재시작해 session을 잃으면 executor 요청은 실패하고 DB lease 만료 후 안전하게 재claim됩니다.
+
+Rootless BuildKit은 process sandbox를 유지합니다. chart는 위험한 `--oci-worker-no-process-sandbox`를 전달하지 않으므로, 선택한 `runtimeClassName`과 builder node가 sandboxed rootless BuildKit을 지원하지 않으면 startup probe 단계에서 fail-closed합니다. 실제 클러스터 출시는 이 runtime 조합의 live build 증거가 필요합니다.
+
+Production에는 registry-wide Docker config를 mount하지 않습니다. 외부 HTTPS credential broker가 다음 요청에 대해 최대 900초짜리 `pull`/`push` credential을 발급해야 합니다.
+
+```json
+{
+  "organizationId": "...",
+  "projectId": "...",
+  "serviceId": "...",
+  "jobId": "...",
+  "repository": "<server-derived exact output repository>",
+  "actions": ["pull", "push"],
+  "minTtlSeconds": 840,
+  "maxTtlSeconds": 900
+}
+```
+
+응답은 같은 `repository`, 비어 있지 않은 `username`/`password`, RFC 3339 `expiresAt`을 포함해야 합니다. 요청에는 `minTtlSeconds`와 `maxTtlSeconds`가 함께 전달되며, production 기본 계약은 명령 제한 600초, Job 제한 780초, 자격증명 TTL 840~900초입니다. 따라서 자격증명은 전체 Job 제한보다 최소 60초 더 오래 유효하면서도 15분을 넘지 않습니다. Executor는 repository 일치와 TTL을 재검증하고 job 전용 `DOCKER_CONFIG`를 `0600`으로 만든 뒤 build/scan/sign에만 전달하고 cleanup합니다. Broker bootstrap token은 executor container에만 read-only로 mount되며 BuildKit container에는 전달되지 않습니다.
+
+생성 Dockerfile의 frontend와 Node base image도 production values에서 `repository@sha256:<64 hex>` 형식으로 명시해야 합니다. 누락되거나 mutable tag이면 Helm render와 live generated build가 모두 거부됩니다.
+
 ## 관련 문서
 
 - [워크플로 작업](workflows.md)

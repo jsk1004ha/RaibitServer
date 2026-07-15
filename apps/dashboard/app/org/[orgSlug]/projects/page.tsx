@@ -1,5 +1,5 @@
 import { loadDashboardOverview } from '../../../../lib/api';
-import { ConsoleShell } from '../../../../components/console-ui';
+import { ConsoleShell, LoadErrorSummary } from '../../../../components/console-ui';
 import { ProjectCard } from '../../../../components/project-card';
 
 export default async function ProjectsPage({ params }: { params: Promise<{ orgSlug: string }> }) {
@@ -13,6 +13,7 @@ export default async function ProjectsPage({ params }: { params: Promise<{ orgSl
           <div><p className="eyebrow">{orgSlug} · 워크스페이스</p><h1 className="page-title">프로젝트</h1><p className="page-subtitle">워크스페이스의 프로젝트와 서비스 운영 상태를 확인하세요.</p></div>
           <span className="badge ok">{projects.length}개</span>
         </header>
+        <LoadErrorSummary issues={state.loadErrors} />
         <section className="card">
           <div className="card-title"><h2>프로젝트 목록</h2><span className="badge info">{projects.length}개</span></div>
           <div className="stack">

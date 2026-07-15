@@ -1,0 +1,38 @@
+{{- if not (regexMatch "^[0-9]*[1-9][0-9]*$" (toString .Values.provisioner.healthIntervalSeconds)) -}}
+{{- fail "provisioner.healthIntervalSeconds must be a positive integer" -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" (default "" .Values.ingress.gatewayNamespace)) -}}
+{{- fail "ingress.gatewayNamespace must be a Kubernetes DNS label" -}}
+{{- end -}}
+{{- if .Values.production -}}
+{{- if or (not .Values.database.existingSecret) (not .Values.database.urlKey) -}}
+{{- fail "production database.existingSecret and database.urlKey are required" -}}
+{{- end -}}
+{{- if not .Values.runtimeSecrets.existingSecret -}}
+{{- fail "production runtimeSecrets.existingSecret is required" -}}
+{{- end -}}
+{{- if not .Values.dashboard.enabled -}}
+{{- fail "production dashboard must be enabled" -}}
+{{- end -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" .Values.image.digests.dashboard)) -}}
+{{- fail "production platform image dashboard requires a valid sha256 digest" -}}
+{{- end -}}
+{{- if not .Values.ingress.enabled -}}
+{{- fail "production ingress must be enabled" -}}
+{{- end -}}
+{{- if or (not .Values.ingress.hosts.api) (not .Values.ingress.hosts.dashboard) -}}
+{{- fail "production ingress API and dashboard hosts are required" -}}
+{{- end -}}
+{{- if or (not .Values.ingress.tls.enabled) (not .Values.ingress.tls.existingSecret) -}}
+{{- fail "production ingress TLS must be enabled with an existing secret" -}}
+{{- end -}}
+{{- if not .Values.migration.enabled -}}
+{{- fail "production database migration hook must be enabled" -}}
+{{- end -}}
+{{- if not .Values.orchestrator.execute -}}
+{{- fail "production orchestrator execution must be enabled" -}}
+{{- end -}}
+{{- if not .Values.provisioner.execute -}}
+{{- fail "production provisioner execution must be enabled" -}}
+{{- end -}}
+{{- end -}}

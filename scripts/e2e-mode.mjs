@@ -99,6 +99,12 @@ export function resolveE2EPlan({ requestedMode = E2E_MODES.DRY, execute = false,
   };
 }
 
+export function assertLegacyDevE2EDryRun(plan = {}) {
+  if (plan.dryRun === false) {
+    throw new Error('legacy TypeScript dev E2E is dry-run only; use the Go builder and Go orchestrator control-plane workers for live verification');
+  }
+}
+
 export function liveE2ESetupPlan(tools = {}, options = {}) {
   const clusterName = options.clusterName || 'raibitserver-e2e';
   const registryName = options.registryName || 'raibitserver-registry';
@@ -116,7 +122,6 @@ export function liveE2ESetupPlan(tools = {}, options = {}) {
     'kubectl apply -f infra/operators/manageddatabase-crd.yaml',
     'kubectl apply -f infra/operators/managedresources-crd.yaml',
     'kubectl get namespace ingress-nginx || kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml',
-    'kubectl label namespace ingress-nginx raibitserver.io/ingress-gateway=true --overwrite',
     'kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=180s',
     `kubectl get nodes -o wide && kubectl get pods -A`,
   ];

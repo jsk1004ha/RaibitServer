@@ -13,12 +13,14 @@ import (
 )
 
 type Command struct {
-	Name     string
-	Args     []string
-	Dir      string
-	Env      map[string]string
-	Stdin    string
-	Redacted string
+	Name             string
+	Args             []string
+	Dir              string
+	Env              map[string]string
+	Stdin            string
+	Redacted         string
+	CleanGitEnv      bool
+	CleanRegistryEnv bool
 }
 
 type CommandResult struct {
@@ -56,6 +58,12 @@ func (OSRunner) Run(ctx context.Context, command Command, options CommandOptions
 		cmd.Dir = command.Dir
 	}
 	cmd.Env = os.Environ()
+	if command.CleanGitEnv {
+		cmd.Env = withoutAmbientGitCredentials(cmd.Env)
+	}
+	if command.CleanRegistryEnv {
+		cmd.Env = withoutAmbientRegistryCredentials(cmd.Env)
+	}
 	for key, value := range command.Env {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
@@ -75,10 +83,49 @@ func (OSRunner) Run(ctx context.Context, command Command, options CommandOptions
 		}
 	}
 	result := CommandResult{Command: printable, DryRun: false, ExitCode: exitCode, Stdout: controlplane.Redact(stdout.String()), Stderr: controlplane.Redact(stderr.String())}
+	if options.Sensitive {
+		result.Stdout = ""
+		result.Stderr = ""
+	}
 	if err != nil {
+		if options.Sensitive {
+			return result, fmt.Errorf("command failed (%d): %s (sensitive output omitted)", exitCode, printable)
+		}
 		return result, fmt.Errorf("command failed (%d): %s\n%s", exitCode, printable, firstNonEmptyOutput(result.Stderr, result.Stdout))
 	}
 	return result, nil
+}
+
+func withoutAmbientRegistryCredentials(environment []string) []string {
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		key := entry
+		if index := strings.IndexByte(entry, '='); index >= 0 {
+			key = entry[:index]
+		}
+		switch strings.ToUpper(strings.TrimSpace(key)) {
+		case "DOCKER_CONFIG", "REGISTRY_AUTH_FILE":
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func withoutAmbientGitCredentials(environment []string) []string {
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		key := entry
+		if index := strings.IndexByte(entry, '='); index >= 0 {
+			key = entry[:index]
+		}
+		upper := strings.ToUpper(strings.TrimSpace(key))
+		if strings.HasPrefix(upper, "GIT_") || strings.HasPrefix(upper, "RAIBITSERVER_GIT_") || upper == "GITHUB_TOKEN" || upper == "GH_TOKEN" || upper == "SSH_ASKPASS" {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func commandString(command Command) string {

@@ -31,7 +31,9 @@ test('web service uses secret refs and safe container defaults', () => {
   assert.deepEqual(container.securityContext.capabilities, { drop: ['ALL'] });
   assert.deepEqual(container.securityContext.seccompProfile, { type: 'RuntimeDefault' });
   assert.deepEqual(container.volumeMounts, [{ name: 'tmp', mountPath: '/tmp' }]);
-  assert.deepEqual(deployment.spec.template.spec.volumes, [{ name: 'tmp', emptyDir: {} }]);
+  assert.deepEqual(deployment.spec.template.spec.volumes, [{ name: 'tmp', emptyDir: { sizeLimit: '128Mi' } }]);
+  assert.equal(container.resources.requests['ephemeral-storage'], '64Mi');
+  assert.equal(container.resources.limits['ephemeral-storage'], '256Mi');
   assert.equal(deployment.spec.template.spec.automountServiceAccountToken, false);
   assert.equal(container.env.some((env) => env.name === 'DATABASE_URL' && env.valueFrom.secretKeyRef.name === 'web-env'), true);
   assert.equal(secret.metadata.annotations['raibitserver.io/provider-contract'], 'not-live-secret');
@@ -68,9 +70,9 @@ test('tenant network policy allows DNS but blocks metadata and private control-p
     'default ingress must not allow same-namespace lateral traffic',
   );
   assert.equal(
-    policy.spec.ingress.some((rule) => rule.from?.some((peer) => peer.namespaceSelector?.matchLabels?.['raibitserver.io/ingress-gateway'] === 'true')),
+    policy.spec.ingress.some((rule) => rule.from?.some((peer) => peer.namespaceSelector?.matchLabels?.['kubernetes.io/metadata.name'] === 'ingress-nginx')),
     true,
-    'default ingress allows only the shared ingress gateway namespace',
+    'default ingress allows only the standard ingress gateway namespace',
   );
   assert.equal(policy.raibitserver.blocksMetadataEndpoint, true);
   assert.equal(policy.raibitserver.blocksControlPlane, true);
@@ -126,4 +128,82 @@ test('tenant pre-pull image hints do not create DaemonSets', () => {
   assert.equal(prePull.prePullPlan.enabled, false);
   assert.equal(prePull.prePullPlan.strategy, 'disabled-tenant-prepull-not-supported');
   assert.deepEqual(prePull.prePullPlan.ignoredImages.sort(), ['attacker.example/evil-shell:latest', 'busybox:1.36', 'node:24-alpine', 'python:3.13-alpine', 'registry.local/web:1'].sort());
+});
+
+test('tenant input cannot choose the trusted ingress gateway namespace', () => {
+  const custom = compileProject({
+    organization: { slug: 'gdg' },
+    project: { name: 'gateway-contract' },
+    ingressGatewayNamespace: 'attacker-controlled',
+    runtime: { ingressGatewayNamespace: 'also-attacker-controlled' },
+    services: [{ name: 'web', type: 'web', sourceType: 'image', image: 'example/web:1' }],
+    resources: [],
+  }, {}, { ingressGatewayNamespace: 'edge-gateway-system' });
+  const policy = custom.manifests.find((manifest) => manifest.kind === 'NetworkPolicy' && manifest.metadata.name === 'tenant-isolation');
+  const selector = policy.spec.ingress[0].from[0].namespaceSelector;
+  assert.deepEqual(selector, { matchLabels: { 'kubernetes.io/metadata.name': 'edge-gateway-system' } });
+  assert.doesNotMatch(JSON.stringify(selector), /attacker-controlled|raibitserver\.io\/ingress-gateway/);
+});
+
+test('invalid trusted ingress gateway namespace fails closed', () => {
+  assert.throws(
+    () => compileProject({ organization: { slug: 'gdg' }, project: { name: 'invalid-gateway' } }, {}, { ingressGatewayNamespace: 'INVALID/namespace' }),
+    /invalid ingress gateway namespace/,
+  );
+});
+
+test('tenant resource overrides cannot remove or inflate temporary storage bounds', () => {
+  const custom = compileProject({
+    organization: { slug: 'gdg' },
+    project: { name: 'bounded-storage' },
+    services: [{
+      name: 'web',
+      type: 'web',
+      sourceType: 'image',
+      image: 'example/web:1',
+      resources: {
+        requests: { cpu: '250m', memory: '256Mi' },
+        limits: { cpu: '1', memory: '1Gi', 'ephemeral-storage': '100Ti' },
+      },
+    }],
+    resources: [],
+  });
+  const deployment = custom.manifests.find((manifest) => manifest.kind === 'Deployment');
+  const container = deployment.spec.template.spec.containers[0];
+  assert.deepEqual(container.resources.requests, { cpu: '250m', memory: '256Mi', 'ephemeral-storage': '64Mi' });
+  assert.deepEqual(container.resources.limits, { cpu: '1', memory: '1Gi', 'ephemeral-storage': '256Mi' });
+  assert.deepEqual(deployment.spec.template.spec.volumes, [{ name: 'tmp', emptyDir: { sizeLimit: '128Mi' } }]);
+});
+
+test('long service identities keep every generated Kubernetes object name bounded and referenced exactly', () => {
+  const longName = `service-${'x'.repeat(90)}`;
+  const compiled = compileProject({
+    organization: { id: 'organization-cuid', slug: 'gdg' },
+    project: { id: 'project-cuid', slug: 'long-service' },
+    services: [{
+      id: 'service-cuid',
+      name: longName,
+      type: 'web',
+      sourceType: 'image',
+      image: 'registry.local/web:1',
+      env: { LOG_LEVEL: 'info', API_TOKEN: 'secret-value' },
+      scaling: { minReplicas: 1, maxReplicas: 2 },
+      allowPublicEgress: true,
+    }],
+    resources: [],
+  });
+
+  for (const manifest of compiled.manifests) {
+    assert.ok(manifest.metadata.name.length <= 63, `${manifest.kind}/${manifest.metadata.name}`);
+    if (manifest.metadata.namespace) assert.ok(manifest.metadata.namespace.length <= 63, manifest.metadata.namespace);
+  }
+
+  const deployment = compiled.manifests.find((manifest) => manifest.kind === 'Deployment');
+  const ingress = compiled.manifests.find((manifest) => manifest.kind === 'Ingress');
+  const objectNames = new Set(compiled.manifests.map((manifest) => manifest.metadata.name));
+  for (const env of deployment.spec.template.spec.containers[0].env) {
+    const reference = env.valueFrom.secretKeyRef?.name || env.valueFrom.configMapKeyRef?.name;
+    assert.ok(objectNames.has(reference), `missing env source ${reference}`);
+  }
+  assert.ok(ingress.spec.tls[0].secretName.length <= 63, ingress.spec.tls[0].secretName);
 });

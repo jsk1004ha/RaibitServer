@@ -1,4 +1,6 @@
 import { maskSecretValue } from './secrets.ts';
+import { trustedIngressGatewayNamespace } from './constants.ts';
+import { assertEmailDeliveryConfigured } from './email-verification.ts';
 
 type EnvRecord = Record<string, any>;
 
@@ -15,6 +17,7 @@ export const RUNTIME_KEY_CATALOG = Object.freeze([
   { name: 'RAIBITSERVER_REGISTRY_PASSWORD', category: 'registry', required: false, secret: true, description: 'Default image registry password/token' },
   { name: 'DATABASE_URL', category: 'persistence', required: false, secret: true, description: 'PostgreSQL connection string used by Prisma persistence' },
   { name: 'RAIBITSERVER_POSTGRES_POOLER_HOST', category: 'provider', required: false, secret: false, description: 'PgBouncer host used for shared PostgreSQL resource DATABASE_URL injection' },
+  { name: 'RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE', category: 'kubernetes', required: false, secret: false, description: 'Trusted namespace allowed to reach public tenant services (default ingress-nginx)' },
 ]);
 
 export function runtimeConfigStatus(env: EnvRecord = process.env) {
@@ -71,6 +74,9 @@ export function parseApiRuntimeConfig(env: EnvRecord = process.env) {
     persistence: {
       databaseUrlConfigured: Boolean(env.DATABASE_URL),
     },
+    kubernetes: {
+      ingressGatewayNamespace: trustedIngressGatewayNamespace(env.RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE),
+    },
   };
 }
 
@@ -80,6 +86,32 @@ export function validateApiRuntimeConfig(env: EnvRecord = process.env) {
   const production = nodeEnv === 'production';
   capture(() => optionalPort(env.PORT, 'PORT'), issues);
   capture(() => optionalPositiveInteger(env.RAIBITSERVER_AUTH_RATE_LIMIT, 'RAIBITSERVER_AUTH_RATE_LIMIT'), issues);
+  capture(() => ingressGatewayNamespaceFromEnv(env.RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE), issues);
+
+  if (production) {
+    try {
+      assertEmailDeliveryConfigured(env);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'email_delivery_not_configured';
+      const senderIssue = message.includes('email_sender');
+      const missingDelivery = message === 'email_delivery_not_configured';
+      let key = 'RAIBITSERVER_EMAIL_WEBHOOK_URL';
+      let code = 'INVALID_EMAIL_DELIVERY';
+      if (senderIssue) {
+        key = 'RAIBITSERVER_EMAIL_FROM';
+        code = 'INVALID_EMAIL_SENDER';
+      } else if (missingDelivery) {
+        code = 'MISSING_EMAIL_DELIVERY';
+      } else if (message.includes('mode')) {
+        key = 'RAIBITSERVER_EMAIL_DELIVERY_MODE';
+      }
+      issues.push({
+        key,
+        code,
+        message,
+      });
+    }
+  }
 
   if (production && env.RAIBITSERVER_AUTH_DISABLED === '1') {
     issues.push({ key: 'RAIBITSERVER_AUTH_DISABLED', code: 'UNSAFE_PRODUCTION_AUTH_DISABLED', message: 'RAIBITSERVER_AUTH_DISABLED is forbidden when NODE_ENV=production' });
@@ -104,6 +136,14 @@ export function validateApiRuntimeConfig(env: EnvRecord = process.env) {
     issues,
     config: issues.length === 0 ? parseApiRuntimeConfig(env) : null,
   };
+}
+
+function ingressGatewayNamespaceFromEnv(value: any) {
+  try {
+    return trustedIngressGatewayNamespace(value);
+  } catch {
+    throw configError('RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE', 'INVALID_KUBERNETES_NAMESPACE', 'RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE must be a Kubernetes DNS label');
+  }
 }
 
 export function assertApiRuntimeConfig(env: EnvRecord = process.env) {

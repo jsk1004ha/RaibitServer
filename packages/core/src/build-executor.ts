@@ -6,11 +6,12 @@ import { SOURCE_TYPES } from './constants.ts';
 import { cloneRepository, sourceCheckoutPlan } from './source-control.ts';
 import { runCommand, commandToString, type CommandSpec } from './command-runner.ts';
 import { pushImage, registryLogin } from './registry.ts';
-import { isSecretKey, maskSecretValue } from './secrets.ts';
+import { isSecretKey } from './secrets.ts';
 import { sanitizeLogRecord } from './security.ts';
 
 export function dockerBuildxCommand({ image, context = '.', dockerfile = 'Dockerfile', push = false, load = false, platforms = [], buildArgs = {}, target = null, cache = true, cacheFrom = [], cacheTo = [], metadataFile = null }: Record<string, any>) {
   if (!image) throw new Error('image is required for docker buildx');
+  const validatedBuildArgs = validateBuildArgs(buildArgs);
   const args = ['buildx', 'build', '--file', String(dockerfile), '--tag', String(image)];
   const redactedArgs = [...args];
   if (metadataFile) { args.push('--metadata-file', String(metadataFile)); redactedArgs.push('--metadata-file', String(metadataFile)); }
@@ -28,9 +29,9 @@ export function dockerBuildxCommand({ image, context = '.', dockerfile = 'Docker
     }
   }
   for (const platform of platforms || []) { args.push('--platform', String(platform)); redactedArgs.push('--platform', String(platform)); }
-  for (const [key, value] of Object.entries(buildArgs || {})) {
+  for (const [key, value] of Object.entries(validatedBuildArgs)) {
     args.push('--build-arg', `${key}=${value}`);
-    redactedArgs.push('--build-arg', `${key}=${isSecretKey(key) ? maskSecretValue(value) : value}`);
+    redactedArgs.push('--build-arg', `${key}=${value}`);
   }
   if (target) { args.push('--target', String(target)); redactedArgs.push('--target', String(target)); }
   args.push(String(context));
@@ -79,6 +80,7 @@ function resolvePathWithinSourceDir(sourceDir: string, requestedPath: string, fi
 }
 
 export function buildExecutionPlan(service: Record<string, any>, files: Record<string, string> = {}, options: Record<string, any> = {}) {
+  const buildArgs = validateBuildArgs(options.buildArgs || service.buildArgs || {});
   const buildPlan = resolveBuildStrategy(service, files);
   const checkout = sourceCheckoutPlan(service, options);
   const sourceDir = path.resolve(options.sourceDir || checkout.localPath || checkout.destination || '.');
@@ -91,7 +93,7 @@ export function buildExecutionPlan(service: Record<string, any>, files: Record<s
   const metadataFile = trustedMetadataFile(options);
   const buildCommand = builder === 'buildctl'
     ? buildctlCommand({ image: buildPlan.image, context, dockerfile: path.dirname(dockerfilePath), push })
-    : dockerBuildxCommand({ image: buildPlan.image, context, dockerfile: dockerfilePath, push, load: !push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, cache: cachePlan.enabled, cacheFrom: cachePlan.cacheFrom, cacheTo: cachePlan.cacheTo, metadataFile });
+    : dockerBuildxCommand({ image: buildPlan.image, context, dockerfile: dockerfilePath, push, load: !push, platforms: options.platforms || service.platforms || [], buildArgs, target: options.target || service.target || null, cache: cachePlan.enabled, cacheFrom: cachePlan.cacheFrom, cacheTo: cachePlan.cacheTo, metadataFile });
 
   return {
     service: buildPlan.service,
@@ -111,6 +113,7 @@ export function buildExecutionPlan(service: Record<string, any>, files: Record<s
 }
 
 export async function executeBuildWorkflow(service: Record<string, any>, files: Record<string, string> = {}, options: Record<string, any> = {}) {
+  assertLegacyBuildDryRun(options);
   const dryRun = options.dryRun !== false;
   const plan = buildExecutionPlan(service, files, options);
   const steps: any[] = [];
@@ -157,6 +160,24 @@ export async function executeBuildWorkflow(service: Record<string, any>, files: 
     steps.push({ type: 'registry-push', ...(await pushImage({ image: plan.image, dryRun, timeoutMs: options.timeoutMs })) });
   }
   return { ...plan, sourceDir, dryRun, imageDigest, steps };
+}
+
+export function assertLegacyBuildDryRun(options: Record<string, any> = {}) {
+  if (options.dryRun === false) {
+    throw new Error('legacy TypeScript builder is dry-run only; use the Go builder control-plane worker for live builds');
+  }
+}
+
+function validateBuildArgs(buildArgs: Record<string, any> = {}) {
+  const validated: Record<string, string> = {};
+  for (const [key, value] of Object.entries(buildArgs || {})) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`invalid build arg name: ${key}`);
+    if (isSecretKey(key) || /(?:credential|private.?key|database.?url|api.?key|access.?key|auth)/i.test(key)) {
+      throw new Error(`secret-looking build arg ${key} is not allowed; use a BuildKit secret mount`);
+    }
+    validated[key] = String(value);
+  }
+  return validated;
 }
 
 async function ensureSyntheticDockerfileIfNeeded(plan: Record<string, any>, service: Record<string, any>, { dryRun }: Record<string, any>) {

@@ -18,9 +18,13 @@ import type { ProjectSpec, ResourceSpec, ServiceSpec } from './types.ts';
 
 export class RAIBITSERVERControlPlane {
   store: ControlPlaneStore;
+  private readonly manifestOptions: Record<string, unknown>;
 
-  constructor(store = new ControlPlaneStore()) {
+  constructor(store = new ControlPlaneStore(), options: Record<string, unknown> = {}) {
     this.store = store;
+    this.manifestOptions = {
+      ingressGatewayNamespace: options.ingressGatewayNamespace ?? process.env.RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE,
+    };
   }
 
   catalog() {
@@ -40,7 +44,7 @@ export class RAIBITSERVERControlPlane {
   }
 
   compileManifests(projectSpec: ProjectSpec, filesByService: Record<string, Record<string, string>> = {}) {
-    return compileProject(projectSpec, filesByService);
+    return compileProject(projectSpec, filesByService, this.manifestOptions);
   }
 
   planSourceCheckout(service: ServiceSpec, options: Record<string, unknown> = {}) {
@@ -56,7 +60,7 @@ export class RAIBITSERVERControlPlane {
   }
 
   planKubernetesApply(projectSpec: ProjectSpec, filesByService: Record<string, Record<string, string>> = {}, options: Record<string, unknown> = {}) {
-    const compiled = compileProject(projectSpec, filesByService);
+    const compiled = compileProject(projectSpec, filesByService, this.manifestOptions);
     return { compiled, apply: kubernetesApplyPlan(compiled.manifests, options) };
   }
 

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import { once } from 'node:events';
@@ -70,7 +71,7 @@ test('secret helpers encrypt at rest and mask nested primitive values', () => {
 
 function runNode(args, env = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, args, { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, ...env } });
+    const proc = spawn(process.execPath, args, { cwd: fileURLToPath(new URL('..', import.meta.url)), env: { ...process.env, ...env } });
     const stdout = [];
     const stderr = [];
     proc.stdout.on('data', (chunk) => stdout.push(chunk));

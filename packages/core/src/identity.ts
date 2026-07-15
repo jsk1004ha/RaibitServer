@@ -3,6 +3,7 @@ import { signJwtHs256 } from './auth.ts';
 import { slugify } from './ids.ts';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DUMMY_PASSWORD_HASH = 'scrypt:v1:16384:raibitserver-login-dummy-v1:JppfEKtMgGpjjcApqHiLK-1Cno0OpvqN1hdYNu6zdQg';
 const ACCOUNT_TYPE_ALIASES: Record<string, string> = Object.freeze({
   CLUB: 'CLUB_MEMBER',
   CLUB_MEMBER: 'CLUB_MEMBER',
@@ -43,6 +44,14 @@ export function hashPassword(password: string, options: Record<string, any> = {}
   return `scrypt:v1:${cost}:${salt}:${hash}`;
 }
 
+export async function hashPasswordAsync(password: string, options: Record<string, any> = {}) {
+  assertPasswordStrength(password);
+  const salt = options.salt || crypto.randomBytes(16).toString('base64url');
+  const cost = Number(options.cost || 16384);
+  const hash = await scryptAsync(String(password), salt, cost);
+  return `scrypt:v1:${cost}:${salt}:${hash}`;
+}
+
 export function verifyPassword(password: string, encoded: string) {
   const [scheme, version, costText, salt, expected] = String(encoded || '').split(':');
   if (scheme !== 'scrypt' || version !== 'v1' || !salt || !expected) return false;
@@ -53,16 +62,57 @@ export function verifyPassword(password: string, encoded: string) {
   return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
+export async function verifyPasswordAsync(password: string, encoded?: string | null) {
+  const candidate = validPasswordHashForVerification(encoded) ? String(encoded) : DUMMY_PASSWORD_HASH;
+  const [, , costText, salt, expected] = candidate.split(':');
+  const cost = Number(costText || 16384);
+  const actual = await scryptAsync(String(password || ''), salt, cost);
+  const actualBuffer = Buffer.from(actual);
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function validPasswordHashForVerification(encoded?: string | null) {
+  const [scheme, version, costText, salt, expected] = String(encoded || '').split(':');
+  const cost = Number(costText);
+  return (
+    scheme === 'scrypt' &&
+    version === 'v1' &&
+    Boolean(salt) &&
+    /^[A-Za-z0-9_-]{43}$/.test(expected || '') &&
+    Number.isSafeInteger(cost) &&
+    cost >= 1024 &&
+    cost <= 16384 &&
+    (cost & (cost - 1)) === 0
+  );
+}
+
+function scryptAsync(password: string, salt: string, cost: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, 32, { N: cost }, (error, derivedKey) => {
+      if (error) reject(error);
+      else resolve(derivedKey.toString('base64url'));
+    });
+  });
+}
+
 export function sessionPayloadForUser(user: Record<string, any>, memberships: Array<Record<string, any>> = []) {
   const organizationIds = memberships.map((membership) => membership.organizationId).filter(Boolean);
+  const rolesByOrganization = Object.fromEntries(
+    memberships
+      .filter((membership) => membership.organizationId && membership.role)
+      .map((membership) => [String(membership.organizationId), membership.role]),
+  );
   return {
     sub: user.id,
     email: user.email,
     role: memberships[0]?.role || 'developer',
     organizationId: organizationIds[0] || null,
     organizationIds,
+    rolesByOrganization,
     accountType: user.accountType || 'NON_CLUB',
     approvalStatus: user.approvalStatus || 'PENDING',
+    sessionVersion: Number(user.sessionVersion || 0),
     userRole: user.role || 'USER',
     emailVerified: Boolean(user.emailVerifiedAt),
   };
