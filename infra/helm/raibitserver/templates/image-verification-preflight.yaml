@@ -1,0 +1,363 @@
+{{- $verification := .Values.security.imageVerification -}}
+{{- $controller := $verification.admissionController -}}
+{{- $clientConfig := $controller.clientConfig -}}
+{{- $clientService := $clientConfig.service -}}
+{{- $clientURL := $clientConfig.url -}}
+{{- $trustRoot := $verification.trustRoot -}}
+{{- $hook := $verification.verificationHook -}}
+{{- $serviceTargetConfigured := or $clientService.namespace $clientService.name $clientService.path -}}
+{{- $urlTargetConfigured := or $clientURL.host $clientURL.path -}}
+{{- $clientConfigMode := "url" -}}
+{{- if $serviceTargetConfigured -}}
+{{- $clientConfigMode = "service" -}}
+{{- end -}}
+{{- if and .Values.production (not $hook.enabled) -}}
+{{- fail "production image verification preflight hook must be enabled" -}}
+{{- end -}}
+{{- if $hook.enabled -}}
+{{- if not $hook.checkerImage.repository -}}
+{{- fail "image verification preflight checker image repository is required" -}}
+{{- end -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" $hook.checkerImage.digest)) -}}
+{{- fail "image verification preflight checker image requires a valid sha256 digest" -}}
+{{- end -}}
+{{- if or (not $controller.existingWebhookConfiguration) (not $controller.webhookName) -}}
+{{- fail "image verification preflight requires the exact webhook configuration and webhook name" -}}
+{{- end -}}
+{{- if or (not $trustRoot.namespace) (not $trustRoot.existingSecret) (not $trustRoot.key) -}}
+{{- fail "image verification preflight requires the exact trust root namespace, secret, and key" -}}
+{{- end -}}
+{{- if not (regexMatch "^[A-Za-z0-9._-]+$" $trustRoot.key) -}}
+{{- fail "image verification preflight trust root key must be a valid Secret data key" -}}
+{{- end -}}
+{{- if or (not $controller.namespace) (not $controller.deploymentName) (not $controller.serviceName) -}}
+{{- fail "image verification preflight requires the configured controller Deployment and verifier Service" -}}
+{{- end -}}
+{{- if and $serviceTargetConfigured $urlTargetConfigured -}}
+{{- fail "image verification preflight clientConfig must configure exactly one service or URL target" -}}
+{{- end -}}
+{{- if not (or $serviceTargetConfigured $urlTargetConfigured) -}}
+{{- fail "image verification preflight clientConfig requires a service or URL target" -}}
+{{- end -}}
+{{- if $serviceTargetConfigured -}}
+{{- if or (not $clientService.namespace) (not $clientService.name) -}}
+{{- fail "image verification preflight clientConfig service target requires namespace and name" -}}
+{{- end -}}
+{{- if or (ne $clientService.namespace $controller.namespace) (ne $clientService.name $controller.serviceName) -}}
+{{- fail "image verification preflight clientConfig service target must match the configured verifier Service" -}}
+{{- end -}}
+{{- if and $clientService.path (not (hasPrefix "/" $clientService.path)) -}}
+{{- fail "image verification preflight clientConfig service path must start with /" -}}
+{{- end -}}
+{{- end -}}
+{{- if $urlTargetConfigured -}}
+{{- if or (not $clientURL.host) (not $clientURL.path) -}}
+{{- fail "image verification preflight clientConfig URL target requires host and path" -}}
+{{- end -}}
+{{- if or (contains "://" $clientURL.host) (contains "/" $clientURL.host) (contains " " $clientURL.host) -}}
+{{- fail "image verification preflight clientConfig URL host must not include a scheme, path, or whitespace" -}}
+{{- end -}}
+{{- if not (hasPrefix "/" $clientURL.path) -}}
+{{- fail "image verification preflight clientConfig URL path must start with /" -}}
+{{- end -}}
+{{- end -}}
+{{- if lt (int $hook.activeDeadlineSeconds) 1 -}}
+{{- fail "image verification preflight activeDeadlineSeconds must be positive" -}}
+{{- end -}}
+{{- $hookName := printf "%s-image-verify" .Release.Name | trunc 47 | trimSuffix "-" -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $hookName }}-webhook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations"]
+    resourceNames: [{{ $controller.existingWebhookConfiguration | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $hookName }}-webhook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $hookName }}-webhook
+subjects:
+  - kind: ServiceAccount
+    name: {{ $hookName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $hookName }}-trust-root
+  namespace: {{ $trustRoot.namespace }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $trustRoot.existingSecret | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $hookName }}-trust-root
+  namespace: {{ $trustRoot.namespace }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $hookName }}-trust-root
+subjects:
+  - kind: ServiceAccount
+    name: {{ $hookName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $hookName }}-controller
+  namespace: {{ $controller.namespace }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ $controller.deploymentName | quote }}]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: [{{ $controller.serviceName | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $hookName }}-controller
+  namespace: {{ $controller.namespace }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $hookName }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ $hookName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  activeDeadlineSeconds: {{ $hook.activeDeadlineSeconds }}
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: raibitserver-image-verification-preflight
+    spec:
+      serviceAccountName: {{ $hookName }}
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: verifier-contract-check
+          image: "{{ $hook.checkerImage.repository }}@{{ $hook.checkerImage.digest }}"
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              set -eu
+              policy="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={.webhooks[?(@.name==\"${WEBHOOK_NAME}\")].failurePolicy}")"
+              if [ "${policy}" != "Fail" ]; then
+                echo "expected webhook ${WEBHOOK_NAME} in ${WEBHOOK_CONFIGURATION} with failurePolicy=Fail" >&2
+                exit 1
+              fi
+
+              case "${CLIENT_CONFIG_MODE}" in
+                service)
+                  actual_service_namespace="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={.webhooks[?(@.name==\"${WEBHOOK_NAME}\")].clientConfig.service.namespace}")"
+                  actual_service_name="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={.webhooks[?(@.name==\"${WEBHOOK_NAME}\")].clientConfig.service.name}")"
+                  actual_service_path="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={.webhooks[?(@.name==\"${WEBHOOK_NAME}\")].clientConfig.service.path}")"
+                  if [ "${actual_service_namespace}" != "${EXPECTED_CLIENT_SERVICE_NAMESPACE}" ] ||
+                     [ "${actual_service_name}" != "${EXPECTED_CLIENT_SERVICE_NAME}" ] ||
+                     [ "${actual_service_path}" != "${EXPECTED_CLIENT_SERVICE_PATH}" ]; then
+                    echo "webhook ${WEBHOOK_NAME} clientConfig.service does not match the configured verifier Service target" >&2
+                    exit 1
+                  fi
+                  ;;
+                url)
+                  actual_url="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={.webhooks[?(@.name==\"${WEBHOOK_NAME}\")].clientConfig.url}")"
+                  expected_url="https://${EXPECTED_CLIENT_URL_HOST}${EXPECTED_CLIENT_URL_PATH}"
+                  if [ "${actual_url}" != "${expected_url}" ]; then
+                    echo "webhook ${WEBHOOK_NAME} clientConfig.url does not match the configured verifier URL target" >&2
+                    exit 1
+                  fi
+                  ;;
+                *)
+                  echo "unsupported verifier clientConfig mode" >&2
+                  exit 1
+                  ;;
+              esac
+
+              webhook_rules="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].rules[*]}{.scope}{\"|\"}{range .apiGroups[*]}{.}{\",\"}{end}{\"|\"}{range .apiVersions[*]}{.}{\",\"}{end}{\"|\"}{range .operations[*]}{.}{\",\"}{end}{\"|\"}{range .resources[*]}{.}{\",\"}{end}{\"\\n\"}{end}")"
+              workload_rule_matches=false
+              while IFS='|' read -r scope api_groups api_versions operations resources; do
+                if [ "${scope}" = "Namespaced" ] &&
+                   [ "${api_groups}" = "," ] &&
+                   [ "${api_versions}" = "v1," ] &&
+                   [ "${resources}" = "pods," ]; then
+                  case "${operations}" in
+                    *"CREATE,"*) has_create=true ;;
+                    *) has_create=false ;;
+                  esac
+                  case "${operations}" in
+                    *"UPDATE,"*) has_update=true ;;
+                    *) has_update=false ;;
+                  esac
+                  if [ "${has_create}" = true ] && [ "${has_update}" = true ]; then
+                    workload_rule_matches=true
+                  fi
+                fi
+              done <<EOF
+              ${webhook_rules}
+              EOF
+              if [ "${workload_rule_matches}" != true ]; then
+                echo "webhook ${WEBHOOK_NAME} must cover namespaced core/v1 pods for CREATE and UPDATE" >&2
+                exit 1
+              fi
+
+              selector_is_safe() {
+                all_values="$1"
+                managed_value="$2"
+                expressions="$3"
+                if [ -z "${all_values}" ] && [ -z "${expressions}" ]; then
+                  return 0
+                fi
+                [ "${all_values}" = "${MANAGED_SELECTOR_VALUE}," ] &&
+                  [ "${managed_value}" = "${MANAGED_SELECTOR_VALUE}" ] &&
+                  [ -z "${expressions}" ]
+              }
+              namespace_selector_values="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].namespaceSelector.matchLabels[*]}{.}{\",\"}{end}")"
+              namespace_managed_value="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={.webhooks[?(@.name==\"${WEBHOOK_NAME}\")].namespaceSelector.matchLabels.raibitserver\\.io/managed}")"
+              namespace_selector_expressions="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].namespaceSelector.matchExpressions[*]}{.key}{\":\"}{.operator}{\":\"}{range .values[*]}{.}{\",\"}{end}{\";\"}{end}")"
+              object_selector_values="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].objectSelector.matchLabels[*]}{.}{\",\"}{end}")"
+              object_managed_value="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={.webhooks[?(@.name==\"${WEBHOOK_NAME}\")].objectSelector.matchLabels.raibitserver\\.io/managed}")"
+              object_selector_expressions="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].objectSelector.matchExpressions[*]}{.key}{\":\"}{.operator}{\":\"}{range .values[*]}{.}{\",\"}{end}{\";\"}{end}")"
+              if ! selector_is_safe "${namespace_selector_values}" "${namespace_managed_value}" "${namespace_selector_expressions}" ||
+                 ! selector_is_safe "${object_selector_values}" "${object_managed_value}" "${object_selector_expressions}"; then
+                echo "webhook ${WEBHOOK_NAME} selectors must be absent or exactly ${MANAGED_SELECTOR_KEY}=${MANAGED_SELECTOR_VALUE}" >&2
+                exit 1
+              fi
+
+              trust_root_value="$(kubectl --namespace "${TRUST_ROOT_NAMESPACE}" get secret "${TRUST_ROOT_SECRET}" --output "jsonpath={.data['${TRUST_ROOT_JSONPATH_KEY}']}")"
+              if [ -z "${trust_root_value}" ]; then
+                echo "expected non-empty trust-root data key ${TRUST_ROOT_KEY} in Secret ${TRUST_ROOT_NAMESPACE}/${TRUST_ROOT_SECRET}" >&2
+                exit 1
+              fi
+              kubectl --namespace "${CONTROLLER_NAMESPACE}" get deployment "${CONTROLLER_DEPLOYMENT}" >/dev/null
+              kubectl --namespace "${CONTROLLER_NAMESPACE}" get service "${CONTROLLER_SERVICE}" >/dev/null
+              echo "external image signature verifier contract is available and fail closed"
+          env:
+            - name: WEBHOOK_CONFIGURATION
+              value: {{ $controller.existingWebhookConfiguration | quote }}
+            - name: WEBHOOK_NAME
+              value: {{ $controller.webhookName | quote }}
+            - name: CLIENT_CONFIG_MODE
+              value: {{ $clientConfigMode | quote }}
+            - name: EXPECTED_CLIENT_SERVICE_NAMESPACE
+              value: {{ $clientService.namespace | quote }}
+            - name: EXPECTED_CLIENT_SERVICE_NAME
+              value: {{ $clientService.name | quote }}
+            - name: EXPECTED_CLIENT_SERVICE_PATH
+              value: {{ $clientService.path | quote }}
+            - name: EXPECTED_CLIENT_URL_HOST
+              value: {{ $clientURL.host | quote }}
+            - name: EXPECTED_CLIENT_URL_PATH
+              value: {{ $clientURL.path | quote }}
+            - name: MANAGED_SELECTOR_KEY
+              value: raibitserver.io/managed
+            - name: MANAGED_SELECTOR_VALUE
+              value: "true"
+            - name: TRUST_ROOT_NAMESPACE
+              value: {{ $trustRoot.namespace | quote }}
+            - name: TRUST_ROOT_SECRET
+              value: {{ $trustRoot.existingSecret | quote }}
+            - name: TRUST_ROOT_KEY
+              value: {{ $trustRoot.key | quote }}
+            - name: TRUST_ROOT_JSONPATH_KEY
+              value: {{ replace "." "\\." $trustRoot.key | quote }}
+            - name: CONTROLLER_NAMESPACE
+              value: {{ $controller.namespace | quote }}
+            - name: CONTROLLER_DEPLOYMENT
+              value: {{ $controller.deploymentName | quote }}
+            - name: CONTROLLER_SERVICE
+              value: {{ $controller.serviceName | quote }}
+            - name: HOME
+              value: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+              ephemeral-storage: 8Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+{{- end }}

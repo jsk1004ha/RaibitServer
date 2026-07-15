@@ -137,11 +137,26 @@ test('HTTP API exposes deployment detail, status transition, cancel, and rollbac
     assert.ok(imageReady.body.buildFinishedAt);
 
     const cancelled = await requestWithStatus(port, 'POST', `/deployments/${queued.id}/cancel`, { reason: 'user requested' });
-    assert.equal(cancelled.statusCode, 202);
+    assert.equal(cancelled.statusCode, 200);
     assert.equal(cancelled.body.deployment.status, 'CANCELLED');
-    assert.equal(cancelled.body.workflowJob.type, 'deployment-cancel');
+    assert.ok(cancelled.body.deployment.finishedAt);
+    assert.equal(cancelled.body.workflowJob, undefined);
+    assert.equal(controlPlane.store.workflowJobs.some((job) => job.type === 'deployment-cancel'), false);
+    assert.equal(controlPlane.store.listDeploymentEvents(queued.id).some((event) => event.type === 'deployment.cancelled'), true);
 
-    const rollback = await requestWithStatus(port, 'POST', `/deployments/${queued.id}/rollback`, {});
+    const deploying = controlPlane.store.createDeployment({ serviceId: service.id, status: 'DEPLOYING', imageUrl: 'registry.local/demo/api:deploying' });
+    const deployingCancel = await requestWithStatus(port, 'POST', `/deployments/${deploying.id}/cancel`, { reason: 'too late' });
+    assert.equal(deployingCancel.statusCode, 409);
+    assert.equal(controlPlane.store.getDeployment(deploying.id).status, 'DEPLOYING');
+    const readyCancel = await requestWithStatus(port, 'POST', `/deployments/${previous.id}/cancel`, { reason: 'too late' });
+    assert.equal(readyCancel.statusCode, 409);
+    assert.equal(controlPlane.store.getDeployment(previous.id).status, 'READY');
+
+    const unconfirmedRollback = await requestWithStatus(port, 'POST', `/deployments/${queued.id}/rollback`, {});
+    assert.equal(unconfirmedRollback.statusCode, 400);
+    assert.equal(unconfirmedRollback.body.error, 'confirmation_required');
+
+    const rollback = await requestWithStatus(port, 'POST', `/deployments/${queued.id}/rollback`, { confirmed: true });
     assert.equal(rollback.statusCode, 202);
     assert.equal(rollback.body.deployment.status, 'IMAGE_READY');
     assert.equal(rollback.body.deployment.imageUrl, previous.imageUrl);
@@ -189,7 +204,7 @@ test('rollback cannot use unscoped deployments or bypass deployment quotas', asy
   const { port } = server.address();
   try {
     const token = signJwtHs256({ sub: user.id, role: 'maintainer', organizationId: orgA.id }, secret);
-    const denied = await requestWithStatus(port, 'POST', `/deployments/${currentA.id}/rollback`, { previousDeploymentId: previousA.id }, token);
+    const denied = await requestWithStatus(port, 'POST', `/deployments/${currentA.id}/rollback`, { previousDeploymentId: previousA.id, confirmed: true }, token);
     assert.equal(denied.statusCode, 403);
     assert.match(denied.body.error, /maxDeploymentsPerDay/);
   } finally {
@@ -237,7 +252,8 @@ test('HTTP resource create strips tenant-supplied provider connection fields', a
     assert.equal(response.body.providerConnection, undefined);
     assert.equal(response.body.connectionUrl, undefined);
     assert.equal(response.body.desiredSpec.providerConnection, undefined);
-    assert.equal(response.body.desiredSpec.storageGb, 1);
+    assert.equal(response.body.desiredSpec.storageMb, 1024);
+    assert.equal(response.body.desiredSpec.storageGb, undefined);
   } finally {
     server.close();
   }

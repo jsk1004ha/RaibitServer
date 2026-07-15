@@ -24,15 +24,15 @@
 `packages/core/src/provisioner.ts`는 각 resource를 provider-neutral plan으로 compile합니다.
 
 - `ManagedDatabase`, `ManagedCache`, `ManagedObjectStorage`, `ManagedVectorDatabase`, `ManagedMessageQueue` 형태의 CR-style manifest
-- provider 이름과 plan (`shared-small` 기본값). `shared-small`은 resource마다 새 DB/Redis 컨테이너를 띄우는 뜻이 아니라, 공유 provider 인스턴스 안에 tenant primitive를 만드는 뜻입니다.
+- provider 이름과 plan (`shared-small` 기본값). 이는 provider-neutral 목표 계약이며 현재 Go live adapter의 실행 방식과 동일하다는 뜻은 아닙니다.
 - storage, version, backup policy, credential secret 이름
 - connection environment variable용 Secret manifest
 
 `provisionProjectResources`는 workload Kubernetes apply와 같은 dry-run/execute command surface로 이 manifest를 적용합니다.
 
-## Shared provider model
+## 목표 Shared provider model
 
-RAIBITSERVER DBaaS의 기본 운영 단위는 **공유 provider 인스턴스 + 프로젝트별 tenant primitive**입니다. RAM을 줄이고 운영 표면을 단순화하기 위해 `shared-small` 플랜은 다음처럼 동작해야 합니다.
+RAIBITSERVER DBaaS의 목표 운영 단위는 **공유 provider 인스턴스 + 프로젝트별 tenant primitive**입니다. 아래 표는 목표 설계이며 현재 authoritative Go live adapter에는 아직 구현되지 않았습니다. 현재 live adapter는 리소스별 PVC/Service/StatefulSet을 tenant namespace에 만드는 `raibitserver-local-*` dedicated-local 모델입니다.
 
 | 엔진 | 공유 provider | 프로젝트별 생성 단위 | 삭제/복구 단위 |
 | --- | --- | --- | --- |
@@ -61,7 +61,7 @@ PostgreSQL 서비스 연결은 기본적으로 `서비스/API -> PgBouncer -> Po
 
 ## Beta vs 정식 버전 위험 완화 범위
 
-베타에서는 “한 tenant가 다른 tenant 데이터를 지우거나, 기본 연결 폭증으로 provider를 즉시 불안정하게 만드는 위험”을 우선 막습니다. 정식 버전에서는 자동 관측·승격·복구 자동화처럼 운영 자동화 수준이 필요한 항목을 완료합니다.
+아래 항목은 shared provider를 활성화하기 전 완료해야 하는 목표 계약입니다. 현재 dedicated-local adapter가 이 표의 PgBouncer, tenant role/ACL, prefix 삭제, primitive 단위 복구를 제공한다고 해석하면 안 됩니다.
 
 | 위험 | 베타 필수 구현 | 정식 버전/GA까지 유예 |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ PostgreSQL 서비스 연결은 기본적으로 `서비스/API -> PgBouncer -> Po
 | Redis/Valkey 전체 삭제 | ACL user + `REDIS_KEY_PREFIX`, `-@admin`, `-@dangerous`, `-FLUSHALL`, `-FLUSHDB`, 삭제는 `SCAN MATCH <prefix>*` + `UNLINK` | per-prefix memory/key cardinality meter, restore rehearsal 자동화, Redis Cluster topology별 prefix scan adapter |
 | 백업/복구 | PostgreSQL/MySQL/MongoDB는 tenant primitive 단위 command contract 문서화 | Redis prefix-level restore tooling, self-serve point-in-time restore UI, 정기 복구 리허설 자동화 |
 
-따라서 베타에서 “완전한 noisy-neighbor 해소”를 약속하지 않습니다. 베타의 완료 조건은 shared-small을 안전하게 체험할 수 있도록 destructive operation, connection 폭증, timeout 부재를 막는 것입니다.
+따라서 현재 Closed Beta에서는 shared-small live 실행을 약속하지 않습니다. PostgreSQL/MySQL/MariaDB/MongoDB/Redis/Valkey의 dedicated-local 실행만 별도 certified image로 제한하고, shared provider는 위 격리·쿼터·복구 조건이 구현된 뒤 활성화해야 합니다.
 
 ## 로컬 deterministic mode
 
@@ -87,7 +87,21 @@ DATABASE_URL=sqlite:<path>
 
 ## Live provider mode
 
-Provider-owned credential이 설정되면 다음 원칙을 적용합니다.
+Authoritative Go provisioner의 live mode는 다음 원칙을 적용합니다.
+
+- PostgreSQL/MySQL/MariaDB/MongoDB/Redis/Valkey만 현재 live 대상입니다. 각 리소스는 tenant namespace에 전용 PVC/Service/StatefulSet으로 생성됩니다.
+- provider image는 sha256 digest로 고정하고 restricted Pod Security의 엔진별 non-root UID/GID 계약(PostgreSQL 70, MySQL/MariaDB/MongoDB/Redis/Valkey 999), writable data path, `/bin/sh`, 엔진별 client CLI를 충족해야 합니다.
+- PostgreSQL은 PVC 루트의 `lost+found`와 충돌하지 않도록 `PGDATA=/var/lib/postgresql/data/pgdata`를 고정합니다. MySQL/MariaDB의 application username `root`는 공식 이미지 초기화 계약과 충돌하므로 compile 단계에서 거부합니다.
+- 현재 지원하는 plan은 기본 `shared-small` 호환 입력과 명시적 `dedicated-local`뿐이며 둘 다 dedicated-local workload로 실행됩니다. 사용자 지정 version/미구현 plan은 operator-pinned image와 다른 동작을 암묵적으로 선택하지 않도록 fail-closed 합니다.
+- 이 adapter는 `local` region만 제공합니다. 외부 region 또는 알려지지 않은 provider 식별자를 현재 클러스터에 조용히 배치하지 않고 compile 단계에서 거부합니다.
+- credential Secret은 create-once + immutable입니다. 최초 생성 응답에서 Kubernetes UID만 받아 control-plane 공개 metadata로 저장합니다. 생성 직후 프로세스가 중단된 재시도는 admission이 no-op으로 강제한 server-side dry-run metadata PATCH로 UID와 소유 generation만 확인하고, health·삭제 전에는 UID precondition이 있는 server-side dry-run DELETE로 같은 객체인지 확인합니다. 삭제는 Service 차단 후 StatefulSet을 foreground cascade로 완전히 종료하고 NetworkPolicy를 제거한 다음 UID-fenced Secret과 PVC 순서로 수행합니다.
+- provisioner에는 Secret `get` 권한이 없습니다. 복구용 `patch`는 admission에서 dry-run no-op으로만 허용되고 클라이언트도 `PartialObjectMetadata` 외 응답이나 data 필드를 거부합니다. 예상 이름을 다른 객체가 먼저 만든 actual-create 경합, 기존 workload/PVC에 대응하는 Secret 유실, UID가 다른 same-name 재생성은 모두 fail-closed 합니다.
+- Secret 전체를 `envFrom`으로 주입하지 않고 컴파일러가 허용한 key만 개별 `secretKeyRef`로 연결합니다. kubelet startup/readiness는 deterministic public connection contract와 실제 credential 인증(`SELECT 1`, Mongo ping, Redis/Valkey `AUTH` 성공 후 `PING`)을 함께 검사합니다. startup probe는 긴 초기화·복구 중 liveness 재시작 루프가 생기지 않도록 최대 20분의 bounded window를 제공합니다.
+- READY 리소스는 `provisioner.healthIntervalSeconds` 주기로 다시 claim하여 immutable Secret UID, 인증 readiness, Service를 확인합니다. 일시적인 Kubernetes 오류는 3회 연속 실패 후 FAILED로 전환하고 계속 재검증하여 복구할 수 있으며, Secret 유실·UID 불일치 같은 integrity failure는 즉시 FAILED로 내립니다.
+- Kubernetes 명령을 실행하기 직전에 DB claim heartbeat를 갱신하되 원래 CAS claim token은 바꾸지 않습니다. 따라서 긴 rollout/delete 중 stale lease가 다른 worker에 넘어가지 않으며, 지속적인 deletion/health/provisioning backlog도 교대 슬롯으로 서로를 무기한 굶기지 않습니다.
+- live mode에서 성공적으로 한 리소스를 처리한 경우 polling sleep 없이 다음 backlog 항목을 처리합니다. idle/error와 상태를 다시 `PROVISIONING`으로 되돌리는 dry-run은 같은 row를 hot-loop하지 않도록 `provisioner.reconcileIntervalSeconds`만큼 대기합니다.
+- provisioner의 cluster 권한은 managed namespace와 제한된 RoleBinding bootstrap에만 사용합니다. 실제 provider object 권한은 managed tenant namespace에 생성한 전용 RoleBinding으로 한정하며 Secret read와 `pods/exec`는 부여하지 않습니다.
+- Object Storage/Qdrant/NATS는 bucket/collection/stream bootstrap과 authenticated semantic check가 없으므로 live 요청을 Kubernetes object 생성 전에 fail-closed 합니다. dry-run plan은 계속 생성할 수 있습니다.
 
 - PostgreSQL console query는 sealed provider `connectionSecretName`에서 connection material을 가져옵니다.
 - tenant request body와 resource-create payload는 connection URL/URI/DSN/JDBC variants를 제공할 수 없습니다.
@@ -99,7 +113,8 @@ Provider-owned credential이 설정되면 다음 원칙을 적용합니다.
 
 ## Secret 처리
 
-- provider secret은 sealed secret row 또는 Kubernetes Secret ref로 저장합니다.
+- provider secret 값은 Kubernetes immutable Secret에만 저장하고 control-plane에는 Secret 이름, 허용 key, Kubernetes 객체 UID 등 값이 아닌 공개 ref metadata만 저장합니다.
+- 재시도와 health check는 Secret 값을 API로 읽지 않습니다. required key 누락·공개 contract 불일치·credential 불일치는 workload의 authenticated readiness 실패로 드러납니다.
 - API/CLI/log snapshot은 secret-looking 값을 masking합니다.
 - 서비스 env에는 secret 값을 직접 기록하지 않고 secret ref를 사용합니다.
 

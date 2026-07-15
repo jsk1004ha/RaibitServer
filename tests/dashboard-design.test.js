@@ -118,7 +118,7 @@ test('project cards render compact Korean console rows', async () => {
   assert.match(card, /import\s+\{\s*Icon\s*\}\s+from\s+'\.\/icon'/);
   assert.match(card, /className="project-row-card"/);
   assert.match(card, /<Icon\s+name="folder"/);
-  assert.ok(card.includes('서비스 {project.services ?? 0}개 · 리소스 {project.resources ?? 0}개'));
+  assert.ok(card.includes('서비스 {project.services ?? project.serviceCount ?? 0}개 · 리소스 {project.resources ?? project.resourceCount ?? 0}개'));
   assert.ok(card.includes('콘솔 열기 →'));
   assert.match(card, /<h2>/);
 });
@@ -191,7 +191,7 @@ test('project workflows keep their operational contracts behind a Korean console
   }
   assert.ok(createProject.includes('<ConsoleShell active="create-project"'));
   assert.match(createProject, /<form\s+method="post"\s+action=\{apiAction\('\/projects'\)\}/);
-  for (const name of ['name', 'slug', 'organizationId', 'repoUrl', 'branch', 'sourceType', 'image', 'dockerfilePath', 'buildContext', 'type', 'database', 'cache']) {
+  for (const name of ['name', 'slug', 'repoUrl', 'branch', 'sourceType', 'image', 'dockerfilePath', 'buildContext', 'type', 'database', 'cache']) {
     assert.ok(createProject.includes(`name="${name}"`), `${name} create-project field missing`);
   }
   for (const contract of [
@@ -277,15 +277,15 @@ test('dynamic project routes await Next 16 params before rendering route-bound U
   }
 });
 
-test('project workflow controls bind tenant scope and expose accessible labels without inert buttons', async () => {
+test('project workflow controls derive tenant scope server-side and expose accessible labels without inert buttons', async () => {
   const [createProject, projectDetail] = await Promise.all([
     read('../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx'),
     read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
   ]);
 
-  assert.ok(createProject.includes('<label>조직 <input value={orgSlug} readOnly /></label>'));
-  assert.ok(createProject.includes('<input type="hidden" name="organizationId" value={orgSlug} />'));
-  assert.doesNotMatch(createProject, /<input(?![^>]*type="hidden")[^>]*name="organizationId"/);
+  assert.ok(createProject.includes('<label>조직 <input value={orgSlug} readOnly aria-describedby="organization-scope-note" /></label>'));
+  assert.ok(createProject.includes('실제 조직 권한은 로그인한 계정에서 확인합니다.'));
+  assert.doesNotMatch(createProject, /<input[^>]*name="organizationId"/);
   assert.match(createProject, /<ol\s+className="tabs"[^>]*>/);
   assert.doesNotMatch(createProject, /<button[^>]*className="tab/);
 
@@ -326,7 +326,6 @@ test('deployment detail awaits route params and keeps operational controls on a 
     'getJson(`/deployments/${encodeURIComponent(deploymentId)}`',
     'getJson(`/deployments/${encodeURIComponent(deploymentId)}/logs`',
     'getJson(`/deployments/${encodeURIComponent(deploymentId)}/events`',
-    'apiAction(`/deployments/${deploymentId}/status`, context)',
     'apiAction(`/deployments/${deploymentId}/rollback`, context)',
     'apiAction(`/deployments/${deploymentId}/cancel`, context)',
   ]) {
@@ -334,13 +333,17 @@ test('deployment detail awaits route params and keeps operational controls on a 
   }
   for (const marker of [
     '배포 상세', '상태와 이미지', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소',
-    '프로젝트 콘솔', '롤백', '상태 업데이트', 'detail.errorCode', 'detail.errorMessage',
+    '프로젝트 콘솔', '롤백', '상태는 빌더와 오케스트레이터가 자동으로 갱신합니다.', 'detail.errorCode', 'detail.errorMessage',
   ]) {
     assert.ok(deployment.includes(marker), `${marker} deployment marker missing`);
   }
-  for (const field of ['status', 'imageUrl', 'imageDigest', 'errorMessage', 'reason']) {
+  for (const field of ['imageUrl', 'reason']) {
     assert.ok(deployment.includes(`name="${field}"`), `${field} deployment field missing`);
   }
+  assert.ok(!deployment.includes('apiAction(`/deployments/${deploymentId}/status`, context)'), 'tenant dashboard must not expose the system-owned status mutation');
+  for (const field of ['status', 'imageDigest', 'errorMessage']) assert.ok(!deployment.includes(`name="${field}"`), `${field} system-owned field must be read-only`);
+  assert.ok(deployment.includes('최근 이벤트'));
+  assert.doesNotMatch(deployment, />실시간</);
   assert.ok(deployment.includes('id="rollback-deployment"'));
   assert.match(deployment, /import\s+\{\s*ConsoleShell,\s*LogViewer,\s*MetricCard,\s*StatusBadge\s*\}/);
   assert.doesNotMatch(deployment, /<button[^>]*type="button"[^>]*>(?:Copy|Download)<\/button>/);
@@ -537,7 +540,7 @@ test('GitHub console keeps integration contracts behind a compact Korean workflo
   for (const path of ['/integrations/github', '/github/repositories/import', '/projects/:projectId/services/:serviceId/github', '/github/repositories/:repositoryId/sync']) {
     assert.ok(github.includes(path), `${path} GitHub action path missing`);
   }
-  for (const field of ['organizationId', 'accountLogin', 'installationId', 'token', 'projectId', 'integrationId', 'repository', 'serviceName', 'repoUrl', 'branch']) {
+  for (const field of ['projectId', 'integrationId', 'repositoryId', 'serviceName', 'branch']) {
     assert.ok(github.includes(`name="${field}"`), `${field} GitHub field missing`);
   }
   for (const identifier of ['firstRepository.fullName', 'encodeURIComponent(firstRepository.fullName)', 'x-github-event', 'x-github-delivery', 'x-hub-signature-256', '웹훅 / 미리보기 계약']) {
@@ -556,7 +559,8 @@ test('GitHub console keeps integration contracts behind a compact Korean workflo
   assert.ok(github.includes('동기화할 저장소가 없습니다. 먼저 저장소를 가져오세요.'));
   assert.ok(!github.includes("'/projects/project-id/services/service-id/github'"));
   assert.ok(!github.includes("'/github/repositories/owner%2Frepo/sync'"));
-  assert.ok(github.includes('name="token" type="password" autoComplete="off"'));
+  assert.doesNotMatch(github, /name="(?:token|installationId|repoUrl)"/);
+  assert.ok(github.includes('GitHub App callback이 조직 소유권을 검증'));
   assert.doesNotMatch(github, /(?:minHeight|height):\s*['"]?\d/);
   for (const oldCopy of ['Repository import and preview deployments', 'Connect integration', 'Import repository', 'Attach repository to service', 'Sync repository metadata']) {
     assert.ok(!github.includes(oldCopy), `${oldCopy} old GitHub copy remains`);

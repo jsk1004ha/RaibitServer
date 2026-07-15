@@ -11,7 +11,8 @@
 Closed Beta라고 부르려면 아래 조건을 모두 만족해야 합니다.
 
 - `pnpm e2e:dry`가 deterministic proof로 통과합니다.
-- `pnpm e2e:live`가 disposable local cluster에서 실제 앱 build → registry push → Kubernetes deploy → URL HTTP 200 → DB 연결 → log 조회 → preview cleanup까지 통과합니다.
+- `pnpm e2e:live`가 disposable kind cluster에서 Helm migration/API health, 관리형 PostgreSQL Provisioner, Orchestrator deletion reconciliation을 통과합니다.
+- 별도의 전체 앱 lifecycle evidence가 실제 Go Builder source build → 외부 registry push/signing → Kubernetes workload deploy → URL HTTP 200 → log 조회 → preview cleanup까지 통과합니다.
 - 관리자 승인, quota, secret masking, 보안 정책 차단이 실제로 동작합니다.
 - GitHub push/PR webhook이 deployment/preview workflow로 이어집니다.
 
@@ -50,7 +51,7 @@ Closed Beta라고 부르려면 아래 조건을 모두 만족해야 합니다.
 
 베타의 핵심 기준은 다음이다.
 
-> **`pnpm e2e:live`에서 실제 앱이 build → registry push → Kubernetes deploy → URL HTTP 200 → DB 연결 → log 조회 → preview cleanup까지 성공해야 한다.**
+> **`pnpm e2e:live`의 control-plane reconciliation과 별도 전체 앱 lifecycle evidence가 모두 성공해야 한다. 현재 명령 하나의 성공을 전체 Beta 성공으로 해석하지 않는다.**
 
 ---
 
@@ -122,7 +123,8 @@ Closed Beta는 아래 조건을 모두 만족해야 한다.
 [ ] admin dashboard로 사용자 승인과 quota 관리가 된다.
 [ ] secret이 노출되지 않는다.
 [ ] 보안 정책 위반 service는 배포가 차단된다.
-[ ] `pnpm e2e:live`가 통과한다.
+[ ] `pnpm e2e:live` kind/Helm reconciliation gate가 통과한다.
+[ ] Go Builder부터 HTTP/log/preview cleanup까지 전체 앱 lifecycle evidence가 통과한다.
 ```
 
 ---
@@ -143,73 +145,44 @@ P0는 **베타 출시 전 반드시 통과해야 하는 항목**이다. 하나�
 [ ] Go services go test ./... 성공
 [ ] Go services go build ./... 성공
 [ ] pnpm e2e:dry 성공
-[ ] pnpm e2e:live 성공
+[ ] pnpm e2e:live kind/Helm reconciliation 성공
+[ ] 전체 앱 lifecycle live evidence 성공
 ```
 
 ---
 
 ### 3.2 Live E2E
 
-`pnpm e2e:live`는 베타의 가장 중요한 gate다. 2026-05-23 기준 구현 체크리스트는 아래와 같다. 실제 베타 판정은 Docker, kubectl, kind 또는 k3d가 있는 환경에서 `pnpm e2e:live`가 non-zero 없이 끝나고 `.raibitserver-work/live-e2e-report.json`의 `liveBeta.betaChecklist`가 모두 `true`일 때만 통과로 본다.
+`pnpm e2e:live`와 alias `pnpm dev:e2e:live`는 canonical command `pnpm e2e:live:helm`을 호출한다. 이 명령은 Docker, kind, kubectl, Helm, Go가 있는 환경에서 `scripts/live-helm-e2e.sh`를 실행하는 **kind/Helm control-plane reconciliation gate**다. 기존 `scripts/dev-e2e.mjs`는 dry 전용이며 live 진입점으로 사용하지 않는다.
 
-필수 통과 조건:
-
-```txt
-[x] kind 또는 k3d cluster 생성
-[x] local registry 생성
-[x] local registry와 cluster 연결
-[x] ingress controller 설치
-[x] ingress namespace에 raibitserver.io/ingress-gateway=true label 적용
-[x] ManagedDatabase/ManagedResource CRD 설치
-[x] example Express app build
-[x] example Vite app build
-[x] Dockerfile app build
-[x] generated Dockerfile app build
-[x] prebuilt image app deploy
-[x] image local registry push
-[x] image digest 기록
-[x] Kubernetes Namespace 생성
-[x] Kubernetes Deployment 생성
-[x] Kubernetes Service 생성
-[x] Kubernetes Ingress 또는 port-forward route 생성
-[x] rollout status 성공
-[x] public/local URL HTTP 200
-[x] BuildLog 저장
-[x] RuntimeLog 저장
-[x] DeploymentEvent 저장
-[x] PostgreSQL local-live provider 생성 및 SELECT 1 확인
-[x] SQLite DB console query 확인
-[x] PR preview deployment 생성
-[x] PR closed cleanup workflow enqueue 확인
-[x] live-e2e-report.json 생성
-```
-
-필수 report:
+현재 자동화된 assertion:
 
 ```txt
-.raibitserver-work/live-e2e-report.json
+[x] pinned kind cluster 생성 및 종료 시 정리
+[x] API/Orchestrator/Provisioner production image build와 kind load
+[x] digest-pinned PostgreSQL image load
+[x] 실제 Helm chart 설치와 Prisma migration 확인
+[x] API rollout과 /api/health 확인
+[x] Go Provisioner의 PostgreSQL Resource claim/READY 전환
+[x] tenant PVC/StatefulSet/immutable Secret 및 인증 SELECT 1 확인
+[x] 주기 health reconciliation과 credential Secret UID fence 확인
+[x] 실제 PostgreSQL Builder exhausted-attempt·Orchestrator deletion lease·Provisioner Secret UID fence 회귀 확인
+[x] Go Orchestrator의 DELETE_REQUESTED Project/namespace 삭제 확인
+[x] dryRun=false 및 project_deleted worker log 확인
 ```
 
-Dry/default proof는 같은 schema를 `.raibitserver-work/e2e-report.json`에 쓰고, live mode에서만 `live-e2e-report.json`을 추가로 생성한다.
-
-Report에는 최소한 다음이 있어야 한다.
+이 게이트는 별도 JSON report를 만들지 않는다. 실제 실행의 exit code, 각 DB/Kubernetes assertion, 실패 시 출력되는 resource/Pod diagnostics가 증거다. Beta 판정에는 아래 두 묶음이 모두 필요하다.
 
 ```txt
-- cluster name
-- registry url
-- namespace
-- deployed services
-- deployment ids
-- image urls
-- image digests
-- public URLs
-- HTTP status results
-- DB resource ids/provider evidence
-- preview deployment ids
-- cleanup result
-- liveBeta.betaChecklist
-- failed steps, if any
+[ ] Docker/kind가 있는 release 환경에서 pnpm e2e:live exit code 0
+[ ] Go Builder source build와 외부 registry push/signing 성공
+[ ] built image digest가 Deployment에 기록되고 tenant workload로 rollout
+[ ] 실제 service URL HTTP 200
+[ ] BuildLog/RuntimeLog/DeploymentEvent 조회
+[ ] GitHub PR preview 생성 및 closed cleanup 실행
 ```
+
+Builder 성공 경로는 external non-private registry, registry credential, fail-closed scanner data, secret-backed signing key/signature repository, dispatcher mTLS certificate가 필요하다. 현재 disposable kind gate는 이 외부 의존성을 제공하지 않으므로 source-build executor를 실행 증거로 판정하지 않는다. local/private registry나 scan/sign stub으로 이 항목을 통과 처리하지 않는다.
 
 ---
 
@@ -278,11 +251,11 @@ FAILED
 필수 테스트:
 
 ```txt
-[x] Express app 실제 배포
-[x] Vite app 실제 배포
-[x] Dockerfile app 실제 배포
-[x] prebuilt image 실제 배포
-[x] curl URL HTTP 200
+[ ] Express app 실제 배포 live evidence
+[ ] Vite app 실제 배포 live evidence
+[ ] Dockerfile app 실제 배포 live evidence
+[ ] prebuilt image 실제 배포 live evidence
+[ ] curl URL HTTP 200 live evidence
 [x] failed build는 BUILD_FAILED 또는 FAILED로 기록
 [x] failed rollout은 FAILED로 기록
 ```
@@ -296,7 +269,8 @@ FAILED
 ```txt
 [x] Go builder가 WorkflowJob claim 가능
 [x] Go builder가 project/service/deployment 조회 가능
-[x] GitHub repo clone 가능
+[x] 명시적으로 허용된 anonymous public GitHub repo clone 가능
+[ ] private GitHub repo exact-repository short-lived credential clone live evidence
 [x] local source path 사용 가능
 [x] branch checkout 가능
 [x] commit checkout 가능
@@ -314,12 +288,12 @@ FAILED
 통과 기준:
 
 ```txt
-[x] 실제 docker buildx 실행
-[x] 실제 image push
-[x] deployment.imageUrl 저장
-[x] deployment.imageDigest 저장
-[x] build logs API 조회 가능
-[x] dashboard에서 build logs 확인 가능
+[ ] release 환경에서 실제 buildctl/buildx 실행
+[ ] external registry image push와 signing
+[ ] deployment.imageUrl 저장 live evidence
+[ ] deployment.imageDigest 저장 live evidence
+[ ] build logs API 조회 live evidence
+[ ] dashboard build logs 확인 live evidence
 ```
 
 구현/검증 증거:
@@ -340,13 +314,12 @@ FAILED
 [x] Kubernetes manifest 생성
 [x] kubectl apply 또는 client-go apply 가능
 [x] Namespace 생성
-[x] Secret 생성
-[x] ConfigMap 생성
+[x] 기존 Secret ref만 workload에 주입
 [x] Deployment 생성
 [x] Service 생성
 [x] Ingress 또는 route 생성
 [x] rollout status 확인
-[x] RuntimeLog 저장
+[x] RuntimeLog 수집은 별도 log-ingester가 담당
 [x] DeploymentEvent 저장
 [x] READY/FAILED 상태 반영
 [x] preview cleanup 가능
@@ -356,11 +329,11 @@ FAILED
 통과 기준:
 
 ```txt
-[x] kubectl get deployment에서 app 확인
-[x] kubectl rollout status 성공
-[x] app URL HTTP 200
-[x] runtime logs API 조회 가능
-[x] dashboard에서 runtime logs 확인 가능
+[ ] kubectl get deployment에서 built app 확인
+[ ] built app rollout status 성공
+[ ] app URL HTTP 200
+[ ] runtime logs API 조회 live evidence
+[ ] dashboard runtime logs 확인 live evidence
 ```
 
 ---
@@ -369,61 +342,48 @@ FAILED
 
 베타에서도 다양한 DB/resource를 실제로 사용할 수 있어야 한다.
 
-### 4.1 지원 수준 구분
+### 4.1 지원 수준과 증거 상태
 
-#### Beta Core
+아래 표는 **현재 구현 상태**다. 코드나 dry-run 계약이 있다는 사실을 실제 cluster에서 검증된 지원으로 간주하지 않는다. 이 문서의 `[x]`는 해당 행에 명시된 정적·로컬 계약이 구현됐다는 뜻이고, 실제 생성·인증·연결·삭제는 release 환경의 live evidence가 있어야만 `[x]`로 바꾼다.
 
-반드시 실제 구현해야 한다.
+| 엔진 | 현재 구현 경로 | Closed Beta 판정 |
+| --- | --- | --- |
+| PostgreSQL | Go dedicated-local compiler/reconciler, 인증 `SELECT 1`, kind 시나리오 자동화 | release 환경 live 실행 증거 미확보 |
+| MySQL / MariaDB | Go dedicated-local compiler/reconciler와 인증 probe | live lifecycle 미검증 |
+| MongoDB | Go dedicated-local compiler/reconciler와 인증 ping | live lifecycle 미검증 |
+| Redis / Valkey | Go dedicated-local compiler/reconciler와 인증 `PING` | live lifecycle 미검증 |
+| SQLite | Node 로컬 console와 provider-neutral 계약 | Go/Kubernetes managed-resource adapter 대상 아님 |
+| Object Storage / MinIO | TypeScript plan과 Go manifest 계약 | primitive bootstrap 미구현으로 live fail-closed |
+| Qdrant / Vector DB | TypeScript plan과 Go manifest 계약 | primitive bootstrap 미구현으로 live fail-closed |
+| NATS / Message Queue | TypeScript plan과 Go manifest 계약 | primitive bootstrap 미구현으로 live fail-closed |
 
-```txt
-- PostgreSQL
-- SQLite
-```
-
-#### Beta Practical
-
-베타에서 실제로 쓸 수 있어야 한다.
-
-```txt
-- Redis / Valkey
-- Object Storage / MinIO
-- MySQL
-- MariaDB
-- MongoDB
-```
-
-#### Beta Experimental
-
-실험 기능으로 제공한다.
-
-```txt
-- Qdrant / Vector DB
-- NATS / Message Queue
-```
+Beta 목표 범위는 PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey의 dedicated-local lifecycle과 SQLite 로컬 경로다. Object Storage, Qdrant, NATS는 인증된 bucket/collection/stream bootstrap과 health reconciliation이 구현·검증되기 전까지 사용자에게 live 지원으로 표시하지 않는다.
 
 ---
 
 ### 4.2 모든 resource 공통 기준
 
-각 resource는 최소한 아래를 만족해야 한다.
+각 live resource는 최소한 아래를 만족해야 한다. 현재 공통 API와 deterministic 계약 외의 live 항목은 미통과다.
 
 ```txt
 [x] Resource 생성 API
-[x] Provider implementation
-[x] Provider-owned connection secret 저장
-[x] Service env injection
+[x] Deterministic provider plan/manifest 계약
 [x] Dashboard masked connection info
-[x] Console read/query/browser 기능
-[x] Delete/cleanup
 [x] Quota 반영
 [x] Audit log 기록
+[ ] Release cluster에서 provider workload 생성 및 인증 probe
+[ ] Provider-owned immutable connection secret 실제 저장
+[ ] 배포된 service에 secretKeyRef env 실제 주입
+[ ] 실제 provider를 대상으로 console read/query/browser 검증
+[ ] UID-fenced delete/cleanup live 검증
+[ ] Backup/restore live 검증
 ```
 
 ---
 
 ### 4.3 PostgreSQL
 
-필수 기능:
+구현 계약(로컬/정적 증거이며 live 통과를 뜻하지 않음):
 
 ```txt
 [x] CREATE DATABASE
@@ -442,61 +402,61 @@ FAILED
 [x] DB console SELECT 1
 [x] schema list
 [x] table list
-[x] pg_dump backup
-[x] restore command 또는 restore workflow
-[x] resource delete/cleanup
+[x] pg_dump backup command contract
+[x] restore command/workflow contract
+[x] resource delete contract
 ```
 
 통과 기준:
 
 ```txt
-[x] PostgreSQL resource 실제 생성
-[x] service에 DATABASE_URL 주입
-[x] 배포된 app이 DATABASE_URL env를 받음
-[x] DB console SELECT 1 성공
-[x] table list 조회 성공
-[x] backup 생성 성공
+[ ] Release cluster에서 PostgreSQL resource 실제 생성
+[ ] 실제 service에 DATABASE_URL secretKeyRef 주입
+[ ] 배포된 app이 DATABASE_URL env를 받음
+[ ] 실제 DB console SELECT 1 성공
+[ ] 실제 table list 조회 성공
+[ ] backup 생성과 restore 성공
 ```
 
 ---
 
 ### 4.4 SQLite
 
-필수 기능:
+구현 계약(로컬 경로이며 Kubernetes live 통과를 뜻하지 않음):
 
 ```txt
-[x] SQLite resource 생성
+[x] SQLite resource create/local console contract
 [x] provider-owned SQLite path 생성
 [x] PVC-backed file 또는 local provider-owned file
 [x] SQLITE_PATH env 생성
 [x] DATABASE_URL=sqlite:<path> env 생성
-[x] service volume mount
+[x] service volume mount plan
 [x] DB console CREATE TABLE
 [x] DB console INSERT
 [x] DB console SELECT
 [x] table list
-[x] file backup
-[x] file restore
+[x] file backup contract
+[x] file restore contract
 [x] replica=1 제한 또는 warning
 ```
 
 통과 기준:
 
 ```txt
-[x] SQLite resource 생성
-[x] service에 SQLITE_PATH 주입
-[x] DB console CREATE/INSERT/SELECT 성공
-[x] backup file 생성 성공
+[ ] Release 경로에서 SQLite resource 실제 생성
+[ ] 실제 service에 SQLITE_PATH 주입
+[ ] 배포된 app과 DB console의 CREATE/INSERT/SELECT 성공
+[ ] backup file 생성과 restore 성공
 ```
 
 ---
 
 ### 4.5 Redis / Valkey
 
-필수 기능:
+구현 계약(로컬/정적 증거이며 live 통과를 뜻하지 않음):
 
 ```txt
-[x] Redis 또는 Valkey resource 생성
+[x] Redis 또는 Valkey resource create plan
 [x] REDIS_URL 생성
 [x] REDIS_HOST 생성
 [x] REDIS_PORT 생성
@@ -507,56 +467,48 @@ FAILED
 [x] TTL view
 [x] delete key
 [x] memory info 가능하면 구현
-[x] resource delete/cleanup
+[x] resource delete contract
 ```
 
 통과 기준:
 
 ```txt
-[x] Redis resource 실제 생성
-[x] service에 REDIS_URL 주입
-[x] console에서 key list 조회
-[x] console에서 value 조회
-[x] console에서 TTL 조회
+[ ] Release cluster에서 Redis와 Valkey resource 실제 생성
+[ ] 실제 service에 REDIS_URL 주입
+[ ] 실제 console에서 key list/value/TTL 조회
+[ ] 인증 `PING`, 삭제, 재조정 live 검증
 ```
 
 ---
 
 ### 4.6 Object Storage / MinIO
 
-필수 기능:
+현재는 plan-only다. Go reconciler는 non-dry-run에서 인증된 bucket primitive bootstrap이 없음을 감지해 명시적으로 실패한다.
 
 ```txt
-[x] MinIO 또는 S3-compatible resource 생성
-[x] bucket 생성
-[x] S3_ENDPOINT 생성
-[x] S3_BUCKET 생성
-[x] S3_REGION 생성
-[x] S3_ACCESS_KEY 생성
-[x] S3_SECRET_KEY 생성
-[x] service env 자동 주입
-[x] file list
-[x] upload
-[x] download
-[x] delete
-[x] presigned URL 가능하면 구현
-[x] resource delete/cleanup
+[x] Deterministic S3 endpoint/bucket/env plan
+[x] Provider-owned secret/manifest 계약과 masked dashboard model
+[x] Live 요청은 primitive bootstrap 전 fail-closed
+[ ] 인증된 bucket 생성과 ownership 검증
+[ ] 실제 service secretKeyRef env 주입
+[ ] file upload/list/download/delete와 presigned URL live 검증
+[ ] backup/restore와 UID-fenced cleanup live 검증
 ```
 
-통과 기준:
+통과 기준(live evidence required):
 
 ```txt
-[x] Object Storage resource 생성
-[x] bucket 생성
-[x] service에 S3 env 주입
-[x] dashboard에서 file upload/list/delete 가능
+[ ] Release cluster에서 Object Storage resource와 bucket 실제 생성
+[ ] 실제 service에 S3 env 주입
+[ ] dashboard에서 실제 object upload/list/delete 성공
+[ ] 재조정, 인증 실패, 삭제 경로 live 검증
 ```
 
 ---
 
 ### 4.7 MySQL
 
-필수 기능:
+구현 계약(로컬/정적 증거이며 live 통과를 뜻하지 않음):
 
 ```txt
 [x] CREATE DATABASE
@@ -572,17 +524,17 @@ FAILED
 [x] connection test
 [x] DB console SELECT 1
 [x] table list
-[x] mysqldump backup command
-[x] resource delete/cleanup
+[x] mysqldump backup command contract
+[x] resource delete contract
 ```
 
 통과 기준:
 
 ```txt
-[x] MySQL resource 실제 생성
-[x] service에 MYSQL_URL 주입
-[x] DB console SELECT 1 성공
-[x] table list 성공
+[ ] Release cluster에서 MySQL resource 실제 생성
+[ ] 실제 service에 MYSQL_URL 주입
+[ ] 실제 DB console SELECT 1과 table list 성공
+[ ] backup/restore와 삭제 live 검증
 ```
 
 ---
@@ -591,36 +543,37 @@ FAILED
 
 MariaDB는 MySQL-compatible provider로 구현 가능하다.
 
-필수 기능:
+구현 계약(로컬/정적 증거이며 live 통과를 뜻하지 않음):
 
 ```txt
-[x] MariaDB resource 생성
+[x] MariaDB resource create plan
 [x] MARIADB_URL 생성
 [x] MYSQL_URL 생성
 [x] MYSQL_* env 생성
 [x] service env 자동 주입
 [x] DB console SELECT 1
 [x] table list
-[x] backup command
-[x] resource delete/cleanup
+[x] backup command contract
+[x] resource delete contract
 ```
 
 통과 기준:
 
 ```txt
-[x] MariaDB resource 실제 생성
-[x] service에 MARIADB_URL 주입
-[x] DB console SELECT 1 성공
+[ ] Release cluster에서 MariaDB resource 실제 생성
+[ ] 실제 service에 MARIADB_URL 주입
+[ ] 실제 DB console SELECT 1 성공
+[ ] backup/restore와 삭제 live 검증
 ```
 
 ---
 
 ### 4.9 MongoDB
 
-필수 기능:
+구현 계약(로컬/정적 증거이며 live 통과를 뜻하지 않음):
 
 ```txt
-[x] MongoDB resource 생성
+[x] MongoDB resource create plan
 [x] database 생성
 [x] user 생성
 [x] password 생성
@@ -633,84 +586,78 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 [x] collection list
 [x] document browse
 [x] find query
-[x] resource delete/cleanup
+[x] resource delete contract
 ```
 
 통과 기준:
 
 ```txt
-[x] MongoDB resource 실제 생성
-[x] service에 MONGODB_URI 주입
-[x] collection list 조회
-[x] find query 성공
+[ ] Release cluster에서 MongoDB resource 실제 생성
+[ ] 실제 service에 MONGODB_URI 주입
+[ ] 실제 collection list와 find query 성공
+[ ] backup/restore와 삭제 live 검증
 ```
 
 ---
 
 ### 4.10 Qdrant / Vector DB
 
-실험적 지원.
-
-필수 기능:
+현재는 plan-only다. Go reconciler는 non-dry-run에서 인증된 collection primitive bootstrap이 없음을 감지해 명시적으로 실패한다.
 
 ```txt
-[x] Qdrant resource 생성
-[x] QDRANT_URL 생성
-[x] QDRANT_API_KEY 생성
-[x] VECTOR_DB_URL 생성
-[x] VECTOR_DB_COLLECTION 생성
-[x] service env 자동 주입
-[x] collection list
-[x] collection create
-[x] collection delete
-[x] simple search test 가능하면 구현
+[x] Deterministic URL/API key/collection/env plan
+[x] Provider-owned secret/manifest 계약과 masked dashboard model
+[x] Live 요청은 primitive bootstrap 전 fail-closed
+[ ] 인증된 collection 생성과 ownership 검증
+[ ] 실제 service secretKeyRef env 주입
+[ ] collection list/create/delete와 search live 검증
+[ ] backup/restore와 UID-fenced cleanup live 검증
 ```
 
 통과 기준:
 
 ```txt
-[x] Qdrant resource 생성
-[x] service에 VECTOR_DB_URL 주입
-[x] collection list 성공
+[ ] Release cluster에서 Qdrant resource와 collection 실제 생성
+[ ] 실제 service에 VECTOR_DB_URL 주입
+[ ] 실제 collection list/search 성공
+[ ] 재조정, 인증 실패, 삭제 경로 live 검증
 ```
 
 ---
 
 ### 4.11 NATS / Message Queue
 
-실험적 지원.
-
-필수 기능:
+현재는 plan-only다. Go reconciler는 non-dry-run에서 인증된 stream/subject primitive bootstrap이 없음을 감지해 명시적으로 실패한다.
 
 ```txt
-[x] NATS resource 생성
-[x] QUEUE_URL 생성
-[x] QUEUE_TOPIC 생성
-[x] QUEUE_USERNAME 가능하면 생성
-[x] QUEUE_PASSWORD 가능하면 생성
-[x] service env 자동 주입
-[x] subject/connection info 조회
-[x] publish/subscribe smoke test 가능하면 구현
+[x] Deterministic URL/topic/credential/env plan
+[x] Provider-owned secret/manifest 계약과 masked dashboard model
+[x] Live 요청은 primitive bootstrap 전 fail-closed
+[ ] 인증된 stream/subject 생성과 ownership 검증
+[ ] 실제 service secretKeyRef env 주입
+[ ] publish/subscribe와 consumer smoke live 검증
+[ ] backup/restore와 UID-fenced cleanup live 검증
 ```
 
 통과 기준:
 
 ```txt
-[x] NATS resource 생성
-[x] service에 QUEUE_URL 주입
-[x] connection info 조회 가능
+[ ] Release cluster에서 NATS resource와 stream 실제 생성
+[ ] 실제 service에 QUEUE_URL 주입
+[ ] 실제 publish/subscribe 성공
+[ ] 재조정, 인증 실패, 삭제 경로 live 검증
 ```
 
 ---
 
 
-구현/검증 증거:
+구현 계약과 아직 필요한 검증 증거:
 
 - Resource lifecycle API: `GET/PATCH/DELETE /resources/:resourceId`, `POST /resources/:resourceId/attach`, `POST /resources/:resourceId/provision`.
-- Provider plan/secrets: `packages/core/src/resource-providers.ts`가 PostgreSQL, SQLite, Redis/Valkey, Object Storage, MySQL/MariaDB, MongoDB, Qdrant, NATS의 provider-owned env secret, create/test/backup/restore/delete command contract를 생성한다.
-- Service env injection: `attachResource`가 provider-owned secret에서 env를 읽어 service secret env로 주입하고 원문 secret은 snapshot/API에 노출하지 않는다.
-- Online manager: dashboard resource console에서 masked connection info, query/command, provider provision, service attach, schema/table/collection/key/bucket/subject browser를 제공한다.
+- Deterministic contract: `packages/core/src/resource-providers.ts`와 로컬 테스트가 provider env, 명령 plan, masking, console response shape를 검증한다. 이는 외부 provider 명령의 실제 성공 증거가 아니다.
+- Go adapter contract: `services/provisioner/internal/provider`가 digest-pinned dedicated-local manifest와 인증 probe를 컴파일한다. Object Storage/Qdrant/NATS는 `requiresPrimitiveBootstrap`에 의해 live에서 fail-closed다.
 - Local proof: `tests/db-resource-beta.test.js`, `tests/db-console.test.js`, `tests/resource-providers.test.js`, `pnpm e2e:dry`의 `betaResourceEvidence`.
+- Required live proof: release 환경 명령과 날짜, image digest, resource ID/namespace, 인증 probe, service env binding, console query, backup/restore, deletion 결과를 보존해야 한다. 이 증거가 없는 엔진은 지원 완료로 표시하지 않는다.
 
 ## 5. GitHub / Preview 기준
 
@@ -724,6 +671,12 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 [x] installation repository list
 [x] repository import
 [x] service에 GitHub repo attach
+[x] verified same-organization installation + authoritative repository catalog 강제
+[x] service create/update의 GitHub binding self-assertion 차단
+[x] repository/installation binding immutable
+[ ] private repository per-build short-lived credential broker
+[x] DB-connected dispatcher와 tenant별 disposable builder Pod/BuildKit daemon 및 state의 code/chart 분리
+[ ] 실제 cluster에서 dispatcher mTLS, executor DB egress 차단, gVisor BuildKit build→scan→sign live evidence
 [x] webhook raw body 처리
 [x] webhook signature 검증
 [x] delivery id dedupe
@@ -953,14 +906,13 @@ Dashboard는 예쁘지 않아도 된다. 하지만 Beta에서는 실제 조작�
 [x] Preview deployment list
 ```
 
-통과 기준:
+통과 기준(라우팅/UI 계약이며 실제 provider live 증거는 4절에서 별도 판정):
 
 ```txt
-[x] CLI 없이 dashboard에서 project → service → deploy → logs 확인 가능
-[x] dashboard에서 DB resource 생성 가능
-[x] dashboard에서 DB console SELECT 가능
-[x] dashboard에서 pending user 승인 가능
-[x] dashboard에서 quota 수정 가능
+[x] Dashboard project → service → deploy → logs 화면과 API action 연결
+[x] DB resource 생성과 console SELECT form/API action 연결
+[x] Pending user 승인과 quota 수정 form/API action 연결
+[ ] Release 환경에서 위 dashboard 흐름 end-to-end 검증
 ```
 
 ---
@@ -1010,11 +962,13 @@ cleanup
 
 ```txt
 [ ] 모든 P0 체크리스트 통과
-[ ] pnpm e2e:live 성공
+[ ] pnpm e2e:live kind/Helm reconciliation 성공
+[ ] 전체 앱 lifecycle live evidence 성공
 [ ] 최소 2개 example app 실제 배포 성공
-[x] 최소 6개 DB/resource 실제 생성/연결 성공
-[x] PostgreSQL, SQLite, Redis, Object Storage 실제 사용 가능
-[x] MySQL/MariaDB/MongoDB 최소 read/query 가능
+[ ] 최소 6개 DB/resource 실제 생성/연결 성공
+[ ] PostgreSQL과 SQLite 목표 경로 실제 사용 가능
+[ ] Redis/Valkey/MySQL/MariaDB/MongoDB live lifecycle 증거 확보
+[ ] Object Storage/Qdrant/NATS는 live 비활성 또는 primitive bootstrap 검증 완료
 [x] GitHub push fixture 성공
 [x] GitHub PR preview fixture 성공
 [x] Preview cleanup 성공
@@ -1082,12 +1036,12 @@ Closed Beta에서 Production v1로 넘어가기 위한 기준이다.
 
 ---
 
-### 원칙 2. Live E2E 우선
+### 원칙 2. Live evidence 우선
 
 가장 중요한 항목:
 
 ```txt
-pnpm e2e:live 성공
+pnpm e2e:live reconciliation 성공 + 전체 앱 lifecycle live evidence 성공
 ```
 
 이게 안 되면 Beta가 아니다.
@@ -1120,15 +1074,15 @@ advanced permission
 
 ```txt
 1. Go worker PostgresStore 구현
-2. pnpm e2e:live 완전 자동화
-3. PostgreSQL provider 실제 lifecycle 완성 ✅
-4. Redis/Valkey provider 실제 구현 ✅
-5. Object Storage/MinIO provider 실제 구현 ✅
-6. MySQL/MariaDB provider 실제 구현 ✅
-7. MongoDB provider 실제 구현 ✅
+2. external registry/scanner/signing을 갖춘 전체 앱 lifecycle live gate 자동화
+3. PostgreSQL provider release live lifecycle 증거 확보
+4. Redis/Valkey provider release live lifecycle 검증
+5. Object Storage/MinIO authenticated bucket bootstrap 구현 또는 live 비활성 유지
+6. MySQL/MariaDB provider release live lifecycle 검증
+7. MongoDB provider release live lifecycle 검증
 8. GitHub webhook push/PR/cleanup lifecycle 완성
 9. Dashboard Beta UX 완성
-10. Qdrant/NATS 실험 지원 ✅
+10. Qdrant/NATS authenticated primitive bootstrap 구현 전 live 비활성 유지
 ```
 
 ---
@@ -1141,10 +1095,10 @@ advanced permission
 목표는 새 기능을 계속 추가하는 것이 아니라 Closed Beta 기준을 통과시키는 것이다.
 
 Closed Beta 정의:
-제한된 동아리원/관리자가 쓰는 실제 배포 플랫폼이다. GitHub repo/Dockerfile/prebuilt image를 실제 Kubernetes에 배포할 수 있고, PostgreSQL, SQLite, Redis/Valkey, Object Storage, MySQL/MariaDB, MongoDB를 resource로 생성해 service에 연결할 수 있으며, Qdrant/NATS는 실험적 resource로 제공된다.
+제한된 동아리원/관리자가 쓰는 실제 배포 플랫폼이다. 목표 범위는 GitHub repo/Dockerfile/prebuilt image를 실제 Kubernetes에 배포하고 PostgreSQL, SQLite, Redis/Valkey, MySQL/MariaDB, MongoDB를 검증된 경로로 연결하는 것이다. Object Storage/Qdrant/NATS는 authenticated primitive bootstrap이 구현·검증되기 전까지 live 지원 범위에서 제외한다.
 
 최우선 기준:
-pnpm e2e:live가 실제로 app build → registry push → Kubernetes deploy → URL HTTP 200 → DB/resource attach → log 조회 → preview cleanup까지 성공해야 한다.
+pnpm e2e:live의 kind/Helm reconciliation과, 별도 전체 앱 lifecycle의 app build → registry push/signing → Kubernetes deploy → URL HTTP 200 → DB/resource attach → log 조회 → preview cleanup이 모두 성공해야 한다.
 
 금지:
 - Beta checklist와 무관한 기능 추가 금지
@@ -1161,7 +1115,8 @@ Beta P0 checklist:
 - pnpm prisma:validate
 - Go services go test/build
 - pnpm e2e:dry
-- pnpm e2e:live
+- pnpm e2e:live (kind/Helm reconciliation)
+- 전체 앱 lifecycle live evidence (Builder/registry/workload/HTTP/log/preview)
 - Express/Vite/Dockerfile/generated Dockerfile app 실제 배포
 - local registry push
 - Kubernetes Deployment/Service/Ingress 생성
@@ -1169,7 +1124,7 @@ Beta P0 checklist:
 - PostgreSQL resource 실제 생성
 - SQLite resource 실제 생성
 - Redis/Valkey resource 실제 생성
-- Object Storage resource 실제 생성
+- Object Storage live 비활성 또는 authenticated bucket bootstrap 증거
 - MySQL/MariaDB resource 실제 생성
 - MongoDB resource 실제 생성
 - service env injection
@@ -1203,9 +1158,9 @@ Beta P0 checklist:
 
 ```txt
 목표: Closed Beta
-핵심 gate: pnpm e2e:live
-DB 범위: PostgreSQL, SQLite, Redis/Valkey, Object Storage, MySQL/MariaDB, MongoDB 실제 지원
-실험 DB: Qdrant, NATS
+핵심 gate: pnpm e2e:live reconciliation + 전체 앱 lifecycle live evidence
+검증 목표 DB 범위: PostgreSQL, SQLite, Redis/Valkey, MySQL/MariaDB, MongoDB
+Plan-only/live fail-closed: Object Storage, Qdrant, NATS
 성공 기준: 실제 build/deploy/db/log/preview/admin/quota/security 통과
 ```
 

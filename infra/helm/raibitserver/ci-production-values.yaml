@@ -1,0 +1,109 @@
+# Static chart-verification fixture only. Platform digests below are synthetic
+# format-valid values and MUST be replaced by published, signed image digests.
+production: true
+
+image:
+  registry: ghcr.io/raibitserver
+  digests:
+    api: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    dashboard: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    orchestrator: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    builder: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    provisioner: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    logIngester: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    metricsIngester: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+builder:
+  replicas: 1
+  registry: ghcr.io/raibitserver/workloads
+  buildkitDigest: sha256:d76eb1caecac5733ef7553c1e90a1b21f1bb218cd1142d3553de0747b4a14ba9
+  dispatch:
+    existingSecret: ci-builder-dispatch-mtls
+  # Synthetic format-valid references for chart verification only.
+  generatedDockerfile:
+    frontend: docker.io/docker/dockerfile:1.7@sha256:1212121212121212121212121212121212121212121212121212121212121212
+    nodeImage: docker.io/library/node:24-alpine@sha256:1313131313131313131313131313131313131313131313131313131313131313
+  databaseEgress:
+    port: 5432
+    selectorPeers: []
+    cidrs:
+      - 10.20.0.0/24
+  registryCredentials:
+    brokerURL: https://registry-credential-broker.security.example/v1/credentials
+    existingSecret: ci-registry-credential-broker
+  anonymousGit:
+    enabled: false
+  signing:
+    existingSecret: ci-cosign-signing
+
+orchestrator:
+  execute: true
+
+provisioner:
+  execute: true
+  providerImages:
+    postgresql: registry.example.com/raibitserver/providers/postgresql@sha256:0101010101010101010101010101010101010101010101010101010101010101
+    mysql: registry.example.com/raibitserver/providers/mysql@sha256:0202020202020202020202020202020202020202020202020202020202020202
+    mariadb: registry.example.com/raibitserver/providers/mariadb@sha256:0303030303030303030303030303030303030303030303030303030303030303
+    mongodb: registry.example.com/raibitserver/providers/mongodb@sha256:0404040404040404040404040404040404040404040404040404040404040404
+    redis: registry.example.com/raibitserver/providers/redis@sha256:0505050505050505050505050505050505050505050505050505050505050505
+    valkey: registry.example.com/raibitserver/providers/valkey@sha256:0606060606060606060606060606060606060606060606060606060606060606
+    minio: registry.example.com/raibitserver/providers/minio@sha256:0707070707070707070707070707070707070707070707070707070707070707
+    qdrant: registry.example.com/raibitserver/providers/qdrant@sha256:0808080808080808080808080808080808080808080808080808080808080808
+    nats: registry.example.com/raibitserver/providers/nats@sha256:0909090909090909090909090909090909090909090909090909090909090909
+
+runtimeSecrets:
+  existingSecret: ci-raibitserver-runtime
+
+observability:
+  logIngester:
+    enabled: true
+  metricsIngester:
+    enabled: true
+  networkPolicy:
+    kubernetesApiEgress:
+      cidrs:
+        - 10.96.0.1/32
+    databaseEgress:
+      selectorPeers: []
+      cidrs:
+        - 10.20.0.0/24
+
+dashboard:
+  enabled: true
+
+ingress:
+  enabled: true
+  hosts:
+    api: api.production.example
+    dashboard: console.production.example
+  tls:
+    enabled: true
+    existingSecret: ci-raibitserver-ingress-tls
+
+security:
+  imageVerification:
+    admissionController:
+      name: policy-controller
+      namespace: policy-system
+      existingWebhookConfiguration: policy-controller-validating-webhook
+      webhookName: verify-images.policy.raibitserver.app
+      deploymentName: policy-controller
+      serviceName: policy-controller-webhook
+      clientConfig:
+        service:
+          namespace: policy-system
+          name: policy-controller-webhook
+          path: /validate
+        url:
+          host: ""
+          path: ""
+    trustRoot:
+      namespace: trust-system
+      existingSecret: raibitserver-cosign-trust-root
+      key: cosign.pub
+    verificationHook:
+      enabled: true
+      checkerImage:
+        repository: docker.io/alpine/k8s:1.34.1
+        digest: sha256:ec714df3813b5405292860f8a1c55c5727bf8c33c88992f1e981efad8065547f

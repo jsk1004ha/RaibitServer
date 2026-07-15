@@ -1,5 +1,7 @@
 import type { DeploymentListResponse, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceListResponse, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
 
+export type PageOptions = { limit?: number; cursor?: string; after?: string };
+
 export class RAIBITSERVERClient {
   readonly baseUrl: string;
   readonly token?: string;
@@ -32,8 +34,8 @@ export class RAIBITSERVERClient {
   listOrganizations(): Promise<Record<string, unknown>> { return this.request('/organizations'); }
   createOrganization(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/organizations', { method: 'POST', body: input }); }
 
-  listProjects(organizationId?: string): Promise<ProjectListResponse | ProjectSpec[]> {
-    return this.request(organizationId ? `/organizations/${encodeURIComponent(organizationId)}/projects` : '/projects');
+  listProjects(organizationId?: string, options: PageOptions = {}): Promise<ProjectListResponse | ProjectSpec[]> {
+    return this.request(withPageQuery(organizationId ? `/organizations/${encodeURIComponent(organizationId)}/projects` : '/projects', options));
   }
 
   createProject(project: Partial<ProjectSpec> & Record<string, unknown>, organizationId?: string): Promise<ProjectSpec> {
@@ -53,7 +55,7 @@ export class RAIBITSERVERClient {
     return this.request(`/projects/${encodeURIComponent(projectId)}/services`, { method: 'POST', body: service });
   }
 
-  listServices(projectId: string): Promise<ServiceListResponse> { return this.request(`/projects/${encodeURIComponent(projectId)}/services`); }
+  listServices(projectId: string, options: PageOptions = {}): Promise<ServiceListResponse> { return this.request(withPageQuery(`/projects/${encodeURIComponent(projectId)}/services`, options)); }
   getService(serviceId: string): Promise<ServiceSpec> { return this.request(`/services/${encodeURIComponent(serviceId)}`); }
   updateService(serviceId: string, service: Partial<ServiceSpec> & Record<string, unknown>): Promise<ServiceSpec> {
     return this.request(`/services/${encodeURIComponent(serviceId)}`, { method: 'PATCH', body: service });
@@ -66,7 +68,7 @@ export class RAIBITSERVERClient {
     return this.request(`/projects/${encodeURIComponent(projectId)}/resources`, { method: 'POST', body: resource });
   }
 
-  listResources(projectId: string): Promise<ResourceListResponse> { return this.request(`/projects/${encodeURIComponent(projectId)}/resources`); }
+  listResources(projectId: string, options: PageOptions = {}): Promise<ResourceListResponse> { return this.request(withPageQuery(`/projects/${encodeURIComponent(projectId)}/resources`, options)); }
   getResource(resourceId: string): Promise<ResourceSpec> { return this.request(`/resources/${encodeURIComponent(resourceId)}`); }
   updateResource(resourceId: string, input: Partial<ResourceSpec> & Record<string, unknown>): Promise<ResourceSpec> { return this.request(`/resources/${encodeURIComponent(resourceId)}`, { method: 'PATCH', body: input }); }
   deleteResource(resourceId: string): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}`, { method: 'DELETE' }); }
@@ -82,18 +84,20 @@ export class RAIBITSERVERClient {
     return this.request(`/services/${encodeURIComponent(projectIdOrServiceId)}/deployments`, { method: 'POST', body: serviceIdOrRequest });
   }
 
-  listDeployments(projectId: string, serviceId: string): Promise<DeploymentListResponse>;
-  listDeployments(serviceId: string): Promise<DeploymentListResponse>;
-  listDeployments(projectIdOrServiceId: string, serviceId?: string): Promise<DeploymentListResponse> {
+  listDeployments(projectId: string, serviceId: string, options?: PageOptions): Promise<DeploymentListResponse>;
+  listDeployments(serviceId: string, options?: PageOptions): Promise<DeploymentListResponse>;
+  listDeployments(projectIdOrServiceId: string, serviceIdOrOptions?: string | PageOptions, options: PageOptions = {}): Promise<DeploymentListResponse> {
+    const serviceId = typeof serviceIdOrOptions === 'string' ? serviceIdOrOptions : undefined;
+    const page = typeof serviceIdOrOptions === 'string' ? options : (serviceIdOrOptions || {});
     const path = serviceId
       ? `/projects/${encodeURIComponent(projectIdOrServiceId)}/services/${encodeURIComponent(serviceId)}/deployments`
       : `/services/${encodeURIComponent(projectIdOrServiceId)}/deployments`;
-    return this.request(path);
+    return this.request(withPageQuery(path, page));
   }
 
-  listDeploymentLogs(deploymentId: string): Promise<Record<string, unknown>> { return this.request(`/deployments/${encodeURIComponent(deploymentId)}/logs`); }
-  listDeploymentEvents(deploymentId: string): Promise<Record<string, unknown>> { return this.request(`/deployments/${encodeURIComponent(deploymentId)}/events`); }
-  listRuntimeLogs(serviceId: string): Promise<Record<string, unknown>> { return this.request(`/services/${encodeURIComponent(serviceId)}/logs`); }
+  listDeploymentLogs(deploymentId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/deployments/${encodeURIComponent(deploymentId)}/logs`, options)); }
+  listDeploymentEvents(deploymentId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/deployments/${encodeURIComponent(deploymentId)}/events`, options)); }
+  listRuntimeLogs(serviceId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/services/${encodeURIComponent(serviceId)}/logs`, options)); }
   getDeployment(deploymentId: string): Promise<DeploymentSpec> { return this.request(`/deployments/${encodeURIComponent(deploymentId)}`); }
   updateDeploymentStatus(deploymentId: string, input: Record<string, unknown>): Promise<DeploymentSpec> {
     return this.request(`/deployments/${encodeURIComponent(deploymentId)}/status`, { method: 'PATCH', body: input });
@@ -149,4 +153,13 @@ export class RAIBITSERVERClient {
     if (!response.ok) throw new Error(`RAIBITSERVER API ${response.status}: ${body?.error || text}`);
     return body as T;
   }
+}
+
+function withPageQuery(path: string, options: PageOptions) {
+  const query = new URLSearchParams();
+  if (options.limit !== undefined) query.set('limit', String(options.limit));
+  if (options.cursor) query.set('cursor', options.cursor);
+  else if (options.after) query.set('after', options.after);
+  const encoded = query.toString();
+  return encoded ? `${path}?${encoded}` : path;
 }

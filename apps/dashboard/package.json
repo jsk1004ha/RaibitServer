@@ -2,10 +2,12 @@
   "name": "@raibitserver/dashboard",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "lint": "next lint",
+    "test": "node --test lib/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

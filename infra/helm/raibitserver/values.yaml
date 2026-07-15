@@ -1,13 +1,260 @@
+production: false
+nameOverride: ""
+fullnameOverride: ""
 image:
   registry: registry.raibitserver.local
   tag: latest
+  pullPolicy: IfNotPresent
+  digests:
+    api: ""
+    dashboard: ""
+    orchestrator: ""
+    builder: ""
+    provisioner: ""
+    logIngester: ""
+    metricsIngester: ""
+database:
+  existingSecret: raibitserver-control-plane-database
+  urlKey: DATABASE_URL
+runtimeSecrets:
+  existingSecret: raibitserver-api-runtime
 api:
   replicas: 2
+  port: 3000
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+dashboard:
+  enabled: true
+  replicas: 2
+  port: 3000
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
 orchestrator:
   replicas: 1
+  execute: false
+  reconcileIntervalSeconds: 5
 builder:
-  replicas: 2
+  # Local/default installs keep external build infrastructure disabled. A
+  # production release must set this to exactly 1; dispatcher sessions are
+  # in-memory and intentionally fail closed across dispatcher restarts.
+  replicas: 0
+  registry: registry.raibitserver.app
+  push: true
+  buildTimeoutSeconds: 600
+  # The trusted dispatcher is the only builder component that receives the
+  # control-plane DSN. Disposable executors reach it over mTLS and never receive
+  # database credentials or database NetworkPolicy egress.
+  dispatch:
+    port: 8443
+    requestTimeoutSeconds: 30
+    sessionTTLSeconds: 900
+    existingSecret: ""
+    caKey: ca.crt
+    serverCertificateKey: server.crt
+    serverKeyKey: server.key
+    clientCertificateKey: client.crt
+    clientKeyKey: client.key
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+  databaseEgress:
+    port: 5432
+    selectorPeers:
+      - podSelector:
+          app.kubernetes.io/name: raibitserver-postgres
+    cidrs: []
+  runtimeClassName: gvisor
+  buildkitImage: moby/buildkit:v0.30.0-rootless
+  buildkitDigest: ""
+  # Every scheduled batch creates a bounded set of disposable executor Pods.
+  # Each Pod claims at most one control-plane job through the dispatcher, and
+  # its native BuildKit sidecar dies with that Pod. Overlapping batches are
+  # forbidden by the CronJob template, so active executors stay bounded by
+  # parallelism.
+  isolation:
+    mode: single-job-pod
+    schedule: "* * * * *"
+    parallelism: 4
+    completions: 4
+    startingDeadlineSeconds: 30
+    activeDeadlineSeconds: 780
+    ttlSecondsAfterFinished: 300
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+  # Production must provide published immutable references. Local dry-run keeps
+  # these empty and uses the documented mutable development fallback only.
+  generatedDockerfile:
+    frontend: ""
+    nodeImage: ""
+  workspaceSizeLimit: 20Gi
+  buildkitStateSizeLimit: 20Gi
+  ephemeralStorage:
+    builderRequest: 1Gi
+    builderLimit: 10Gi
+    buildkitRequest: 2Gi
+    buildkitLimit: 20Gi
+    socketSizeLimit: 64Mi
+    workSizeLimit: 1Gi
+    metadataSizeLimit: 256Mi
+  # The broker token only authorizes minting one short-lived credential for the
+  # server-derived output repository. A registry-wide Docker config is forbidden.
+  registryCredentials:
+    brokerURL: ""
+    existingSecret: ""
+    tokenKey: token
+    minTTLSeconds: 840
+    maxTTLSeconds: 900
+  # Anonymous clones are limited to uncredentialed HTTPS github.com URLs.
+  # Private repositories remain fail-closed until per-build exact-repository
+  # Git credentials are available; executor Pod isolation is already required.
+  anonymousGit:
+    enabled: false
+  scan:
+    enabled: true
+    command: trivy
+    severity: HIGH,CRITICAL
+  signing:
+    enabled: true
+    command: cosign
+    existingSecret: ""
+    keyKey: cosign.key
+    passwordKey: cosign.password
+  nodeSelector:
+    raibitserver.io/workload: build
+  tolerations:
+    - key: raibitserver.io/workload
+      operator: Equal
+      value: build
+      effect: NoSchedule
 provisioner:
   replicas: 1
+  execute: false
+  reconcileIntervalSeconds: 5
+  healthIntervalSeconds: 300
+  # Production requires every catalog provider image to be an immutable
+  # repository@sha256:digest reference. Empty defaults keep local dry-run usable.
+  providerImages:
+    postgresql: ""
+    mysql: ""
+    mariadb: ""
+    mongodb: ""
+    redis: ""
+    valkey: ""
+    minio: ""
+    qdrant: ""
+    nats: ""
+observability:
+  logIngester:
+    enabled: false
+    replicas: 1
+    dbMaxOpenConns: 5
+    dbMaxIdleConns: 2
+    dbConnMaxLifetime: "30m"
+    pageSize: 100
+    maxPods: 200
+    maxContainers: 8
+    maxLines: 1000
+    maxLineBytes: 16384
+    maxReadBytes: 1048576
+    maxRecords: 10000
+    maxBytes: 16777216
+    maxDuration: "20s"
+    interval: "15s"
+    retention: "168h"
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+  metricsIngester:
+    enabled: false
+    replicas: 1
+    dbMaxOpenConns: 5
+    dbMaxIdleConns: 2
+    dbConnMaxLifetime: "30m"
+    pageSize: 100
+    maxPods: 500
+    maxContainers: 8
+    maxSamples: 10000
+    maxDuration: "20s"
+    interval: "30s"
+    retention: "720h"
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+  networkPolicy:
+    kubernetesApiEgress:
+      port: 443
+      cidrs: []
+    databaseEgress:
+      port: 5432
+      selectorPeers: []
+      cidrs: []
 ingress:
-  host: api.raibitserver.app
+  enabled: true
+  className: nginx
+  # Reserved Kubernetes namespace identity used by tenant NetworkPolicies.
+  # Workload/project input cannot override this platform-owned value.
+  gatewayNamespace: ingress-nginx
+  annotations: {}
+  hosts:
+    api: api.raibitserver.app
+    dashboard: console.raibitserver.app
+  tls:
+    enabled: false
+    existingSecret: ""
+migration:
+  enabled: true
+  activeDeadlineSeconds: 300
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 300
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+security:
+  imageVerification:
+    enabled: true
+    provider: cosign
+    admissionController:
+      name: ""
+      namespace: ""
+      existingWebhookConfiguration: ""
+      webhookName: ""
+      deploymentName: ""
+      serviceName: ""
+      clientConfig:
+        service:
+          namespace: ""
+          name: ""
+          path: ""
+        url:
+          host: ""
+          path: ""
+    trustRoot:
+      namespace: ""
+      existingSecret: ""
+      key: cosign.pub
+    verificationHook:
+      enabled: false
+      activeDeadlineSeconds: 120
+      checkerImage:
+        repository: docker.io/alpine/k8s:1.34.1
+        digest: ""
+    policy:
+      enabled: true

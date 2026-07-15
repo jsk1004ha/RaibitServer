@@ -45,7 +45,7 @@ export class AuthController {
   @RequirePermission('project:read')
   @Post('logout')
   @HttpCode(200)
-  logout() {
-    return { ok: true };
+  logout(@Req() req: any) {
+    return this.authService.logout(req.raibitSubject);
   }
 }

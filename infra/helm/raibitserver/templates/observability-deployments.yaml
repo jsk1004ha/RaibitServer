@@ -1,0 +1,136 @@
+{{- $logs := .Values.observability.logIngester -}}
+{{- $metrics := .Values.observability.metricsIngester -}}
+{{- if and (not .Values.production) (or $logs.enabled $metrics.enabled) -}}
+{{- fail "observability ingesters require production=true" -}}
+{{- end -}}
+{{- if and .Values.production $logs.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-log-ingester
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-log-ingester
+    app.kubernetes.io/component: log-ingester
+spec:
+  replicas: {{ $logs.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: raibitserver-log-ingester
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "raibitserver.commonLabels" . | nindent 8 }}
+        app.kubernetes.io/name: raibitserver-log-ingester
+        app.kubernetes.io/component: log-ingester
+    spec:
+      serviceAccountName: {{ include "raibitserver.fullname" . }}-log-ingester
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: log-ingester
+          image: "{{ .Values.image.registry }}/raibitserver/log-ingester@{{ .Values.image.digests.logIngester }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | quote }}
+                  key: {{ .Values.database.urlKey | quote }}
+            - { name: RAIBITSERVER_DB_MAX_OPEN_CONNS, value: {{ $logs.dbMaxOpenConns | quote }} }
+            - { name: RAIBITSERVER_DB_MAX_IDLE_CONNS, value: {{ $logs.dbMaxIdleConns | quote }} }
+            - { name: RAIBITSERVER_DB_CONN_MAX_LIFETIME, value: {{ $logs.dbConnMaxLifetime | quote }} }
+            - { name: RAIBITSERVER_INGEST_PAGE_SIZE, value: {{ $logs.pageSize | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_PODS, value: {{ $logs.maxPods | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_CONTAINERS, value: {{ $logs.maxContainers | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_LINES, value: {{ $logs.maxLines | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_LINE_BYTES, value: {{ $logs.maxLineBytes | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_READ_BYTES, value: {{ $logs.maxReadBytes | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_RECORDS, value: {{ $logs.maxRecords | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_BYTES, value: {{ $logs.maxBytes | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_DURATION, value: {{ $logs.maxDuration | quote }} }
+            - { name: RAIBITSERVER_INGEST_INTERVAL, value: {{ $logs.interval | quote }} }
+            - { name: RAIBITSERVER_LOG_RETENTION, value: {{ $logs.retention | quote }} }
+          resources:
+            {{- toYaml $logs.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+{{- end }}
+{{- if and .Values.production $metrics.enabled }}
+{{- if $logs.enabled }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-metrics-ingester
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-metrics-ingester
+    app.kubernetes.io/component: metrics-ingester
+spec:
+  replicas: {{ $metrics.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: raibitserver-metrics-ingester
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "raibitserver.commonLabels" . | nindent 8 }}
+        app.kubernetes.io/name: raibitserver-metrics-ingester
+        app.kubernetes.io/component: metrics-ingester
+    spec:
+      serviceAccountName: {{ include "raibitserver.fullname" . }}-metrics-ingester
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: metrics-ingester
+          image: "{{ .Values.image.registry }}/raibitserver/metrics-ingester@{{ .Values.image.digests.metricsIngester }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | quote }}
+                  key: {{ .Values.database.urlKey | quote }}
+            - { name: RAIBITSERVER_DB_MAX_OPEN_CONNS, value: {{ $metrics.dbMaxOpenConns | quote }} }
+            - { name: RAIBITSERVER_DB_MAX_IDLE_CONNS, value: {{ $metrics.dbMaxIdleConns | quote }} }
+            - { name: RAIBITSERVER_DB_CONN_MAX_LIFETIME, value: {{ $metrics.dbConnMaxLifetime | quote }} }
+            - { name: RAIBITSERVER_INGEST_PAGE_SIZE, value: {{ $metrics.pageSize | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_PODS, value: {{ $metrics.maxPods | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_CONTAINERS, value: {{ $metrics.maxContainers | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_SAMPLES, value: {{ $metrics.maxSamples | quote }} }
+            - { name: RAIBITSERVER_INGEST_MAX_DURATION, value: {{ $metrics.maxDuration | quote }} }
+            - { name: RAIBITSERVER_INGEST_INTERVAL, value: {{ $metrics.interval | quote }} }
+            - { name: RAIBITSERVER_METRIC_RETENTION, value: {{ $metrics.retention | quote }} }
+          resources:
+            {{- toYaml $metrics.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+{{- end }}

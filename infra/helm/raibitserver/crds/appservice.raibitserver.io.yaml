@@ -1,0 +1,31 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: appservices.raibitserver.io
+spec:
+  group: raibitserver.io
+  names:
+    kind: AppService
+    plural: appservices
+    singular: appservice
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                image: { type: string }
+                port: { type: integer }
+                envFromSecret: { type: string }
+                serviceType: { type: string, enum: [web, private, worker, cron, job] }
+            status:
+              type: object
+              properties:
+                phase: { type: string }
+                url: { type: string }

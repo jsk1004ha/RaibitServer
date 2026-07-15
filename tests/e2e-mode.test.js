@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseE2EOptions, resolveE2EPlan, hasLiveE2ETools, missingLiveE2EToolGroups, liveE2ESetupPlan } from '../scripts/e2e-mode.mjs';
+import { assertLegacyDevE2EDryRun, parseE2EOptions, resolveE2EPlan, hasLiveE2ETools, missingLiveE2EToolGroups, liveE2ESetupPlan } from '../scripts/e2e-mode.mjs';
 
 test('e2e mode defaults to deterministic dry-run without execute side effects', () => {
   const options = parseE2EOptions([], {});
@@ -48,6 +48,14 @@ test('live setup plan chooses kind or k3d and includes registry plus ingress ste
   assert.equal(kindPlan.commands.some((command) => command.includes('manageddatabase-crd.yaml')), true);
   assert.equal(kindPlan.commands.some((command) => command.includes('managedresources-crd.yaml')), true);
   assert.equal(kindPlan.commands.some((command) => command.includes('ingress-nginx')), true);
-  assert.equal(kindPlan.commands.some((command) => command.includes('raibitserver.io/ingress-gateway=true')), true);
+  assert.equal(kindPlan.commands.some((command) => command.includes('raibitserver.io/ingress-gateway')), false);
   assert.equal(kindPlan.commands.some((command) => command.includes('kubectl wait')), true);
+});
+
+test('legacy dev E2E refuses live TypeScript execution and directs operators to Go workers', () => {
+  assert.doesNotThrow(() => assertLegacyDevE2EDryRun({ dryRun: true }));
+  assert.throws(
+    () => assertLegacyDevE2EDryRun({ dryRun: false }),
+    /legacy TypeScript dev E2E.*dry-run only.*Go builder.*Go orchestrator/i,
+  );
 });

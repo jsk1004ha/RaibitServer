@@ -7,35 +7,45 @@ import { RAIBITSERVERControlPlane, buildResourceProviderPlan } from '../packages
 
 const auth = { mode: 'disabled', allowDisabled: true, defaultRole: 'owner' };
 
-test('beta resource lifecycle creates provider-owned secrets, injects service env, consoles, and cleans up', async () => {
+test('beta resource lifecycle plans through the API and attaches only Go-provisioned Kubernetes Secret refs', async () => {
   const controlPlane = new RAIBITSERVERControlPlane();
   const org = controlPlane.store.createOrganization({ name: 'DB Beta Org', slug: 'db-beta-org' });
   const project = controlPlane.store.createProject({ organizationId: org.id, name: 'DB Beta', slug: 'db-beta' });
   const service = controlPlane.store.createService({ projectId: project.id, name: 'web', type: 'web', attachedResources: [] });
   const server = await serve(controlPlane);
   try {
-    const engines = ['postgresql', 'sqlite', 'redis', 'valkey', 'object-storage', 'mysql', 'mariadb', 'mongodb', 'qdrant', 'nats'];
+      const engines = ['postgresql', 'sqlite', 'redis', 'valkey', 'object-storage', 'mysql', 'mariadb', 'mongodb', 'qdrant', 'nats'];
     const resources = [];
     for (const engine of engines) {
       const created = await request(server.port, 'POST', `/projects/${project.id}/resources`, resourceBody(engine));
       assert.equal(created.statusCode, 201, `${engine} create`);
       assert.equal(created.body.engine, engine);
-      assert.ok(created.body.connectionSecretName, `${engine} connection secret`);
+        assert.equal(created.body.connectionSecretName ?? null, null, `${engine} has no control-plane credential secret`);
       resources.push(created.body);
       const provisioned = await request(server.port, 'POST', `/resources/${created.body.id}/provision`, { dryRun: true });
       assert.equal(provisioned.statusCode, 202, `${engine} provision`);
-      assert.equal(provisioned.body.resource.status, 'ready');
-      assert.equal(provisioned.body.result.connectionSecret.providerOwned, true);
-      const attached = await request(server.port, 'POST', `/resources/${created.body.id}/attach`, { serviceId: service.id, envPrefix: engine === 'postgresql' ? 'PGAPP' : '' });
-      assert.equal(attached.statusCode, 200, `${engine} attach`);
-      assert.ok(Object.keys(attached.body.injectedEnv).length > 0, `${engine} injected env`);
+      assert.equal(provisioned.body.resource.status, 'provisioning');
+      assert.equal(provisioned.body.result.dryRun, true);
+        const blocked = await request(server.port, 'POST', `/resources/${created.body.id}/attach`, { serviceId: service.id });
+        assert.equal(blocked.statusCode, 409, `${engine} cannot attach before READY`);
+        if (engine !== 'sqlite') {
+          const row = controlPlane.store.resources.get(created.body.id);
+          const secretName = `${row.slug}-connection`;
+          controlPlane.store.resources.set(row.id, {
+            ...row,
+            status: 'READY',
+            connectionSecretName: secretName,
+            desiredState: { ...(row.desiredState || {}), providerConnection: { secretName, environmentKeys: providerKeys(engine), endpoint: `${row.slug}.managed-demo.svc.cluster.local` } },
+          });
+          const attached = await request(server.port, 'POST', `/resources/${created.body.id}/attach`, { serviceId: service.id, envPrefix: engine === 'postgresql' ? 'PGAPP' : '' });
+          assert.equal(attached.statusCode, 200, `${engine} attach`);
+          assert.ok(Object.values(attached.body.injectedEnv).every((entry) => entry.valueFrom?.secretKeyRef?.name === secretName), `${engine} secretKeyRef injection`);
+        }
     }
 
     const snapshot = controlPlane.store.snapshot();
     assert.equal(snapshot.resources.length, engines.length);
-    assert.ok(snapshot.secrets.some((secret) => secret.scopeType === 'resource-provider-connection' && secret.key === 'DATABASE_URL'));
-    assert.ok(snapshot.secrets.some((secret) => secret.scopeType === 'resource-provider-connection' && secret.key === 'REDIS_URL'));
-    assert.ok(snapshot.secrets.some((secret) => secret.scopeType === 'resource-provider-connection' && secret.key === 'MONGODB_URI'));
+      assert.equal(snapshot.secrets.some((secret) => secret.scopeType === 'resource-provider-connection'), false);
     assert.equal(JSON.stringify(snapshot).includes('local-e2e-postgres-secret'), false);
     assert.ok(snapshot.environmentVariables.some((entry) => entry.key === 'PGAPP_DATABASE_URL'));
     assert.ok(snapshot.environmentVariables.some((entry) => entry.key === 'MYSQL_URL'));
@@ -103,6 +113,14 @@ function resourceBody(engine) {
   if (engine === 'nats') base.desiredSpec = { topic: 'events', subjects: ['events.>'] };
   if (engine === 'mysql' || engine === 'mariadb') base.desiredSpec = { schemas: ['app'], tables: ['health'] };
   return base;
+}
+
+function providerKeys(engine) {
+  return {
+    postgresql: ['DATABASE_URL'], redis: ['REDIS_URL'], valkey: ['VALKEY_URL'],
+    'object-storage': ['S3_ENDPOINT'], mysql: ['MYSQL_URL'], mariadb: ['MARIADB_URL'],
+    mongodb: ['MONGODB_URI'], qdrant: ['VECTOR_DB_URL'], nats: ['QUEUE_URL'],
+  }[engine] || [];
 }
 
 function serve(controlPlane) {

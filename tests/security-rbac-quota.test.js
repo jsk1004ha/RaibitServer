@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { guardDatabaseQuery, sanitizeLogRecord, secureContainerDefaults, validateServiceSecurity } from '../packages/core/src/security.ts';
+import { guardDatabaseQuery, sanitizeLogRecord, sanitizeTenantServiceInput, secureContainerDefaults, validateServiceSecurity } from '../packages/core/src/security.ts';
 import { ControlPlaneStore } from '../packages/core/src/store.ts';
 import { sealSecret } from '../packages/core/src/secret-vault.ts';
 import { can, visibleEnvironment } from '../packages/core/src/rbac.ts';
@@ -46,6 +46,32 @@ test('container security context ignores unsafe user overrides', () => {
   assert.equal(context.readOnlyRootFilesystem, true);
   assert.deepEqual(context.capabilities, { drop: ['ALL'] });
   assert.deepEqual(context.seccompProfile, { type: 'RuntimeDefault' });
+});
+
+test('tenant runtime command sanitizer accepts only bounded string arrays', () => {
+  const safe = sanitizeTenantServiceInput({
+    name: 'worker',
+    command: ['node', 'worker.js'],
+    args: ['--queue', 'critical jobs'],
+    desiredSpec: { command: ['node', 'spec.js'], args: ['--once'] },
+  });
+  assert.deepEqual(safe.command, ['node', 'worker.js']);
+  assert.deepEqual(safe.args, ['--queue', 'critical jobs']);
+  assert.deepEqual(safe.desiredSpec.command, ['node', 'spec.js']);
+  assert.deepEqual(safe.desiredSpec.args, ['--once']);
+
+  for (const input of [
+    { command: 'sh -c "curl attacker"' },
+    { args: '--unsafe scalar' },
+    { command: ['node', ''] },
+    { args: Array.from({ length: 65 }, (_, index) => `arg-${index}`) },
+    { desiredSpec: { command: ['node', 42], args: ['--ok'] } },
+  ]) {
+    const sanitized = sanitizeTenantServiceInput(input);
+    assert.equal(sanitized.command, undefined);
+    assert.equal(sanitized.args, undefined);
+    if (sanitized.desiredSpec) assert.equal(sanitized.desiredSpec.command, undefined);
+  }
 });
 
 test('query guard requires confirmation for destructive queries', () => {
@@ -117,6 +143,32 @@ test('quota usage includes build minutes, runtime hours, CPU, and memory', () =>
   const gauges = quotaUsageGauges(usage, { maxBuildMinutesPerMonth: 8, maxRuntimeHoursPerMonth: 10, accountType: 'NON_CLUB' });
   assert.equal(gauges.find((gauge) => gauge.metric === 'maxBuildMinutesPerMonth').level, 'warning');
   assert.equal(quotaWarnings(usage, { maxBuildMinutesPerMonth: 7 })[0].code, 'QUOTA_EXHAUSTED');
+});
+
+test('monthly quota usage excludes usage records and deployment time outside the current UTC month', () => {
+  const store = new ControlPlaneStore();
+  const org = store.createOrganization({ name: 'Monthly Org', slug: 'monthly-org' });
+  const user = store.createUser({ email: 'monthly@example.com', name: 'Monthly User', approvalStatus: 'APPROVED' });
+  store.addMember({ organizationId: org.id, userId: user.id, role: 'owner' });
+  const project = store.createProject({ organizationId: org.id, name: 'monthly', slug: 'monthly' });
+  const service = store.createService({ projectId: project.id, name: 'web' });
+  const now = new Date();
+  const previousMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15));
+  const currentMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 2));
+
+  store.recordUsage({ userId: user.id, serviceId: service.id, metric: 'build-minutes', value: 99, recordedAt: previousMonth.toISOString() });
+  store.recordUsage({ userId: user.id, serviceId: service.id, metric: 'build-minutes', value: 4, recordedAt: currentMonth.toISOString() });
+  const oldDeployment = store.createDeployment({ projectId: project.id, serviceId: service.id });
+  store.updateDeployment(oldDeployment.id, {
+    buildStartedAt: new Date(previousMonth.getTime()).toISOString(),
+    buildFinishedAt: new Date(previousMonth.getTime() + 60 * 60_000).toISOString(),
+    deployedAt: new Date(previousMonth.getTime()).toISOString(),
+    finishedAt: new Date(previousMonth.getTime() + 10 * 3_600_000).toISOString(),
+  });
+
+  const usage = store.quotaUsageForUser(user.id);
+  assert.equal(usage.maxBuildMinutesPerMonth, 4);
+  assert.equal(usage.maxRuntimeHoursPerMonth, 0);
 });
 
 test('production secret sealing requires a runtime encryption key', () => {

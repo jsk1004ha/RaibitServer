@@ -40,6 +40,48 @@ jobs:
       - run: node src/cli.js k8s-apply examples/project.json >/tmp/raibitserver-k8s-apply.json
       - run: pnpm e2e:dry
 
+  postgres-integration:
+    name: PostgreSQL / Prisma integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: raibitserver
+          POSTGRES_PASSWORD: raibitserver
+          POSTGRES_DB: raibitserver_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U raibitserver -d raibitserver_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://raibitserver:raibitserver@127.0.0.1:5432/raibitserver_test
+      RAIBITSERVER_TEST_DATABASE_URL: postgresql://raibitserver:raibitserver@127.0.0.1:5432/raibitserver_test
+      RAIBITSERVER_TEST_POSTGRES_DSN: postgresql://raibitserver:raibitserver@127.0.0.1:5432/raibitserver_test?sslmode=disable
+      RAIBITSERVER_SECRET_ENCRYPTION_KEY: ci-test-encryption-key-at-least-32-characters
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma:generate
+      - run: pnpm exec prisma migrate deploy --schema prisma/schema.prisma
+      - run: node --test tests/postgres-integration.test.js
+      - run: (cd services/builder && go test -count=1 -run '^TestPostgres' ./internal/controlplane)
+      - run: (cd services/orchestrator && go test -count=1 -run '^TestPostgres' ./internal/store)
+      - run: (cd services/provisioner && go test -count=1 -run '^TestPostgres' ./internal/reconciler)
+
   go:
     name: Go services
     runs-on: ubuntu-latest
@@ -47,12 +89,35 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: '1.26.x'
       - run: |
           for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester; do
             test -f "$dir/go.mod"
             (cd "$dir" && go test ./... && go build ./...)
           done
+
+  containers:
+    name: Container definition / ${{ matrix.dockerfile }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile:
+          - apps/api/Dockerfile
+          - apps/dashboard/Dockerfile
+          - apps/cli/Dockerfile
+          - services/builder/Dockerfile
+          - services/orchestrator/Dockerfile
+          - services/provisioner/Dockerfile
+          - services/log-ingester/Dockerfile
+          - services/metrics-ingester/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate Dockerfile
+        run: docker buildx build --check --file "${{ matrix.dockerfile }}" .
+      - name: Build production image
+        run: docker buildx build --file "${{ matrix.dockerfile }}" --provenance=false .
 
   manifests:
     name: OpenAPI and Helm smoke
@@ -66,11 +131,29 @@ jobs:
         with:
           node-version: '24'
           cache: pnpm
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.2.3
       - run: pnpm install --frozen-lockfile
-      - run: node -e "import('yaml').then(({default:YAML})=>{const fs=require('node:fs'); YAML.parse(fs.readFileSync('openapi/raibitserver.yaml','utf8')); for (const f of ['infra/k8s/appservice-crd.yaml','infra/operators/manageddatabase-crd.yaml','infra/operators/managedresources-crd.yaml']) YAML.parse(fs.readFileSync(f,'utf8')); console.log('yaml-ok')})"
-      - run: |
-          if command -v helm >/dev/null 2>&1; then
-            helm template raibitserver infra/helm/raibitserver >/tmp/raibitserver-helm.yaml
-          else
-            echo "helm not installed on runner image; YAML parse smoke completed"
-          fi
+      - run: node -e "import('yaml').then(({default:YAML})=>{const fs=require('node:fs'); YAML.parse(fs.readFileSync('openapi/raibitserver.yaml','utf8')); for (const f of ['infra/k8s/appservice-crd.yaml','infra/operators/manageddatabase-crd.yaml','infra/operators/managedresources-crd.yaml']) { const docs=YAML.parseAllDocuments(fs.readFileSync(f,'utf8')); for (const doc of docs) { if (doc.errors.length) throw doc.errors[0]; } } console.log('yaml-ok')})"
+      - run: sh scripts/verify-helm.sh
+
+  live-helm-e2e:
+    name: kind / Helm live production path
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.35.0
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.2.3
+      - name: Install pinned kind
+        run: go install sigs.k8s.io/kind@v0.31.0
+      - name: Run live Helm reconciliation gate
+        run: PATH="$(go env GOPATH)/bin:$PATH" bash scripts/live-helm-e2e.sh

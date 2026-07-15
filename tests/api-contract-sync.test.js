@@ -38,7 +38,10 @@ test('api client uses project-scoped deployment route and keeps legacy fallback'
 test('OpenAPI and Nest controller surface expose client contract routes', async () => {
   const openapi = YAML.parse(await fs.readFile(new URL('../openapi/raibitserver.yaml', import.meta.url), 'utf8'));
   for (const route of [
+    '/health',
+    '/snapshot',
     '/projects/{projectId}',
+    '/projects/{projectId}/overview',
     '/services/{serviceId}',
     '/projects/{projectId}/services/{serviceId}/deployments',
     '/deployments/{deploymentId}',
@@ -75,6 +78,17 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   ]) {
     assert.ok(openapi.paths[route], `${route} missing from OpenAPI`);
   }
+  assert.deepEqual(openapi.paths['/health'].get.security, []);
+  assert.ok(openapi.paths['/deployments/{deploymentId}/cancel'].post.responses['200']);
+  assert.ok(openapi.paths['/deployments/{deploymentId}/cancel'].post.responses['409']);
+  assert.equal(openapi.paths['/deployments/{deploymentId}/cancel'].post.responses['202'], undefined);
+  assert.equal(openapi.paths['/deployments/{deploymentId}/rollback'].post.requestBody.content['application/json'].schema.required.includes('confirmed'), true);
+  assert.equal(openapi.paths['/admin/users/{userId}/reject'].post.requestBody.content['application/json'].schema.required.includes('confirmed'), true);
+  for (const route of ['/projects', '/services/{serviceId}/deployments', '/deployments/{deploymentId}/logs', '/deployments/{deploymentId}/events', '/services/{serviceId}/logs']) {
+    const parameters = openapi.paths[route].get.parameters || [];
+    assert.equal(parameters.some((parameter) => parameter.$ref === '#/components/parameters/limit'), true, `${route} must document limit pagination`);
+    assert.equal(parameters.some((parameter) => parameter.$ref === '#/components/parameters/cursor'), true, `${route} must document cursor pagination`);
+  }
 
   const appModule = await fs.readFile(new URL('../apps/api/src/app.module.ts', import.meta.url), 'utf8');
   for (const moduleName of ['AuthModule', 'ProjectsModule', 'ServicesModule', 'DeploymentsModule', 'ResourcesModule', 'EnvironmentModule', 'IntegrationsModule', 'AdminModule', 'UsageModule']) {
@@ -94,9 +108,11 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   const resourceConsoleController = await fs.readFile(new URL('../apps/api/src/modules/resources/resource-console.controller.ts', import.meta.url), 'utf8');
   const githubController = await fs.readFile(new URL('../apps/api/src/modules/integrations/github.controller.ts', import.meta.url), 'utf8');
   const authController = await fs.readFile(new URL('../apps/api/src/modules/auth/auth.controller.ts', import.meta.url), 'utf8');
+  const rbacGuard = await fs.readFile(new URL('../apps/api/src/auth/rbac.guard.ts', import.meta.url), 'utf8');
   const apiMain = await fs.readFile(new URL('../apps/api/src/main.ts', import.meta.url), 'utf8');
   const raibitserverService = await fs.readFile(new URL('../apps/api/src/raibitserver.service.ts', import.meta.url), 'utf8');
   const coreApi = await fs.readFile(new URL('../packages/core/src/api.ts', import.meta.url), 'utf8');
+  const sseStream = await fs.readFile(new URL('../packages/core/src/sse.ts', import.meta.url), 'utf8');
   const envPolicy = await fs.readFile(new URL('../packages/core/src/env-policy.ts', import.meta.url), 'utf8');
   const persistence = await fs.readFile(new URL('../packages/core/src/persistence.ts', import.meta.url), 'utf8');
   const apiClient = await fs.readFile(new URL('../packages/api-client/src/index.ts', import.meta.url), 'utf8');
@@ -112,6 +128,11 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.match(servicesController, /ServiceDetailController/);
   assert.match(servicesController, /@Patch\(\)/);
   for (const marker of ["@Get('deployments/:deploymentId')", "@Patch('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/cancel')", "@Post('deployments/:deploymentId/rollback')", "@Get('deployments/:deploymentId/stream')", "@Get('services/:serviceId/logs/stream')"]) assert.ok(deploymentsController.includes(marker), `${marker} missing from Deployments controller`);
+  assert.match(deploymentsController, /@Post\('deployments\/:deploymentId\/cancel'\)\s*@HttpCode\(200\)/);
+  assert.match(deploymentsController, /startBoundedSseStream/, 'Nest SSE endpoints must use the bounded shared stream');
+  assert.match(sseStream, /setInterval\(/, 'SSE streams must remain open and poll for updates');
+  assert.match(sseStream, /req\?\.on\?\.\('close', onRequestClose\)/, 'SSE streams must release timers when clients disconnect');
+  assert.match(sseStream, /maxLifetimeMs/, 'SSE streams must have an explicit maximum lifetime');
   assert.match(deploymentsModule, /ServiceDeploymentsController/);
   assert.match(deploymentsModule, /DeploymentLogsController/);
   assert.match(deploymentsModule, /providers: \[DeploymentsService\]/);
@@ -132,11 +153,12 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.ok(raibitserverService.includes('assertNestEnvironmentWriteAllowed(subject, parsed.entries)'), 'Nest env-file writes must use the shared limited-secret write guard');
   const loginMethod = raibitserverService.slice(raibitserverService.indexOf('async login'), raibitserverService.indexOf('  async createProject'));
   assert.doesNotMatch(loginMethod, /assertRateLimit\(authLimiter,\s*`login:\$\{email\}`\)/, 'Nest login limiter must not use a global email-only key');
-  assert.ok(loginMethod.indexOf('verifyPassword') >= 0 && loginMethod.indexOf('verifyPassword') < loginMethod.indexOf('assertRateLimit'), 'Nest login must verify the password before counting failed-login rate limit attempts');
+  assert.ok(loginMethod.indexOf('enforceAuthAbuseLimits') >= 0 && loginMethod.indexOf('enforceAuthAbuseLimits') < loginMethod.indexOf('verifyPassword'), 'Nest login must durably charge IP+email abuse-limit keys before expensive password verification');
   assert.match(authController, /login\(@Body\(\) input: Record<string, any>, @Req\(\) req: any\)/, 'Nest auth controller must pass request context for auth rate-limit source keys');
-  assert.ok(persistence.includes('if (integrationIds.length === 0) return { installationId: String(input.installationId), repositories: [] };'), 'Prisma GitHub installation repository listing must not leak all repos when scope filters out integrations');
+  assert.match(rbacGuard, /await this\.controlPlane\.validateSessionSubject\(req\.raibitSubject\)/, 'Nest RBAC guard must validate current approval and session version on every protected request');
+  assert.ok(persistence.includes('if (integrations.length === 0) return { installationId: String(input.installationId), repositories: [] };'), 'Prisma GitHub installation repository listing must not leak all repos when scope filters out integrations');
   assert.ok(persistence.includes('return redactUser(user);'), 'Prisma user creation/update surfaces must redact passwordHash');
-  assert.ok(!persistence.includes('integrationIds.length === 0 || integrationIds.includes'), 'Prisma GitHub installation repository listing must not use broad fallback matching');
+  assert.ok(!persistence.includes('integrations.length === 0 ||'), 'Prisma GitHub installation repository listing must not use broad fallback matching');
   assert.ok(persistence.includes('servicesForPrismaGitHubRepository'), 'Prisma GitHub webhook must map deliveries to attached services');
   assert.ok(persistence.includes("type: 'preview-deploy'"), 'Prisma GitHub webhook must enqueue preview deploy jobs');
   assert.ok(persistence.includes("type: 'preview-cleanup'"), 'Prisma GitHub webhook must enqueue preview cleanup jobs');

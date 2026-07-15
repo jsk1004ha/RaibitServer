@@ -1,0 +1,93 @@
+{{- if .Values.production }}
+{{- $liveProviders := dict "postgresql" true "mysql" true "mariadb" true "mongodb" true "redis" true "valkey" true }}
+{{- range $provider, $image := .Values.provisioner.providerImages }}
+{{- $configuredImage := default "" $image }}
+{{- if and (or (hasKey $liveProviders $provider) (ne $configuredImage "")) (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$" $configuredImage)) }}
+{{- fail (printf "production provider image %s requires a valid sha256 digest-pinned reference" $provider) }}
+{{- end }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-provisioner
+spec:
+  replicas: {{ .Values.provisioner.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: raibitserver-provisioner
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: raibitserver-provisioner
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "raibitserver.fullname" . }}-provisioner
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: provisioner
+          image: "{{ .Values.image.registry }}/raibitserver/provisioner{{ if .Values.image.digests.provisioner }}@{{ .Values.image.digests.provisioner }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: RAIBITSERVER_DRY_RUN
+              value: {{ ternary "0" "1" .Values.provisioner.execute | quote }}
+            - name: RAIBITSERVER_EXECUTE
+              value: {{ ternary "1" "0" .Values.provisioner.execute | quote }}
+            - { name: RAIBITSERVER_PROVISIONER_OUTPUT_DIR, value: /tmp/raibitserver-provisioner }
+            - name: RAIBITSERVER_RECONCILE_INTERVAL_SECONDS
+              value: {{ .Values.provisioner.reconcileIntervalSeconds | quote }}
+            - name: RAIBITSERVER_PROVIDER_HEALTH_INTERVAL_SECONDS
+              value: {{ .Values.provisioner.healthIntervalSeconds | quote }}
+            - name: RAIBITSERVER_PROVISIONER_SERVICE_ACCOUNT_NAME
+              value: {{ printf "%s-provisioner" (include "raibitserver.fullname" .) | quote }}
+            - name: RAIBITSERVER_PROVISIONER_SERVICE_ACCOUNT_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: RAIBITSERVER_PROVISIONER_TENANT_ROLE_NAME
+              value: {{ printf "%s-provisioner-tenant" (include "raibitserver.fullname" .) | quote }}
+            - name: RAIBITSERVER_PROVIDER_POSTGRESQL_IMAGE
+              value: {{ .Values.provisioner.providerImages.postgresql | quote }}
+            - name: RAIBITSERVER_PROVIDER_MYSQL_IMAGE
+              value: {{ .Values.provisioner.providerImages.mysql | quote }}
+            - name: RAIBITSERVER_PROVIDER_MARIADB_IMAGE
+              value: {{ .Values.provisioner.providerImages.mariadb | quote }}
+            - name: RAIBITSERVER_PROVIDER_MONGODB_IMAGE
+              value: {{ .Values.provisioner.providerImages.mongodb | quote }}
+            - name: RAIBITSERVER_PROVIDER_REDIS_IMAGE
+              value: {{ .Values.provisioner.providerImages.redis | quote }}
+            - name: RAIBITSERVER_PROVIDER_VALKEY_IMAGE
+              value: {{ .Values.provisioner.providerImages.valkey | quote }}
+            - name: RAIBITSERVER_PROVIDER_MINIO_IMAGE
+              value: {{ .Values.provisioner.providerImages.minio | quote }}
+            - name: RAIBITSERVER_PROVIDER_QDRANT_IMAGE
+              value: {{ .Values.provisioner.providerImages.qdrant | quote }}
+            - name: RAIBITSERVER_PROVIDER_NATS_IMAGE
+              value: {{ .Values.provisioner.providerImages.nats | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | quote }}
+                  key: {{ .Values.database.urlKey | quote }}
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 128Mi }

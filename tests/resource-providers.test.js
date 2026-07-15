@@ -76,26 +76,24 @@ test('shared SQL and document provider plans create tenant primitives instead of
   assert.match(mongo.commands.backup, /mongodump .* --db /);
 });
 
-test('PostgreSQL provider dry-run attaches provider-owned connection secret and console can resolve it', async () => {
+test('PostgreSQL provider dry-run keeps the resource provisioning and does not report a live connection', async () => {
   const store = new ControlPlaneStore();
   const resource = store.createResource({ projectId: 'prj_1', name: 'pg-provider', engine: 'postgresql', provider: 'postgresql-direct', databaseName: 'appdb', username: 'app_user' });
+  const originalSecretName = resource.connectionSecretName;
   const provisioned = await store.provisionResourceProvider({ resourceId: resource.id, dryRun: true, actorUserId: 'provider-test', password: 'provider-secret-password' });
-  assert.equal(provisioned.resource.status, 'ready');
-  assert.equal(Boolean(provisioned.resource.connectionSecretName), true);
+  assert.equal(provisioned.resource.status, 'provisioning');
+  assert.equal(provisioned.resource.connectionSecretName, originalSecretName);
+  assert.equal(provisioned.result.dryRun, true);
   assert.equal(JSON.stringify(store.snapshot()).includes('provider-secret-password'), false);
   const consoleResource = store.resourceForConsole(provisioned.resource);
-  assert.match(consoleResource.providerConnection.databaseUrl, /^postgresql:\/\/app_user:/);
+    assert.equal(consoleResource.providerConnection, undefined);
 });
 
-test('PostgreSQL live provisioning requires explicit server-side allowlist env', async () => {
-  const previous = process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING;
-  delete process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING;
+test('PostgreSQL live provisioning is delegated exclusively to the Go provisioner', async () => {
   await assert.rejects(
     () => provisionPostgresProvider({ name: 'blocked-live', engine: 'postgresql' }, { execute: true, dryRun: false }),
-    /live PostgreSQL provisioning is disabled/,
+      /authoritative Go provisioner/,
   );
-  if (previous === undefined) delete process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING;
-  else process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING = previous;
 });
 
 test('project provisioning can include direct PostgreSQL provider dry-run result', async () => {

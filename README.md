@@ -35,9 +35,9 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 
 - Node.js **24+**
 - pnpm **11.1.2** (`corepack enable` 권장)
-- 선택 사항: Docker, kind 또는 k3d, kubectl, Go 1.22+
+- live Helm gate 실행 시: Bash, Docker, kind, kubectl, Helm, curl, Go 1.26.x
 
-Node.js 24+는 로컬 SQLite DB console 경로가 `node:sqlite`를 사용하기 때문에 필요합니다. 기본 dry-run 검증은 cloud credential, registry, Kubernetes cluster, GitHub secret 없이 실행됩니다.
+Node.js 24+는 로컬 SQLite DB console 경로가 `node:sqlite`를 사용하기 때문에 필요합니다. Go 모듈은 1.25.0 이상을 선언하지만 CI와 재현 가능한 live 검증은 1.26.x를 사용합니다. 기본 dry-run 검증은 cloud credential, registry, Kubernetes cluster, GitHub secret 없이 실행됩니다.
 
 ## 빠른 시작
 
@@ -58,7 +58,7 @@ pnpm dev:down
 | --- | --- | --- |
 | `pnpm dev:up` | `pnpm dev-up` | 로컬 도구 감지 및 dev 상태 준비 |
 | `pnpm e2e:dry` | `pnpm dev:e2e:dry`, `pnpm dev-e2e` | 외부 부작용 없는 기본 E2E |
-| `pnpm e2e:live` | `pnpm dev:e2e:live` | Docker/kind·k3d/kubectl을 사용하는 live E2E |
+| `pnpm e2e:live:helm` | `pnpm e2e:live`, `pnpm dev:e2e:live` | Docker/kind/Helm으로 API·Provisioner·Orchestrator를 검증하는 live reconciliation gate |
 | `pnpm dev:down` | `pnpm dev-down` | 로컬 상태 정리 |
 
 ## 기본 검증
@@ -137,9 +137,9 @@ node src/cli.js compose examples/docker-compose.yml
 | DB/상태 | `DATABASE_URL`, `RAIBITSERVER_PERSISTENCE`, `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_STORE`, `RAIBITSERVER_CONTROL_PLANE_FILE`, `REDIS_URL` |
 | Secret/Auth | `JWT_SECRET`, `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_AUTH_ISSUER`, `RAIBITSERVER_SESSION_TTL_SECONDS`, `RAIBITSERVER_AUTH_RATE_LIMIT`, `RAIBITSERVER_TRUST_PROXY_HEADERS`, `ENCRYPTION_KEY`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS` |
 | Dashboard/API | `PORT`, `RAIBITSERVER_API_URL`, `RAIBITSERVER_DASHBOARD_TOKEN`, `RAIBITSERVER_TOKEN`, `RAIBITSERVER_DASHBOARD_BASIC_AUTH` |
-| Build/Runtime | `REGISTRY_URL`, `RAIBITSERVER_REGISTRY`, `RAIBITSERVER_REGISTRY_USERNAME`, `RAIBITSERVER_REGISTRY_PASSWORD`, `RAIBITSERVER_BUILDKIT_CACHE`, `RAIBITSERVER_BUILDKIT_CACHE_REF`, `KUBECONFIG`, `RAIBITSERVER_KUBE_CONTEXT`, `BASE_DOMAIN`, `RAIBITSERVER_BASE_DOMAIN`, `RAIBITSERVER_EXECUTE`, `RAIBITSERVER_PUSH` |
+| Build/Runtime | `REGISTRY_URL`, `RAIBITSERVER_REGISTRY`, `RAIBITSERVER_REGISTRY_USERNAME`, `RAIBITSERVER_REGISTRY_PASSWORD`, `RAIBITSERVER_BUILDKIT_CACHE`, `RAIBITSERVER_BUILDKIT_CACHE_REF`, `KUBECONFIG`, `RAIBITSERVER_KUBE_CONTEXT`, `BASE_DOMAIN`, `RAIBITSERVER_BASE_DOMAIN`, `RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE`, `RAIBITSERVER_EXECUTE`, `RAIBITSERVER_PUSH` |
 | Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
-| Provider | `RAIBITSERVER_POSTGRES_PROVIDER_URL`, `POSTGRES_PROVIDER_URL` |
+| Provider | `RAIBITSERVER_POSTGRES_PROVIDER_URL`, `POSTGRES_PROVIDER_URL`, `RAIBITSERVER_PROVIDER_POSTGRESQL_IMAGE`, `RAIBITSERVER_PROVIDER_MYSQL_IMAGE`, `RAIBITSERVER_PROVIDER_MARIADB_IMAGE`, `RAIBITSERVER_PROVIDER_MONGODB_IMAGE`, `RAIBITSERVER_PROVIDER_REDIS_IMAGE`, `RAIBITSERVER_PROVIDER_VALKEY_IMAGE`, `RAIBITSERVER_PROVIDER_MINIO_IMAGE`, `RAIBITSERVER_PROVIDER_QDRANT_IMAGE`, `RAIBITSERVER_PROVIDER_NATS_IMAGE` |
 | GitHub App/OAuth | `RAIBITSERVER_GITHUB_CLIENT_ID`, `RAIBITSERVER_GITHUB_CLIENT_SECRET`, `RAIBITSERVER_GITHUB_REDIRECT_URI`, `RAIBITSERVER_GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` |
 
 Production 실행 전 필수 설정은 [production 배포 문서](deploy/production/README.md)를 확인하세요.
@@ -176,7 +176,7 @@ GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드
 
 | 영역 | 필요 설정 |
 | --- | --- |
-| OS/런타임 | Linux 서버 또는 Kubernetes cluster, Node.js 24+, pnpm 11.1.2, Go 1.22+ |
+| OS/런타임 | Linux 서버 또는 Kubernetes cluster, Node.js 24+, pnpm 11.1.2, Go 모듈 1.25.0+ (release 검증 1.26.x) |
 | Container build | Docker/BuildKit 또는 Kubernetes 내부 builder, image push 권한이 있는 registry |
 | Kubernetes | `kubectl`, Helm, ingress controller, 기본 StorageClass/PVC, namespace 생성 권한 |
 | Database | PostgreSQL 15+ 권장, Prisma migration 적용 가능해야 함 |
@@ -203,6 +203,8 @@ GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드
 서비스 실행 host는 slug 경계 충돌을 막기 위해 user와 project 사이에 `--`를 둔 `<user>--<project>.apps.<BASE_DOMAIN>` 패턴으로 생성됩니다. PR preview host는 `pr-<number>-<user>--<project>.preview.<BASE_DOMAIN>`이고, 개별 service/resource 관리 화면은 충돌 방지를 위해 `<user>--<project>-<service>.console.<BASE_DOMAIN>` 및 `<user>--<project>-<resource>.resources.<BASE_DOMAIN>`를 사용합니다. 따라서 `*.apps`, `*.preview`, `*.console`, `*.resources` wildcard 인증서를 준비해야 합니다.
 
 Cloudflare Tunnel을 쓰는 경우 각 tenant service hostname을 tunnel ingress rule에 직접 매핑하지 마세요. Tunnel은 `*.apps.<BASE_DOMAIN>`, `*.preview.<BASE_DOMAIN>`, `*.console.<BASE_DOMAIN>`, `*.resources.<BASE_DOMAIN>` 같은 zone-level wildcard를 **내부 Kubernetes Ingress Controller 하나**로 보내고, 최종 Host 기반 라우팅은 Kubernetes Ingress가 담당해야 합니다. Cloudflare Tunnel hostname wildcard는 `*.example.com` 형태만 쓰고 `test.*.example.com` 같은 중간 wildcard에 의존하지 않습니다. 자세한 예시는 [Cloudflare Tunnel 운영 가이드](docs/cloudflare-tunnel.md)와 [production tunnel 예시](deploy/production/cloudflare-tunnel.example.yml)를 참고하세요.
+
+Tenant NetworkPolicy는 임의의 사용자 라벨이 아니라 Kubernetes 예약 네임스페이스 라벨 `kubernetes.io/metadata.name`으로 ingress controller를 식별합니다. 기본 네임스페이스는 `ingress-nginx`이며, 다른 네임스페이스를 쓰면 Helm `ingress.gatewayNamespace`를 설정하세요. 이 값은 같은 release의 API, Go orchestrator, ValidatingAdmissionPolicy에 함께 렌더되고 tenant 프로젝트 입력으로는 변경할 수 없습니다.
 
 > 보안 필수: 대시보드는 서버 토큰(`RAIBITSERVER_DASHBOARD_TOKEN`/`RAIBITSERVER_TOKEN`)으로 API 데이터를 렌더링할 수 있으므로 public ingress에 노출할 때 반드시 별도 인증 계층을 적용하세요. 기본 구성에서는 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`를 `username:password` 형식으로 설정해야 하며, 서버 토큰이 있는데 basic auth가 없으면 대시보드 요청은 503으로 차단됩니다.
 
@@ -255,6 +257,7 @@ RAIBITSERVER_REGISTRY_USERNAME=<registry-user>
 RAIBITSERVER_REGISTRY_PASSWORD=<registry-password>
 RAIBITSERVER_PUSH=1
 RAIBITSERVER_BUILD_TIMEOUT_SECONDS=900
+RAIBITSERVER_ALLOW_ANONYMOUS_GIT=0
 
 # Provider
 REDIS_URL=redis://redis.internal:6379
@@ -277,7 +280,7 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 
 - Nest API는 부팅 시 `PORT`, `RAIBITSERVER_AUTH_RATE_LIMIT`, production auth/secret 설정을 먼저 검증합니다. `NODE_ENV=production`에서는 32자 미만 `RAIBITSERVER_AUTH_JWT_SECRET`, 32자 미만 `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS`가 있는데 32자 미만 `RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN`, `RAIBITSERVER_AUTH_DISABLED=1`, `RAIBITSERVER_AUTH_DEV_HEADERS=1`, `RAIBITSERVER_AUTH_DEV_TOKEN=1`이 모두 fail-fast로 차단됩니다.
 - `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다. 특히 인증 비활성화는 `NODE_ENV=production`에서는 무시되며, 로컬에서도 `RAIBITSERVER_AUTH_DISABLED_CONFIRM=I_UNDERSTAND_THIS_GRANTS_GLOBAL_OWNER` 확인값이 있어야만 활성화됩니다. dev header 인증은 추가로 `RAIBITSERVER_DEV_HEADER_BIND_LOCAL=1`이 있어야만 켜집니다.
-- 인증 rate limit은 기본적으로 소켓 원격 주소를 사용하고 `X-Forwarded-For`를 신뢰하지 않습니다. 로그인 실패는 비밀번호 검증 후에만 source-scoped 실패 bucket에 기록하므로 다른 네트워크 위치의 잘못된 시도로 같은 이메일의 정상 로그인을 잠그지 않습니다. Cloudflare Access/Tunnel, Nginx, Ingress처럼 신뢰된 프록시만 API 앞에 있고 origin bypass가 방화벽으로 막힌 경우에만 `RAIBITSERVER_TRUST_PROXY_HEADERS=1`을 설정하세요.
+- 인증 rate limit은 기본적으로 소켓 원격 주소를 사용하고 `X-Forwarded-For`를 신뢰하지 않습니다. signup, 이메일 인증·재발송, 로그인은 처리 전에 durable email/action, source/action, 전체 auth-flow source, global bucket을 모두 선차감하며 성공해도 bucket을 reset하지 않습니다. 키에는 원문 이메일이나 source 대신 secret-keyed digest를 저장합니다. 따라서 로그인 성공 여부나 계정 존재 여부로 제한을 우회할 수 없고, 한 source의 이메일 순환 공격과 한 이메일의 source 순환 공격을 함께 제한합니다. Cloudflare Access/Tunnel, Nginx, Ingress처럼 신뢰된 프록시만 API 앞에 있고 origin bypass가 방화벽으로 막힌 경우에만 `RAIBITSERVER_TRUST_PROXY_HEADERS=1`을 설정하세요.
 - 운영 첫 admin은 더 이상 “첫 가입자”만으로 자동 승격되지 않습니다. `ADMIN_EMAILS`에 포함된 이메일이 `RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN`을 함께 제출할 때만 admin bootstrap이 허용됩니다.
 - 이메일/비밀번호 signup은 6자리 이메일 인증 코드를 먼저 발송하고, `/auth/email/verify` 성공 후에만 세션 토큰을 발급합니다. 같은 이메일로 signup을 다시 시작하면 이전에 소비되지 않은 signup 인증 코드와 payload를 무효화하고 새 payload/코드를 발급해, 악의적이거나 오래된 pending signup이 정상 가입을 계속 막거나 피해자가 공격자 지정 비밀번호/조직으로 계정을 만들게 하지 않습니다. `/auth/email/resend`는 아직 만료되지 않은 최신 pending signup payload에 대해서만 코드를 재발급합니다. 발신자는 발송 전용 주소(`RAIBITSERVER_EMAIL_FROM`, 예: `RAIBITSERVER <email-verification@raibitserver.app>`)이고, `RAIBITSERVER_EMAIL_DOMAIN`/`RAIBITSERVER_BASE_DOMAIN`/`BASE_DOMAIN`에서 자동 생성할 수도 있습니다. 이 기능은 사용자 메일함/MX를 운영하지 않으며 production은 `RAIBITSERVER_EMAIL_WEBHOOK_URL` 같은 실제 mail bridge와 발신 도메인의 SPF/DKIM/DMARC 설정이 필요합니다.
 - DB console 권한은 `db:schema:read`, `db:data:read`, `db:query:write`로 분리됩니다. 기본 developer는 schema metadata만 볼 수 있고 row data `SELECT`는 maintainer/db-admin 이상 권한이 필요합니다.
@@ -286,6 +289,8 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 - `RAIBITSERVER_ALLOW_MEMORY_PERSISTENCE=1`은 production 안전 조건을 깨뜨립니다.
 - `RAIBITSERVER_DRY_RUN=1` 또는 `RAIBITSERVER_EXECUTE` 미설정 상태에서는 worker가 실제 apply/push/provision을 수행하지 않습니다.
 - builder는 `localPath`, `buildContext`, `dockerfilePath`를 workspace/source 경계 안으로만 해석합니다. 상위 디렉터리(`..`) 또는 절대 경로로 경계를 벗어나는 빌드 입력은 거부됩니다.
+- production의 익명 Git clone은 기본 차단됩니다. 공개 GitHub 저장소가 꼭 필요할 때만 Helm `builder.anonymousGit.enabled=true`를 명시하며, shared token이나 ambient Git credential은 사용하지 않습니다.
+- private GitHub source build는 verified installation/repository binding까지는 구현됐지만, Git clone용 exact-repository short-lived token broker가 연결되기 전까지 의도적으로 실패합니다. DB 연결 dispatcher와 tenant BuildKit executor의 Pod/NetworkPolicy 분리는 구현되어 있습니다.
 
 ### 5. 처음 서버 올리는 순서
 
@@ -303,13 +308,18 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
    - `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, GitHub/registry/provider secret을 secret manager에 저장합니다.
    - 회원가입 요청은 이메일 코드만 발송하고, 코드 인증이 성공해야 user/organization을 생성하고 세션 토큰을 발급합니다. 로컬 첫 verified auth 사용자는 `ADMIN / NON_CLUB / APPROVED`가 되고, 운영 첫 admin은 `ADMIN_EMAILS` + bootstrap token으로 제한됩니다. 인증 완료된 신규 회원가입은 먼저 `NON_CLUB`으로 시작하며, 운영자는 어드민 화면에서 `CLUB_MEMBER`/`NON_CLUB`을 전환합니다.
 4. **이미지 빌드/배포**
-   - API, Dashboard, Go workers 이미지를 빌드해 registry에 push합니다.
-   - Helm을 사용한다면 `infra/helm/raibitserver/values.yaml`의 `image.registry`, `image.tag`, `ingress.host`, replica 수를 환경에 맞게 덮어씁니다.
+   - 저장소 루트를 build context로 사용해 API, Dashboard, CLI와 Go service Dockerfile을 빌드하고 registry에 push합니다. 예: `docker build -f apps/api/Dockerfile -t <registry>/api:<tag> .`
+   - 배포 전 각 push 결과의 manifest-list digest를 확인하고 Helm의 `image.digests.api`, `dashboard`, `orchestrator`, `builder`, `provisioner`, `logIngester`, `metricsIngester`에 활성화할 component의 `sha256:...` 값을 넣습니다. production 모드는 tag-only 이미지를 허용하지 않습니다.
+   - live 관리형 PostgreSQL/MySQL/MariaDB/MongoDB/Redis/Valkey workload 이미지는 `provisioner.providerImages.*`에 `repository@sha256:<digest>` 형식으로 모두 지정합니다. production chart는 이 6개 이미지가 누락되거나 tag-only이면 거부합니다. MinIO/Qdrant/NATS 이미지는 plan-only adapter가 live bootstrap을 구현할 때까지 비워 둘 수 있으며, 값을 넣는 경우에도 digest pin은 필수입니다.
+   - certified provider 이미지는 restricted Pod Security의 엔진별 non-root UID/GID 계약(PostgreSQL `70`, MySQL/MariaDB/MongoDB/Redis/Valkey `999`)으로 실행되고 데이터 경로에 쓸 수 있어야 합니다. 또한 `/bin/sh`와 인증 확인 CLI(`psql`, `mysql`/`mariadb`, `mongosh`, `redis-cli`/`valkey-cli`)를 포함해야 합니다. provisioner는 생성한 자격 증명으로 실제 인증 명령이 성공한 뒤에만 READY로 전환합니다.
+   - `runtimeSecrets.existingSecret`, `database.existingSecret`, `ingress.tls.existingSecret`과 builder의 registry/signing/dispatch mTLS secret ref를 미리 생성합니다. `builder.dispatch.existingSecret`에는 release 전용 CA, dispatcher server keypair, executor client keypair가 필요하며 server certificate SAN은 `<release>-builder-dispatcher` Service DNS를 포함해야 합니다. GitHub 자격 증명을 shared builder Secret으로 만들거나 mount하지 않습니다. chart는 application credential Secret을 생성하지 않습니다.
+   - `infra/helm/raibitserver/ci-production-values.yaml`의 platform digest는 정적 chart 검증용 가짜 값이므로 실제 배포에 사용하지 않습니다. production 값은 `sh scripts/verify-helm.sh`로 fail-closed 조건을 먼저 검증합니다.
+   - chart의 `crds/`는 최초 설치 시 적용되지만 Helm upgrade에서 CRD schema를 자동 갱신하지 않습니다. CRD 변경은 백업과 호환성 검토 후 별도 승인 절차로 적용합니다.
 5. **API와 Dashboard 기동**
    - API는 `/api` global prefix를 사용합니다. health check와 auth/login/signup 경로를 확인합니다.
    - Dashboard는 `RAIBITSERVER_API_URL=https://api.<BASE_DOMAIN>/api`로 API를 바라보게 합니다.
 6. **Go worker 기동**
-   - builder/orchestrator/provisioner/log-ingester/metrics-ingester에 PostgreSQL control-plane URL을 주입합니다.
+   - builder dispatcher/orchestrator/provisioner/log-ingester/metrics-ingester에 PostgreSQL control-plane URL을 주입합니다. disposable builder executor에는 DB URL을 절대 주입하지 않습니다. 기본 chart는 겹치지 않는 CronJob batch마다 executor 4개를 병렬 실행하며 `builder.isolation.parallelism`/`completions`로 경계 내 처리량을 조정합니다.
    - 실제 적용 환경에서는 `RAIBITSERVER_EXECUTE=1`, build push가 필요하면 `RAIBITSERVER_PUSH=1`을 설정합니다.
 7. **GitHub App/OAuth 연결**
    - OAuth callback: `https://api.<BASE_DOMAIN>/api/auth/github/callback`
@@ -318,17 +328,24 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
    - 자세한 권한과 fixture 검증은 [GitHub App 문서](docs/github-app.md)와 [Preview Deployment 문서](docs/preview-deployments.md)를 참고하세요.
 8. **운영 smoke 검증**
    - 관리자 첫 로그인 → 조직/프로젝트 생성 → GitHub repo attach 또는 image service 생성 → deployment queue → worker 처리 → 서비스 URL 접속까지 확인합니다.
-   - Disposable cluster 기준 live 검증은 `RAIBITSERVER_EXECUTE=1 pnpm e2e:live`로 실행합니다.
+   - Disposable cluster의 Helm reconciliation 검증은 Docker daemon, kind, kubectl, Helm, Go toolchain이 있는 환경에서 `pnpm e2e:live`로 실행합니다. 이 명령은 `scripts/live-helm-e2e.sh`를 호출해 실제 API/orchestrator/provisioner 이미지를 빌드·로딩하고, migration/API health, 관리형 PostgreSQL 생성·immutable Secret·인증 쿼리·READY·주기 health reconciliation, Builder exhausted-attempt DB 복구, 삭제 lease 정밀도, 오케스트레이터의 DB 프로젝트/tenant namespace 삭제를 확인한 후 cluster를 제거합니다.
+   - 이 게이트는 Go Builder의 source build/registry push/signing, tenant workload HTTP 200, runtime log, preview cleanup을 아직 포함하지 않습니다. 전체 앱 lifecycle Beta 판정은 이 잔여 항목의 별도 live evidence도 필요합니다. 정확한 범위는 [Live E2E 문서](docs/live-e2e.md)를 참고하세요.
 
 ### 6. Kubernetes 보안 기본값
 
 - platform component는 `raibitserver-system` 같은 전용 namespace에 두고, 사용자 workload는 조직/프로젝트별 namespace로 분리합니다.
 - tenant workload에는 restricted Pod Security, non-root 실행, resource requests/limits, Secret ref, NetworkPolicy를 적용합니다.
-- manifest planner가 provider-owned managed resource 연결값을 미리 계산해야 할 때는 deterministic `provider-managed-*` placeholder를 쓰고 Secret에 `raibitserver.io/provider-contract=not-live-secret` annotation을 붙입니다. 이 값은 apply 가능한 live credential이 아니라 provisioner가 sealed provider secret으로 대체해야 하는 계약입니다. resource provisioner는 이런 placeholder를 Kubernetes Secret으로 apply하지 않고 `credentialsMode=provider-generated`와 provider 출력 secret 이름만 기록합니다.
+- TypeScript control plane의 provider 엔드포인트는 계획만 만들며 자격 증명이나 placeholder Secret을 쓰지 않습니다. authoritative Go provisioner만 암호학적 난수 자격 증명을 생성해 stdin으로 immutable Kubernetes Secret을 최초 1회 생성합니다. 재시도는 Secret을 읽지 않고 server-side create의 `AlreadyExists`만 확인하며, 기존 workload의 Secret이 사라졌다면 credential을 재생성하지 않습니다. workload에는 허용 key별 `secretKeyRef`만 주입하고 kubelet이 공개 connection contract와 실제 인증을 검사합니다. control-plane DB에는 Secret 이름·허용 환경변수 키·내부 endpoint 같은 공개 메타데이터만 기록하며 READY 리소스도 주기적으로 재검증합니다.
+- provisioner는 cluster-wide `pods/exec`와 Secret read 권한을 갖지 않습니다. managed namespace와 제한된 tenant RoleBinding만 bootstrap하고, provider object CRUD는 해당 namespace의 tenant role로 수행합니다. admission policy가 unmanaged namespace 채택, 다른 ClusterRole/ServiceAccount 바인딩, ownership label이 없는 provider object 변경을 거부합니다.
 - tenant spec의 `prePullImages`/`runtime.prePullImages`/`performance.prePullImages`는 DaemonSet을 만들지 않습니다. node-wide image warming은 tenant manifest가 아니라 operator-controlled 배포 정책에서만 허용해야 합니다.
 - privileged container, hostPath, hostNetwork, root 실행, quota 초과 배포는 배포 전 차단되어야 합니다.
 - orchestrator service account는 필요한 namespace/resource에만 권한을 주고 cluster-admin 상시 권한은 피합니다.
 - registry pull secret과 provider credential은 사용자가 API body로 직접 넘기는 값이 아니라 platform secret/ref로 관리합니다.
+- production Helm 배포는 digest-pinned checker 이미지로 `pre-install,pre-upgrade` 검증 Job을 실행합니다. 이 hook은 지정한 `ValidatingWebhookConfiguration` 안의 정확한 webhook 이름, `failurePolicy=Fail`, 설정한 `clientConfig.service` 또는 `clientConfig.url`, namespaced core/v1 Pod `CREATE`/`UPDATE` 규칙, 안전한 `raibitserver.io/managed=true` selector 계약을 확인합니다. 또한 trust-root Secret의 정확한 `.data[key]`가 비어 있지 않은지와 verifier Deployment/Service가 모두 존재하는지를 최소 `get` RBAC으로 확인하며, 실패하면 일반 workload가 설치되기 전에 release를 중단합니다. `helm lint/template`은 값과 manifest 계약만 오프라인 검증하므로, 클러스터에 verifier나 trust-root가 실제로 없으면 설치/업그레이드 시 hook 실행이 실패하는 것이 정상적인 fail-closed 동작입니다. checker 이미지는 `/bin/sh`, `kubectl`을 포함해야 하며 production에서는 반드시 sha256 digest로 고정합니다.
+- builder dispatcher의 database egress는 `builder.databaseEgress`에 TCP port와 namespace/pod selector peer 또는 CIDR을 명시합니다. production 값에서 대상이 하나도 없으면 Helm render가 실패합니다. executor NetworkPolicy에는 이 규칙이 없고, public egress의 `except`에도 설정된 DB CIDR을 넣습니다.
+- log/metrics ingester는 기본값이 비활성입니다. production에서 활성화하려면 각각의 digest와 공용 `database.existingSecret`을 준비하고, `observability.networkPolicy.kubernetesApiEgress.cidrs`와 `databaseEgress.selectorPeers` 또는 `databaseEgress.cidrs`를 명시해야 합니다. 대상이 비어 있으면 Helm render가 실패합니다.
+- log ingester service account는 Pod 조회와 `pods/log` 읽기만, metrics ingester service account는 `metrics.k8s.io` Pod 조회만 허용합니다. metrics ingester를 활성화하는 cluster에는 Metrics API를 제공하는 metrics-server 등도 필요합니다.
+- 두 ingester는 외부 HTTP endpoint나 Service를 열지 않는 batch-style worker입니다. 자체 health endpoint가 없으므로 HTTP probe를 만들지 않으며, 치명 오류 시 process 종료와 Deployment restart 정책으로 복구합니다.
 
 ### 7. 방화벽과 네트워크
 
@@ -360,10 +377,11 @@ pnpm typecheck
 pnpm lint
 pnpm prisma:validate
 pnpm prisma:generate
+sh scripts/verify-helm.sh
+pnpm e2e:live
 node src/cli.js validate examples/project.json
 node src/cli.js manifest examples/project.json >/tmp/raibitserver-manifest.json
 node src/cli.js compose examples/docker-compose.yml >/tmp/raibitserver-compose-plan.json
-RAIBITSERVER_EXECUTE=1 pnpm e2e:live
 ```
 
 Go가 설치된 운영 빌드 환경에서는 다음도 함께 확인합니다.
@@ -378,22 +396,20 @@ Production 세부 항목은 [Production 배포 문서](deploy/production/README.
 
 ## DB와 리소스 지원 범위
 
-RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로젝트에 연결되는 catalog resource입니다. `shared-small` DBaaS/cache 플랜은 resource마다 PostgreSQL/MySQL/MongoDB/Redis 컨테이너를 새로 띄우지 않고, 공유 provider 안에 database/user/bucket/collection/prefix를 생성합니다. 이때 shared-provider tenant 이름(prefix 포함)은 `projectSlug`가 없더라도 `organizationId/projectId/resourceId` 기반으로 생성되어 프로젝트 간 충돌을 방지합니다.
+RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로젝트에 연결되는 catalog resource입니다. TypeScript의 `shared-small` plan은 향후 공유 provider 안에 tenant primitive를 생성하기 위한 provider-neutral 계약입니다. 현재 authoritative Go live adapter는 이 공유 모델을 아직 실행하지 않으며, 각 리소스를 프로젝트 namespace의 전용 PVC/Service/StatefulSet으로 생성하는 `raibitserver-local-*` 구현입니다. 따라서 현재 live 경로를 shared capacity나 tenant-level backup/ACL이 구현된 것으로 해석하면 안 됩니다.
 
 | 엔진 | 로컬 proof | Provider contract |
 | --- | --- | --- |
-| PostgreSQL | provider dry-run, env injection, console contract | shared PostgreSQL + PgBouncer, database/user/grant, `DATABASE_URL`, connection test, `pg_dump -Fc` backup/restore |
-| MySQL/MariaDB | env/provision plan | shared server, DB/user/password/grant |
-| MongoDB | collection/document contract | shared server, database/user/URI, `mongodump --db` |
-| Redis/Valkey | key/value/TTL contract | shared server, ACL user + `REDIS_KEY_PREFIX`, key browser, prefix delete via `SCAN MATCH` + `UNLINK` |
-| SQLite | 실행 가능한 로컬 console | PVC-backed file DB |
-| Object Storage | MinIO/S3 env plan | bucket/browser/presign |
-| Qdrant/vector | collection/search-test contract | vector collection/search |
-| NATS/queue | subject/connection contract | queue connection info |
+| PostgreSQL | dry-run + dedicated-local 구현; release live evidence 대기 | immutable credential, authenticated `SELECT 1`, `DATABASE_URL` Secret ref |
+| MySQL/MariaDB | dry-run + dedicated-local 구현; release live evidence 대기 | immutable credential, authenticated `SELECT 1` |
+| MongoDB | dry-run + dedicated-local 구현; release live evidence 대기 | immutable credential, authenticated ping |
+| Redis/Valkey | dry-run + dedicated-local 구현; release live evidence 대기 | immutable credential, authenticated `PING` |
+| SQLite | 실행 가능한 로컬 console | Go live managed-resource adapter 대상 아님 |
+| Object Storage | MinIO/S3 env plan | bucket bootstrap/HeadBucket 전까지 live fail-closed |
+| Qdrant/vector | collection/search-test plan | collection bootstrap/auth check 전까지 live fail-closed |
+| NATS/queue | subject/connection plan | stream/subject bootstrap/auth smoke 전까지 live fail-closed |
 
-운영 리스크는 공유 인스턴스의 본질적인 trade-off입니다. noisy neighbor, 낮은 프로세스/디스크 I/O 격리, 프로젝트 단위 백업/복구 복잡도, Redis prefix-only 위험을 줄이기 위해 quota/metering, timeout, PgBouncer, provider-owned secret, Redis ACL key pattern, dedicated plan 승격 경로를 함께 둡니다.
-
-베타에서는 destructive operation 방지와 기본 연결/timeout 제한을 우선 구현합니다. PostgreSQL resource plan은 PgBouncer 경유 URL과 role별 connection/statement/idle/lock timeout 계약을 생성하고, `shared-small` SQL 리소스의 서비스 바인딩 env에는 기본 `connection_limit=3` 및 `*_CONNECTION_LIMIT`가 주입됩니다. Redis/Valkey plan은 ACL + prefix와 `SCAN MATCH`/`UNLINK` 삭제만 허용합니다. 자동 noisy-neighbor 탐지, per-prefix Redis restore, dedicated plan 자동 승격은 정식 버전 범위로 문서화했습니다.
+공유 provider의 noisy-neighbor 제어, PgBouncer, tenant별 role/ACL/quota, primitive 단위 백업·복구는 목표 계약이며 현재 Go live adapter의 완료 기능이 아닙니다. Closed Beta에서는 위 6개 dedicated-local 엔진만 digest-pinned certified image와 인증 probe를 통과한 경우 활성화하고, 나머지는 계획만 제공하거나 실패하도록 운영해야 합니다.
 
 자세한 내용은 [리소스 프로비저닝](docs/provisioning.md)과 [DB console](docs/db-console.md)을 참고하세요.
 
@@ -403,7 +419,7 @@ RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로
 
 - `pnpm install --frozen-lockfile` 실패: Node.js 24+와 pnpm 11.1.2를 확인합니다.
 - Production API 부팅 실패: `DATABASE_URL`, auth secret, encryption key를 확인합니다.
-- dry E2E는 성공하지만 live E2E가 실패: Docker, kubectl, kind/k3d와 `.raibitserver-work/e2e-report.json`의 `liveSetupResults`를 확인합니다.
+- dry E2E는 성공하지만 live E2E가 실패: Docker daemon, kind, kubectl, Helm, Go가 준비됐는지 확인하고, 실패 시 출력되는 control-plane/provider namespace diagnostics를 확인합니다.
 - DB console query 거부: 역할, `confirmed: true`, provider-owned connection 여부를 확인합니다.
 
 ## 지원, 라이선스, 변경 이력

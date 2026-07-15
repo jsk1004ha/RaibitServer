@@ -1,37 +1,73 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: raibitserver-api
+  name: {{ include "raibitserver.fullname" . }}-api
   labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
     app.kubernetes.io/name: raibitserver-api
-    app.kubernetes.io/managed-by: helm
+    app.kubernetes.io/component: api
 spec:
+  {{- if not .Values.api.autoscaling.enabled }}
   replicas: {{ .Values.api.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: raibitserver-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
         app.kubernetes.io/name: raibitserver-api
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: api
     spec:
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: api
-          image: "{{ .Values.image.registry }}/raibitserver/api:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.registry }}/raibitserver/api{{ if .Values.image.digests.api }}@{{ .Values.image.digests.api }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: {{ .Values.api.port | quote }} }
+            - name: RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE
+              value: {{ .Values.ingress.gatewayNamespace | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | quote }}
+                  key: {{ .Values.database.urlKey | quote }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.runtimeSecrets.existingSecret | quote }}
           ports:
-            - containerPort: 3000
+            - { name: http, containerPort: {{ .Values.api.port }}, protocol: TCP }
+          startupProbe:
+            httpGet: { path: /api/health, port: http }
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 2
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: {{ .Values.api.resources.requests.cpu | quote }}
+              memory: {{ .Values.api.resources.requests.memory | quote }}
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: {{ .Values.api.resources.limits.cpu | quote }}
+              memory: {{ .Values.api.resources.limits.memory | quote }}
           securityContext:
             readOnlyRootFilesystem: true
             runAsUser: 10001
@@ -44,4 +80,5 @@ spec:
               mountPath: /tmp
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 128Mi

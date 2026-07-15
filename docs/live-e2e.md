@@ -1,83 +1,71 @@
-# Live E2E
+# Live kind / Helm reconciliation gate
 
-> `pnpm e2e:live`는 Docker, kind/k3d, kubectl을 사용해 실제 local cluster에 build → push → deploy → rollout → HTTP 200 → DB/resource evidence → preview cleanup까지 수행하는 side-effecting 베타 gate입니다.
-
-## 목적
-
-Dry-run으로는 확인할 수 없는 registry, cluster, ingress, rollout, image pull, live provider 경계를 검증합니다. 일반 CI 기본값은 dry E2E이며, live E2E는 의도적으로 실행할 때만 사용합니다.
+> `pnpm e2e:live`는 disposable kind cluster에 실제 Helm chart를 설치해 control-plane의 migration, API, Provisioner, Orchestrator 실행 경계를 검증하는 side-effecting gate입니다.
 
 ## 실행 명령
 
 ```sh
-pnpm dev:up
 pnpm e2e:live
-pnpm dev:down
 ```
 
-Alias는 `pnpm dev:e2e:live`입니다.
+정확한 이름의 canonical command는 `pnpm e2e:live:helm`이며, `pnpm e2e:live`와 `pnpm dev:e2e:live`는 모두 이 명령을 호출합니다. 기존 TypeScript 실행기인 `scripts/dev-e2e.mjs`는 `pnpm e2e:dry`와 `pnpm dev:e2e:dry` 전용입니다.
+
+`pnpm e2e:live` 자체가 명시적인 side-effecting 명령이므로 별도의 `RAIBITSERVER_EXECUTE=1`은 필요하지 않습니다. 스크립트는 전용 cluster를 만들고 성공·실패와 관계없이 종료 시 삭제합니다. 같은 이름의 cluster가 이미 있으면 덮어쓰지 않고 실패합니다.
 
 ## 사전 요구사항
 
-- Docker + BuildKit/buildx
+- Bash
+- 실행 중인 Docker daemon
+- `kind`
 - `kubectl`
-- `kind` 또는 `k3d`
-- 기본값 `localhost:5000`이 맞지 않으면 `REGISTRY_URL`
+- Helm
+- `curl`
+- Go toolchain
+- `base64`
 
-필수 도구가 없으면 build, push, `kubectl apply`를 시작하기 전에 non-zero로 종료합니다. 기본 dry-run은 이 경우에도 deterministic fallback report를 생성합니다.
+스크립트는 필요한 도구를 먼저 확인하고, 하나라도 없으면 이미지 build나 cluster 생성 전에 non-zero로 종료합니다. k3d는 현재 이 게이트의 대체 실행기가 아닙니다.
 
-## 실행 중 준비하는 것
+## 현재 검증 범위
 
-Live mode는 `--execute` 계약과 도구 준비가 모두 충족될 때 다음을 준비합니다.
+게이트는 다음 증거를 실제 프로세스와 Kubernetes API에서 확인합니다.
 
-1. `raibitserver-registry` local registry (`:5000`)
-2. `raibitserver-e2e` disposable kind 또는 k3d cluster
-3. registry-to-cluster wiring
-   - kind: containerd mirror, Docker network 연결, `kube-public/local-registry-hosting` ConfigMap
-   - k3d: `--registry-use`
-4. RAIBITSERVER managed resource CRD 설치
-5. ingress-nginx 설치, `raibitserver.io/ingress-gateway=true` namespace label, readiness wait
-6. Express Dockerfile app build/push
-7. Vite Dockerfile app build/push
-8. generated Dockerfile app build/push
-9. prebuilt image retag/push/deploy
-10. local PostgreSQL provider Deployment/Service apply와 `SELECT 1` 확인
-11. Kubernetes workload apply, rollout status, ingress HTTP 200, log/event evidence
-12. SQLite console query, PR preview 생성, PR closed cleanup enqueue 확인
+1. API, Orchestrator, Provisioner production image를 repository Dockerfile로 build합니다.
+2. digest-pinned PostgreSQL image와 platform image를 disposable kind cluster에 load합니다.
+3. 실제 Helm chart를 설치하고 Prisma migration hook이 완료됐는지 PostgreSQL에서 확인합니다.
+4. API deployment rollout과 `/api/health` 응답을 확인합니다.
+5. Provisioner가 PostgreSQL Resource row를 claim해 tenant namespace, PVC, StatefulSet, immutable credential Secret을 만들고 인증된 `SELECT 1` 및 주기 health reconciliation을 완료하는지 확인합니다.
+6. credential Secret UID를 저장하고, 같은 이름으로 교체된 Secret을 UID fence가 거부하는지 확인합니다.
+7. 실제 PostgreSQL을 대상으로 Builder의 exhausted final-attempt reaper, Orchestrator deletion lease timestamp 정밀도, Provisioner의 교체된 credential Secret UID fence 회귀를 실행합니다.
+8. Orchestrator가 `DELETE_REQUESTED` Project를 claim해 tenant namespace와 DB row를 삭제하고 `dryRun=false`, `project_deleted` 로그를 남기는지 확인합니다.
 
-## 증거 파일
+성공 시 마지막 줄에 아래 범위를 명시한 PASS 메시지가 출력됩니다. 이 스크립트는 `.raibitserver-work/live-e2e-report.json`을 만들지 않으며, 종료 코드와 cluster/DB/Kubernetes assertion이 증거입니다.
 
-Live mode는 `.raibitserver-work/e2e-report.json`와 `.raibitserver-work/live-e2e-report.json`를 씁니다. Dry mode는 같은 schema를 `.raibitserver-work/e2e-report.json`에만 씁니다.
+## 현재 포함하지 않는 범위
 
-핵심 필드:
+This gate does not exercise the Go Builder source build, registry push, tenant workload rollout, service URL HTTP 200, runtime log ingestion, or preview cleanup. DB-connected dispatcher와 DB credential이 없는 disposable BuildKit executor의 분리 경로는 chart/code에 구현됐지만 실제 cluster mTLS·NetworkPolicy 증거는 아직 이 gate의 성공 범위에 포함되지 않습니다. Private GitHub source는 Git clone용 exact-repository short-lived token broker가 연결되기 전까지 fail-closed입니다.
 
-- `tools`: Docker/kubectl/kind/k3d/go 감지 결과
-- `liveSetup`, `liveSetupResults`: registry/cluster/ingress/CRD setup 계획과 실행 결과
-- `liveBeta.services`: service별 deployment id, image URL, image digest
-- `liveBeta.rolloutResults`: `kubectl rollout status`와 PostgreSQL `SELECT 1` 결과
-- `liveBeta.httpResults`: public/local ingress URL HTTP status
-- `liveBeta.betaChecklist`: 베타 Live E2E checklist 항목별 boolean
-- `previewDeploymentId`, `previewCleanupAction`: PR preview와 cleanup evidence
-- `buildDryRun`, `kubernetesDryRun`, `provisionDryRun`: live에서는 모두 `false`
+Go Builder의 live 성공 경로는 현재 구조상 외부에서 접근 가능한 non-private OCI registry, registry 인증, fail-closed scanner database, secret-backed signing key와 signature repository를 요구합니다. Builder는 live 모드에서 localhost/private registry, scan 비활성화, signing 비활성화 또는 signing key 누락을 의도적으로 거부합니다. 따라서 kind 내부 임시 registry나 scan/sign stub으로 성공을 꾸미지 않습니다.
 
-## 통과 기준
+In short, the remaining Builder gate needs an external registry, signing infrastructure, and scanner data that this disposable cluster does not provide.
 
-```txt
-[ ] pnpm e2e:live exit code 0
-[ ] .raibitserver-work/live-e2e-report.json 존재
-[ ] liveBeta.betaChecklist 모든 값 true
-[ ] buildDryRun=false
-[ ] kubernetesDryRun=false
-[ ] provisionDryRun=false
-[ ] liveBeta.httpResults 모든 statusCode=200
-[ ] liveBeta.services 모든 imageDigest 존재
-```
+이 누락 범위는 전체 애플리케이션 lifecycle Closed Beta gate의 잔여 조건입니다. 현재 `pnpm e2e:live` 성공은 Helm control-plane reconciliation gate 통과를 뜻하며, source build → registry push → workload deploy → HTTP 200 → runtime log → preview cleanup 전체 통과를 뜻하지 않습니다.
 
-## CI에서의 위치
+## CI
 
-수동 실행용 GitHub Actions workflow는 `.github/workflows/live-e2e.yml`에 있습니다. 기본 runner는 `self-hosted` 계열로 가정하므로 일반 PR은 dry E2E를 기본 proof로 사용합니다.
+- `.github/workflows/ci.yml`의 `live-helm-e2e` job이 일반 CI에서 pinned kind/kubectl/Helm/Go 도구로 같은 스크립트를 실행합니다.
+- `.github/workflows/live-e2e.yml`은 `workflow_dispatch`로 같은 public command인 `pnpm e2e:live`를 수동 실행합니다.
+- 두 job 모두 유한 timeout을 사용합니다.
+
+## 문제 해결
+
+- Docker 연결 실패: Docker daemon이 실행 중인지 확인합니다.
+- 기존 cluster 충돌: `kind get clusters`로 확인하거나 `RAIBITSERVER_LIVE_E2E_CLUSTER`에 새 이름을 지정합니다.
+- Helm/worker 실패: 실패 시 출력되는 control-plane 및 provider namespace resource/log diagnostics를 확인합니다.
+- 로컬에서 kind 실행이 불가능하면 `bash -n scripts/live-helm-e2e.sh`와 정적 회귀 테스트만 통과했다고 전체 live gate 성공으로 간주하지 않습니다.
 
 ## 관련 문서
 
-- [로컬 E2E](local-e2e.md)
+- [로컬 dry E2E](local-e2e.md)
 - [검증 명령](verification-commands.md)
+- [베타 출시 기준](beta-criteria.md)
 - [문제 해결](troubleshooting.md)

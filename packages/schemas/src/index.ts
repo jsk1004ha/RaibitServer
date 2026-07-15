@@ -28,7 +28,6 @@ export const ServiceCreateSchema = z.object({
   sourceType: SourceTypeSchema.default('github'),
   buildMode: BuildModeSchema.optional(),
   repoUrl: z.string().url().or(z.string().regex(/^[\w.-]+\/[\w.-]+$/)).optional(),
-  githubRepositoryId: z.string().optional(),
   branch: z.string().optional(),
   rootDirectory: z.string().optional(),
   buildContext: z.string().optional(),
@@ -105,10 +104,10 @@ export type ResourceSpec = z.input<typeof ResourceCreateSchema> & { id?: string;
 export type ProjectSpec = z.input<typeof ProjectCreateSchema> & { id?: string };
 export type DeploymentRequest = z.input<typeof DeploymentCreateSchema> & { projectId?: string; serviceId?: string };
 export interface DeploymentSpec extends DeploymentRequest { id?: string; projectId?: string; serviceId: string; status?: DeploymentStatus; imageDigest?: string | null; errorCode?: string | null; errorMessage?: string | null; previewUrl?: string | null; workflowJob?: Record<string, unknown>; }
-export interface ProjectListResponse { projects: ProjectSpec[]; }
-export interface ServiceListResponse { services: ServiceSpec[]; }
-export interface ResourceListResponse { resources: ResourceSpec[]; }
-export interface DeploymentListResponse { deployments: DeploymentSpec[]; }
+export interface ProjectListResponse { projects: ProjectSpec[]; nextCursor?: string | null; }
+export interface ServiceListResponse { services: ServiceSpec[]; nextCursor?: string | null; }
+export interface ResourceListResponse { resources: ResourceSpec[]; nextCursor?: string | null; }
+export interface DeploymentListResponse { deployments: DeploymentSpec[]; nextCursor?: string | null; }
 
 export interface ApiEnvelope<T> { data?: T; error?: string; }
 export interface UserSession { user: Record<string, unknown>; memberships: Array<Record<string, unknown>>; token: string; }

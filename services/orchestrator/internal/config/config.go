@@ -2,18 +2,23 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"time"
 )
 
 type Config struct {
-	DatabaseURL string
-	Kubeconfig  string
-	KubeContext string
-	StateFile   string
-	OutputDir   string
-	BaseDomain  string
-	DryRun      bool
-	Timeout     time.Duration
+	DatabaseURL             string
+	Kubeconfig              string
+	KubeContext             string
+	StateFile               string
+	OutputDir               string
+	BaseDomain              string
+	IngressGatewayNamespace string
+	DryRun                  bool
+	Timeout                 time.Duration
+	PollInterval            time.Duration
+	ClaimLease              time.Duration
+	WorkerID                string
 }
 
 func FromEnv() Config {
@@ -23,16 +28,35 @@ func FromEnv() Config {
 			timeout = parsed
 		}
 	}
+	pollInterval := secondsEnv("RAIBITSERVER_RECONCILE_INTERVAL_SECONDS", 5*time.Second)
+	claimLease := secondsEnv("RAIBITSERVER_CLAIM_LEASE_SECONDS", 15*time.Minute)
+	hostname, _ := os.Hostname()
 	return Config{
-		DatabaseURL: os.Getenv("DATABASE_URL"),
-		Kubeconfig:  os.Getenv("KUBECONFIG"),
-		KubeContext: os.Getenv("RAIBITSERVER_KUBE_CONTEXT"),
-		StateFile:   firstNonEmpty(os.Getenv("RAIBITSERVER_CONTROL_PLANE_FILE"), os.Getenv("RAIBITSERVER_STATE_FILE"), os.Getenv("RAIBITSERVER_WORKFLOW_STATE")),
-		OutputDir:   firstNonEmpty(os.Getenv("RAIBITSERVER_ORCHESTRATOR_OUTPUT_DIR"), ".raibitserver-work/orchestrator"),
-		BaseDomain:  firstNonEmpty(os.Getenv("BASE_DOMAIN"), os.Getenv("RAIBITSERVER_BASE_DOMAIN"), "raibitserver.local"),
-		DryRun:      os.Getenv("RAIBITSERVER_DRY_RUN") != "0" && os.Getenv("RAIBITSERVER_EXECUTE") != "1",
-		Timeout:     timeout,
+		DatabaseURL:             firstNonEmpty(os.Getenv("RAIBITSERVER_CONTROL_PLANE_DATABASE_URL"), os.Getenv("DATABASE_URL")),
+		Kubeconfig:              os.Getenv("KUBECONFIG"),
+		KubeContext:             os.Getenv("RAIBITSERVER_KUBE_CONTEXT"),
+		StateFile:               firstNonEmpty(os.Getenv("RAIBITSERVER_CONTROL_PLANE_FILE"), os.Getenv("RAIBITSERVER_STATE_FILE"), os.Getenv("RAIBITSERVER_WORKFLOW_STATE")),
+		OutputDir:               firstNonEmpty(os.Getenv("RAIBITSERVER_ORCHESTRATOR_OUTPUT_DIR"), ".raibitserver-work/orchestrator"),
+		BaseDomain:              firstNonEmpty(os.Getenv("BASE_DOMAIN"), os.Getenv("RAIBITSERVER_BASE_DOMAIN"), "raibitserver.local"),
+		IngressGatewayNamespace: firstNonEmpty(os.Getenv("RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE"), "ingress-nginx"),
+		DryRun:                  os.Getenv("RAIBITSERVER_DRY_RUN") != "0" && os.Getenv("RAIBITSERVER_EXECUTE") != "1",
+		Timeout:                 timeout,
+		PollInterval:            pollInterval,
+		ClaimLease:              claimLease,
+		WorkerID:                firstNonEmpty(os.Getenv("RAIBITSERVER_WORKER_ID"), hostname, "raibitserver-orchestrator"),
 	}
+}
+
+func secondsEnv(name string, fallback time.Duration) time.Duration {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return fallback
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func firstNonEmpty(values ...string) string {

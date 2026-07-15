@@ -1,31 +1,93 @@
-import { ControlPlaneStore } from './store.ts';
+import type { PrismaClient } from '@prisma/client';
+import { AUTH_RETENTION_PRUNE_BATCH_SIZE, ControlPlaneStore } from './store.ts';
 import { deepClone, stableId } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { openSecret, sealSecret } from './secret-vault.ts';
 import { secretEncryptionConfigured } from './config.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
-import { providerConnectionEnvForResource, provisionResourceProvider as provisionAnyResourceProvider } from './resource-providers.ts';
+import { buildResourceProviderPlan, publicResourceProviderPlan } from './resource-providers.ts';
 import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
-import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
+import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
 import { redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate } from './security.ts';
-import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
+import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
+import { parseGitHubRepository } from './github-integration.ts';
 import {
-  deploymentBuildMinutes,
-  deploymentRuntimeHours,
+  activityLimit,
+  boundedKeysetRows,
+  deploymentBuildMinutesWithin,
+  deploymentRuntimeHoursWithin,
   isProviderConnectionSecret,
-  prefixEnv,
-  providerConnectionFromEnv,
-  providerEnvFromConnection,
+    kubernetesExternalSecretRef,
+    providerConnectionFromEnv,
+    providerSecretEnvRefs,
   resourceQuotaMetric,
   resourceStorageMb,
   resourceTypeForEngine,
+  prismaKeysetFilter,
   serviceCpuMillicores,
   serviceMemoryMb,
   usageMetricSum,
+  utcMonthBounds,
 } from './store-helpers.ts';
+
+type QuotaRequirement = { metric: string; increment: number };
+
+function combineQuotaRequirements(requirements: QuotaRequirement[]) {
+  const combined = new Map<string, number>();
+  for (const requirement of requirements) {
+    if (!requirement?.metric) continue;
+    combined.set(requirement.metric, Number(combined.get(requirement.metric) || 0) + Number(requirement.increment || 0));
+  }
+  return [...combined.entries()]
+    .map(([metric, increment]) => ({ metric, increment }))
+    .filter((requirement) => Number.isFinite(requirement.increment) && requirement.increment > 0);
+}
+
+function serviceQuotaRequirements(existing: Record<string, any> | null | undefined, requested: Record<string, any>): QuotaRequirement[] {
+  return [
+    { metric: 'maxServices', increment: existing ? 0 : 1 },
+    { metric: 'maxCpuMillicores', increment: serviceCpuMillicores(requested) - serviceCpuMillicores(existing || {}) },
+    { metric: 'maxMemoryMb', increment: serviceMemoryMb(requested) - serviceMemoryMb(existing || {}) },
+  ];
+}
+
+function resourceQuotaRequirements(existing: Record<string, any> | null | undefined, requested: Record<string, any>): QuotaRequirement[] {
+  const requestedMetric = resourceQuotaMetric(requested);
+  const requestedStorage = resourceStorageMb(requested, { includeDesiredState: true });
+  if (!existing) return [{ metric: requestedMetric, increment: requestedStorage }];
+  const existingMetric = resourceQuotaMetric(existing);
+  const existingStorage = resourceStorageMb(existing, { includeDesiredState: true });
+  if (existingMetric === requestedMetric) return [{ metric: requestedMetric, increment: requestedStorage - existingStorage }];
+  return [
+    { metric: existingMetric, increment: -existingStorage },
+    { metric: requestedMetric, increment: requestedStorage },
+  ];
+}
+
+function deploymentQuotaRequirements(deploymentType: any): QuotaRequirement[] {
+  return [
+    { metric: 'maxDeploymentsPerDay', increment: 1 },
+    ...(String(deploymentType || 'production').toLowerCase() === 'preview' ? [{ metric: 'maxPreviewDeployments', increment: 1 }] : []),
+  ];
+}
+
+function snapshotInMemoryStore(store: ControlPlaneStore) {
+  const snapshot: Record<string, any> = {};
+  for (const [key, value] of Object.entries(store)) {
+    if (typeof value === 'function') continue;
+    snapshot[key] = value instanceof Map
+      ? new Map([...value.entries()].map(([entryKey, entryValue]) => [entryKey, deepClone(entryValue)]))
+      : deepClone(value);
+  }
+  return snapshot;
+}
+
+function restoreInMemoryStore(store: ControlPlaneStore, snapshot: Record<string, any>) {
+  for (const [key, value] of Object.entries(snapshot)) (store as any)[key] = value;
+}
 
 export class InMemoryControlPlaneRepository {
   store: ControlPlaneStore;
@@ -38,24 +100,44 @@ export class InMemoryControlPlaneRepository {
   async findOrganizationBySlug(slug: string) { return this.store.findOrganizationBySlug(slug); }
   async createUser(input: Record<string, any>) { return this.store.createUser(input); }
   async findUserByEmail(email: string) { return this.store.findUserByEmail(email); }
+  async countUsers(limit = 1) { return this.store.countUsers(limit); }
+  async findUserById(userId: string) { return this.store.findUserById(userId); }
+  async incrementSessionVersion(userId: string) { return this.store.incrementSessionVersion(userId); }
+  async consumeAuthRateLimit(input: Record<string, any>) { return this.store.consumeAuthRateLimit(input); }
+  async peekAuthRateLimit(input: Record<string, any>) { return this.store.peekAuthRateLimit(input); }
+  async resetAuthRateLimit(key: string) { return this.store.resetAuthRateLimit(key); }
   async createEmailVerificationCode(input: Record<string, any>) { return this.store.createEmailVerificationCode(input); }
+  async replaceEmailVerificationCode(input: Record<string, any>) { return this.store.replaceEmailVerificationCode(input); }
   async invalidatePendingEmailVerificationCodes(email: string) { return this.store.invalidatePendingEmailVerificationCodes(email); }
   async findPendingEmailVerificationCode(email: string, purpose?: string) { return this.store.findPendingEmailVerificationCode(email, purpose); }
   async incrementEmailVerificationAttempts(id: string) { return this.store.incrementEmailVerificationAttempts(id); }
   async consumeEmailVerificationCode(id: string, consumedAt?: string) { return this.store.consumeEmailVerificationCode(id, consumedAt); }
+  async completeSignupEmailVerification(input: Record<string, any>) { return this.store.completeSignupEmailVerification(input); }
   async markUserEmailVerified(userId: string, verifiedAt?: string) { return this.store.markUserEmailVerified(userId, verifiedAt); }
   async recordEmailDelivery(input: Record<string, any>) { return this.store.recordEmailDelivery(input); }
   async findUserByGitHubId(githubId: string) { return this.store.findUserByGitHubId(githubId); }
   async linkGitHubUser(userId: string, input: Record<string, any> = {}) { return this.store.linkGitHubUser(userId, input); }
   async addMember(input: Record<string, any>) { return this.store.addMember(input); }
+  async removeMember(input: Record<string, any>) { return this.store.removeMember(input); }
   async listMembershipsForUser(userId: string) { return this.store.listMembershipsForUser(userId); }
-  async createProject(input: Record<string, any>) { return this.store.createProject(input); }
+  async createProject(input: Record<string, any>) {
+    const slug = slugInput(input.slug || input.name);
+    const existing = [...this.store.projects.values()].find((project) => String(project.organizationId) === String(input.organizationId) && String(project.slug) === slug);
+    return this.runQuotaMutation(input.actorUserId, 'project:create', [{ metric: 'maxProjects', increment: existing ? 0 : 1 }], () => this.store.createProject({ ...input, status: input.actorUserId ? 'ACTIVE' : input.status }));
+  }
   async updateProject(projectId: string, updates: Record<string, any>) { return this.store.updateProject(projectId, updates); }
   async deleteProject(projectId: string) { return this.store.deleteProject(projectId); }
-  async createService(input: Record<string, any>) { return this.store.createService(input); }
-  async updateService(serviceId: string, updates: Record<string, any>) { return this.store.updateService(serviceId, updates); }
+  async createService(input: Record<string, any>, options: Record<string, any> = {}) {
+    const slug = slugInput(input.slug || input.name);
+    const existing = [...this.store.services.values()].find((service) => String(service.projectId) === String(input.projectId) && String(service.slug) === slug);
+    return this.runQuotaMutation(input.actorUserId, 'service:create', serviceQuotaRequirements(existing, input), () => this.store.createService(input, options));
+  }
+  async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateService(serviceId, updates, options); }
   async deleteService(serviceId: string) { return this.store.deleteService(serviceId); }
-  async createResource(input: Record<string, any>) { return this.store.createResource(input); }
+  async createResource(input: Record<string, any>) {
+    const existing = [...this.store.resources.values()].find((resource) => String(resource.projectId) === String(input.projectId) && String(resource.name) === String(input.name));
+    return this.runQuotaMutation(input.actorUserId, 'resource:create', resourceQuotaRequirements(existing, input), () => this.store.createResource(input));
+  }
   async updateResource(resourceId: string, updates: Record<string, any>) { return this.store.updateResource(resourceId, updates); }
   async deleteResource(resourceId: string) { return this.store.deleteResource(resourceId); }
   async attachProviderConnectionSecret(input: Record<string, any>) { return this.store.attachProviderConnectionSecret(input); }
@@ -64,35 +146,85 @@ export class InMemoryControlPlaneRepository {
   async createDeployment(input: Record<string, any>) { return this.store.createDeployment(input); }
   async updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateDeployment(deploymentId, updates, options); }
   async transitionDeployment(deploymentId: string, status: string, updates: Record<string, any> = {}, options: Record<string, any> = {}) { return this.store.transitionDeployment(deploymentId, status, updates, options); }
-  async cancelDeployment(deploymentId: string, input: Record<string, any> = {}) { return this.store.cancelDeployment(deploymentId, input); }
-  async rollbackDeployment(deploymentId: string, input: Record<string, any> = {}) { return this.store.rollbackDeployment(deploymentId, input); }
+  async cancelDeployment(deploymentId: string, input: Record<string, any> = {}) {
+    return this.runQuotaMutation(null, 'deployment:cancel', [], () => this.store.cancelDeployment(deploymentId, input));
+  }
+  async rollbackDeployment(deploymentId: string, input: Record<string, any> = {}) {
+    const deployment = this.store.deployments.get(deploymentId);
+    return this.runQuotaMutation(input.actorUserId, 'deployment:create', deploymentQuotaRequirements(deployment?.deploymentType), () => this.store.rollbackDeployment(deploymentId, input));
+  }
   async createSecret(input: Record<string, any>) { return this.store.createSecret(input); }
   async createDeploymentWorkflow(input: Record<string, any>) {
-    const deployment = this.store.createDeployment(input.deployment || input);
-    const workflowJob = this.store.enqueueWorkflowJob({
-      type: input.workflow?.type || 'build-and-deploy',
-      targetType: 'deployment',
-      targetId: deployment.id,
-      payload: { ...(input.workflow?.payload || {}), deploymentId: deployment.id },
+    const requestedDeployment = input.deployment || input;
+    return this.runQuotaMutation(input.actorUserId || requestedDeployment.actorUserId, 'deployment:create', deploymentQuotaRequirements(requestedDeployment.deploymentType), () => {
+      const deployment = this.store.createDeployment(requestedDeployment);
+      const workflowJob = this.store.enqueueWorkflowJob({
+        type: input.workflow?.type || 'build-and-deploy',
+        targetType: 'deployment',
+        targetId: deployment.id,
+        payload: { ...(input.workflow?.payload || {}), deploymentId: deployment.id },
+      });
+      return { deployment, workflowJob };
     });
-    return { deployment, workflowJob };
   }
   async getProject(projectId: string) { return deepClone(this.store.projects.get(projectId) || null); }
   async getService(serviceId: string) { return deepClone(this.store.services.get(serviceId) || null); }
   async getResource(resourceId: string) { return deepClone(this.store.resources.get(resourceId) || null); }
   async getDeployment(deploymentId: string) { return deepClone(this.store.deployments.get(deploymentId) || null); }
-  async listServicesForProject(projectId: string) { return deepClone([...this.store.services.values()].filter((service) => String(service.projectId) === String(projectId))); }
-  async listResourcesForProject(projectId: string) { return deepClone([...this.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId))); }
-  async listDeploymentsForService(serviceId: string) { return deepClone([...this.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId))); }
+  async listProjectsForOrganizations(organizationIds?: string[], options: Record<string, any> = {}) {
+    const allowed = organizationIds ? new Set(organizationIds.map(String)) : null;
+    const projects = boundedKeysetRows([...this.store.projects.values()].filter((project) => !allowed || allowed.has(String(project.organizationId))), options);
+    const projectIds = new Set(projects.map((project) => String(project.id)));
+    const serviceCounts = countRowsByProject(this.store.services.values(), projectIds);
+    const resourceCounts = countRowsByProject(this.store.resources.values(), projectIds);
+    return deepClone(projects.map((project) => ({
+      ...project,
+      serviceCount: serviceCounts.get(String(project.id)) || 0,
+      resourceCount: resourceCounts.get(String(project.id)) || 0,
+    })));
+  }
+  async listUsers() { return deepClone([...this.store.users.values()].map(redactUser)); }
+  async getQuotaForUser(userId: string) { return deepClone([...this.store.quotas.values()].find((row) => String(row.userId) === String(userId)) || null); }
+  async listUsageRecordsForUser(userId: string, options: Record<string, any> = {}) {
+    const month = utcMonthBounds(options.now);
+    return deepClone(this.store.usageRecords
+      .filter((row) => String(row.userId) === String(userId) && Number(new Date(row.recordedAt)) >= month.start && Number(new Date(row.recordedAt)) < month.end)
+      .sort((left, right) => Number(new Date(right.recordedAt)) - Number(new Date(left.recordedAt)))
+      .slice(0, activityLimit(options.limit)));
+  }
+  async adminOverview(options: Record<string, any> = {}) {
+    const limit = activityLimit(options.limit);
+    const users = [...this.store.users.values()].map(redactUser).slice(-limit);
+    const userIds = new Set(users.map((user) => String(user.id)));
+    const quotas = [...this.store.quotas.values()].filter((quota) => userIds.has(String(quota.userId)));
+    const auditLogs = this.store.auditLogs.slice(-limit).reverse();
+    return deepClone({ users, quotas, auditLogs });
+  }
+  async listServicesForProject(projectId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.services.values()].filter((service) => String(service.projectId) === String(projectId)), options)); }
+  async listResourcesForProject(projectId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId)), options)); }
+  async listDeploymentsForService(serviceId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId)), options)); }
+  async listDeploymentsForProject(projectId: string, options: Record<string, any> = {}) {
+    return deepClone(boundedKeysetRows([...this.store.deployments.values()]
+      .filter((deployment) => String(deployment.projectId) === String(projectId)), options));
+  }
   async upsertServiceEnvironment(input: Record<string, any>) { return this.store.upsertServiceEnvironment(input); }
   async importServiceEnvFile(input: Record<string, any>) { return this.store.importServiceEnvFile(input); }
   async listServiceEnvironment(input: Record<string, any>) { return this.store.listServiceEnvironment(input); }
   async createGitHubIntegration(input: Record<string, any>) { return this.store.createGitHubIntegration(input); }
+  async verifyGitHubIntegration(input: Record<string, any>) { return this.store.verifyGitHubIntegration(input); }
+  async registerGitHubRepository(input: Record<string, any>) { return this.store.registerGitHubRepository(input); }
   async listGitHubIntegrations(input: Record<string, any>) { return this.store.listGitHubIntegrations(input); }
   async attachGitHubRepositoryToService(input: Record<string, any>) { return this.store.attachGitHubRepositoryToService(input); }
   async listGitHubInstallations(input: Record<string, any>) { return this.store.listGitHubInstallations(input); }
   async listGitHubInstallationRepositories(input: Record<string, any>) { return this.store.listGitHubInstallationRepositories(input); }
-  async importGitHubRepository(input: Record<string, any>) { return this.store.importGitHubRepository(input); }
+  async importGitHubRepository(input: Record<string, any>) {
+    const repository = [...this.store.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === String(input.repositoryId)
+      || normalizePrismaRepositoryId(candidate.fullName) === normalizePrismaRepositoryId(input.repoUrl || input.repository || ''));
+    const serviceName = input.serviceName || repository?.repo || String(repository?.fullName || input.repository || '').split('/').pop() || 'web';
+    const existing = [...this.store.services.values()].find((service) => String(service.projectId) === String(input.projectId) && String(service.slug) === slugInput(serviceName));
+    return this.runQuotaMutation(input.actorUserId, 'service:create', serviceQuotaRequirements(existing, { ...input, name: serviceName }), () => this.store.importGitHubRepository(input));
+  }
+  async listServicesForGitHubRepository(repository: any, scope: Record<string, any> = {}) { return deepClone(this.store.servicesForGitHubRepository(repository, scope)); }
   async syncGitHubRepository(input: Record<string, any>) { return this.store.syncGitHubRepository(input); }
   async handleGitHubWebhook(input: Record<string, any>) { return this.store.handleGitHubWebhook(input); }
   async enqueueWorkflowJob(input: Record<string, any>) { return this.store.enqueueWorkflowJob(input); }
@@ -101,27 +233,83 @@ export class InMemoryControlPlaneRepository {
   async failWorkflowJob(jobId: string, error: any, options: Record<string, any> = {}) { return this.store.failWorkflowJob(jobId, error, options); }
   async processNextWorkflowJob(handlers: Record<string, any>, options: Record<string, any> = {}) { return this.store.processNextWorkflowJob(handlers, options); }
   async approveUser(userId: string, input: Record<string, any> = {}) { return this.store.approveUser(userId, input); }
-  async rejectUser(userId: string) { return this.store.rejectUser(userId); }
+  async rejectUser(userId: string, input: Record<string, any> = {}) { return this.store.rejectUser(userId, input); }
   async setQuota(input: Record<string, any>) { return this.store.setQuota(input); }
   async enforceUserCan(input: Record<string, any>) { return this.store.enforceUserCan(input); }
+  async writeDesiredProject(projectSpec: Record<string, any>) {
+    const orgInput = projectSpec.organization || null;
+    const requestedOrganizationId = projectSpec.organizationId || projectSpec.orgId || null;
+    const existingOrganization = (requestedOrganizationId ? this.store.organizations.get(String(requestedOrganizationId)) : null)
+      || [...this.store.organizations.values()].find((organization) => String(organization.slug) === slugInput(projectSpec.organizationSlug || orgInput?.slug || orgInput?.name || requestedOrganizationId || ''));
+    const organizationId = String(existingOrganization?.id || requestedOrganizationId || stableId('org', orgInput?.slug || orgInput?.name || projectSpec.organizationSlug || 'default'));
+    const projectInput = projectSpec.project || { name: projectSpec.name || projectSpec.slug || 'project', slug: projectSpec.slug || projectSpec.name || 'project', description: projectSpec.description || '' };
+    const projectSlug = slugInput(projectInput.slug || projectInput.name);
+    const existingProject = [...this.store.projects.values()].find((project) => String(project.organizationId) === organizationId && String(project.slug) === projectSlug);
+    const requirements: QuotaRequirement[] = [{ metric: 'maxProjects', increment: existingProject ? 0 : 1 }];
+    for (const service of projectSpec.services || []) {
+      const existingService = existingProject
+        ? [...this.store.services.values()].find((candidate) => String(candidate.projectId) === String(existingProject.id) && String(candidate.slug) === slugInput(service.slug || service.name))
+        : null;
+      requirements.push(...serviceQuotaRequirements(existingService, service));
+    }
+    for (const resource of projectSpec.resources || []) {
+      const existingResource = existingProject
+        ? [...this.store.resources.values()].find((candidate) => String(candidate.projectId) === String(existingProject.id) && String(candidate.name) === String(resource.name))
+        : null;
+      requirements.push(...resourceQuotaRequirements(existingResource, resource));
+    }
+    return this.runQuotaMutation(projectSpec.actorUserId, 'desired-state:write', requirements, () => {
+      const organization = existingOrganization || this.store.createOrganization({
+        name: orgInput?.name || projectSpec.organizationSlug || requestedOrganizationId || 'Organization',
+        slug: orgInput?.slug || projectSpec.organizationSlug || requestedOrganizationId || 'organization',
+        plan: orgInput?.plan || 'free',
+      });
+      const project = this.store.createProject({
+        organizationId: organization.id,
+        name: projectInput.name || projectSlug,
+        slug: projectSlug,
+        description: projectInput.description || '',
+        status: projectSpec.actorUserId ? 'ACTIVE' : (projectInput.status || 'ACTIVE'),
+      });
+      const services = (projectSpec.services || []).map((service: Record<string, any>) => this.store.createService({ ...service, projectId: project.id }));
+      const resources = (projectSpec.resources || []).map((resource: Record<string, any>) => this.store.createResource({ ...resource, projectId: project.id }));
+      this.store.audit(projectSpec.actorUserId || 'system', 'desired-state:write', 'project', project.id, maskSecrets(projectSpec));
+      return { organization, project, services, resources };
+    });
+  }
   async attachResource(input: Record<string, any>) { return this.store.attachResource(input); }
   async appendBuildLog(input: Record<string, any>) { return this.store.appendBuildLog(input); }
   async appendRuntimeLog(input: Record<string, any>) { return this.store.appendRuntimeLog(input); }
   async appendDeploymentEvent(input: Record<string, any>) { return this.store.appendDeploymentEvent(input); }
-  async listDeploymentLogs(deploymentId: string) { return this.store.listDeploymentLogs(deploymentId); }
-  async listRuntimeLogs(serviceId: string) { return this.store.listRuntimeLogs(serviceId); }
-  async listDeploymentEvents(deploymentId: string) { return this.store.listDeploymentEvents(deploymentId); }
+  async listDeploymentLogs(deploymentId: string, options: Record<string, any> = {}) { return this.store.listDeploymentLogs(deploymentId, options); }
+  async listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) { return this.store.listRuntimeLogs(serviceId, options); }
+  async listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) { return this.store.listDeploymentEvents(deploymentId, options); }
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleQuery(resourceId, query, options); }
   async runResourceConsoleCommand(resourceId: string, command: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleCommand(resourceId, command, options); }
   async browseResourceConsole(resourceId: string, options: Record<string, any> = {}) { return this.store.browseResourceConsole(resourceId, options); }
   async resourceConsoleView(resourceId: string, view: string, options: Record<string, any> = {}) { return this.store.resourceConsoleView(resourceId, view, options); }
   async snapshot() { return this.store.snapshot(); }
+
+  private runQuotaMutation<T>(actorUserId: any, action: string, requirements: QuotaRequirement[], mutation: () => T): T {
+    if (actorUserId) {
+      for (const requirement of combineQuotaRequirements(requirements)) {
+        this.store.enforceUserCan({ userId: actorUserId, action, metric: requirement.metric, increment: requirement.increment });
+      }
+    }
+    const before = snapshotInMemoryStore(this.store);
+    try {
+      return mutation();
+    } catch (error) {
+      restoreInMemoryStore(this.store, before);
+      throw error;
+    }
+  }
 }
 
 export class PrismaControlPlaneRepository {
-  prisma: any;
+  readonly prisma: PrismaClient;
 
-  constructor(prisma: any) {
+  constructor(prisma: PrismaClient) {
     this.prisma = prisma;
   }
 
@@ -129,7 +317,7 @@ export class PrismaControlPlaneRepository {
     const moduleName = options.clientModule || '@prisma/client';
     const imported = await import(moduleName);
     const PrismaClient = imported.PrismaClient;
-    const prisma = new PrismaClient(options.prismaOptions || {});
+    const prisma = new PrismaClient(prismaClientOptions(options.prismaOptions || {}, options.env || process.env));
     if (options.connect !== false) await prisma.$connect();
     return new PrismaControlPlaneRepository(prisma);
   }
@@ -155,14 +343,97 @@ export class PrismaControlPlaneRepository {
     const emailVerifiedAt = input.emailVerifiedAt === undefined ? new Date() : input.emailVerifiedAt;
     const user = await this.prisma.user.upsert({
       where: { email: input.email },
-      update: { name: input.name, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined, role: input.role || undefined, accountType, approvalStatus: input.approvalStatus || undefined, emailVerifiedAt: input.emailVerifiedAt === undefined ? undefined : input.emailVerifiedAt },
-      create: { name: input.name, email: input.email, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || null, role: input.role || 'USER', accountType, approvalStatus: input.approvalStatus || 'PENDING', emailVerifiedAt },
+      update: { name: input.name, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined, sessionVersion: input.passwordHash ? { increment: 1 } : undefined, role: input.role || undefined, accountType, approvalStatus: input.approvalStatus || undefined, emailVerifiedAt: input.emailVerifiedAt === undefined ? undefined : input.emailVerifiedAt },
+      create: { name: input.name, email: input.email, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || null, sessionVersion: 0, role: input.role || 'USER', accountType, approvalStatus: input.approvalStatus || 'PENDING', emailVerifiedAt },
     });
     return redactUser(user);
   }
 
   async findUserByEmail(email: string) {
     return this.prisma.user.findUnique({ where: { email: String(email || '').toLowerCase() } });
+  }
+
+  async countUsers(limit = 1) {
+    const requestedLimit = Math.floor(Number(limit));
+    const boundedLimit = Number.isSafeInteger(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 100)) : 1;
+    return this.prisma.user.count({ take: boundedLimit });
+  }
+
+  async findUserById(userId: string) {
+    return this.prisma.user.findUnique({ where: { id: String(userId) } });
+  }
+
+  async incrementSessionVersion(userId: string) {
+    const user = await this.prisma.user.update({ where: { id: String(userId) }, data: { sessionVersion: { increment: 1 } } });
+    return redactUser(user);
+  }
+
+  async consumeAuthRateLimit(input: Record<string, any>) {
+    const key = String(input.key || 'global');
+    const limit = Math.max(1, Number(input.limit || 10));
+    const windowMs = Math.max(1_000, Number(input.windowMs || 60_000));
+    const now = new Date(input.now === undefined ? Date.now() : Number(input.now));
+    const expiresAt = new Date(now.getTime() + windowMs);
+    const rows = await this.prisma.$queryRawUnsafe(
+      `WITH "expired" AS MATERIALIZED (
+         SELECT "key"
+         FROM "AuthRateLimit"
+         WHERE "expiresAt" <= $2 AND "key" <> $1
+         ORDER BY "expiresAt", "key"
+         LIMIT $4
+       ), "pruned" AS (
+         DELETE FROM "AuthRateLimit" AS "target"
+         USING "expired"
+         WHERE "target"."key" = "expired"."key"
+       ), "upserted" AS (
+         INSERT INTO "AuthRateLimit" ("key", "count", "windowStartedAt", "expiresAt", "updatedAt")
+         VALUES ($1, 1, $2, $3, $2)
+         ON CONFLICT ("key") DO UPDATE SET
+           "count" = CASE WHEN "AuthRateLimit"."expiresAt" <= EXCLUDED."windowStartedAt" THEN 1 ELSE "AuthRateLimit"."count" + 1 END,
+           "windowStartedAt" = CASE WHEN "AuthRateLimit"."expiresAt" <= EXCLUDED."windowStartedAt" THEN EXCLUDED."windowStartedAt" ELSE "AuthRateLimit"."windowStartedAt" END,
+           "expiresAt" = CASE WHEN "AuthRateLimit"."expiresAt" <= EXCLUDED."windowStartedAt" THEN EXCLUDED."expiresAt" ELSE "AuthRateLimit"."expiresAt" END,
+           "updatedAt" = EXCLUDED."updatedAt"
+         WHERE "AuthRateLimit"."expiresAt" <= EXCLUDED."windowStartedAt" OR "AuthRateLimit"."count" < $5
+         RETURNING TRUE AS "allowed", "count", "expiresAt"
+       )
+       SELECT "allowed", "count", "expiresAt" FROM "upserted"
+       UNION ALL
+       SELECT FALSE AS "allowed", "current"."count", "current"."expiresAt"
+       FROM "AuthRateLimit" AS "current"
+       WHERE "current"."key" = $1 AND NOT EXISTS (SELECT 1 FROM "upserted")
+       LIMIT 1`,
+      key,
+      now,
+      expiresAt,
+      AUTH_RETENTION_PRUNE_BATCH_SIZE,
+      limit,
+    );
+    const row = rows[0];
+    const count = Number(row?.count ?? limit);
+    const resetAt = new Date(row?.expiresAt || expiresAt).getTime();
+    const allowed = row ? row.allowed !== false : false;
+    return { allowed, count, remaining: Math.max(0, limit - count), resetAt };
+  }
+
+  async peekAuthRateLimit(input: Record<string, any>) {
+    const key = String(input.key || 'global');
+    const limit = Math.max(1, Number(input.limit || 10));
+    const now = new Date(input.now === undefined ? Date.now() : Number(input.now));
+    const row = await this.prisma.authRateLimit.findUnique({ where: { key } });
+    if (!row || new Date(row.expiresAt).getTime() <= now.getTime()) {
+      return { allowed: true, count: 0, remaining: limit, resetAt: now.getTime() };
+    }
+    const count = Number(row.count || 0);
+    return {
+      allowed: count < limit,
+      count,
+      remaining: Math.max(0, limit - count),
+      resetAt: new Date(row.expiresAt).getTime(),
+    };
+  }
+
+  async resetAuthRateLimit(key: string) {
+    return this.prisma.authRateLimit.deleteMany({ where: { key: String(key || 'global') } });
   }
 
   async createEmailVerificationCode(input: Record<string, any>) {
@@ -179,6 +450,46 @@ export class PrismaControlPlaneRepository {
         attempts: Number(input.attempts || 0),
       },
     });
+  }
+
+  async replaceEmailVerificationCode(input: Record<string, any>) {
+    const now = new Date();
+    const data = {
+      userId: input.userId || null,
+      email: String(input.email || '').toLowerCase(),
+      purpose: input.purpose || 'signup',
+      payload: input.payload || undefined,
+      codeHash: input.codeHash,
+      codeSalt: input.codeSalt,
+      expiresAt: new Date(input.expiresAt),
+      sentAt: input.sentAt ? new Date(input.sentAt) : new Date(),
+      attempts: Number(input.attempts || 0),
+    };
+    return this.prisma.$transaction(async (transaction: any) => {
+      await transaction.$queryRawUnsafe(
+        `WITH "expired" AS MATERIALIZED (
+           SELECT "id"
+           FROM "EmailVerificationCode"
+           WHERE "expiresAt" <= $2
+           ORDER BY "expiresAt", "id"
+           LIMIT $3
+         ), "pruned" AS (
+           DELETE FROM "EmailVerificationCode" AS "target"
+           USING "expired"
+           WHERE "target"."id" = "expired"."id"
+         )
+         SELECT 1::int AS "locked"
+         FROM pg_advisory_xact_lock(hashtextextended($1, 0))`,
+        JSON.stringify([data.email, data.purpose]),
+        now,
+        AUTH_RETENTION_PRUNE_BATCH_SIZE,
+      );
+      await transaction.emailVerificationCode.updateMany({
+        where: { email: data.email, purpose: data.purpose, consumedAt: null },
+        data: { consumedAt: new Date() },
+      });
+      return transaction.emailVerificationCode.create({ data });
+    }, { maxWait: 5_000, timeout: 10_000 });
   }
 
   async invalidatePendingEmailVerificationCodes(email: string) {
@@ -209,6 +520,81 @@ export class PrismaControlPlaneRepository {
     });
   }
 
+  async completeSignupEmailVerification(input: Record<string, any>) {
+    const email = String(input.email || '').trim().toLowerCase();
+    const purpose = String(input.purpose || 'signup');
+    const maxAttempts = Math.max(1, Number(input.maxAttempts || 5));
+    const now = new Date(input.now === undefined ? Date.now() : Number(input.now));
+    try {
+      return await this.prisma.$transaction(async (transaction: any) => {
+        const record = await transaction.emailVerificationCode.findFirst({
+          where: { email, purpose, consumedAt: null },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (!record || new Date(record.expiresAt).getTime() <= now.getTime() || Number(record.attempts || 0) >= maxAttempts) {
+          return { status: 'invalid' };
+        }
+        const valid = typeof input.verifyCode === 'function' && input.verifyCode(record) === true;
+        if (!valid) {
+          await transaction.emailVerificationCode.updateMany({
+            where: { id: record.id, consumedAt: null, expiresAt: { gt: now }, attempts: { lt: maxAttempts } },
+            data: { attempts: { increment: 1 } },
+          });
+          return { status: 'invalid' };
+        }
+        const payload = record.payload || {};
+        if (payload.kind !== 'signup') return { status: 'invalid' };
+        const claimed = await transaction.emailVerificationCode.updateMany({
+          where: { id: record.id, consumedAt: null, expiresAt: { gt: now }, attempts: { lt: maxAttempts } },
+          data: { consumedAt: now },
+        });
+        if (Number(claimed.count || 0) !== 1) return { status: 'invalid' };
+        const existingOrganization = await transaction.organization.findUnique({ where: { slug: slugInput(payload.organizationSlug) } });
+        if (existingOrganization) throw conflictError('organization_slug_already_exists');
+        const existingUser = await transaction.user.findUnique({ where: { email } });
+        if (existingUser) throw conflictError('user_already_exists');
+        const firstUser = Number(await transaction.user.count()) === 0;
+        const policy = typeof input.resolvePolicy === 'function'
+          ? input.resolvePolicy(payload, { firstUser })
+          : payload.policy || {};
+        const organization = await transaction.organization.create({
+          data: {
+            name: payload.organizationName || payload.organizationSlug,
+            slug: slugInput(payload.organizationSlug),
+            plan: payload.plan || 'free',
+          },
+        });
+        const user = await transaction.user.create({
+          data: {
+            name: payload.name || email,
+            email,
+            passwordHash: payload.passwordHash,
+            role: policy.role || 'USER',
+            accountType: normalizeAccountType(policy.accountType),
+            approvalStatus: policy.approvalStatus || 'PENDING',
+            sessionVersion: 0,
+            emailVerifiedAt: now,
+          },
+        });
+        const membership = await transaction.membership.create({
+          data: { organizationId: organization.id, userId: user.id, role: 'owner' },
+        });
+        const memberships = await transaction.membership.findMany({ where: { userId: user.id } });
+        return {
+          status: 'verified',
+          user: redactUser(user),
+          organization,
+          membership,
+          memberships,
+          verifiedAt: now.toISOString(),
+        };
+      }, { isolationLevel: 'Serializable' });
+    } catch (error) {
+      if ((error as any)?.code === 'P2002') throw conflictError('signup_identity_already_exists');
+      throw error;
+    }
+  }
+
   async markUserEmailVerified(userId: string, verifiedAt = new Date().toISOString()) {
     const user = await this.prisma.user.update({ where: { id: userId }, data: { emailVerifiedAt: new Date(verifiedAt) } });
     await this.prisma.auditLog.create({ data: { actorUserId: userId, action: 'user.email:verify', targetType: 'user', targetId: userId, metadata: {} } });
@@ -236,15 +622,35 @@ export class PrismaControlPlaneRepository {
       ? await this.prisma.user.update({ where: { id: userId }, data })
       : await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new Error(`user not found: ${userId}`);
-    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'user.github:link', targetType: 'user', targetId: userId, metadata: maskSecrets({ githubId: input.githubId || user.githubId || null, githubLogin: input.githubLogin || null }) } });
+    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'user.github:link', targetType: 'user', targetId: userId, metadata: maskSecrets({ githubId: input.githubId || user.githubId || null, githubLogin: input.githubLogin || null }) } });
     return redactUser(user);
   }
 
   async addMember(input: Record<string, any>) {
-    return this.prisma.membership.upsert({
-      where: { organizationId_userId: { organizationId: input.organizationId, userId: input.userId } },
-      update: { role: input.role || 'developer' },
-      create: { organizationId: input.organizationId, userId: input.userId, role: input.role || 'developer' },
+    const role = input.role || 'developer';
+    const where = { organizationId_userId: { organizationId: input.organizationId, userId: input.userId } };
+    return this.prisma.$transaction(async (transaction: any) => {
+      const existing = await transaction.membership.findUnique({ where });
+      const membership = await transaction.membership.upsert({
+        where,
+        update: { role },
+        create: { organizationId: input.organizationId, userId: input.userId, role },
+      });
+      if (existing && existing.role !== role) {
+        await transaction.user.update({ where: { id: input.userId }, data: { sessionVersion: { increment: 1 } } });
+      }
+      return membership;
+    });
+  }
+
+  async removeMember(input: Record<string, any>) {
+    const where = { organizationId_userId: { organizationId: input.organizationId, userId: input.userId } };
+    return this.prisma.$transaction(async (transaction: any) => {
+      const existing = await transaction.membership.findUnique({ where });
+      if (!existing) return null;
+      const membership = await transaction.membership.delete({ where });
+      await transaction.user.update({ where: { id: input.userId }, data: { sessionVersion: { increment: 1 } } });
+      return membership;
     });
   }
 
@@ -253,111 +659,190 @@ export class PrismaControlPlaneRepository {
   }
 
   async createProject(input: Record<string, any>) {
-    return this.prisma.project.upsert({
-      where: { organizationId_slug: { organizationId: input.organizationId, slug: input.slug || slugInput(input.name) } },
-      update: { name: input.name, description: input.description || '', status: input.status || 'active' },
-      create: { organizationId: input.organizationId, name: input.name, slug: input.slug || slugInput(input.name), description: input.description || '', status: input.status || 'active' },
+    const slug = input.slug || slugInput(input.name);
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const existing = await tx.project.findUnique({ where: { organizationId_slug: { organizationId: input.organizationId, slug } } });
+      assertMutable(existing, 'project');
+      await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'project:create', [{ metric: 'maxProjects', increment: existing ? 0 : 1 }]);
+      return tx.project.upsert({
+        where: { organizationId_slug: { organizationId: input.organizationId, slug } },
+        update: { name: input.name, description: input.description || '', status: input.actorUserId ? 'ACTIVE' : (input.status || 'ACTIVE') },
+        create: { organizationId: input.organizationId, name: input.name, slug, description: input.description || '', status: input.actorUserId ? 'ACTIVE' : (input.status || 'ACTIVE') },
+      });
     });
   }
 
   async updateProject(projectId: string, updates: Record<string, any>) {
-    return this.prisma.project.update({ where: { id: projectId }, data: projectUpdateData(updates) });
+    return this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.project.findUnique({ where: { id: projectId } });
+      if (!current) return null;
+      assertMutable(current, 'project');
+      if (updates.slug !== undefined && slugInput(updates.slug) !== current.slug) throw conflictError('project slug is immutable after creation');
+      return tx.project.update({ where: { id: projectId }, data: projectUpdateData(updates) });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async deleteProject(projectId: string) {
-    return this.prisma.project.delete({ where: { id: projectId } });
+    return this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.project.findUnique({ where: { id: projectId } });
+      if (!current) return null;
+      const requestedAt = current.deletionRequestedAt || new Date();
+      const services = await tx.service.findMany({ where: { projectId }, select: { id: true } });
+      const resources = await tx.resource.findMany({ where: { projectId }, select: { id: true } });
+      const deployments = await tx.deployment.findMany({ where: { projectId }, select: { id: true } });
+      await revokeResourceAttachments(tx, resources.map((row: Record<string, any>) => row.id));
+      await tx.project.updateMany({
+        where: { id: projectId, status: { notIn: deletionStatuses } },
+        data: { status: deletionRequestedStatus, deletionRequestedAt: requestedAt },
+      });
+      await tx.service.updateMany({
+        where: { projectId, status: { notIn: deletionStatuses } },
+        data: { status: deletionRequestedStatus, deletionRequestedAt: requestedAt },
+      });
+      await tx.resource.updateMany({
+        where: { projectId, status: { notIn: deletionStatuses } },
+        data: { status: deletionRequestedStatus, deletionRequestedAt: requestedAt },
+      });
+      await cancelDeletionWork(tx, {
+        projectId,
+        serviceIds: services.map((row: Record<string, any>) => row.id),
+        resourceIds: resources.map((row: Record<string, any>) => row.id),
+        deploymentIds: deployments.map((row: Record<string, any>) => row.id),
+      });
+      await tx.auditLog.create({ data: { actorUserId: null, action: 'project:delete-requested', targetType: 'project', targetId: projectId, metadata: maskSecrets({ repeated: isDeleting(current), childServices: services.length, childResources: resources.length }) } });
+      return tx.project.findUnique({ where: { id: projectId } });
+    }, { isolationLevel: 'Serializable' });
   }
 
-  async createService(input: Record<string, any>) {
-    return this.prisma.service.upsert({
-      where: { projectId_slug: { projectId: input.projectId, slug: input.slug || slugInput(input.name) } },
-      update: serviceData(input),
-      create: { projectId: input.projectId, name: input.name, slug: input.slug || slugInput(input.name), ...serviceData(input) },
+  async createService(input: Record<string, any>, options: Record<string, any> = {}) {
+    const slug = input.slug || slugInput(input.name);
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      await requireMutableProject(tx, input.projectId);
+      const existing = await tx.service.findUnique({ where: { projectId_slug: { projectId: input.projectId, slug } } });
+      assertMutable(existing, 'service');
+      await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'service:create', serviceQuotaRequirements(existing, input));
+      return tx.service.upsert({
+        where: { projectId_slug: { projectId: input.projectId, slug } },
+        update: serviceData(input, options),
+        create: { projectId: input.projectId, name: input.name, slug, ...serviceData(input, options) },
+      });
     });
   }
 
   async createResource(input: Record<string, any>) {
-    const existing = await this.prisma.resource.findUnique({
-      where: { projectId_name: { projectId: input.projectId, name: input.name } },
-      select: { connectionSecretName: true },
-    }).catch(() => null);
-    const row = await this.prisma.resource.upsert({
-      where: { projectId_name: { projectId: input.projectId, name: input.name } },
-      update: resourceData(input, { connectionSecretName: existing?.connectionSecretName || null }),
-      create: { projectId: input.projectId, name: input.name, slug: input.slug || slugInput(input.name), ...resourceData(input) },
+    const row = await serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      await requireMutableProject(tx, input.projectId);
+      const existing = await tx.resource.findUnique({ where: { projectId_name: { projectId: input.projectId, name: input.name } } });
+      assertMutable(existing, 'resource');
+      if (String(existing?.status || '').toUpperCase() === 'READY') return existing;
+      await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'resource:create', resourceQuotaRequirements(existing, input));
+      return tx.resource.upsert({
+        where: { projectId_name: { projectId: input.projectId, name: input.name } },
+        update: resourceData(input, { connectionSecretName: existing?.connectionSecretName || null, baseDesiredSpec: existing?.desiredSpec || {}, currentDesiredState: existing?.desiredState || {} }),
+        create: { projectId: input.projectId, name: input.name, slug: input.slug || slugInput(input.name), ...resourceData(input) },
+      });
     });
-    await this.attachProviderConnectionSecrets({ resourceId: row.id, env: providerConnectionEnvForResource(row), actorUserId: 'system', live: false, providerMode: 'provider-contract' });
     return this.getResource(row.id);
   }
 
   async updateResource(resourceId: string, updates: Record<string, any>) {
-    const current = await this.getResource(resourceId);
-    if (!current) return null;
-    const updated = await this.prisma.resource.update({ where: { id: resourceId }, data: resourceData({ ...current, ...updates, projectId: current.projectId, name: updates.name || current.name }, { connectionSecretName: current.connectionSecretName || null }) });
-    if (updates.engine || updates.name || updates.provider || updates.desiredSpec) await this.attachProviderConnectionSecrets({ resourceId, env: providerConnectionEnvForResource(updated), actorUserId: 'system', live: false, providerMode: 'provider-contract' });
-    await this.prisma.auditLog.create({ data: { actorUserId: 'system', action: 'resource:update', targetType: 'resource', targetId: resourceId, metadata: maskSecrets(updates) } });
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.resource.findUnique({ where: { id: resourceId } });
+      if (!current) return null;
+      assertMutable(current, 'resource');
+        if (String(current.status || '').toUpperCase() === 'READY') throw conflictError('READY managed resources cannot be updated in place; delete and recreate the resource');
+    if (String(current.status || '').toUpperCase() === 'RECONCILING' && Object.keys(updates || {}).length > 0) throw conflictError('RECONCILING managed resources cannot be updated while the provisioner claim is active');
+      await requireMutableProject(tx, current.projectId);
+      const row = await tx.resource.update({ where: { id: resourceId }, data: resourceData({ ...current, ...updates, projectId: current.projectId, name: updates.name || current.name }, { connectionSecretName: current.connectionSecretName || null, baseDesiredSpec: current.desiredSpec || {}, currentDesiredState: current.desiredState || {} }) });
+      await tx.auditLog.create({ data: { actorUserId: null, action: 'resource:update', targetType: 'resource', targetId: resourceId, metadata: maskSecrets(updates) } });
+      return row;
+    }, { isolationLevel: 'Serializable' });
+    if (!updated) return null;
     return this.getResource(resourceId);
   }
 
   async deleteResource(resourceId: string) {
-    const current = await this.getResource(resourceId);
-    if (!current) return null;
-    const attachments = await this.prisma.resourceAttachment.findMany({ where: { resourceId } }).catch(() => []);
-    for (const attachment of attachments) await this.removeResourceInjectedEnvironment(attachment);
-    await this.prisma.secretValue.deleteMany({ where: { scopeType: 'resource-provider-connection', scopeId: resourceId } }).catch(() => null);
-    const deleted = await this.prisma.resource.delete({ where: { id: resourceId } });
-    await this.prisma.auditLog.create({ data: { actorUserId: 'system', action: 'resource:delete', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ projectId: current.projectId, engine: current.engine }) } });
-    return deleted;
+    return this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.resource.findUnique({ where: { id: resourceId } });
+      if (!current) return null;
+      const attachmentsRevoked = await revokeResourceAttachments(tx, [resourceId]);
+      await tx.resource.updateMany({
+        where: { id: resourceId, status: { notIn: deletionStatuses } },
+        data: { status: deletionRequestedStatus, deletionRequestedAt: current.deletionRequestedAt || new Date() },
+      });
+      await cancelDeletionWork(tx, { projectId: current.projectId, resourceIds: [resourceId] });
+      await tx.auditLog.create({ data: { actorUserId: null, action: 'resource:delete-requested', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ projectId: current.projectId, engine: current.engine, repeated: isDeleting(current), attachmentsRevoked }) } });
+      return tx.resource.findUnique({ where: { id: resourceId } });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async provisionResourceProvider({ resourceId, actorUserId = 'provider', ...options }: Record<string, any>) {
-    const resource = await this.getResource(resourceId);
-    if (!resource) throw new Error(`resource not found: ${resourceId}`);
-    const result = await provisionAnyResourceProvider(resource, options);
-    const attached = await this.attachProviderConnectionSecrets({ resourceId, env: (result as any).connectionEnv || providerConnectionEnvForResource(resource), actorUserId, live: result.dryRun !== true, providerMode: result.dryRun ? 'provider-contract' : 'live-provider' });
-    const updated = await this.prisma.resource.update({ where: { id: resourceId }, data: { status: 'ready', provider: result.provider, desiredState: maskSecrets({ ...(attached.desiredState || {}), providerResult: result.plan }) } });
-    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource.provider:provision', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ engine: result.engine, provider: result.provider, dryRun: result.dryRun, connectionSecret: result.connectionSecret }) } });
-    return { resource: updated, result: maskSecrets({ ...result, databaseUrl: undefined, connectionEnv: undefined }) };
+      if (options.execute === true || options.dryRun === false) throw forbiddenError('live provider execution is handled exclusively by the authoritative Go provisioner');
+      return this.prisma.$transaction(async (tx: any) => {
+        const resource = await tx.resource.findUnique({ where: { id: resourceId } });
+        if (!resource) throw notFoundError(`resource not found: ${resourceId}`);
+        assertMutable(resource, 'resource');
+        if (String(resource.status || '').toUpperCase() === 'READY') throw conflictError('READY managed resources cannot be reprovisioned or rotate credentials through the planning endpoint');
+        await requireMutableProject(tx, resource.projectId);
+        const plan = buildResourceProviderPlan(resource, providerPlanPlaceholders());
+        const publicPlan = publicResourceProviderPlan(plan);
+        const result = { engine: plan.engine, provider: plan.provider, status: 'PROVISIONING', dryRun: true, connectionSecret: plan.connectionSecret, plan: publicPlan };
+        const updated = await tx.resource.update({
+          where: { id: resourceId },
+          data: { status: 'PROVISIONING', connectionSecretName: null, desiredState: maskSecrets({ ...(resource.desiredState || {}), providerPlan: publicPlan }) },
+        });
+        await tx.auditLog.create({ data: { actorUserId, action: 'resource.provider:plan', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ engine: result.engine, provider: result.provider, dryRun: true, executor: 'go-provisioner' }) } });
+        return { resource: updated, result: maskSecrets(result) };
+      }, { isolationLevel: 'Serializable' });
   }
 
   async attachProviderConnectionSecret({ resourceId, databaseUrl, connectionUrl, actorUserId = 'provider', key = 'DATABASE_URL', live = true }: Record<string, any>) {
-    const value = databaseUrl || connectionUrl;
-    if (!value) throw new Error('provider connection URL is required');
-    return this.attachProviderConnectionSecrets({ resourceId, env: { [key]: value }, actorUserId, live, providerMode: live === false ? 'provider-contract' : 'live-provider' });
+      void resourceId; void databaseUrl; void connectionUrl; void actorUserId; void key; void live;
+      throw forbiddenError('provider credentials are written only by the Go provisioner to a Kubernetes Secret');
   }
 
   async attachProviderConnectionSecrets({ resourceId, env = {}, actorUserId = 'provider', live = false, providerMode = 'provider-contract' }: Record<string, any>) {
-    const entries = Object.entries(env || {}).filter(([, value]) => value !== undefined && value !== null && String(value).length > 0);
-    if (!entries.length) throw new Error('provider connection env is required');
-    let firstSecretId = (await this.getResource(resourceId))?.connectionSecretName || null;
-    for (const [key, value] of entries) {
-      const secret = await this.prisma.secretValue.upsert({
-        where: { scopeType_scopeId_key: { scopeType: 'resource-provider-connection', scopeId: resourceId, key } },
-        update: { sealedValue: sealSecret(String(value)), valueMasked: maskSecretValue(String(value)), metadata: maskSecrets({ providerOwned: true, live: live === true, providerMode }) },
-        create: { scopeType: 'resource-provider-connection', scopeId: resourceId, key, sealedValue: sealSecret(String(value)), valueMasked: maskSecretValue(String(value)), metadata: maskSecrets({ providerOwned: true, live: live === true, providerMode }) },
-      });
-      if (!firstSecretId) firstSecretId = secret.id;
-    }
-    const resource = await this.prisma.resource.update({ where: { id: resourceId }, data: { connectionSecretName: firstSecretId } });
-    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource.provider-connection:attach', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ connectionSecretName: firstSecretId, envKeys: entries.map(([key]) => key), providerMode }) } });
-    return resource;
+      return this.prisma.$transaction(async () => {
+        void resourceId; void env; void actorUserId; void live; void providerMode;
+        throw forbiddenError('provider credentials are written only by the Go provisioner to a Kubernetes Secret');
+      }, { isolationLevel: 'Serializable' });
   }
 
   async createDeployment(input: Record<string, any>) {
-    let projectId = input.projectId;
-    if (!projectId && input.serviceId) {
-      const service = await this.prisma.service.findUnique({ where: { id: input.serviceId }, select: { projectId: true } });
-      projectId = service?.projectId;
-    }
-    return this.prisma.deployment.create({ data: deploymentData({ ...input, projectId }) });
+    return this.prisma.$transaction(async (tx: any) => {
+      const service = input.serviceId ? await tx.service.findUnique({ where: { id: input.serviceId } }) : null;
+      if (!service) throw notFoundError(`service not found: ${input.serviceId}`);
+      assertMutable(service, 'service');
+      const projectId = input.projectId || service.projectId;
+      await requireMutableProject(tx, projectId);
+      return tx.deployment.create({ data: deploymentData({ ...input, projectId }) });
+    }, { isolationLevel: 'Serializable' });
   }
 
-  async updateService(serviceId: string, updates: Record<string, any>) {
-    return this.prisma.service.update({ where: { id: serviceId }, data: serviceUpdateData(updates) });
+  async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
+    return this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.service.findUnique({ where: { id: serviceId } });
+      if (!current) return null;
+      assertMutable(current, 'service');
+      assertPrismaGitHubBindingImmutable(current, updates);
+      await requireMutableProject(tx, current.projectId);
+      return tx.service.update({ where: { id: serviceId }, data: serviceUpdateData(updates, options) });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async deleteService(serviceId: string) {
-    return this.prisma.service.delete({ where: { id: serviceId } });
+    return this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.service.findUnique({ where: { id: serviceId } });
+      if (!current) return null;
+      const deployments = await tx.deployment.findMany({ where: { serviceId }, select: { id: true } });
+      await tx.service.updateMany({
+        where: { id: serviceId, status: { notIn: deletionStatuses } },
+        data: { status: deletionRequestedStatus, deletionRequestedAt: current.deletionRequestedAt || new Date() },
+      });
+      await cancelDeletionWork(tx, { projectId: current.projectId, serviceIds: [serviceId], deploymentIds: deployments.map((row: Record<string, any>) => row.id) });
+      await tx.auditLog.create({ data: { actorUserId: null, action: 'service:delete-requested', targetType: 'service', targetId: serviceId, metadata: maskSecrets({ projectId: current.projectId, repeated: isDeleting(current) }) } });
+      return tx.service.findUnique({ where: { id: serviceId } });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
@@ -396,64 +881,97 @@ export class PrismaControlPlaneRepository {
   }
 
   async cancelDeployment(deploymentId: string, input: Record<string, any> = {}) {
-    const deployment = await this.transitionDeployment(deploymentId, 'CANCELLED', {
-      finishedAt: new Date(),
-      errorCode: input.errorCode || 'DEPLOYMENT_CANCELLED',
-      errorMessage: input.reason || input.errorMessage || 'Deployment cancellation requested',
-    }, {
-      eventType: 'deployment.cancelled',
-      message: input.reason || 'Deployment cancellation requested',
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const current = await tx.deployment.findUnique({ where: { id: deploymentId } });
+      if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
+      const currentStatus = normalizeDeploymentStatus(current.status);
+      if (currentStatus === 'CANCELLED') return { deployment: current };
+      if (!canCancelDeployment(currentStatus)) {
+        throw conflictError('deployment_cancellation_conflict: deployment cannot be cancelled after runtime reconciliation has started or reached a terminal state');
+      }
+      const nextStatus = 'CANCELLED';
+      assertDeploymentTransition(current.status, nextStatus);
+      const cancelledAt = new Date();
+      await tx.workflowJob.updateMany({
+        where: {
+          type: { in: ['build-and-deploy', 'preview-deploy', 'build', 'builder'] },
+          status: { in: ['queued', 'running'] },
+          OR: [
+            { targetType: 'deployment', targetId: deploymentId },
+            { payload: { path: ['deploymentId'], equals: deploymentId } },
+          ],
+        },
+        data: { status: 'cancelled', lockedBy: null, lockedAt: null, updatedAt: cancelledAt },
+      });
+      const deployment = await tx.deployment.update({
+        where: { id: deploymentId },
+        data: deploymentUpdateData({
+          status: nextStatus,
+          errorCode: input.errorCode || 'DEPLOYMENT_CANCELLED',
+          errorMessage: input.reason || input.errorMessage || 'Deployment cancelled',
+          reconcileAction: null,
+          reconcileLockedBy: null,
+          reconcileLockedAt: null,
+        }, current),
+      });
+      await tx.deploymentEvent.create({
+        data: {
+          deploymentId,
+          type: 'deployment.cancelled',
+          message: sanitizeLogRecord(input.reason || 'Deployment cancelled'),
+          metadata: sanitizeJson({ from: normalizeDeploymentStatus(current.status), to: nextStatus }),
+        },
+      });
+      return { deployment };
     });
-    const workflowJob = await this.enqueueWorkflowJob({
-      type: 'deployment-cancel',
-      targetType: 'deployment',
-      targetId: deployment.id,
-      payload: { deploymentId: deployment.id, serviceId: deployment.serviceId, projectId: deployment.projectId, reason: input.reason || 'requested' },
-    });
-    return { deployment, workflowJob };
   }
 
   async rollbackDeployment(deploymentId: string, input: Record<string, any> = {}) {
-    const current = await this.getDeployment(deploymentId);
-    if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
-    const previous = input.previousDeploymentId
-      ? await this.getDeployment(String(input.previousDeploymentId))
-      : await this.prisma.deployment.findFirst({
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const current = await tx.deployment.findUnique({ where: { id: deploymentId } });
+      if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
+      const previous = input.previousDeploymentId
+        ? await tx.deployment.findUnique({ where: { id: String(input.previousDeploymentId) } })
+        : await tx.deployment.findFirst({
           where: { serviceId: current.serviceId, id: { not: current.id }, status: 'READY', imageUrl: { not: null } },
           orderBy: [{ deployedAt: 'desc' }, { finishedAt: 'desc' }, { createdAt: 'desc' }],
         });
-    validateRollbackSource(current, previous, input.previousDeploymentId);
-    const imageUrl = previous?.imageUrl || null;
-    if (!imageUrl) {
-      throw conflictError('no previous READY deployment image is available for rollback');
-    }
-    const imageDigest = previous?.imageDigest || null;
-    const rollback = await this.createDeployment({
-      serviceId: current.serviceId,
-      projectId: current.projectId,
-      commitSha: previous?.commitSha || current.commitSha || null,
-      imageUrl,
-      imageDigest,
-      status: 'IMAGE_READY',
-      deploymentType: current.deploymentType || 'production',
-      triggerType: 'rollback',
-      branch: input.branch || current.branch || previous?.branch || 'main',
+      validateRollbackSource(current, previous, input.previousDeploymentId);
+      const imageUrl = previous?.imageUrl || null;
+      if (!imageUrl) throw conflictError('no previous READY deployment image is available for rollback');
+      const imageDigest = previous?.imageDigest || null;
+      await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'deployment:create', deploymentQuotaRequirements(current.deploymentType));
+      const rollback = await tx.deployment.create({ data: deploymentData({
+        serviceId: current.serviceId,
+        projectId: current.projectId,
+        commitSha: previous?.commitSha || current.commitSha || null,
+        imageUrl,
+        imageDigest,
+        status: 'IMAGE_READY',
+        deploymentType: current.deploymentType || 'production',
+        triggerType: 'rollback',
+        branch: input.branch || current.branch || previous?.branch || 'main',
+      }) });
+      await tx.deploymentEvent.create({ data: { deploymentId: current.id, type: 'deployment.rollback.requested', message: sanitizeLogRecord(`Rollback requested to ${imageUrl}`), metadata: sanitizeJson(maskSecrets({ rollbackDeploymentId: rollback.id, previousDeploymentId: previous?.id || null, imageUrl, imageDigest })) } });
+      await tx.deploymentEvent.create({ data: { deploymentId: rollback.id, type: 'deployment.rollback.created', message: sanitizeLogRecord(`Rollback deployment created from ${current.id}`), metadata: sanitizeJson(maskSecrets({ rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, imageUrl, imageDigest })) } });
+      const workflowJob = await tx.workflowJob.create({ data: workflowJobData({
+        type: 'rollback-deploy',
+        targetType: 'deployment',
+        targetId: rollback.id,
+        payload: { deploymentId: rollback.id, rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, serviceId: rollback.serviceId, projectId: rollback.projectId, imageUrl, imageDigest },
+      }) });
+      return { deployment: rollback, rollbackOfDeploymentId: current.id, previousDeployment: previous || null, workflowJob };
     });
-    await this.appendDeploymentEvent({ deploymentId: current.id, type: 'deployment.rollback.requested', message: `Rollback requested to ${imageUrl}`, metadata: { rollbackDeploymentId: rollback.id, previousDeploymentId: previous?.id || null, imageUrl, imageDigest } });
-    await this.appendDeploymentEvent({ deploymentId: rollback.id, type: 'deployment.rollback.created', message: `Rollback deployment created from ${current.id}`, metadata: { rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, imageUrl, imageDigest } });
-    const workflowJob = await this.enqueueWorkflowJob({
-      type: 'rollback-deploy',
-      targetType: 'deployment',
-      targetId: rollback.id,
-      payload: { deploymentId: rollback.id, rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, serviceId: rollback.serviceId, projectId: rollback.projectId, imageUrl, imageDigest },
-    });
-    return { deployment: rollback, rollbackOfDeploymentId: current.id, previousDeployment: previous || null, workflowJob };
   }
 
   async createDeploymentWorkflow(input: Record<string, any>) {
-    return this.prisma.$transaction(async (tx: any) => {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const requestedDeployment = input.deployment || input;
       const service = await tx.service.findUnique({ where: { id: requestedDeployment.serviceId } });
+      if (!service) throw notFoundError(`service not found: ${requestedDeployment.serviceId}`);
+      assertMutable(service, 'service');
+      await requireMutableProject(tx, requestedDeployment.projectId || service.projectId);
+      await enforcePrismaQuotaRequirements(tx, input.actorUserId || requestedDeployment.actorUserId, 'deployment:create', deploymentQuotaRequirements(requestedDeployment.deploymentType));
       const deployment = await tx.deployment.create({ data: deploymentData({ ...requestedDeployment, projectId: requestedDeployment.projectId || service?.projectId }) });
       const workflowJob = await tx.workflowJob.create({ data: workflowJobData({
         ...(input.workflow || {}),
@@ -481,41 +999,74 @@ export class PrismaControlPlaneRepository {
     return this.prisma.deployment.findUnique({ where: { id: deploymentId } });
   }
 
-  async listServicesForProject(projectId: string) {
-    return this.prisma.service.findMany({ where: { projectId }, orderBy: { createdAt: 'asc' } });
+  async listProjectsForOrganizations(organizationIds?: string[], options: Record<string, any> = {}) {
+    const scope = organizationIds ? { organizationId: { in: organizationIds } } : {};
+    const projects = await findKeysetRows(this.prisma.project, scope, options, {
+      include: { _count: { select: { services: true, resources: true } } },
+    });
+    return projects.map(({ _count, ...project }: Record<string, any>) => ({
+      ...project,
+      serviceCount: Number(_count?.services || 0),
+      resourceCount: Number(_count?.resources || 0),
+    }));
   }
 
-  async listResourcesForProject(projectId: string) {
-    return this.prisma.resource.findMany({ where: { projectId }, orderBy: { createdAt: 'asc' } });
+  async listUsers() {
+    const users = await this.prisma.user.findMany({ orderBy: { createdAt: 'asc' } });
+    return users.map(redactUser);
   }
 
-  async listDeploymentsForService(serviceId: string) {
-    return this.prisma.deployment.findMany({ where: { serviceId }, orderBy: { createdAt: 'desc' } });
+  async getQuotaForUser(userId: string) {
+    return this.prisma.quota.findFirst({ where: { userId }, orderBy: { updatedAt: 'desc' } });
+  }
+
+  async listUsageRecordsForUser(userId: string, options: Record<string, any> = {}) {
+    const month = utcMonthBounds(options.now);
+    return this.prisma.usageRecord.findMany({
+      where: { userId, recordedAt: { gte: month.startDate, lt: month.endDate } },
+      orderBy: { recordedAt: 'desc' },
+      take: activityLimit(options.limit),
+    });
+  }
+
+  async adminOverview(options: Record<string, any> = {}) {
+    const limit = activityLimit(options.limit);
+    const [users, quotas, auditLogs] = await Promise.all([
+      this.prisma.user.findMany({
+        select: { id: true, email: true, name: true, avatarUrl: true, githubId: true, role: true, accountType: true, approvalStatus: true, emailVerifiedAt: true, createdAt: true, updatedAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      }),
+      this.prisma.quota.findMany({ orderBy: { updatedAt: 'desc' }, take: limit }),
+      this.prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: limit }),
+    ]);
+    return deepClone({ users, quotas, auditLogs });
+  }
+
+  async listServicesForProject(projectId: string, options: Record<string, any> = {}) {
+    return findKeysetRows(this.prisma.service, { projectId }, options);
+  }
+
+  async listResourcesForProject(projectId: string, options: Record<string, any> = {}) {
+    return findKeysetRows(this.prisma.resource, { projectId }, options);
+  }
+
+  async listDeploymentsForService(serviceId: string, options: Record<string, any> = {}) {
+    return findKeysetRows(this.prisma.deployment, { serviceId }, options);
+  }
+
+  async listDeploymentsForProject(projectId: string, options: Record<string, any> = {}) {
+    return findKeysetRows(this.prisma.deployment, { projectId }, options);
   }
 
   async upsertServiceEnvironment(input: Record<string, any>) {
-    const { normalizeEnvEntries } = await import('./env-file.ts');
-    const rows = [];
-    for (const entry of normalizeEnvEntries(input.entries || [], { source: input.source || 'api' })) {
-      let secretRef = (entry as any).secretId || null;
-      if (entry.isSecret) {
-        const secret = await this.prisma.secretValue.upsert({
-          where: { scopeType_scopeId_key: { scopeType: 'service', scopeId: input.serviceId, key: entry.key } },
-          update: { sealedValue: sealSecret(entry.value), valueMasked: maskSecretValue(entry.value), metadata: maskSecrets({ source: entry.source || input.source || 'api' }) },
-          create: { scopeType: 'service', scopeId: input.serviceId, key: entry.key, sealedValue: sealSecret(entry.value), valueMasked: maskSecretValue(entry.value), metadata: maskSecrets({ source: entry.source || input.source || 'api' }) },
-        });
-        secretRef = secret.id;
-      }
-      const data = envVariableData({ ...entry, projectId: input.projectId, serviceId: input.serviceId, source: entry.source || input.source || 'api', secretRef });
-      const row = await this.prisma.environmentVariable.upsert({
-        where: { serviceId_key: { serviceId: input.serviceId, key: data.key } },
-        update: data,
-        create: data,
-      });
-      rows.push(row);
-    }
-    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'service.env:upsert', targetType: 'service', targetId: input.serviceId, metadata: maskSecrets({ keys: rows.map((row) => row.key) }) } });
-    return { serviceId: input.serviceId, entries: rows.map(maskEnvRow), plainCount: rows.filter((row) => !row.isSecret).length, secretCount: rows.filter((row) => row.isSecret).length };
+    return this.prisma.$transaction(async (tx: any) => {
+      const service = await tx.service.findUnique({ where: { id: input.serviceId } });
+      if (!service) throw notFoundError(`service not found: ${input.serviceId}`);
+      assertMutable(service, 'service');
+      await requireMutableProject(tx, input.projectId || service.projectId);
+      return upsertServiceEnvironmentWithDb(tx, { ...input, projectId: service.projectId });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async importServiceEnvFile(input: Record<string, any>) {
@@ -533,7 +1084,7 @@ export class PrismaControlPlaneRepository {
   async createGitHubIntegration(input: Record<string, any>) {
     const { githubIntegrationSummary } = await import('./github-integration.ts');
     const summary = githubIntegrationSummary(input);
-    let row = await this.prisma.githubIntegration.create({
+    let row = await this.prisma.gitHubIntegration.create({
       data: {
         organizationId: input.organizationId,
         userId: input.userId || null,
@@ -551,90 +1102,141 @@ export class PrismaControlPlaneRepository {
         update: { sealedValue: sealSecret(input.token), valueMasked: maskSecretValue(input.token), metadata: maskSecrets({ accountLogin: input.accountLogin }) },
         create: { scopeType: 'github-integration', scopeId: row.id, key: 'GITHUB_TOKEN', sealedValue: sealSecret(input.token), valueMasked: maskSecretValue(input.token), metadata: maskSecrets({ accountLogin: input.accountLogin }) },
       });
-      row = await this.prisma.githubIntegration.update({ where: { id: row.id }, data: { tokenSecretId: secret.id } });
+      row = await this.prisma.gitHubIntegration.update({ where: { id: row.id }, data: { tokenSecretId: secret.id } });
     }
-    await this.prisma.auditLog.create({ data: { actorUserId: input.userId || 'system', action: 'github:connect', targetType: 'organization', targetId: input.organizationId, metadata: maskSecrets({ integrationId: row.id, accountLogin: row.accountLogin }) } });
+    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.userId), action: 'github:connect', targetType: 'organization', targetId: input.organizationId, metadata: maskSecrets({ integrationId: row.id, accountLogin: row.accountLogin }) } });
     return row;
   }
 
   async listGitHubIntegrations(input: Record<string, any>) {
-    return this.prisma.githubIntegration.findMany({ where: { organizationId: input.organizationId } });
+    return this.prisma.gitHubIntegration.findMany({ where: { organizationId: input.organizationId } });
+  }
+
+  async verifyGitHubIntegration(input: Record<string, any>) {
+    return this.prisma.$transaction(async (tx: any) => {
+      const integration = await tx.gitHubIntegration.findUnique({ where: { id: input.integrationId } });
+      if (!integration) throw notFoundError(`GitHub integration not found: ${input.integrationId}`);
+      const installationId = String(input.installationId || '').trim();
+      if (!installationId) throw conflictError('verified GitHub integration requires an installationId');
+      if (integration.verifiedAt && String(integration.installationId) !== installationId) throw conflictError('verified GitHub installation binding is immutable');
+      const conflictRow = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null }, id: { not: integration.id } } });
+      if (conflictRow) throw conflictError(String(conflictRow.organizationId) === String(integration.organizationId) ? 'GitHub installation is already verified by another integration' : 'GitHub installation is already verified for another organization');
+      const verifiedAt = new Date();
+      const row = await tx.gitHubIntegration.update({ where: { id: integration.id }, data: { installationId, accountLogin: input.accountLogin || integration.accountLogin, verifiedAt } });
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.verifiedBy), action: 'github:verify-installation', targetType: 'github-integration', targetId: integration.id, metadata: { organizationId: integration.organizationId, installationId } } });
+      return row;
+    }, { isolationLevel: 'Serializable' });
+  }
+
+  async registerGitHubRepository(input: Record<string, any>) {
+    return this.prisma.$transaction(async (tx: any) => {
+      const installationId = String(input.installationId || '').trim();
+      const integration = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null } } });
+      if (!integration) throw forbiddenError('repository catalog updates require a verified GitHub installation');
+      const record = canonicalPrismaGitHubRepositoryRecord(input);
+      const existing = await tx.gitHubRepository.findUnique({ where: { githubRepoId: record.githubRepoId } });
+      if (existing && String(existing.installationId) !== installationId) throw conflictError('GitHub repository is already bound to another installation');
+      await tx.gitHubInstallation.upsert({
+        where: { installationId },
+        update: { accountLogin: integration.accountLogin || record.owner },
+        create: { installationId, accountLogin: integration.accountLogin || record.owner, accountType: 'Organization' },
+      });
+      return tx.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async attachGitHubRepositoryToService(input: Record<string, any>) {
-    const { parseGitHubRepository } = await import('./github-integration.ts');
-    const repo = parseGitHubRepository(input.repoUrl);
     const serviceRow = await this.prisma.service.findUnique({ where: { id: input.serviceId }, include: { project: true } });
-    const integration = input.integrationId ? await this.prisma.githubIntegration.findUnique({ where: { id: input.integrationId } }) : null;
-    if (integration && serviceRow?.project && String(integration.organizationId) !== String(serviceRow.project.organizationId)) {
-      throw forbiddenError('GitHub integration does not belong to project organization');
-    }
+    if (!serviceRow) throw notFoundError(`service not found: ${input.serviceId}`);
+    if (String(serviceRow.projectId) !== String(input.projectId)) throw forbiddenError('service does not belong to project');
+    const integration = await requireVerifiedPrismaGitHubIntegration(this.prisma, input.integrationId, serviceRow.project?.organizationId);
+    const repo = await resolvePrismaGitHubRepository(this.prisma, integration.installationId, input);
+    const branch = input.branch || repo.defaultBranch || integration.defaultBranch || 'main';
+    const binding = prismaGitHubServiceBinding(integration, repo);
+    assertPrismaGitHubBindingImmutable(serviceRow, { repoUrl: repo.repoUrl, githubRepositoryId: repo.githubRepoId, desiredState: binding });
+    const currentDesiredState = serviceRow.desiredState && typeof serviceRow.desiredState === 'object' && !Array.isArray(serviceRow.desiredState) ? serviceRow.desiredState as Record<string, any> : {};
+    const currentGitHub = currentDesiredState.github && typeof currentDesiredState.github === 'object' && !Array.isArray(currentDesiredState.github) ? currentDesiredState.github : {};
     const service = await this.prisma.service.update({
       where: { id: input.serviceId },
-      data: { sourceType: 'github', repoUrl: repo.repoUrl, branch: input.branch || 'main', desiredState: sanitizeJson({ github: { repository: repo.fullName, integrationId: input.integrationId || null, attached: true }, githubIntegrationId: input.integrationId || null, githubRepository: repo.fullName }) },
+      data: { sourceType: 'github', repoUrl: repo.repoUrl, githubRepositoryId: repo.githubRepoId, branch, desiredState: sanitizeJson({ ...currentDesiredState, ...binding, github: { ...currentGitHub, ...binding.github, attached: true } }) },
     });
-    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'github:attach-repository', targetType: 'service', targetId: input.serviceId, metadata: { repository: repo.fullName, integrationId: input.integrationId || null } } });
-    return { service, github: { integrationId: input.integrationId || null, repository: repo.fullName, repoUrl: repo.repoUrl, branch: input.branch || 'main' } };
+    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:attach-repository', targetType: 'service', targetId: input.serviceId, metadata: { repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId } } });
+    return { service, github: { ...binding.github, branch } };
   }
 
   async listGitHubInstallations(input: Record<string, any>) {
-    const integrations = await this.prisma.githubIntegration.findMany({ where: { organizationId: input.organizationId, installationId: { not: null } } });
-    const services = await this.prisma.service.findMany({ where: { repoUrl: { not: null } } });
+    const integrations = await this.prisma.gitHubIntegration.findMany({ where: { organizationId: input.organizationId, installationId: { not: null }, verifiedAt: { not: null } } });
+    const repositoryCounts = await Promise.all(integrations.map((integration: Record<string, any>) => this.prisma.gitHubRepository.count({ where: { installationId: String(integration.installationId) } })));
     return {
-      installations: integrations.map((integration: Record<string, any>) => ({
+      installations: integrations.map((integration: Record<string, any>, index: number) => ({
         id: String(integration.installationId),
         installationId: String(integration.installationId),
         integrationId: integration.id,
         accountLogin: integration.accountLogin,
         organizationId: integration.organizationId,
-        repositoryCount: uniquePrismaRepositories(services.filter((service: Record<string, any>) => {
-          const desired = service.desiredState || {};
-          return String(desired.githubIntegrationId || desired.github?.integrationId || '') === String(integration.id);
-        })).length,
+        repositoryCount: repositoryCounts[index],
       })),
     };
   }
 
   async listGitHubInstallationRepositories(input: Record<string, any>) {
     const organizationIds = organizationScopeArray(input);
-    const integrations = await this.prisma.githubIntegration.findMany({ where: { installationId: String(input.installationId), ...(organizationIds.length ? { organizationId: { in: organizationIds } } : {}) } });
-    const integrationIds = integrations.map((integration: Record<string, any>) => String(integration.id));
-    if (integrationIds.length === 0) return { installationId: String(input.installationId), repositories: [] };
-    const services = await this.prisma.service.findMany({ where: { repoUrl: { not: null } } });
-    const repositories = uniquePrismaRepositories(services.filter((service: Record<string, any>) => {
-      const desired = service.desiredState || {};
-      return integrationIds.includes(String(desired.githubIntegrationId || desired.github?.integrationId || ''));
-    }));
+    const integrations = await this.prisma.gitHubIntegration.findMany({ where: { installationId: String(input.installationId), verifiedAt: { not: null }, ...(organizationIds.length ? { organizationId: { in: organizationIds } } : {}) } });
+    if (integrations.length === 0) return { installationId: String(input.installationId), repositories: [] };
+    const rows = await this.prisma.gitHubRepository.findMany({ where: { installationId: String(input.installationId) }, orderBy: [{ fullName: 'asc' }, { githubRepoId: 'asc' }] });
+    const repositories = rows.map(publicPrismaGitHubRepository);
     return { installationId: String(input.installationId), repositories };
   }
 
   async importGitHubRepository(input: Record<string, any>) {
-    const { parseGitHubRepository } = await import('./github-integration.ts');
-    const repo = parseGitHubRepository(input.repoUrl || input.repository);
-    const project = await this.prisma.project.findUnique({ where: { id: input.projectId } });
-    const integration = input.integrationId ? await this.prisma.githubIntegration.findUnique({ where: { id: input.integrationId } }) : null;
-    if (integration && project && String(integration.organizationId) !== String(project.organizationId)) {
-      throw forbiddenError('GitHub integration does not belong to project organization');
-    }
-    const service = await this.createService({
-      projectId: input.projectId,
-      name: input.serviceName || repo.repo,
-      type: 'web',
-      runtimeType: 'container',
-      sourceType: 'github',
-      repoUrl: repo.repoUrl,
-      branch: input.branch || 'main',
-      desiredState: { github: { repository: repo.fullName, integrationId: input.integrationId || null, imported: true }, githubRepository: repo.fullName, githubIntegrationId: input.integrationId || null },
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const project = await tx.project.findUnique({ where: { id: input.projectId } });
+      if (!project) throw notFoundError(`project not found: ${input.projectId}`);
+      assertMutable(project, 'project');
+      const integration = await requireVerifiedPrismaGitHubIntegration(tx, input.integrationId, project.organizationId);
+      const repo = await resolvePrismaGitHubRepository(tx, integration.installationId, input);
+      const branch = input.branch || repo.defaultBranch || integration.defaultBranch || 'main';
+      const binding = prismaGitHubServiceBinding(integration, repo);
+      const name = input.serviceName || repo.repo;
+      const slug = slugInput(name);
+      const existing = await tx.service.findUnique({ where: { projectId_slug: { projectId: input.projectId, slug } } });
+      assertMutable(existing, 'service');
+      const serviceInput = {
+        projectId: input.projectId,
+        name,
+        type: 'web',
+        runtimeType: 'container',
+        sourceType: 'github',
+        repoUrl: repo.repoUrl,
+        githubRepositoryId: repo.githubRepoId,
+        branch,
+        ...binding,
+        desiredState: { ...binding, github: { ...binding.github, imported: true } },
+      };
+      await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'service:create', serviceQuotaRequirements(existing, serviceInput));
+      const service = await tx.service.upsert({
+        where: { projectId_slug: { projectId: input.projectId, slug } },
+        update: serviceData(serviceInput, { allowGitHubBinding: true }),
+        create: { projectId: input.projectId, name, slug, ...serviceData(serviceInput, { allowGitHubBinding: true }) },
+      });
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:import-repository', targetType: 'project', targetId: input.projectId, metadata: maskSecrets({ repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId }) } });
+      return { service, github: { ...binding.github, branch } };
     });
-    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'github:import-repository', targetType: 'project', targetId: input.projectId, metadata: maskSecrets({ repository: repo.fullName, integrationId: input.integrationId || null }) } });
-    return { service, github: { integrationId: input.integrationId || null, repository: repo.fullName, repoUrl: repo.repoUrl, branch: input.branch || 'main' } };
+  }
+
+  async listServicesForGitHubRepository(repository: any, scope: Record<string, any> = {}) {
+    return servicesForPrismaGitHubRepository(this.prisma, repository, scope);
   }
 
   async syncGitHubRepository(input: Record<string, any>) {
-    const repository = normalizePrismaRepositoryId(input.repository || input.repositoryId || '');
-    const services = await servicesForPrismaGitHubRepository(this.prisma, repository, { organizationId: input.organizationId, organizationIds: input.organizationIds });
+    const repository = normalizePrismaRepositoryId(input.repositoryId || input.repository || '');
+    const matchedServices = await servicesForPrismaGitHubRepository(this.prisma, repository, { organizationId: input.organizationId, organizationIds: input.organizationIds });
+    const authorizedServiceIds = Array.isArray(input.serviceIds) ? new Set(input.serviceIds.map(String)) : null;
+    const services = authorizedServiceIds
+      ? matchedServices.filter((service: Record<string, any>) => authorizedServiceIds.has(String(service.id)))
+      : matchedServices;
     const workflowJob = await this.enqueueWorkflowJob({ type: 'github-repository-sync', targetType: 'github-repository', targetId: repository, payload: { repository, serviceIds: services.map((service: Record<string, any>) => service.id) } });
-    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'github:repository-sync', targetType: 'github-repository', targetId: repository, metadata: maskSecrets({ repository }) } });
+    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:repository-sync', targetType: 'github-repository', targetId: repository, metadata: maskSecrets({ repository }) } });
     return { repository, services, workflowJob };
   }
 
@@ -653,39 +1255,70 @@ export class PrismaControlPlaneRepository {
       throw error;
     }
     const deliveryId = String(input.deliveryId || stableId('ghdel', input.event, rawBody));
-    const existing = await this.prisma.webhookEvent.findUnique({ where: { deliveryId } }).catch(() => null);
-    if (existing) return { accepted: true, duplicate: true, deliveryId, actions: [] };
     const actionPlan = githubWebhookActionPlan(input.event, input.payload || {});
-    const row = await this.prisma.webhookEvent.create({ data: { provider: 'github', eventType: String(input.event || 'unknown'), deliveryId, payload: sanitizeJson(maskSecrets(input.payload || {})), handled: true } });
-    const services = await servicesForPrismaGitHubRepository(this.prisma, actionPlan.repository);
-    const actions: any[] = [];
-    for (const service of services) {
-      if (actionPlan.kind === 'production-deploy') {
-        const deployment = await this.createDeployment({ serviceId: service.id, projectId: service.projectId, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'production', triggerType: 'github_push', branch: actionPlan.branch });
-        const workflowJob = await this.enqueueWorkflowJob({ type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook' } });
-        actions.push({ type: 'production-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id });
-      } else if (actionPlan.kind === 'preview-deploy') {
-        const previewPlan = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber });
-        const deployment = await this.createDeployment({ serviceId: service.id, projectId: service.projectId, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewPlan.url });
-        const preview = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id });
-        const workflowJob = await this.enqueueWorkflowJob({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', preview, kubernetes: preview.kubernetes } });
-        await this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.workload.queued', message: `Preview Kubernetes workload queued for PR #${actionPlan.pullRequestNumber}`, metadata: { previewUrl: preview.url, workloadName: preview.kubernetes.workloadName, namespace: preview.kubernetes.namespace } });
-        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: preview.url, previewWorkloadName: preview.kubernetes.workloadName });
-      } else if (actionPlan.kind === 'preview-cleanup') {
-        const preview = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, action: 'delete' });
-        const workflowJob = await this.enqueueWorkflowJob({ type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook', preview, kubernetes: preview.kubernetes } });
-        const deployments = await this.prisma.deployment.findMany({ where: { serviceId: service.id, deploymentType: 'preview', pullRequestNumber: Number(actionPlan.pullRequestNumber) } });
-        for (const deployment of deployments) {
-          const cleanupPlan = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id, action: 'delete' });
-          await this.prisma.deployment.update({ where: { id: deployment.id }, data: { status: 'PREVIEW_CLEANUP_REQUESTED' } });
-          await this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.cleanup.requested', message: `Preview cleanup requested for PR #${actionPlan.pullRequestNumber}`, metadata: { repository: actionPlan.repository, workloadName: cleanupPlan.kubernetes.workloadName, cleanupSelector: cleanupPlan.kubernetes.cleanupSelector } });
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const existing = await tx.webhookEvent.findUnique({ where: { deliveryId } });
+      if (existing?.handled) return { accepted: true, duplicate: true, deliveryId, actions: [] };
+      let row = existing || await tx.webhookEvent.create({
+        data: { provider: 'github', eventType: String(input.event || 'unknown'), deliveryId, payload: sanitizeJson(maskSecrets(input.payload || {})), handled: false, errorMessage: null },
+      });
+      const actions: any[] = await applyPrismaGitHubCatalogWebhook(tx, input.event, input.payload || {});
+      const services = await servicesForPrismaGitHubWebhook(tx, actionPlan);
+      const blockedServiceIds = await prismaGitHubWebhookQuotaBlocks(tx, services, actionPlan, actions);
+      for (const service of services.filter((candidate: Record<string, any>) => !blockedServiceIds.has(String(candidate.id)))) {
+        const deploymentId = stableId('dep', 'github', deliveryId, service.id, actionPlan.kind);
+        const workflowJobId = stableId('job', 'github', deliveryId, service.id, actionPlan.kind);
+        if (actionPlan.kind === 'production-deploy') {
+          const deployment = await tx.deployment.upsert({
+            where: { id: deploymentId },
+            update: {},
+            create: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'production', triggerType: 'github_push', branch: actionPlan.branch }),
+          });
+          const workflowJob = await tx.workflowJob.upsert({
+            where: { id: workflowJobId },
+            update: {},
+            create: { id: workflowJobId, ...workflowJobData({ type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId } }) },
+          });
+          actions.push({ type: 'production-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id });
+        } else if (actionPlan.kind === 'preview-deploy') {
+          const previewPlan = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber });
+          const deployment = await tx.deployment.upsert({
+            where: { id: deploymentId },
+            update: {},
+            create: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewPlan.url }),
+          });
+          const preview = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id });
+          const workflowJob = await tx.workflowJob.upsert({
+            where: { id: workflowJobId },
+            update: {},
+            create: { id: workflowJobId, ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId, preview, kubernetes: preview.kubernetes } }) },
+          });
+          const eventId = stableId('devevt', 'github', deliveryId, service.id, 'preview-queued');
+          await tx.deploymentEvent.upsert({ where: { id: eventId }, update: {}, create: { id: eventId, deploymentId: deployment.id, type: 'preview.workload.queued', message: sanitizeLogRecord(`Preview Kubernetes workload queued for PR #${actionPlan.pullRequestNumber}`), metadata: sanitizeJson(maskSecrets({ previewUrl: preview.url, workloadName: preview.kubernetes.workloadName, namespace: preview.kubernetes.namespace })) } });
+          actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: preview.url, previewWorkloadName: preview.kubernetes.workloadName });
+        } else if (actionPlan.kind === 'preview-cleanup') {
+          const preview = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, action: 'delete' });
+          const workflowJob = await tx.workflowJob.upsert({
+            where: { id: workflowJobId },
+            update: {},
+            create: { id: workflowJobId, ...workflowJobData({ type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook', deliveryId, preview, kubernetes: preview.kubernetes } }) },
+          });
+          const deployments = await tx.deployment.findMany({ where: { serviceId: service.id, deploymentType: 'preview', pullRequestNumber: Number(actionPlan.pullRequestNumber) } });
+          for (const deployment of deployments) {
+            const cleanupPlan = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id, action: 'delete' });
+            await tx.deployment.update({ where: { id: deployment.id }, data: { status: 'PREVIEW_CLEANUP_REQUESTED' } });
+            const eventId = stableId('devevt', 'github', deliveryId, deployment.id, 'preview-cleanup');
+            await tx.deploymentEvent.upsert({ where: { id: eventId }, update: {}, create: { id: eventId, deploymentId: deployment.id, type: 'preview.cleanup.requested', message: sanitizeLogRecord(`Preview cleanup requested for PR #${actionPlan.pullRequestNumber}`), metadata: sanitizeJson(maskSecrets({ repository: actionPlan.repository, workloadName: cleanupPlan.kubernetes.workloadName, cleanupSelector: cleanupPlan.kubernetes.cleanupSelector })) } });
+          }
+          actions.push({ type: 'preview-cleanup-enqueued', serviceId: service.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, deploymentIds: deployments.map((deployment: Record<string, any>) => deployment.id) });
         }
-        actions.push({ type: 'preview-cleanup-enqueued', serviceId: service.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, deploymentIds: deployments.map((deployment: Record<string, any>) => deployment.id) });
       }
-    }
-    const outbound = githubWebhookOutboundPlan(actionPlan, actions);
-    await this.prisma.auditLog.create({ data: { actorUserId: 'github-webhook', action: 'github:webhook', targetType: 'github-delivery', targetId: deliveryId, metadata: maskSecrets({ event: input.event, repository: actionPlan.repository, action: actionPlan.action, actions: actions.map((action) => action.type) }) } }).catch(() => null);
-    return { accepted: true, duplicate: false, deliveryId, event: input.event, repository: actionPlan.repository, action: actionPlan.action, matchedServiceCount: services.length, actions, outbound, webhookEvent: row };
+      const outbound = githubWebhookOutboundPlan(actionPlan, actions);
+      row = await tx.webhookEvent.update({ where: { id: row.id }, data: { handled: true, errorMessage: null } });
+      const auditId = stableId('aud', 'github:webhook', deliveryId);
+      await tx.auditLog.upsert({ where: { id: auditId }, update: {}, create: { id: auditId, actorUserId: null, action: 'github:webhook', targetType: 'github-delivery', targetId: deliveryId, metadata: sanitizeJson(maskSecrets({ event: input.event, repository: actionPlan.repository, action: actionPlan.action, actions: actions.map((action) => action.type) })) } });
+      return { accepted: true, duplicate: false, deliveryId, event: input.event, repository: actionPlan.repository, action: actionPlan.action, matchedServiceCount: services.length, actions, outbound, webhookEvent: row };
+    });
   }
 
   async enqueueWorkflowJob(input: Record<string, any>) {
@@ -753,15 +1386,15 @@ export class PrismaControlPlaneRepository {
   async approveUser(userId: string, input: Record<string, any> = {}) {
     const current = await this.prisma.user.findUnique({ where: { id: userId } });
     const accountType = normalizeAccountType(input.accountType, current?.accountType || 'NON_CLUB');
-    const user = await this.prisma.user.update({ where: { id: userId }, data: { approvalStatus: 'APPROVED', accountType, role: input.role || undefined } });
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { approvalStatus: 'APPROVED', accountType, role: input.role || undefined, sessionVersion: { increment: 1 } } });
     if (accountType === 'NON_CLUB') await this.setQuota({ userId, accountType });
-    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'user:approve', targetType: 'user', targetId: userId, metadata: maskSecrets({ accountType }) } });
+    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'user:approve', targetType: 'user', targetId: userId, metadata: maskSecrets({ accountType }) } });
     return redactUser(user);
   }
 
   async rejectUser(userId: string, input: Record<string, any> = {}) {
-    const user = await this.prisma.user.update({ where: { id: userId }, data: { approvalStatus: 'REJECTED' } });
-    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'user:reject', targetType: 'user', targetId: userId, metadata: {} } });
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { approvalStatus: 'REJECTED', sessionVersion: { increment: 1 } } });
+    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'user:reject', targetType: 'user', targetId: userId, metadata: {} } });
     return redactUser(user);
   }
 
@@ -799,46 +1432,7 @@ export class PrismaControlPlaneRepository {
   }
 
   async quotaUsageForUser(userId: string) {
-    const memberships = await this.prisma.membership.findMany({ where: { userId }, select: { organizationId: true } });
-    const organizationIds = memberships.map((membership: Record<string, any>) => membership.organizationId);
-    if (organizationIds.length === 0) return {};
-    const projects = await this.prisma.project.findMany({ where: { organizationId: { in: organizationIds } }, select: { id: true } });
-    const projectIds = projects.map((project: Record<string, any>) => project.id);
-    if (projectIds.length === 0) {
-      return { maxProjects: 0, maxServices: 0, maxDeploymentsPerDay: 0, maxPreviewDeployments: 0, maxDbStorageMb: 0, maxObjectStorageMb: 0 };
-    }
-    const services = await this.prisma.service.findMany({ where: { projectId: { in: projectIds } }, select: { id: true, desiredSpec: true, desiredState: true } });
-    const serviceIds = services.map((service: Record<string, any>) => service.id);
-    const resources = await this.prisma.resource.findMany({ where: { projectId: { in: projectIds } }, select: { type: true, engine: true, desiredSpec: true, desiredState: true } });
-    const start = new Date();
-    start.setUTCHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + 1);
-    const deployments = serviceIds.length === 0 ? [] : await this.prisma.deployment.findMany({ where: { serviceId: { in: serviceIds }, createdAt: { gte: start, lt: end } }, select: { deploymentType: true } });
-    const allDeployments = serviceIds.length === 0 ? [] : await this.prisma.deployment.findMany({ where: { serviceId: { in: serviceIds } }, select: { buildStartedAt: true, buildFinishedAt: true, startedAt: true, deployedAt: true, finishedAt: true } });
-    const usageRecords = await this.prisma.usageRecord.findMany({
-      where: {
-        OR: [
-          { userId },
-          { organizationId: { in: organizationIds } },
-          { projectId: { in: projectIds } },
-          ...(serviceIds.length ? [{ serviceId: { in: serviceIds } }] : []),
-        ],
-      },
-      select: { metric: true, value: true },
-    }).catch(() => []);
-    return {
-      maxProjects: projects.length,
-      maxServices: serviceIds.length,
-      maxDeploymentsPerDay: deployments.length,
-      maxPreviewDeployments: deployments.filter((deployment: Record<string, any>) => deployment.deploymentType === 'preview').length,
-      maxDbStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
-      maxObjectStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
-      maxBuildMinutesPerMonth: usageMetricSum(usageRecords, ['build-minutes', 'build_minutes', 'buildMinutes', 'maxBuildMinutesPerMonth']) + allDeployments.reduce((sum: number, deployment: Record<string, any>) => sum + deploymentBuildMinutes(deployment), 0),
-      maxRuntimeHoursPerMonth: usageMetricSum(usageRecords, ['runtime-hours', 'runtime_hours', 'runtimeHours', 'app-runtime-hours', 'maxRuntimeHoursPerMonth']) + allDeployments.reduce((sum: number, deployment: Record<string, any>) => sum + deploymentRuntimeHours(deployment), 0),
-      maxCpuMillicores: services.reduce((sum: number, service: Record<string, any>) => sum + serviceCpuMillicores(service), 0),
-      maxMemoryMb: services.reduce((sum: number, service: Record<string, any>) => sum + serviceMemoryMb(service), 0),
-    };
+    return prismaQuotaUsage(this.prisma, userId);
   }
 
   async appendBuildLog(input: Record<string, any>) {
@@ -853,9 +1447,9 @@ export class PrismaControlPlaneRepository {
     return this.prisma.deploymentEvent.create({ data: { deploymentId: input.deploymentId, type: input.type || 'deployment.event', message: maskLogLine(input.message), metadata: sanitizeJson(input.metadata || {}) } });
   }
 
-  async listDeploymentLogs(deploymentId: string) { return this.prisma.buildLog.findMany({ where: { deploymentId }, orderBy: { timestamp: 'asc' } }); }
-  async listRuntimeLogs(serviceId: string) { return this.prisma.runtimeLog.findMany({ where: { serviceId }, orderBy: { timestamp: 'asc' } }); }
-  async listDeploymentEvents(deploymentId: string) { return this.prisma.deploymentEvent.findMany({ where: { deploymentId }, orderBy: { timestamp: 'asc' } }); }
+  async listDeploymentLogs(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.buildLog, { deploymentId }, options); }
+  async listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.runtimeLog, { serviceId }, options); }
+  async listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.deploymentEvent, { deploymentId }, options); }
 
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) {
     const resource = await this.getResource(resourceId);
@@ -865,7 +1459,7 @@ export class PrismaControlPlaneRepository {
       throw error;
     }
     const result = await runDbConsoleQuery(await this.resourceForConsole(resource), query, options);
-    await this.prisma.auditLog.create({ data: { actorUserId: options.actorUserId || 'system', action: 'resource.console:query', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ queryPreview: redactDbConsoleStatement(query), queryBytes: Buffer.byteLength(String(query || '')), resultRows: (result as any).rowCount || result.rows?.length || 0 }) } });
+    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(options.actorUserId), action: 'resource.console:query', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ queryPreview: redactDbConsoleStatement(query), queryBytes: Buffer.byteLength(String(query || '')), resultRows: (result as any).rowCount || result.rows?.length || 0 }) } });
     return result;
   }
 
@@ -877,7 +1471,7 @@ export class PrismaControlPlaneRepository {
       throw error;
     }
     const result = await runDbConsoleQuery(await this.resourceForConsole(resource), command, { ...options, providerCommand: true });
-    await this.prisma.auditLog.create({ data: { actorUserId: options.actorUserId || 'system', action: 'resource.console:command', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ commandPreview: redactDbConsoleStatement(command), commandBytes: Buffer.byteLength(String(command || '')), mode: (result as any).mode }) } });
+    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(options.actorUserId), action: 'resource.console:command', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ commandPreview: redactDbConsoleStatement(command), commandBytes: Buffer.byteLength(String(command || '')), mode: (result as any).mode }) } });
     return result;
   }
 
@@ -902,69 +1496,104 @@ export class PrismaControlPlaneRepository {
   }
 
   async resourceForConsole(resource: Record<string, any>) {
-    const secrets = await this.prisma.secretValue.findMany({ where: { scopeType: 'resource-provider-connection', scopeId: resource.id } });
-    const env: Record<string, string> = {};
-    let live = false;
-    for (const secret of secrets) {
-      if (!isProviderConnectionSecret(secret, resource.id)) continue;
-      if (secret.sealedValue) env[secret.key] = openSecret(secret.sealedValue);
-      if (secret.metadata?.live === true) live = true;
-    }
-    if (!Object.keys(env).length) return resource;
-    return { ...resource, providerConnection: providerConnectionFromEnv(env, resource.engine, live) };
+    return resourceForConsoleWithDb(this.prisma, resource);
   }
 
   async attachResource({ resourceId, serviceId, envPrefix = null, actorUserId = 'system' }: Record<string, any>) {
-    const resource = await this.getResource(resourceId);
-    const service = await this.getService(serviceId);
-    if (!resource) throw Object.assign(new Error(`resource not found: ${resourceId}`), { statusCode: 404 });
-    if (!service) throw Object.assign(new Error(`service not found: ${serviceId}`), { statusCode: 404 });
-    if (String(resource.projectId) !== String(service.projectId)) throw Object.assign(new Error('resource and service must be in the same project'), { statusCode: 403 });
-    const providerEnv = providerEnvFromConnection(await this.resourceForConsole(resource), resource);
-    const injectedEnv = prefixEnv(providerEnv, envPrefix);
-    const row = await this.prisma.resourceAttachment.upsert({
-      where: { resourceId_serviceId: { resourceId, serviceId } },
-      update: { envPrefix, injectedEnv: maskSecrets(injectedEnv) },
-      create: { resourceId, serviceId, envPrefix, injectedEnv: maskSecrets(injectedEnv) },
-    });
-    await this.upsertServiceEnvironment({
-      projectId: service.projectId,
-      serviceId,
-      entries: Object.entries(injectedEnv).map(([key, value]) => ({ key, value: String(value), isSecret: true, source: `resource:${resourceId}` })),
-      actorUserId,
-      source: `resource:${resourceId}`,
-    });
-    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource:attach', targetType: 'service', targetId: serviceId, metadata: maskSecrets({ resourceId, envPrefix, envKeys: Object.keys(injectedEnv) }) } });
-    return row;
+    return this.prisma.$transaction(async (tx: any) => {
+      const [resource, service] = await Promise.all([
+        tx.resource.findUnique({ where: { id: resourceId } }),
+        tx.service.findUnique({ where: { id: serviceId } }),
+      ]);
+      if (!resource) throw Object.assign(new Error(`resource not found: ${resourceId}`), { statusCode: 404 });
+      if (!service) throw Object.assign(new Error(`service not found: ${serviceId}`), { statusCode: 404 });
+      assertMutable(resource, 'resource');
+      assertMutable(service, 'service');
+      await requireMutableProject(tx, resource.projectId);
+      if (String(resource.projectId) !== String(service.projectId)) throw Object.assign(new Error('resource and service must be in the same project'), { statusCode: 403 });
+        const injectedEnv = providerSecretEnvRefs(resource, envPrefix);
+        const existing = await tx.resourceAttachment.findUnique({ where: { resourceId_serviceId: { resourceId, serviceId } } });
+        const previousKeys = Object.keys(existing?.injectedEnv || {});
+      const row = await tx.resourceAttachment.upsert({
+        where: { resourceId_serviceId: { resourceId, serviceId } },
+          update: { envPrefix, injectedEnv },
+          create: { resourceId, serviceId, envPrefix, injectedEnv },
+      });
+        const secretEnv = mergeSecretEnv(service.desiredSpec?.secretEnv, injectedEnv, previousKeys);
+        await tx.service.update({ where: { id: serviceId }, data: { desiredSpec: sanitizeJson({ ...(service.desiredSpec || {}), secretEnv }) } });
+        for (const [key, reference] of Object.entries(injectedEnv)) {
+          await tx.environmentVariable.upsert({
+            where: { serviceId_key: { serviceId, key } },
+            update: { projectId: service.projectId, value: null, isSecret: true, valueMasked: '****', secretRef: kubernetesExternalSecretRef(reference), source: `resource:${resourceId}` },
+            create: { projectId: service.projectId, serviceId, key, value: null, isSecret: true, valueMasked: '****', secretRef: kubernetesExternalSecretRef(reference), source: `resource:${resourceId}` },
+          });
+        }
+      await tx.auditLog.create({ data: { actorUserId, action: 'resource:attach', targetType: 'service', targetId: serviceId, metadata: maskSecrets({ resourceId, envPrefix, envKeys: Object.keys(injectedEnv) }) } });
+      return row;
+    }, { isolationLevel: 'Serializable' });
   }
 
   async removeResourceInjectedEnvironment(attachment: Record<string, any>) {
+      const removedKeys = new Set(Object.keys(attachment.injectedEnv || {}));
     for (const key of Object.keys(attachment.injectedEnv || {})) {
       const row = await this.prisma.environmentVariable.findUnique({ where: { serviceId_key: { serviceId: attachment.serviceId, key } } }).catch(() => null);
       if (row?.source !== `resource:${attachment.resourceId}`) continue;
-      if (row.secretRef) await this.prisma.secretValue.delete({ where: { id: row.secretRef } }).catch(() => null);
+        if (row.secretRef && !String(row.secretRef).startsWith('k8s:')) await this.prisma.secretValue.delete({ where: { id: row.secretRef } }).catch(() => null);
       await this.prisma.environmentVariable.delete({ where: { serviceId_key: { serviceId: attachment.serviceId, key } } }).catch(() => null);
     }
+      const service = await this.prisma.service.findUnique({ where: { id: attachment.serviceId } }).catch(() => null);
+      if (service) {
+        const secretEnv = (Array.isArray(service.desiredSpec?.secretEnv) ? service.desiredSpec.secretEnv : []).filter((entry: any) => !removedKeys.has(String(entry?.name || '')));
+        await this.prisma.service.update({ where: { id: attachment.serviceId }, data: { desiredSpec: sanitizeJson({ ...(service.desiredSpec || {}), secretEnv }) } });
+      }
   }
 
   async writeDesiredProject(projectSpec: Record<string, any>) {
     const orgInput = projectSpec.organization || null;
     const requestedOrganizationId = projectSpec.organizationId || projectSpec.orgId || null;
-    return this.prisma.$transaction(async (tx: any) => {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const organization = await resolveDesiredOrganization(tx, orgInput, requestedOrganizationId, projectSpec.organizationSlug);
       const projectInput = projectSpec.project || { name: projectSpec.name || projectSpec.slug || 'project', slug: projectSpec.slug || projectSpec.name || 'project', description: projectSpec.description || '' };
       const projectSlug = projectInput.slug || slugInput(projectInput.name);
+      const existingProject = typeof tx.project.findUnique === 'function'
+        ? await tx.project.findUnique({ where: { organizationId_slug: { organizationId: organization.id, slug: projectSlug } } })
+        : null;
+      assertMutable(existingProject, 'project');
+      const requirements: QuotaRequirement[] = [{ metric: 'maxProjects', increment: existingProject ? 0 : 1 }];
+      if (existingProject) {
+        for (const service of projectSpec.services || []) {
+          const existingService = typeof tx.service.findUnique === 'function'
+            ? await tx.service.findUnique({ where: { projectId_slug: { projectId: existingProject.id, slug: service.slug || slugInput(service.name) } } })
+            : null;
+          requirements.push(...serviceQuotaRequirements(existingService, service));
+        }
+        for (const resource of projectSpec.resources || []) {
+          const existingResource = typeof tx.resource.findUnique === 'function'
+            ? await tx.resource.findUnique({ where: { projectId_name: { projectId: existingProject.id, name: resource.name } } }).catch(() => null)
+            : null;
+          requirements.push(...resourceQuotaRequirements(existingResource, resource));
+        }
+      } else {
+        for (const service of projectSpec.services || []) requirements.push(...serviceQuotaRequirements(null, service));
+        for (const resource of projectSpec.resources || []) requirements.push(...resourceQuotaRequirements(null, resource));
+      }
+      await enforcePrismaQuotaRequirements(tx, projectSpec.actorUserId, 'desired-state:write', requirements);
       const project = await tx.project.upsert({
         where: { organizationId_slug: { organizationId: organization.id, slug: projectSlug } },
-        update: { name: projectInput.name || projectSlug, description: projectInput.description || '', status: projectInput.status || 'active' },
-        create: { organizationId: organization.id, name: projectInput.name || projectSlug, slug: projectSlug, description: projectInput.description || '', status: projectInput.status || 'active' },
+        update: { name: projectInput.name || projectSlug, description: projectInput.description || '', status: projectSpec.actorUserId ? 'ACTIVE' : (projectInput.status || 'ACTIVE') },
+        create: { organizationId: organization.id, name: projectInput.name || projectSlug, slug: projectSlug, description: projectInput.description || '', status: projectSpec.actorUserId ? 'ACTIVE' : (projectInput.status || 'ACTIVE') },
       });
       const services = [];
       for (const service of projectSpec.services || []) {
+        const serviceSlug = service.slug || slugInput(service.name);
+        const existingService = typeof tx.service.findUnique === 'function'
+          ? await tx.service.findUnique({ where: { projectId_slug: { projectId: project.id, slug: serviceSlug } } })
+          : null;
+        assertMutable(existingService, 'service');
         services.push(await tx.service.upsert({
-          where: { projectId_slug: { projectId: project.id, slug: service.slug || slugInput(service.name) } },
+          where: { projectId_slug: { projectId: project.id, slug: serviceSlug } },
           update: serviceData({ ...service, projectId: project.id }),
-          create: { projectId: project.id, name: service.name, slug: service.slug || slugInput(service.name), ...serviceData({ ...service, projectId: project.id }) },
+          create: { projectId: project.id, name: service.name, slug: serviceSlug, ...serviceData({ ...service, projectId: project.id }) },
         }));
       }
       const resources = [];
@@ -972,16 +1601,21 @@ export class PrismaControlPlaneRepository {
         const existing = typeof tx.resource.findUnique === 'function'
           ? await tx.resource.findUnique({
             where: { projectId_name: { projectId: project.id, name: resource.name } },
-            select: { connectionSecretName: true },
+            select: { connectionSecretName: true, status: true, deletionRequestedAt: true },
           }).catch(() => null)
           : null;
+        assertMutable(existing, 'resource');
+        if (String(existing?.status || '').toUpperCase() === 'READY') {
+          resources.push(existing);
+          continue;
+        }
         resources.push(await tx.resource.upsert({
           where: { projectId_name: { projectId: project.id, name: resource.name } },
           update: resourceData({ ...resource, projectId: project.id }, { connectionSecretName: existing?.connectionSecretName || null }),
           create: { projectId: project.id, name: resource.name, ...resourceData({ ...resource, projectId: project.id }) },
         }));
       }
-      await tx.auditLog.create({ data: { actorUserId: 'system', action: 'desired-state:write', targetType: 'project', targetId: project.id, metadata: maskSecrets(projectSpec) } });
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(projectSpec.actorUserId), action: 'desired-state:write', targetType: 'project', targetId: project.id, metadata: maskSecrets(projectSpec) } });
       return { organization, project, services, resources };
     });
   }
@@ -1008,10 +1642,138 @@ export class PrismaControlPlaneRepository {
     ]);
     const [environmentVariables, githubIntegrations] = await Promise.all([
       this.prisma.environmentVariable.findMany(),
-      this.prisma.githubIntegration.findMany(),
+      this.prisma.gitHubIntegration.findMany(),
     ]);
     return deepClone({ organizations, users: users.map(redactUser), members, projects, services, resources, deployments, auditLogs, usageRecords, workflowJobs, quotas, domains, resourceAttachments, resourceBackups, buildLogs, runtimeLogs, deploymentEvents, environmentVariables: environmentVariables.map(maskEnvRow), githubIntegrations });
   }
+}
+
+async function findActivityRows(model: any, scope: Record<string, any>, options: Record<string, any> = {}) {
+  const cursorFilter = prismaKeysetFilter(options, 'timestamp', 'asc');
+  const rows = await model.findMany({
+    where: cursorFilter ? { AND: [scope, cursorFilter] } : scope,
+    orderBy: [{ timestamp: cursorFilter ? 'asc' : 'desc' }, { id: cursorFilter ? 'asc' : 'desc' }],
+    take: activityLimit(options.limit),
+  });
+  return cursorFilter ? rows : rows.reverse();
+}
+
+async function findKeysetRows(model: any, scope: Record<string, any>, options: Record<string, any> = {}, query: Record<string, any> = {}) {
+  const cursorFilter = prismaKeysetFilter(options, 'createdAt', 'desc');
+  return model.findMany({
+    ...query,
+    where: cursorFilter ? { AND: [scope, cursorFilter] } : scope,
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: activityLimit(options.limit),
+  });
+}
+
+function countRowsByProject(rows: Iterable<Record<string, any>>, projectIds: Set<string>) {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const projectId = String(row.projectId || '');
+    if (!projectIds.has(projectId)) continue;
+    counts.set(projectId, (counts.get(projectId) || 0) + 1);
+  }
+  return counts;
+}
+
+const QUOTA_USAGE_AGGREGATE_SQL = `
+WITH member_orgs AS (
+  SELECT "organizationId" FROM "Membership" WHERE "userId" = $1
+), scoped_projects AS (
+  SELECT p.id FROM "Project" p WHERE p."organizationId" IN (SELECT "organizationId" FROM member_orgs)
+), scoped_services AS (
+  SELECT s.id, s."desiredSpec", s."desiredState" FROM "Service" s WHERE s."projectId" IN (SELECT id FROM scoped_projects)
+), scoped_resources AS (
+  SELECT r.id, r.type, r.engine, r."desiredSpec", r."desiredState" FROM "Resource" r WHERE r."projectId" IN (SELECT id FROM scoped_projects)
+), daily_deployments AS (
+  SELECT d."deploymentType" FROM "Deployment" d
+  WHERE d."serviceId" IN (SELECT id FROM scoped_services) AND d."createdAt" >= $2 AND d."createdAt" < $3
+), monthly_deployments AS (
+  SELECT d."buildStartedAt", d."buildFinishedAt", d."deployedAt", d."finishedAt" FROM "Deployment" d
+  WHERE d."serviceId" IN (SELECT id FROM scoped_services) AND (
+    (d."buildStartedAt" < $5 AND d."buildFinishedAt" > $4) OR
+    (d."deployedAt" < $5 AND (d."finishedAt" IS NULL OR d."finishedAt" > $4))
+  )
+), scoped_usage AS (
+  SELECT u.metric, u.value FROM "UsageRecord" u
+  WHERE u."recordedAt" >= $4 AND u."recordedAt" < $5 AND (
+    u."userId" = $1 OR
+    u."organizationId" IN (SELECT "organizationId" FROM member_orgs) OR
+    u."projectId" IN (SELECT id FROM scoped_projects) OR
+    u."serviceId" IN (SELECT id FROM scoped_services) OR
+    u."resourceId" IN (SELECT id FROM scoped_resources)
+  )
+)
+SELECT
+  (SELECT COUNT(*)::int FROM scoped_projects) AS "maxProjects",
+  (SELECT COUNT(*)::int FROM scoped_services) AS "maxServices",
+  (SELECT COUNT(*)::int FROM daily_deployments) AS "maxDeploymentsPerDay",
+  (SELECT COUNT(*)::int FROM daily_deployments WHERE LOWER("deploymentType") = 'preview') AS "maxPreviewDeployments",
+  (SELECT COALESCE(jsonb_agg(jsonb_build_object('desiredSpec', "desiredSpec", 'desiredState', "desiredState")), '[]'::jsonb) FROM scoped_services) AS services,
+  (SELECT COALESCE(jsonb_agg(jsonb_build_object('type', type, 'engine', engine, 'desiredSpec', "desiredSpec", 'desiredState', "desiredState")), '[]'::jsonb) FROM scoped_resources) AS resources,
+  (SELECT COALESCE(jsonb_agg(jsonb_build_object('buildStartedAt', "buildStartedAt", 'buildFinishedAt', "buildFinishedAt", 'deployedAt', "deployedAt", 'finishedAt', "finishedAt")), '[]'::jsonb) FROM monthly_deployments) AS deployments,
+  (SELECT COALESCE(jsonb_agg(jsonb_build_object('metric', metric, 'value', value)), '[]'::jsonb) FROM scoped_usage) AS "usageRecords"
+`;
+
+function quotaUsageFromAggregate(row: Record<string, any>, month: ReturnType<typeof utcMonthBounds>) {
+  const services = jsonArray(row.services);
+  const resources = jsonArray(row.resources);
+  const deployments = jsonArray(row.deployments);
+  const usageRecords = jsonArray(row.usageRecords);
+  return {
+    maxProjects: Number(row.maxProjects || 0),
+    maxServices: Number(row.maxServices || 0),
+    maxDeploymentsPerDay: Number(row.maxDeploymentsPerDay || 0),
+    maxPreviewDeployments: Number(row.maxPreviewDeployments || 0),
+    maxDbStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
+    maxObjectStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
+    maxBuildMinutesPerMonth: usageMetricSum(usageRecords, ['build-minutes', 'build_minutes', 'buildMinutes', 'maxBuildMinutesPerMonth']) + deployments.reduce((sum, deployment) => sum + deploymentBuildMinutesWithin(deployment, month.start, month.end), 0),
+    maxRuntimeHoursPerMonth: usageMetricSum(usageRecords, ['runtime-hours', 'runtime_hours', 'runtimeHours', 'app-runtime-hours', 'maxRuntimeHoursPerMonth']) + deployments.reduce((sum, deployment) => sum + deploymentRuntimeHoursWithin(deployment, month.start, month.end), 0),
+    maxCpuMillicores: services.reduce((sum, service) => sum + serviceCpuMillicores(service), 0),
+    maxMemoryMb: services.reduce((sum, service) => sum + serviceMemoryMb(service), 0),
+  };
+}
+
+function jsonArray(value: any): Record<string, any>[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function prismaClientOptions(input: Record<string, any>, env: Record<string, any>) {
+  const queryTimeoutMs = boundedInteger(env.RAIBITSERVER_DB_QUERY_TIMEOUT_MS, 15_000, 1_000, 60_000);
+  const maxWaitMs = boundedInteger(env.RAIBITSERVER_DB_MAX_WAIT_MS, 5_000, 1_000, 30_000);
+  const transactionOptions = {
+    maxWait: boundedInteger(input.transactionOptions?.maxWait, maxWaitMs, 1_000, 30_000),
+    timeout: boundedInteger(input.transactionOptions?.timeout, queryTimeoutMs, 1_000, 60_000),
+    ...(input.transactionOptions?.isolationLevel ? { isolationLevel: input.transactionOptions.isolationLevel } : {}),
+  };
+  const datasourceUrl = input.datasourceUrl || env.DATABASE_URL;
+  if (!datasourceUrl || input.datasources) return { ...input, transactionOptions };
+  let url: URL;
+  try {
+    url = new URL(String(datasourceUrl));
+  } catch {
+    throw new Error('DATABASE_URL must be a valid PostgreSQL URL');
+  }
+  url.searchParams.set('connection_limit', String(boundedInteger(env.RAIBITSERVER_DB_POOL_SIZE, 10, 1, 50)));
+  url.searchParams.set('pool_timeout', String(boundedInteger(env.RAIBITSERVER_DB_POOL_TIMEOUT_SECONDS, 10, 1, 60)));
+  url.searchParams.set('connect_timeout', String(boundedInteger(env.RAIBITSERVER_DB_CONNECT_TIMEOUT_SECONDS, 5, 1, 30)));
+  url.searchParams.set('socket_timeout', String(Math.ceil(queryTimeoutMs / 1_000)));
+  return { ...input, datasourceUrl: url.toString(), transactionOptions };
+}
+
+function boundedInteger(value: any, fallback: number, minimum: number, maximum: number) {
+  const parsed = Number.parseInt(String(value ?? fallback), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.min(maximum, parsed));
 }
 
 export function resolveControlPlaneRepositoryConfig(options: Record<string, any> = {}, env: Record<string, any> = process.env) {
@@ -1038,6 +1800,121 @@ export async function createControlPlaneRepository(options: Record<string, any> 
   return new InMemoryControlPlaneRepository(options.store);
 }
 
+const deletionRequestedStatus = 'DELETE_REQUESTED';
+const deletionStatuses = [deletionRequestedStatus, 'DELETING'];
+const terminalDeploymentStatuses = ['READY', 'FAILED', 'CANCELLED', 'CLEANED_UP'];
+const terminalWorkflowStatuses = ['succeeded', 'completed', 'failed', 'cancelled'];
+
+function isDeleting(row: Record<string, any> | null | undefined) {
+  return deletionStatuses.includes(String(row?.status || '').toUpperCase());
+}
+
+function assertMutable(row: Record<string, any> | null | undefined, kind: string) {
+  if (row && isDeleting(row)) throw conflictError(`${kind} is being deleted`);
+}
+
+async function requireMutableProject(db: any, projectId: any) {
+  const project = await db.project.findUnique({ where: { id: String(projectId) } });
+  if (!project) throw notFoundError(`project not found: ${projectId}`);
+  assertMutable(project, 'project');
+  return project;
+}
+
+async function revokeResourceAttachments(tx: any, resourceIds: string[]) {
+  if (!resourceIds.length) return 0;
+  const attachments = await tx.resourceAttachment.findMany({ where: { resourceId: { in: resourceIds } } });
+  const injectedRows: Record<string, any>[] = [];
+  for (const attachment of attachments) {
+    const keys = Object.keys(attachment.injectedEnv || {});
+    if (!keys.length) continue;
+    const rows = await tx.environmentVariable.findMany({ where: { serviceId: attachment.serviceId, key: { in: keys }, source: `resource:${attachment.resourceId}` } });
+    injectedRows.push(...rows);
+  }
+    const injectedSecretIds = injectedRows.map((row) => row.secretRef).filter((value) => value && !String(value).startsWith('k8s:'));
+  if (injectedSecretIds.length) await tx.secretValue.deleteMany({ where: { id: { in: injectedSecretIds } } });
+  if (injectedRows.length) await tx.environmentVariable.deleteMany({ where: { id: { in: injectedRows.map((row) => row.id) } } });
+    for (const attachment of attachments) {
+      const removedKeys = new Set(Object.keys(attachment.injectedEnv || {}));
+      if (!removedKeys.size || typeof tx.service?.findUnique !== 'function' || typeof tx.service?.update !== 'function') continue;
+      const service = await tx.service.findUnique({ where: { id: attachment.serviceId } });
+      if (!service || !Array.isArray(service.desiredSpec?.secretEnv)) continue;
+      const secretEnv = service.desiredSpec.secretEnv.filter((entry: any) => !removedKeys.has(String(entry?.name || '')));
+      await tx.service.update({ where: { id: attachment.serviceId }, data: { desiredSpec: sanitizeJson({ ...(service.desiredSpec || {}), secretEnv }) } });
+    }
+  await tx.resourceAttachment.deleteMany({ where: { resourceId: { in: resourceIds } } });
+  return attachments.length;
+}
+
+async function cancelDeletionWork(tx: any, scope: Record<string, any>) {
+  const deploymentWhere: Record<string, any> = { status: { notIn: terminalDeploymentStatuses } };
+  if (scope.serviceIds?.length) deploymentWhere.serviceId = { in: scope.serviceIds };
+  else if (scope.projectId) deploymentWhere.projectId = scope.projectId;
+  if (tx.deployment?.updateMany) {
+    await tx.deployment.updateMany({
+      where: deploymentWhere,
+      data: {
+        status: 'CANCELLED',
+        finishedAt: new Date(),
+        errorCode: 'PARENT_DELETE_REQUESTED',
+        errorMessage: 'Deployment cancelled because its parent is being deleted',
+        reconcileAction: null,
+        reconcileLockedBy: null,
+        reconcileLockedAt: null,
+      },
+    });
+  }
+  const targets = [
+    ...(scope.projectId ? [{ targetType: 'project', targetId: scope.projectId }] : []),
+    ...(scope.serviceIds || []).map((targetId: string) => ({ targetType: 'service', targetId })),
+    ...(scope.resourceIds || []).map((targetId: string) => ({ targetType: 'resource', targetId })),
+    ...(scope.deploymentIds || []).map((targetId: string) => ({ targetType: 'deployment', targetId })),
+  ];
+  if (targets.length && tx.workflowJob?.updateMany) {
+    await tx.workflowJob.updateMany({
+      where: { status: { notIn: terminalWorkflowStatuses }, OR: targets },
+      data: { status: 'cancelled', lockedBy: null, lockedAt: null },
+    });
+  }
+}
+
+async function upsertServiceEnvironmentWithDb(db: any, input: Record<string, any>) {
+  const { normalizeEnvEntries } = await import('./env-file.ts');
+  const rows = [];
+  for (const entry of normalizeEnvEntries(input.entries || [], { source: input.source || 'api' })) {
+    let secretRef = (entry as any).secretId || null;
+    if (entry.isSecret) {
+      const secret = await db.secretValue.upsert({
+        where: { scopeType_scopeId_key: { scopeType: 'service', scopeId: input.serviceId, key: entry.key } },
+        update: { sealedValue: sealSecret(entry.value), valueMasked: maskSecretValue(entry.value), metadata: maskSecrets({ source: entry.source || input.source || 'api' }) },
+        create: { scopeType: 'service', scopeId: input.serviceId, key: entry.key, sealedValue: sealSecret(entry.value), valueMasked: maskSecretValue(entry.value), metadata: maskSecrets({ source: entry.source || input.source || 'api' }) },
+      });
+      secretRef = secret.id;
+    }
+    const data = envVariableData({ ...entry, projectId: input.projectId, serviceId: input.serviceId, source: entry.source || input.source || 'api', secretRef });
+    const row = await db.environmentVariable.upsert({
+      where: { serviceId_key: { serviceId: input.serviceId, key: data.key } },
+      update: data,
+      create: data,
+    });
+    rows.push(row);
+  }
+  await db.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'service.env:upsert', targetType: 'service', targetId: input.serviceId, metadata: maskSecrets({ keys: rows.map((row) => row.key) }) } });
+  return { serviceId: input.serviceId, entries: rows.map(maskEnvRow), plainCount: rows.filter((row) => !row.isSecret).length, secretCount: rows.filter((row) => row.isSecret).length };
+}
+
+async function resourceForConsoleWithDb(db: any, resource: Record<string, any>) {
+  const secrets = await db.secretValue.findMany({ where: { scopeType: 'resource-provider-connection', scopeId: resource.id } });
+  const env: Record<string, string> = {};
+  let live = false;
+  for (const secret of secrets) {
+    if (!isProviderConnectionSecret(secret, resource.id)) continue;
+    if (secret.sealedValue) env[secret.key] = openSecret(secret.sealedValue);
+    if (secret.metadata?.live === true) live = true;
+  }
+  if (!Object.keys(env).length) return resource;
+  return { ...resource, providerConnection: providerConnectionFromEnv(env, resource.engine, live) };
+}
+
 function slugInput(value: any) {
   return String(value || 'item').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
 }
@@ -1045,9 +1922,7 @@ function slugInput(value: any) {
 function projectUpdateData(input: Record<string, any> = {}) {
   const data: Record<string, any> = {};
   if (input.name !== undefined) data.name = input.name;
-  if (input.slug !== undefined) data.slug = slugInput(input.slug);
   if (input.description !== undefined) data.description = input.description || '';
-  if (input.status !== undefined) data.status = input.status;
   return data;
 }
 
@@ -1069,8 +1944,11 @@ async function resolveDesiredOrganization(tx: any, orgInput: Record<string, any>
   });
 }
 
-function serviceData(input: Record<string, any>) {
-  const safe = sanitizeTenantServiceInput(input);
+function serviceData(input: Record<string, any>, options: Record<string, any> = {}) {
+  const safe = sanitizeTenantServiceInput(input, { allowGitHubBinding: options.allowGitHubBinding === true });
+  const desiredState = options.allowGitHubBinding === true && input.desiredState && typeof input.desiredState === 'object' && !Array.isArray(input.desiredState)
+    ? { ...safe, ...input.desiredState }
+    : safe;
   return {
     type: safe.type || 'web',
     runtimeType: safe.runtimeType || 'container',
@@ -1091,7 +1969,7 @@ function serviceData(input: Record<string, any>) {
     port: safe.port ? Number(safe.port) : null,
     status: 'created',
     desiredSpec: sanitizeJson(safe.desiredSpec || safe),
-    desiredState: sanitizeJson(safe),
+    desiredState: sanitizeJson(desiredState),
   };
 }
 
@@ -1100,8 +1978,9 @@ function resourceData(input: Record<string, any>, options: Record<string, any> =
   const engine = normalizeResourceEngine(safe.engine || input.engine || safe.type);
   const id = input.id || stableId('res', safe.projectId, safe.name);
   const sqlitePath = engine === 'sqlite' ? (input.sqlitePath || input.desiredSpec?.sqlitePath || providerOwnedSqlitePath(id)) : null;
-  const desiredSpec = sqlitePath ? { ...(safe.desiredSpec || {}), sqlitePath } : (safe.desiredSpec || {});
-  const desiredState = { ...safe, engine, desiredSpec, sqlitePath: sqlitePath || undefined };
+  const canonicalSpec = canonicalizeProviderDesiredSpec(safe, { baseSpec: options.baseDesiredSpec || {}, rejectUnknown: false });
+  const desiredSpec = sqlitePath ? { ...canonicalSpec, sqlitePath } : canonicalSpec;
+  const desiredState = { ...(options.currentDesiredState || {}), ...safe, engine, desiredSpec, sqlitePath: sqlitePath || undefined };
   return {
     slug: safe.slug || slugInput(safe.name),
     type: safe.type || resourceTypeForEngine(engine),
@@ -1118,8 +1997,8 @@ function resourceData(input: Record<string, any>, options: Record<string, any> =
 }
 
 
-function serviceUpdateData(input: Record<string, any> = {}) {
-  const inputSafe = sanitizeTenantServiceUpdate(input);
+function serviceUpdateData(input: Record<string, any> = {}, options: Record<string, any> = {}) {
+  const inputSafe = sanitizeTenantServiceUpdate(input, { allowGitHubBinding: options.allowGitHubBinding === true });
   const allowed = ['name', 'type', 'runtimeType', 'sourceType', 'buildMode', 'repoUrl', 'githubRepositoryId', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'image', 'imageUrl', 'port'];
   const data: Record<string, any> = {};
   for (const key of allowed) {
@@ -1193,6 +2072,133 @@ function deploymentData(input: Record<string, any>) {
 
 function compactData(input: Record<string, any>) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+
+function providerPlanPlaceholders() {
+  return {
+    password: '<generated-by-go-provisioner>', apiKey: '<generated-by-go-provisioner>',
+    accessKey: '<generated-by-go-provisioner>', secretKey: '<generated-by-go-provisioner>',
+    generatePassword: false,
+  };
+}
+
+function mergeSecretEnv(current: any, injectedEnv: Record<string, any>, replaceKeys: string[] = []) {
+  const replacing = new Set(replaceKeys);
+  const rows = (Array.isArray(current) ? current : []).filter((entry: any) => !replacing.has(String(entry?.name || '')));
+  const byName = new Map(rows.map((entry: any) => [String(entry.name), entry]));
+  for (const [name, reference] of Object.entries(injectedEnv)) byName.set(name, { name, ...(reference as Record<string, any>) });
+  return [...byName.values()];
+}
+
+function canonicalPrismaGitHubRepositoryRecord(input: Record<string, any>) {
+  const installationId = String(input.installationId || '').trim();
+  const githubRepoId = String(input.githubRepoId || input.repositoryId || '').trim();
+  if (!installationId) throw badRequestError('GitHub repository installationId is required');
+  if (!githubRepoId) throw badRequestError('GitHub repository githubRepoId is required');
+  const parsed = parseGitHubRepository(input.fullName || (input.owner && input.name ? `${input.owner}/${input.name}` : ''));
+  const owner = parsed.owner.toLowerCase();
+  const name = parsed.repo.toLowerCase();
+  return {
+    installationId,
+    githubRepoId,
+    owner,
+    name,
+    fullName: `${owner}/${name}`,
+    defaultBranch: String(input.defaultBranch || 'main'),
+    private: input.private === true,
+  };
+}
+
+async function requireVerifiedPrismaGitHubIntegration(db: any, integrationId: any, organizationId: any) {
+  const id = String(integrationId || '').trim();
+  const integration = id ? await db.gitHubIntegration.findUnique({ where: { id } }) : null;
+  if (!integration) throw notFoundError(`GitHub integration not found: ${id || '<missing>'}`);
+  if (String(integration.organizationId) !== String(organizationId)) throw forbiddenError('GitHub integration does not belong to project organization');
+  if (!integration.verifiedAt || !integration.installationId) throw forbiddenError('repository attachment requires a verified GitHub App installation');
+  return integration;
+}
+
+async function resolvePrismaGitHubRepository(db: any, installationId: any, selector: Record<string, any>) {
+  const rows = await db.gitHubRepository.findMany({ where: { installationId: String(installationId) } });
+  const repositoryId = String(selector.repositoryId || selector.githubRepositoryId || '').trim();
+  const requested = selector.repoUrl || selector.repository;
+  if (!repositoryId && !requested) throw badRequestError('GitHub repositoryId or repository selector is required');
+  const requestedFullName = requested ? parseGitHubRepository(requested).fullName.toLowerCase() : '';
+  const row = rows.find((candidate: Record<string, any>) => {
+    const idMatches = !repositoryId || repositoryId === String(candidate.githubRepoId) || repositoryId === String(candidate.id);
+    const nameMatches = !requestedFullName || requestedFullName === String(candidate.fullName).toLowerCase();
+    return idMatches && nameMatches;
+  });
+  if (!row) throw forbiddenError('repository is not available to the selected GitHub installation');
+  const parsed = parseGitHubRepository(row.fullName);
+  return { ...row, owner: parsed.owner.toLowerCase(), repo: parsed.repo.toLowerCase(), fullName: parsed.fullName.toLowerCase(), repoUrl: `https://github.com/${parsed.fullName.toLowerCase()}.git` };
+}
+
+function prismaGitHubServiceBinding(integration: Record<string, any>, repository: Record<string, any>) {
+  const github = {
+    integrationId: integration.id,
+    installationId: String(integration.installationId),
+    repositoryId: String(repository.githubRepoId),
+    repositoryRecordId: String(repository.id),
+    repository: repository.fullName,
+    repoUrl: repository.repoUrl,
+    visibility: repository.private === true ? 'private' : 'public',
+  };
+  return {
+    githubIntegrationId: github.integrationId,
+    githubInstallationId: github.installationId,
+    githubRepositoryId: github.repositoryId,
+    githubRepository: github.repository,
+    githubRepositoryVisibility: github.visibility,
+    sourceAccess: github.visibility === 'private' ? 'github-app-private' : 'github-app-public',
+    github,
+  };
+}
+
+function publicPrismaGitHubRepository(repository: Record<string, any>) {
+  const parsed = parseGitHubRepository(repository.fullName);
+  return {
+    id: String(repository.githubRepoId),
+    githubRepoId: String(repository.githubRepoId),
+    fullName: parsed.fullName.toLowerCase(),
+    repoUrl: `https://github.com/${parsed.fullName.toLowerCase()}.git`,
+    defaultBranch: repository.defaultBranch || 'main',
+    private: repository.private === true,
+  };
+}
+
+function assertPrismaGitHubBindingImmutable(current: Record<string, any>, updates: Record<string, any>) {
+  const desired = current.desiredState || {};
+  const github = desired.github || {};
+  const expected = {
+    githubIntegrationId: desired.githubIntegrationId || github.integrationId,
+    githubInstallationId: desired.githubInstallationId || github.installationId,
+    githubRepositoryId: current.githubRepositoryId || desired.githubRepositoryId || github.repositoryId,
+    githubRepository: desired.githubRepository || github.repository,
+    githubRepositoryVisibility: desired.githubRepositoryVisibility || github.visibility,
+    repoUrl: current.repoUrl || github.repoUrl,
+    sourceType: current.sourceType || 'github',
+  };
+  if (!expected.githubRepositoryId) return;
+  const candidates = [updates, updates?.desiredSpec, updates?.desiredState, updates?.desiredState?.github].filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+  for (const candidate of candidates) {
+    for (const key of ['githubIntegrationId', 'githubInstallationId', 'githubRepositoryId', 'githubRepository', 'githubRepositoryVisibility', 'repoUrl', 'sourceType']) {
+      const candidateKey = candidate === updates?.desiredState?.github
+        ? ({ githubIntegrationId: 'integrationId', githubInstallationId: 'installationId', githubRepositoryId: 'repositoryId', githubRepository: 'repository', githubRepositoryVisibility: 'visibility', repoUrl: 'repoUrl', sourceType: 'sourceType' } as Record<string, string>)[key]
+        : key;
+      if (!candidateKey || !Object.prototype.hasOwnProperty.call(candidate, candidateKey)) continue;
+      let actual = candidate[candidateKey];
+      let wanted = expected[key as keyof typeof expected];
+      if (key === 'repoUrl') {
+        actual = parseGitHubRepository(String(actual)).repoUrl.toLowerCase();
+        wanted = parseGitHubRepository(String(wanted)).repoUrl.toLowerCase();
+      } else if (key === 'githubRepository') {
+        actual = parseGitHubRepository(String(actual)).fullName.toLowerCase();
+        wanted = parseGitHubRepository(String(wanted)).fullName.toLowerCase();
+      }
+      if (String(actual) !== String(wanted)) throw conflictError('GitHub repository binding is immutable; create a new service to use another repository');
+    }
+  }
 }
 
 function uniquePrismaRepositories(services: Array<Record<string, any>>) {
@@ -1319,6 +2325,320 @@ function organizationScopeArray(input: Record<string, any> = {}) {
 function forbiddenError(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 403;
+  return error;
+}
+
+function auditActorUserId(value: any) {
+  const actor = String(value || '').trim();
+  if (!actor) return null;
+  if (new Set(['system', 'provider', 'github-app', 'github-webhook', 'github-installation-webhook', 'workflow-worker', 'builder']).has(actor.toLowerCase())) return null;
+  return actor;
+}
+
+async function serializableTransactionWithRetry(prisma: any, work: (tx: any) => Promise<any>, maxAttempts = 3) {
+  let lastError: any = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await prisma.$transaction(work, { isolationLevel: 'Serializable' });
+    } catch (error) {
+      lastError = error;
+      const code = String((error as any)?.code || '');
+      const message = String((error as any)?.message || '').toLowerCase();
+      const retryable = code === 'P2034' || code === 'P2002' || message.includes('serialization') || message.includes('write conflict') || message.includes('deadlock');
+      if (!retryable || attempt === maxAttempts) {
+        await recordQuotaMutationBlock(prisma, error);
+        throw error;
+      }
+      await Promise.resolve();
+    }
+  }
+  throw lastError;
+}
+
+async function recordQuotaMutationBlock(prisma: any, error: any) {
+  const audit = error?.quotaAudit;
+  if (!audit || !prisma?.auditLog?.create) return;
+  try {
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: audit.actorUserId,
+        action: 'quota:block',
+        targetType: audit.action || 'action',
+        targetId: audit.metric || audit.action || 'unknown',
+        metadata: audit.reason
+          ? { reason: audit.reason }
+          : { current: audit.current, increment: audit.increment, limit: audit.limit },
+      },
+    });
+  } catch {
+    // Audit availability must not replace the original authorization failure.
+  }
+}
+
+async function enforcePrismaQuotaRequirements(db: any, actorUserId: any, action: string, requirements: QuotaRequirement[]) {
+  const userId = String(actorUserId || '').trim();
+  const combined = combineQuotaRequirements(requirements);
+  if (!userId || combined.length === 0) return true;
+  if (typeof db.$queryRawUnsafe === 'function') {
+    await db.$queryRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', `raibitserver:quota:${userId}`);
+  }
+  const user = await db.user.findUnique({ where: { id: userId } });
+  if (!user || user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER') return true;
+  if (user.approvalStatus !== 'APPROVED') {
+    const error = forbiddenError(`user ${userId} is ${user.approvalStatus || 'PENDING'} and cannot ${action}`);
+    (error as any).quotaAudit = { actorUserId: userId, action, reason: user.approvalStatus || 'PENDING' };
+    throw error;
+  }
+  const accountType = user.accountType || 'NON_CLUB';
+  const quota = await db.quota.findFirst({ where: { userId, accountType } })
+    || await db.quota.upsert({ where: { id: `quota_${userId}_${accountType}` }, update: {}, create: { id: `quota_${userId}_${accountType}`, userId, accountType } });
+  const usage = await prismaQuotaUsage(db, userId);
+  for (const requirement of combined) {
+    if (quota[requirement.metric] === undefined || quota[requirement.metric] === null) continue;
+    const current = Number(usage[requirement.metric] || 0);
+    const requested = current + requirement.increment;
+    if (requested > Number(quota[requirement.metric])) {
+      const error = forbiddenError(`quota exceeded: ${requirement.metric} (${requested}/${quota[requirement.metric]})`);
+      (error as any).quotaAudit = { actorUserId: userId, action, metric: requirement.metric, current, increment: requirement.increment, limit: Number(quota[requirement.metric]) };
+      throw error;
+    }
+  }
+  return true;
+}
+
+async function prismaQuotaUsage(db: any, userId: string) {
+  const month = utcMonthBounds();
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  if (typeof db.$queryRawUnsafe === 'function') {
+    const rows = await db.$queryRawUnsafe(QUOTA_USAGE_AGGREGATE_SQL, userId, start, end, month.startDate, month.endDate);
+    return quotaUsageFromAggregate(rows?.[0] || {}, month);
+  }
+  const memberships = await db.membership.findMany({ where: { userId }, select: { organizationId: true } });
+  const organizationIds = memberships.map((membership: Record<string, any>) => membership.organizationId);
+  if (organizationIds.length === 0) return {};
+  const projects = await db.project.findMany({ where: { organizationId: { in: organizationIds } }, select: { id: true } });
+  const projectIds = projects.map((project: Record<string, any>) => project.id);
+  if (projectIds.length === 0) {
+    return { maxProjects: 0, maxServices: 0, maxDeploymentsPerDay: 0, maxPreviewDeployments: 0, maxDbStorageMb: 0, maxObjectStorageMb: 0, maxCpuMillicores: 0, maxMemoryMb: 0 };
+  }
+  const services = await db.service.findMany({ where: { projectId: { in: projectIds } }, select: { id: true, desiredSpec: true, desiredState: true } });
+  const serviceIds = services.map((service: Record<string, any>) => service.id);
+  const resources = await db.resource.findMany({ where: { projectId: { in: projectIds } }, select: { id: true, type: true, engine: true, desiredSpec: true, desiredState: true } });
+  const deployments = serviceIds.length === 0 ? [] : await db.deployment.findMany({ where: { serviceId: { in: serviceIds }, createdAt: { gte: start, lt: end } }, select: { deploymentType: true } });
+  const allDeployments = serviceIds.length === 0 ? [] : await db.deployment.findMany({
+    where: {
+      serviceId: { in: serviceIds },
+      OR: [
+        { AND: [{ buildStartedAt: { lt: month.endDate } }, { buildFinishedAt: { gt: month.startDate } }] },
+        { AND: [{ deployedAt: { lt: month.endDate } }, { OR: [{ finishedAt: null }, { finishedAt: { gt: month.startDate } }] }] },
+      ],
+    },
+    select: { buildStartedAt: true, buildFinishedAt: true, deployedAt: true, finishedAt: true },
+  });
+  const resourceIds = resources.map((resource: Record<string, any>) => resource.id);
+  const usageRecords = await db.usageRecord.findMany({
+    where: {
+      recordedAt: { gte: month.startDate, lt: month.endDate },
+      OR: [
+        { userId },
+        { organizationId: { in: organizationIds } },
+        { projectId: { in: projectIds } },
+        ...(serviceIds.length ? [{ serviceId: { in: serviceIds } }] : []),
+        ...(resourceIds.length ? [{ resourceId: { in: resourceIds } }] : []),
+      ],
+    },
+    select: { metric: true, value: true },
+  }).catch(() => []);
+  return {
+    maxProjects: projects.length,
+    maxServices: serviceIds.length,
+    maxDeploymentsPerDay: deployments.length,
+    maxPreviewDeployments: deployments.filter((deployment: Record<string, any>) => String(deployment.deploymentType).toLowerCase() === 'preview').length,
+    maxDbStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
+    maxObjectStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
+    maxBuildMinutesPerMonth: usageMetricSum(usageRecords, ['build-minutes', 'build_minutes', 'buildMinutes', 'maxBuildMinutesPerMonth']) + allDeployments.reduce((sum: number, deployment: Record<string, any>) => sum + deploymentBuildMinutesWithin(deployment, month.start, month.end), 0),
+    maxRuntimeHoursPerMonth: usageMetricSum(usageRecords, ['runtime-hours', 'runtime_hours', 'runtimeHours', 'app-runtime-hours', 'maxRuntimeHoursPerMonth']) + allDeployments.reduce((sum: number, deployment: Record<string, any>) => sum + deploymentRuntimeHoursWithin(deployment, month.start, month.end), 0),
+    maxCpuMillicores: services.reduce((sum: number, service: Record<string, any>) => sum + serviceCpuMillicores(service), 0),
+    maxMemoryMb: services.reduce((sum: number, service: Record<string, any>) => sum + serviceMemoryMb(service), 0),
+  };
+}
+
+async function applyPrismaGitHubCatalogWebhook(prisma: any, event: any, payload: Record<string, any> = {}) {
+  const eventName = String(event || '').toLowerCase();
+  const action = String(payload.action || '').toLowerCase();
+  if (!['installation', 'installation_repositories', 'repository'].includes(eventName)) return [];
+  const installationId = String(payload.installation?.id || '').trim();
+  const accountLogin = String(payload.installation?.account?.login || '').trim().toLowerCase();
+  const senderId = String(payload.sender?.id || '').trim();
+  const actions: any[] = [];
+  if (eventName === 'installation' && ['created', 'new_permissions_accepted'].includes(action)) {
+    if (!/^\d+$/.test(installationId) || !accountLogin || !/^\d+$/.test(senderId)) return actions;
+    const integrations = await prisma.gitHubIntegration.findMany({ where: { accountLogin: { equals: accountLogin, mode: 'insensitive' } }, include: { user: true } });
+    const candidates = integrations.filter((integration: Record<string, any>) => String(integration.accountLogin || '').toLowerCase() === accountLogin
+      && String(integration.user?.githubId || '') === senderId
+      && (!integration.verifiedAt || String(integration.installationId || '') === installationId));
+    if (candidates.length !== 1) return actions;
+    const integration = candidates[0];
+    const conflict = await prisma.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null }, id: { not: integration.id } } });
+    if (conflict) return actions;
+    const verifiedAt = new Date();
+    await prisma.gitHubIntegration.update({ where: { id: integration.id }, data: { installationId, accountLogin, verifiedAt } });
+    await prisma.gitHubInstallation.upsert({ where: { installationId }, update: { accountLogin, accountType: String(payload.installation?.account?.type || 'Organization') }, create: { installationId, accountLogin, accountType: String(payload.installation?.account?.type || 'Organization') } });
+    let repositoryCount = 0;
+    for (const repository of Array.isArray(payload.repositories) ? payload.repositories : []) {
+      if (!/^\d+$/.test(String(repository?.id || '')) || !repository?.full_name) continue;
+      const record = canonicalPrismaGitHubRepositoryRecord({ installationId, githubRepoId: String(repository.id), fullName: repository.full_name, defaultBranch: repository.default_branch || 'main', private: repository.private === true });
+      const existing = await prisma.gitHubRepository.findUnique({ where: { githubRepoId: record.githubRepoId } });
+      if (existing && String(existing.installationId) !== installationId) continue;
+      await prisma.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record });
+      repositoryCount += 1;
+    }
+    actions.push({ type: 'github-installation-catalog-verified', integrationId: integration.id, installationId, repositoryCount });
+    return actions;
+  }
+  if (eventName === 'installation' && ['deleted', 'suspend'].includes(action) && /^\d+$/.test(installationId)) {
+    const removed = await prisma.gitHubRepository.deleteMany({ where: { installationId } });
+    await prisma.gitHubIntegration.updateMany({ where: { installationId }, data: { verifiedAt: null } });
+    actions.push({ type: 'github-installation-catalog-invalidated', installationId, repositoryCount: Number(removed?.count || 0) });
+    return actions;
+  }
+  if (eventName === 'installation_repositories' && /^\d+$/.test(installationId)) {
+    const integration = await prisma.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null } } });
+    if (!integration) return actions;
+    for (const repository of Array.isArray(payload.repositories_added) ? payload.repositories_added : []) {
+      if (!/^\d+$/.test(String(repository?.id || '')) || !repository?.full_name) continue;
+      const record = canonicalPrismaGitHubRepositoryRecord({ installationId, githubRepoId: String(repository.id), fullName: repository.full_name, defaultBranch: repository.default_branch || 'main', private: repository.private === true });
+      const existing = await prisma.gitHubRepository.findUnique({ where: { githubRepoId: record.githubRepoId } });
+      if (!existing || String(existing.installationId) === installationId) {
+        await prisma.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record });
+      }
+    }
+    const removedIds = (Array.isArray(payload.repositories_removed) ? payload.repositories_removed : []).map((repository: any) => String(repository?.id || '')).filter((id: string) => /^\d+$/.test(id));
+    if (removedIds.length) await prisma.gitHubRepository.deleteMany({ where: { installationId, githubRepoId: { in: removedIds } } });
+    actions.push({ type: 'github-installation-repositories-catalog-updated', installationId });
+    return actions;
+  }
+  if (eventName === 'repository' && ['transferred', 'deleted', 'archived'].includes(action)) {
+    const repositoryId = String(payload.repository?.id || '').trim();
+    const repositoryName = normalizePrismaRepositoryId(payload.repository?.full_name || '');
+    if (!/^\d+$/.test(installationId) || !/^\d+$/.test(repositoryId) || !repositoryName) return actions;
+    const catalog = await prisma.gitHubRepository.findFirst({ where: { installationId, githubRepoId: repositoryId } });
+    if (catalog && normalizePrismaRepositoryId(catalog.fullName) === repositoryName) {
+      await prisma.gitHubRepository.deleteMany({ where: { installationId, githubRepoId: repositoryId } });
+      actions.push({ type: 'github-repository-catalog-invalidated', installationId, repositoryId });
+    }
+  }
+  return actions;
+}
+
+async function prismaGitHubWebhookQuotaBlocks(prisma: any, services: any[], actionPlan: Record<string, any>, actions: any[]) {
+  const blocked = new Set<string>();
+  if (!['production-deploy', 'preview-deploy'].includes(String(actionPlan.kind || ''))) return blocked;
+  const servicesByUser = new Map<string, any[]>();
+  for (const service of services) {
+    const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+    const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
+    const integrationId = String(desired.githubIntegrationId || github.integrationId || '');
+    const integration = integrationId ? await prisma.gitHubIntegration.findUnique({ where: { id: integrationId } }) : null;
+    let userId = String(integration?.userId || '');
+    if (!userId && service.project?.organizationId && prisma.membership?.findFirst) {
+      const owner = await prisma.membership.findFirst({ where: { organizationId: service.project.organizationId, role: { equals: 'owner', mode: 'insensitive' } } });
+      userId = String(owner?.userId || '');
+    }
+    if (!integration?.verifiedAt
+      || String(integration.installationId || '') !== String(actionPlan.installationId || '')
+      || String(integration.organizationId || '') !== String(service.project?.organizationId || '')
+      || !userId) {
+      blocked.add(String(service.id));
+      actions.push({ type: 'github-webhook-quota-blocked', serviceId: service.id, reason: 'verified_quota_owner_required' });
+      continue;
+    }
+    const group = servicesByUser.get(userId) || [];
+    group.push(service);
+    servicesByUser.set(userId, group);
+  }
+  for (const [userId, ownedServices] of servicesByUser) {
+    if (typeof prisma.$queryRawUnsafe === 'function') {
+      await prisma.$queryRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', `raibitserver:quota:${userId}`);
+    }
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    let permitted = Boolean(user && (user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER' || user.approvalStatus === 'APPROVED'));
+    if (permitted && user.role !== 'ADMIN' && user.accountType !== 'CLUB_MEMBER') {
+      const accountType = user.accountType || 'NON_CLUB';
+      const quota = await prisma.quota.findFirst({ where: { userId, accountType } })
+        || await prisma.quota.upsert({ where: { id: `quota_${userId}_${accountType}` }, update: {}, create: { id: `quota_${userId}_${accountType}`, userId, accountType } });
+      const usage = await prismaDeploymentQuotaUsage(prisma, userId);
+      const deploymentIncrement = ownedServices.length;
+      permitted = usage.maxDeploymentsPerDay + deploymentIncrement <= Number(quota.maxDeploymentsPerDay);
+      if (permitted && actionPlan.kind === 'preview-deploy') {
+        permitted = usage.maxPreviewDeployments + deploymentIncrement <= Number(quota.maxPreviewDeployments);
+      }
+    }
+    if (!permitted) {
+      for (const service of ownedServices) blocked.add(String(service.id));
+      actions.push({ type: 'github-webhook-quota-blocked', serviceIds: ownedServices.map((service) => service.id), reason: 'quota_or_approval_policy' });
+    }
+  }
+  return blocked;
+}
+
+async function prismaDeploymentQuotaUsage(prisma: any, userId: string) {
+  const month = utcMonthBounds();
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  if (typeof prisma.$queryRawUnsafe === 'function') {
+    const rows = await prisma.$queryRawUnsafe(QUOTA_USAGE_AGGREGATE_SQL, userId, start, end, month.startDate, month.endDate);
+    const usage = quotaUsageFromAggregate(rows?.[0] || {}, month);
+    return { maxDeploymentsPerDay: Number(usage.maxDeploymentsPerDay || 0), maxPreviewDeployments: Number(usage.maxPreviewDeployments || 0) };
+  }
+  const memberships = await prisma.membership.findMany({ where: { userId }, select: { organizationId: true } });
+  const organizationIds = memberships.map((membership: Record<string, any>) => membership.organizationId);
+  const projects = organizationIds.length ? await prisma.project.findMany({ where: { organizationId: { in: organizationIds } }, select: { id: true } }) : [];
+  const projectIds = projects.map((project: Record<string, any>) => project.id);
+  const services = projectIds.length ? await prisma.service.findMany({ where: { projectId: { in: projectIds } }, select: { id: true } }) : [];
+  const serviceIds = services.map((service: Record<string, any>) => service.id);
+  if (!serviceIds.length) return { maxDeploymentsPerDay: 0, maxPreviewDeployments: 0 };
+  const deployments = await prisma.deployment.findMany({ where: { serviceId: { in: serviceIds }, createdAt: { gte: start, lt: end } }, select: { deploymentType: true } });
+  return { maxDeploymentsPerDay: deployments.length, maxPreviewDeployments: deployments.filter((deployment: Record<string, any>) => String(deployment.deploymentType).toLowerCase() === 'preview').length };
+}
+
+async function servicesForPrismaGitHubWebhook(prisma: any, actionPlan: Record<string, any>) {
+  if (actionPlan.kind === 'ignored' || !actionPlan.repositoryId || !actionPlan.installationId || !actionPlan.repository) return [];
+  const catalog = await prisma.gitHubRepository.findFirst({
+    where: {
+      githubRepoId: String(actionPlan.repositoryId),
+      installationId: String(actionPlan.installationId),
+    },
+  });
+  if (!catalog || normalizePrismaRepositoryId(catalog.fullName) !== normalizePrismaRepositoryId(actionPlan.repository)) return [];
+  const services = await prisma.service.findMany({
+    where: { githubRepositoryId: String(actionPlan.repositoryId) },
+    include: { project: { include: { organization: true } } },
+  });
+  return services.filter((service: Record<string, any>) => serviceMatchesGitHubWebhook(service, actionPlan));
+}
+
+function serviceMatchesGitHubWebhook(service: Record<string, any>, actionPlan: Record<string, any>) {
+  const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+  const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
+  const repositoryId = String(service.githubRepositoryId || desired.githubRepositoryId || github.repositoryId || '');
+  const installationId = String(desired.githubInstallationId || github.installationId || '');
+  const repository = normalizePrismaRepositoryId(desired.githubRepository || github.repository || service.repoUrl || '');
+  if (repositoryId !== String(actionPlan.repositoryId) || installationId !== String(actionPlan.installationId) || repository !== normalizePrismaRepositoryId(actionPlan.repository)) return false;
+  const productionBranch = String(service.branch || desired.branch || 'main');
+  return actionPlan.kind === 'production-deploy'
+    ? String(actionPlan.branch) === productionBranch
+    : String(actionPlan.baseBranch || '') === productionBranch;
+}
+
+function badRequestError(message: string) {
+  const error = new Error(message);
+  (error as any).statusCode = 400;
   return error;
 }
 

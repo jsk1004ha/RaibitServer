@@ -1,20 +1,23 @@
 import { RAIBITSERVERControlPlane } from './control-plane.ts';
 import { maskSecrets } from './secrets.ts';
-import { authorizeRequest, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
+import { authorizeRequest, authorizeSubject, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
 import { organizationScopeFromProjectInput } from './scope.ts';
-import { createSessionToken, normalizeEmail, sessionTtlSeconds, shouldPromoteFirstLogin, verifyPassword } from './identity.ts';
+import { createSessionToken, normalizeEmail, sessionTtlSeconds, shouldPromoteFirstLogin, verifyPasswordAsync } from './identity.ts';
 import { assertUserEmailVerified, issueSignupEmailVerificationCode, resendEmailVerificationCode, verifyEmailCodeAndCreateSession } from './email-verification.ts';
 import { runtimeConfigStatus } from './config.ts';
 import { devHeaderAuthAllowed, devTokenAuthAllowed } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { assertEnvironmentWriteAllowed } from './env-policy.ts';
 import { quotaUsageGauges, quotaWarnings } from './quota.ts';
-import { assertRateLimit, assertSystemDeploymentActor, createFixedWindowRateLimiter, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
+import { assertSystemDeploymentActor, enforceAuthAbuseLimits, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
 import { githubOAuthLoginPlan } from './github-integration.ts';
+import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
-  const auth = options.auth || authConfigFromEnv();
-  const authLimiter = createFixedWindowRateLimiter({ limit: Number(process.env.RAIBITSERVER_AUTH_RATE_LIMIT || 10), windowMs: 60_000 });
+  const auth = {
+    ...(options.auth || authConfigFromEnv()),
+    currentUser: (userId: string) => controlPlane.store.findUserById(userId),
+  };
   return async function handler(req, res) {
     try {
       const url = new URL(req.url, 'http://localhost');
@@ -34,24 +37,23 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const body = await readJson(req);
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
         const email = normalizeEmail(body.email);
-        assertRateLimit(authLimiter, authRateKey(req, `signup:${email}`));
+        await enforceAuthAbuseLimits(controlPlane.store, { action: 'signup', email, source: authRateSource(req), env: process.env });
         const emailVerification = await issueSignupEmailVerificationCode(controlPlane.store, { ...body, email }, { jwtSecret: auth.jwtSecret, issuer: auth.issuer || 'raibitserver', env: process.env });
-        return send(res, 201, { emailVerification, signup: { email, status: 'verification_required' } });
+        return send(res, 201, { emailVerification, signup: { status: 'verification_requested' } });
       }
       if (method === 'POST' && url.pathname === '/auth/email/verify') {
         const body = await readJson(req);
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
         const email = normalizeEmail(body.email);
-        assertRateLimit(authLimiter, authRateKey(req, `email-verify:${email}`));
+        await enforceAuthAbuseLimits(controlPlane.store, { action: 'email-verify', email, source: authRateSource(req), env: process.env });
         const result = await verifyEmailCodeAndCreateSession(controlPlane.store, body, { jwtSecret: auth.jwtSecret, issuer: auth.issuer || 'raibitserver', sessionTtlSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth), env: process.env });
-        authLimiter.reset(authRateKey(req, `email-verify:${email}`));
         return send(res, 200, { ...result, user: publicUser(result.user) });
       }
       if (method === 'POST' && url.pathname === '/auth/email/resend') {
         const body = await readJson(req);
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
         const email = normalizeEmail(body.email);
-        assertRateLimit(authLimiter, authRateKey(req, `email-resend:${email}`));
+        await enforceAuthAbuseLimits(controlPlane.store, { action: 'email-resend', email, source: authRateSource(req), env: process.env });
         const emailVerification = await resendEmailVerificationCode(controlPlane.store, body, { jwtSecret: auth.jwtSecret, issuer: auth.issuer || 'raibitserver', env: process.env });
         return send(res, 200, { emailVerification });
       }
@@ -59,15 +61,16 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const body = await readJson(req);
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
         const email = normalizeEmail(body.email);
-        assertRateLimit(authLimiter, authRateKey(req, `login:${email}`));
+        await enforceAuthAbuseLimits(controlPlane.store, { action: 'login', email, source: authRateSource(req), env: process.env });
         let user = controlPlane.store.findUserByEmail(email);
-        if (!user || !verifyPassword(body.password, user.passwordHash)) return send(res, 401, { error: 'invalid_credentials' });
+        const passwordValid = await verifyPasswordAsync(body.password, user?.passwordHash);
+        if (!user || !passwordValid) return send(res, 401, { error: 'invalid_credentials' });
         assertUserEmailVerified(user);
         if (shouldPromoteFirstLogin(user, [...controlPlane.store.users.values()])) {
           user = controlPlane.store.approveUser(user.id, { accountType: 'NON_CLUB', role: 'ADMIN' });
         }
+        assertUserApproved(user);
         const memberships = controlPlane.store.listMembershipsForUser(user.id);
-        authLimiter.reset(authRateKey(req, `login:${email}`));
         const token = createSessionToken(user, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth) });
         const { passwordHash: _passwordHash, ...publicUser } = user;
         return send(res, 200, { user: publicUser, memberships, token });
@@ -93,7 +96,10 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, { user: user ? publicUser(user) : null, subject, memberships });
       }
       if (method === 'POST' && url.pathname === '/auth/logout') {
-        subjectFromRequest(req, auth);
+        const subject = subjectFromRequest(req, auth);
+        if (subject.authMode === 'jwt' && subject.global !== true && controlPlane.store.findUserById(subject.id)) {
+          controlPlane.store.incrementSessionVersion(subject.id);
+        }
         return send(res, 200, { ok: true });
       }
       if (method === 'POST' && url.pathname === '/auth/dev-token') {
@@ -105,7 +111,12 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       if (method === 'GET' && url.pathname === '/snapshot') {
         authorizeRequest(req, 'audit:read', auth);
-        return send(res, 200, maskSecrets(controlPlane.store.snapshot()));
+        const limit = Math.max(1, Math.min(1000, Number.parseInt(url.searchParams.get('limit') || '200', 10) || 200));
+        const users = [...controlPlane.store.users.values()].slice(-limit).map(publicUser);
+        const userIds = new Set(users.map((user) => String(user.id)));
+        const quotas = [...controlPlane.store.quotas.values()].filter((quota) => userIds.has(String(quota.userId))).slice(-limit);
+        const auditLogs = controlPlane.store.auditLogs.slice(-limit).reverse();
+        return send(res, 200, maskSecrets({ users, quotas, auditLogs }));
       }
       if (method === 'POST' && url.pathname === '/plan/build') {
         authorizeRequest(req, 'project:read', auth);
@@ -172,7 +183,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'project:read', auth);
         const organizationId = decodeURIComponent(organizationProjectsMatch[1]);
         requireScope(subject, { organizationId });
-        return send(res, 200, { projects: [...controlPlane.store.projects.values()].filter((project) => String(project.organizationId) === String(organizationId)) });
+        return send(res, 200, keysetPage('projects', boundedKeysetRows([...controlPlane.store.projects.values()].filter((project) => String(project.organizationId) === String(organizationId)), pageOptions(url)), 'createdAt'));
       }
       if (organizationProjectsMatch && method === 'POST') {
         const subject = authorizeAction(req, 'project:create', auth);
@@ -184,8 +195,8 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       if (method === 'GET' && url.pathname === '/projects') {
         const subject = authorizeAction(req, 'project:read', auth);
-        const projects = [...controlPlane.store.projects.values()].filter((project) => subject.global === true || subject.authMode === 'disabled' || matchesSubjectOrganization(subject, project.organizationId));
-        return send(res, 200, { projects });
+        const projects = boundedKeysetRows([...controlPlane.store.projects.values()].filter((project) => subject.global === true || subject.authMode === 'disabled' || matchesSubjectOrganization(subject, project.organizationId)), pageOptions(url));
+        return send(res, 200, keysetPage('projects', projects, 'createdAt'));
       }
       if (method === 'POST' && url.pathname === '/projects') {
         const body = await readJson(req);
@@ -195,6 +206,19 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'project:create', metric: 'maxProjects', increment: 1 });
         return send(res, 201, controlPlane.store.createProject({ ...body, organizationId }));
       }
+      const projectOverviewMatch = url.pathname.match(/^\/projects\/([^/]+)\/overview$/);
+      if (projectOverviewMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const projectId = decodeURIComponent(projectOverviewMatch[1]);
+        const project = await assertProjectAccess(controlPlane.store, projectId, subject);
+        const services = [...controlPlane.store.services.values()].filter((service) => String(service.projectId) === String(projectId));
+        const resources = [...controlPlane.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId));
+        const deployments = [...controlPlane.store.deployments.values()]
+          .filter((deployment) => String(deployment.projectId) === String(projectId))
+          .sort((left, right) => Number(new Date(right.createdAt)) - Number(new Date(left.createdAt)))
+          .slice(0, 200);
+        return send(res, 200, { project, services, resources, deployments });
+      }
       const projectMatch = url.pathname.match(/^\/projects\/([^/]+)$/);
       if (projectMatch && method === 'GET') {
         const subject = authorizeAction(req, 'project:read', auth);
@@ -203,7 +227,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, project);
       }
       if (projectMatch && method === 'PATCH') {
-        const subject = authorizeAction(req, 'project:create', auth);
+        const subject = authorizeAction(req, 'project:update', auth);
         const projectId = decodeURIComponent(projectMatch[1]);
         await assertProjectAccess(controlPlane.store, projectId, subject);
         const project = controlPlane.store.updateProject(projectId, await readJson(req));
@@ -223,7 +247,8 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'project:read', auth);
         const projectId = decodeURIComponent(projectServicesMatch[1]);
         await assertProjectAccess(controlPlane.store, projectId, subject);
-        return send(res, 200, { services: [...controlPlane.store.services.values()].filter((service) => String(service.projectId) === String(projectId)) });
+        const services = boundedKeysetRows([...controlPlane.store.services.values()].filter((service) => String(service.projectId) === String(projectId)), pageOptions(url));
+        return send(res, 200, keysetPage('services', services, 'createdAt'));
       }
       if (projectServicesMatch && method === 'POST') {
         const body = await readJson(req);
@@ -271,22 +296,25 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'project:read', auth);
         const projectId = decodeURIComponent(projectResourcesMatch[1]);
         await assertProjectAccess(controlPlane.store, projectId, subject);
-        return send(res, 200, { resources: [...controlPlane.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId)) });
+        const resources = boundedKeysetRows([...controlPlane.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId)), pageOptions(url));
+        return send(res, 200, keysetPage('resources', resources, 'createdAt'));
       }
       if (projectResourcesMatch && method === 'POST') {
         const body = await readJson(req);
+    const safeResource = sanitizeTenantResourceApiInput(body);
         const subject = authorizeAction(req, 'db:create', auth);
         const projectId = decodeURIComponent(projectResourcesMatch[1]);
         await assertProjectAccess(controlPlane.store, projectId, subject);
-        controlPlane.store.enforceUserCan({ userId: subject.id, action: 'resource:create', metric: resourceQuotaMetric(body), increment: Number(body.storageMb || body.storageGb || 1) });
-        return send(res, 201, controlPlane.store.createResource({ ...sanitizeTenantResourceApiInput(body), projectId }));
+        controlPlane.store.enforceUserCan({ userId: subject.id, action: 'resource:create', metric: resourceQuotaMetric(safeResource), increment: resourceStorageMb(safeResource, { includeDesiredState: true }) });
+    return send(res, 201, controlPlane.store.createResource({ ...safeResource, projectId }));
       }
       if (method === 'POST' && url.pathname === '/resources') {
         const body = await readJson(req);
+    const safeResource = sanitizeTenantResourceApiInput(body);
         const subject = authorizeAction(req, 'db:create', auth);
         await assertProjectAccess(controlPlane.store, body.projectId, subject);
-        controlPlane.store.enforceUserCan({ userId: subject.id, action: 'resource:create', metric: resourceQuotaMetric(body), increment: Number(body.storageMb || body.storageGb || 1) });
-        return send(res, 201, controlPlane.store.createResource(sanitizeTenantResourceApiInput(body)));
+        controlPlane.store.enforceUserCan({ userId: subject.id, action: 'resource:create', metric: resourceQuotaMetric(safeResource), increment: resourceStorageMb(safeResource, { includeDesiredState: true }) });
+    return send(res, 201, controlPlane.store.createResource(safeResource));
       }
       const resourceMatch = url.pathname.match(/^\/resources\/([^/]+)$/);
       if (resourceMatch && method === 'GET') {
@@ -334,6 +362,15 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, controlPlane.store.attachResource({ ...body, resourceId, actorUserId: subject.id }));
       }
       const serviceDeploymentsMatch = url.pathname.match(/^\/services\/([^/]+)\/deployments$/);
+      if (serviceDeploymentsMatch && method === 'GET') {
+        const serviceId = decodeURIComponent(serviceDeploymentsMatch[1]);
+        const service = controlPlane.store.services.get(serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        const subject = authorizeAction(req, 'project:read', auth);
+        await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        const deployments = boundedKeysetRows([...controlPlane.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId)), pageOptions(url));
+        return send(res, 200, keysetPage('deployments', deployments, 'createdAt'));
+      }
       if (serviceDeploymentsMatch && method === 'POST') {
         const serviceId = decodeURIComponent(serviceDeploymentsMatch[1]);
         const service = controlPlane.store.services.get(serviceId);
@@ -351,6 +388,13 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 202, { ...deployment, workflowJob });
       }
       const projectServiceDeploymentsMatch = url.pathname.match(/^\/projects\/([^/]+)\/services\/([^/]+)\/deployments$/);
+      if (projectServiceDeploymentsMatch && method === 'GET') {
+        const [projectId, serviceId] = projectServiceDeploymentsMatch.slice(1).map(decodeURIComponent);
+        const subject = authorizeAction(req, 'project:read', auth);
+        await assertServiceAccess(controlPlane.store, projectId, serviceId, subject);
+        const deployments = boundedKeysetRows([...controlPlane.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId)), pageOptions(url));
+        return send(res, 200, keysetPage('deployments', deployments, 'createdAt'));
+      }
       if (projectServiceDeploymentsMatch && method === 'POST') {
         const [projectId, serviceId] = projectServiceDeploymentsMatch.slice(1).map(decodeURIComponent);
         const body = await readJson(req);
@@ -399,19 +443,25 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
         const body = await readJson(req);
         if (action === 'rollback') {
+          requireExplicitConfirmation(body);
           controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
           if ((deployment.deploymentType || body.deploymentType || body.type) === 'preview') controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
         }
         const result = action === 'cancel'
           ? controlPlane.store.cancelDeployment(deploymentId, { ...body, actorUserId: subject.id })
           : controlPlane.store.rollbackDeployment(deploymentId, { ...body, actorUserId: subject.id });
-        return send(res, 202, result);
+        return send(res, action === 'cancel' ? 200 : 202, result);
       }
       const deploymentLogsMatch = url.pathname.match(/^\/deployments\/([^/]+)\/(logs|events)$/);
       if (deploymentLogsMatch && method === 'GET') {
-        authorizeAction(req, 'logs:read', auth);
+        const subject = authorizeAction(req, 'logs:read', auth);
         const [deploymentId, kind] = deploymentLogsMatch.slice(1).map(decodeURIComponent);
-        return send(res, 200, kind === 'logs' ? { logs: controlPlane.store.listDeploymentLogs(deploymentId) } : { events: controlPlane.store.listDeploymentEvents(deploymentId) });
+        const deployment = controlPlane.store.deployments.get(deploymentId);
+        if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
+        await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
+        const options = pageOptions(url);
+        const rows = kind === 'logs' ? controlPlane.store.listDeploymentLogs(deploymentId, options) : controlPlane.store.listDeploymentEvents(deploymentId, options);
+        return send(res, 200, activityPage(kind, rows));
       }
       const deploymentStreamMatch = url.pathname.match(/^\/deployments\/([^/]+)\/stream$/);
       if (deploymentStreamMatch && method === 'GET') {
@@ -429,8 +479,12 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       const runtimeLogsMatch = url.pathname.match(/^\/services\/([^/]+)\/logs$/);
       if (runtimeLogsMatch && method === 'GET') {
-        authorizeAction(req, 'logs:read', auth);
-        return send(res, 200, { logs: controlPlane.store.listRuntimeLogs(decodeURIComponent(runtimeLogsMatch[1])) });
+        const subject = authorizeAction(req, 'logs:read', auth);
+        const serviceId = decodeURIComponent(runtimeLogsMatch[1]);
+        const service = controlPlane.store.services.get(serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        return send(res, 200, activityPage('logs', controlPlane.store.listRuntimeLogs(serviceId, pageOptions(url))));
       }
       const runtimeStreamMatch = url.pathname.match(/^\/services\/([^/]+)\/logs\/stream$/);
       if (runtimeStreamMatch && method === 'GET') {
@@ -482,7 +536,8 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (subject.userRole !== 'ADMIN' && subject.global !== true) return send(res, 403, { error: 'admin_required' });
         const [userId, action] = adminApproveMatch.slice(1).map(decodeURIComponent);
         const body = await readJson(req);
-        return send(res, 200, action === 'approve' ? controlPlane.store.approveUser(userId, { ...body, actorUserId: subject.id }) : controlPlane.store.rejectUser(userId, { actorUserId: subject.id }));
+        if (action === 'reject') requireExplicitConfirmation(body);
+        return send(res, 200, action === 'approve' ? controlPlane.store.approveUser(userId, { ...body, actorUserId: subject.id }) : controlPlane.store.rejectUser(userId, { ...body, actorUserId: subject.id }));
       }
       const adminQuotaMatch = url.pathname.match(/^\/admin\/users\/([^/]+)\/quota$/);
       if (adminQuotaMatch && (method === 'PATCH' || method === 'POST')) {
@@ -552,7 +607,16 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const [projectId, serviceId] = githubServiceMatch.slice(1).map(decodeURIComponent);
         await assertServiceAccess(controlPlane.store, projectId, serviceId, subject);
         const body = await readJson(req);
-        return send(res, 200, controlPlane.store.attachGitHubRepositoryToService({ projectId, serviceId, integrationId: body.integrationId, repoUrl: body.repoUrl || body.repository, branch: body.branch || 'main', actorUserId: subject.id }));
+        return send(res, 200, controlPlane.store.attachGitHubRepositoryToService({
+          projectId,
+          serviceId,
+          integrationId: body.integrationId,
+          repositoryId: body.repositoryId || body.githubRepositoryId,
+          repository: body.repository,
+          repoUrl: body.repoUrl,
+          branch: body.branch,
+          actorUserId: subject.id,
+        }));
       }
       const githubInstallationRepositoriesMatch = url.pathname.match(/^\/github\/installations\/([^/]+)\/repositories$/);
       if (githubInstallationRepositoriesMatch && method === 'GET') {
@@ -580,7 +644,15 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       if (githubRepositorySyncMatch && method === 'POST') {
         const subject = authorizeAction(req, 'deploy:run', auth);
         const body = await readJson(req);
-        return send(res, 202, controlPlane.store.syncGitHubRepository({ ...body, repositoryId: decodeURIComponent(githubRepositorySyncMatch[1]), actorUserId: subject.id, organizationId: subject.organizationId, organizationIds: subject.organizationIds }));
+        const repositoryId = decodeURIComponent(githubRepositorySyncMatch[1]);
+        const authorizedTargets = assertGitHubRepositorySyncAccess(controlPlane.store, repositoryId, subject);
+        return send(res, 202, controlPlane.store.syncGitHubRepository({
+          ...body,
+          repository: repositoryId,
+          repositoryId,
+          actorUserId: subject.id,
+          ...authorizedTargets,
+        }));
       }
 
       return send(res, 404, { error: 'not_found', path: url.pathname });
@@ -603,6 +675,36 @@ function authorizeAction(req: any, action: string, auth: Record<string, any>) {
   return subject;
 }
 
+function assertGitHubRepositorySyncAccess(store: any, repositoryId: string, subject: Record<string, any>) {
+  if (subject.global === true || subject.claims?.global === true || subject.authMode === 'disabled') {
+    return {
+      organizationId: subject.organizationId,
+      organizationIds: subject.organizationIds,
+      serviceIds: null,
+    };
+  }
+  const services = store.servicesForGitHubRepository(repositoryId, {
+    organizationId: subject.organizationId,
+    organizationIds: subject.organizationIds,
+  });
+  const organizationIds = new Set<string>();
+  for (const service of services) {
+    const project = store.projects.get(service.projectId);
+    if (!project?.organizationId) {
+      const error = new Error(`project not found: ${service.projectId}`);
+      (error as any).statusCode = 404;
+      throw error;
+    }
+    authorizeSubject({ ...subject }, 'deploy:run', { organizationId: project.organizationId });
+    organizationIds.add(String(project.organizationId));
+  }
+  return {
+    organizationId: null,
+    organizationIds: [...organizationIds],
+    serviceIds: services.map((service: Record<string, any>) => service.id),
+  };
+}
+
 async function assertServiceAccess(store: any, projectId: string, serviceId: string, subject: Record<string, any>) {
   const service = store.services.get(serviceId);
   if (!service) {
@@ -619,36 +721,14 @@ async function assertServiceAccess(store: any, projectId: string, serviceId: str
 }
 
 async function assertProjectAccess(store: any, projectId: string, subject: Record<string, any>) {
-  if (subject.global === true || subject.authMode === 'disabled') {
-    const project = store.projects.get(projectId);
-    if (!project) {
-      const error = new Error(`project not found: ${projectId}`);
-      (error as any).statusCode = 404;
-      throw error;
-    }
-    return project;
-  }
-  let projectScopeError: any = null;
-  try {
-    requireScope(subject, { projectId });
-    const scopedProject = store.projects.get(projectId);
-    if (!scopedProject) {
-      const error = new Error(`project not found: ${projectId}`);
-      (error as any).statusCode = 404;
-      throw error;
-    }
-    return scopedProject;
-  } catch (error) {
-    projectScopeError = error;
-    // Organization-scoped subjects can operate on projects inside their org.
-  }
-  if (!subject.organizationId && !Array.isArray(subject.organizationIds)) throw projectScopeError;
   const project = store.projects.get(projectId);
   if (!project) {
     const error = new Error(`project not found: ${projectId}`);
     (error as any).statusCode = 404;
     throw error;
   }
+  if (subject.global === true || subject.authMode === 'disabled') return project;
+  if (subject.projectId || Array.isArray(subject.projectIds)) requireScope(subject, { projectId });
   requireScope(subject, { organizationId: project.organizationId });
   return project;
 }
@@ -676,8 +756,20 @@ function publicUser(user) {
   return rest;
 }
 
-function resourceQuotaMetric(resource) {
-  return String(resource?.type || '').toLowerCase() === 'storage' || String(resource?.engine || '').toLowerCase().includes('object') ? 'maxObjectStorageMb' : 'maxDbStorageMb';
+function pageOptions(url: URL) {
+  return {
+    limit: url.searchParams.get('limit') || undefined,
+    cursor: url.searchParams.get('cursor') || undefined,
+    after: url.searchParams.get('after') || undefined,
+  };
+}
+
+function keysetPage(key: string, rows: Array<Record<string, any>>, timestampField: string) {
+  return { [key]: rows, nextCursor: keysetCursorForRows(rows, timestampField) };
+}
+
+function activityPage(key: string, rows: Array<Record<string, any>>) {
+  return { [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp') };
 }
 
 function projectSpecFromBody(body) {
@@ -734,11 +826,26 @@ export function sendSseSnapshot(res, event, body) {
   res.end();
 }
 
-function authRateKey(req, label: string) {
+function authRateSource(req: any) {
   const headers = req.headers || {};
   const forwarded = process.env.RAIBITSERVER_TRUST_PROXY_HEADERS === '1'
     ? String(headers['x-forwarded-for'] || '').split(',')[0].trim()
     : '';
-  const ip = forwarded || req.socket?.remoteAddress || 'local';
-  return `${ip}:${label}`;
+  return forwarded || req.socket?.remoteAddress || 'local';
+}
+
+function assertUserApproved(user: Record<string, any>) {
+  if (String(user?.approvalStatus || 'PENDING').toUpperCase() !== 'APPROVED') {
+    const error = new Error('account_not_approved');
+    (error as any).statusCode = 403;
+    throw error;
+  }
+  return true;
+}
+
+function requireExplicitConfirmation(input: Record<string, any>) {
+  if (input?.confirmed === true || input?.confirmed === 'true') return;
+  const error = new Error('confirmation_required');
+  (error as any).statusCode = 400;
+  throw error;
 }

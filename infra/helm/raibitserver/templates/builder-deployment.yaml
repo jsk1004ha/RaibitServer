@@ -1,0 +1,446 @@
+{{- if .Values.production }}
+{{- if or (not .Values.builder.registry) (regexMatch "^(localhost|127\\.|10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|[^/]+\\.local(:[0-9]+)?(/|$))" (lower .Values.builder.registry)) }}
+{{- fail "production builder.registry must be explicit and must not use a localhost or private registry" }}
+{{- end }}
+{{- if not .Values.builder.push }}
+{{- fail "production builder.push must be true" }}
+{{- end }}
+{{- if not (regexMatch "^https://[^[:space:]@]+$" (default "" .Values.builder.registryCredentials.brokerURL)) }}
+{{- fail "production registry credential broker URL must use https and must not contain credentials" }}
+{{- end }}
+{{- if not .Values.builder.registryCredentials.existingSecret }}
+{{- fail "production registry credential broker token secret is required" }}
+{{- end }}
+{{- if ne (int .Values.builder.replicas) 1 }}
+{{- fail "production builder requires exactly one trusted dispatcher replica" }}
+{{- end }}
+{{- if not .Values.builder.dispatch.existingSecret }}
+{{- fail "production builder dispatcher mTLS secret is required" }}
+{{- end }}
+{{- range $name, $key := dict "caKey" .Values.builder.dispatch.caKey "serverCertificateKey" .Values.builder.dispatch.serverCertificateKey "serverKeyKey" .Values.builder.dispatch.serverKeyKey "clientCertificateKey" .Values.builder.dispatch.clientCertificateKey "clientKeyKey" .Values.builder.dispatch.clientKeyKey }}
+{{- if not $key }}
+{{- fail (printf "production builder dispatcher mTLS %s is required" $name) }}
+{{- end }}
+{{- end }}
+{{- if or (lt (int .Values.builder.buildTimeoutSeconds) 60) (gt (int .Values.builder.buildTimeoutSeconds) (int .Values.builder.isolation.activeDeadlineSeconds)) }}
+{{- fail "production builder command timeout must be at least 60 seconds and must not exceed the job deadline" }}
+{{- end }}
+{{- if or (lt (int .Values.builder.registryCredentials.minTTLSeconds) 60) (gt (int .Values.builder.registryCredentials.minTTLSeconds) (int .Values.builder.registryCredentials.maxTTLSeconds)) (gt (int .Values.builder.registryCredentials.maxTTLSeconds) 900) }}
+{{- fail "production registry credential TTL window must be between 60 and 900 seconds with minimum TTL not exceeding maximum TTL" }}
+{{- end }}
+{{- if gt (add (int .Values.builder.isolation.activeDeadlineSeconds) 60) (int .Values.builder.registryCredentials.minTTLSeconds) }}
+{{- fail "production registry credential minimum TTL must outlive the job deadline by at least 60 seconds" }}
+{{- end }}
+{{- if gt (add (int .Values.builder.isolation.activeDeadlineSeconds) 60) (int .Values.builder.dispatch.sessionTTLSeconds) }}
+{{- fail "production builder dispatcher session TTL must outlive the executor job deadline by at least 60 seconds" }}
+{{- end }}
+{{- if not .Values.builder.scan.enabled }}
+{{- fail "production builder.scan.enabled must be true" }}
+{{- end }}
+{{- if or (not .Values.builder.signing.enabled) (not .Values.builder.signing.existingSecret) }}
+{{- fail "production builder signing must be enabled with an existing secret" }}
+{{- end }}
+{{- if not .Values.builder.runtimeClassName }}
+{{- fail "production builder.runtimeClassName must select an isolated runtime" }}
+{{- end }}
+{{- if not .Values.security.imageVerification.enabled }}
+{{- fail "production image admission verification must be enabled" }}
+{{- end }}
+{{- if not .Values.security.imageVerification.provider }}
+{{- fail "production image admission verification provider is required" }}
+{{- end }}
+{{- if or (not .Values.security.imageVerification.admissionController.name) (not .Values.security.imageVerification.admissionController.namespace) (not .Values.security.imageVerification.admissionController.existingWebhookConfiguration) }}
+{{- fail "production image admission verification requires an existing external admission controller and webhook configuration" }}
+{{- end }}
+{{- if or (not .Values.security.imageVerification.trustRoot.existingSecret) (not .Values.security.imageVerification.trustRoot.key) }}
+{{- fail "production image admission verification requires an existing trust root secret and key" }}
+{{- end }}
+{{- if not .Values.security.imageVerification.policy.enabled }}
+{{- fail "production digest and signature annotation admission policy must be enabled" }}
+{{- end }}
+{{- range $name, $quantity := dict "builderRequest" .Values.builder.ephemeralStorage.builderRequest "builderLimit" .Values.builder.ephemeralStorage.builderLimit "buildkitRequest" .Values.builder.ephemeralStorage.buildkitRequest "buildkitLimit" .Values.builder.ephemeralStorage.buildkitLimit "socketSizeLimit" .Values.builder.ephemeralStorage.socketSizeLimit "workSizeLimit" .Values.builder.ephemeralStorage.workSizeLimit "metadataSizeLimit" .Values.builder.ephemeralStorage.metadataSizeLimit "workspaceSizeLimit" .Values.builder.workspaceSizeLimit "buildkitStateSizeLimit" .Values.builder.buildkitStateSizeLimit }}
+{{- if not (regexMatch "^[1-9][0-9]*(m|Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$" (default "" $quantity)) }}
+{{- fail (printf "production builder ephemeral storage %s must be a positive valid Kubernetes quantity" $name) }}
+{{- end }}
+{{- end }}
+{{- range $component := list "api" "orchestrator" "builder" "provisioner" }}
+{{- $digest := index $.Values.image.digests $component }}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" $digest)) }}
+{{- fail (printf "production platform image %s requires a valid sha256 digest" $component) }}
+{{- end }}
+{{- end }}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" .Values.builder.buildkitDigest)) }}
+{{- fail "production BuildKit image requires a valid sha256 digest" }}
+{{- end }}
+{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" (default "" .Values.builder.generatedDockerfile.frontend)) }}
+{{- fail "production generated Dockerfile frontend must be an image reference pinned by sha256 digest" }}
+{{- end }}
+{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" (default "" .Values.builder.generatedDockerfile.nodeImage)) }}
+{{- fail "production generated Dockerfile node image must be an image reference pinned by sha256 digest" }}
+{{- end }}
+{{- if ne .Values.builder.isolation.mode "single-job-pod" }}
+{{- fail "production builder isolation mode must be single-job-pod" }}
+{{- end }}
+{{- end }}
+{{- if not .Values.builder.isolation.schedule }}
+{{- fail "builder single-job-pod schedule is required" }}
+{{- end }}
+{{- if or (lt (int .Values.builder.isolation.parallelism) 1) (gt (int .Values.builder.isolation.parallelism) 32) }}
+{{- fail "builder isolation parallelism must be between 1 and 32" }}
+{{- end }}
+{{- if or (lt (int .Values.builder.isolation.completions) (int .Values.builder.isolation.parallelism)) (gt (int .Values.builder.isolation.completions) 64) }}
+{{- fail "builder isolation completions must be at least parallelism and no greater than 64" }}
+{{- end }}
+{{- if or (lt (int .Values.builder.replicas) 0) (gt (int .Values.builder.replicas) 1) }}
+{{- fail "builder replicas must be 0 (disabled) or 1 (single trusted dispatcher)" }}
+{{- end }}
+{{- if or (lt (int .Values.builder.dispatch.port) 1) (gt (int .Values.builder.dispatch.port) 65535) }}
+{{- fail "builder dispatcher port must be between 1 and 65535" }}
+{{- end }}
+{{- if le (int .Values.builder.dispatch.requestTimeoutSeconds) 0 }}
+{{- fail "builder dispatcher request timeout must be positive" }}
+{{- end }}
+{{- if le (int .Values.builder.dispatch.sessionTTLSeconds) 0 }}
+{{- fail "builder dispatcher session TTL must be positive" }}
+{{- end }}
+{{- range $name, $seconds := dict "startingDeadlineSeconds" .Values.builder.isolation.startingDeadlineSeconds "activeDeadlineSeconds" .Values.builder.isolation.activeDeadlineSeconds "ttlSecondsAfterFinished" .Values.builder.isolation.ttlSecondsAfterFinished }}
+{{- if le (int $seconds) 0 }}
+{{- fail (printf "builder isolation %s must be positive" $name) }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-builder-dispatcher
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-builder-dispatcher
+spec:
+  replicas: {{ .Values.builder.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: raibitserver-builder-dispatcher
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: raibitserver-builder-dispatcher
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: build-dispatcher
+      annotations:
+        raibitserver.io/verify-image-signatures: {{ ternary "required" "disabled" .Values.security.imageVerification.enabled | quote }}
+    spec:
+      serviceAccountName: {{ include "raibitserver.fullname" . }}-builder-dispatcher
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: builder-dispatcher
+          image: "{{ .Values.image.registry }}/raibitserver/builder{{ if .Values.image.digests.builder }}@{{ .Values.image.digests.builder }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: dispatch, containerPort: {{ .Values.builder.dispatch.port }}, protocol: TCP }
+          env:
+            - { name: RAIBITSERVER_BUILDER_ROLE, value: dispatcher }
+            - { name: RAIBITSERVER_PRODUCTION, value: {{ ternary "1" "0" .Values.production | quote }} }
+            - { name: RAIBITSERVER_CONTROL_PLANE_STORE, value: postgresql }
+            - { name: RAIBITSERVER_DISPATCH_ADDR, value: {{ printf ":%v" .Values.builder.dispatch.port | quote }} }
+            - { name: RAIBITSERVER_DISPATCH_SESSION_TTL_SECONDS, value: {{ .Values.builder.dispatch.sessionTTLSeconds | quote }} }
+            - { name: RAIBITSERVER_DISPATCH_CLIENT_CA_FILE, value: /var/run/secrets/raibitserver/dispatch/ca.crt }
+            - { name: RAIBITSERVER_DISPATCH_SERVER_CERT_FILE, value: /var/run/secrets/raibitserver/dispatch/server.crt }
+            - { name: RAIBITSERVER_DISPATCH_SERVER_KEY_FILE, value: /var/run/secrets/raibitserver/dispatch/server.key }
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | quote }}
+                  key: {{ .Values.database.urlKey | quote }}
+          readinessProbe:
+            tcpSocket: { port: dispatch }
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket: { port: dispatch }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+{{ toYaml .Values.builder.dispatch.resources | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+{{ if .Values.builder.dispatch.existingSecret }}
+            - { name: dispatch-mtls, mountPath: /var/run/secrets/raibitserver/dispatch, readOnly: true }
+{{ end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{ if .Values.builder.dispatch.existingSecret }}
+        - name: dispatch-mtls
+          secret:
+            secretName: {{ .Values.builder.dispatch.existingSecret | quote }}
+            defaultMode: 0440
+            items:
+              - { key: {{ .Values.builder.dispatch.caKey | quote }}, path: ca.crt }
+              - { key: {{ .Values.builder.dispatch.serverCertificateKey | quote }}, path: server.crt }
+              - { key: {{ .Values.builder.dispatch.serverKeyKey | quote }}, path: server.key }
+{{ end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-builder-dispatcher
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-builder-dispatcher
+spec:
+  type: ClusterIP
+  sessionAffinity: ClientIP
+  selector:
+    app.kubernetes.io/name: raibitserver-builder-dispatcher
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - { name: dispatch, port: {{ .Values.builder.dispatch.port }}, targetPort: dispatch, protocol: TCP }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-builder-executor
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-builder-executor
+spec:
+  schedule: {{ .Values.builder.isolation.schedule | quote }}
+  suspend: {{ eq (int .Values.builder.replicas) 0 }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.builder.isolation.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ .Values.builder.isolation.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.builder.isolation.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      parallelism: {{ .Values.builder.isolation.parallelism }}
+      completions: {{ .Values.builder.isolation.completions }}
+      completionMode: NonIndexed
+      activeDeadlineSeconds: {{ .Values.builder.isolation.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .Values.builder.isolation.ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: raibitserver-builder-executor
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: build-executor
+          annotations:
+            raibitserver.io/verify-image-signatures: {{ ternary "required" "disabled" .Values.security.imageVerification.enabled | quote }}
+        spec:
+          serviceAccountName: {{ include "raibitserver.fullname" . }}-builder-executor
+          automountServiceAccountToken: false
+{{ if .Values.builder.runtimeClassName }}
+          runtimeClassName: {{ .Values.builder.runtimeClassName | quote }}
+{{ end }}
+          nodeSelector:
+{{ toYaml .Values.builder.nodeSelector | indent 12 }}
+          tolerations:
+{{ toYaml .Values.builder.tolerations | indent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: buildkitd
+              # Kubernetes native sidecar: it starts before the worker and is
+              # terminated automatically when the one-shot Job container exits.
+              restartPolicy: Always
+              image: "{{ .Values.builder.buildkitImage }}{{ if .Values.builder.buildkitDigest }}@{{ .Values.builder.buildkitDigest }}{{ end }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              args: ["--addr", "unix:///run/buildkit/buildkitd.sock"]
+              startupProbe:
+                exec:
+                  command: ["/bin/sh", "-ec", "test -S /run/buildkit/buildkitd.sock"]
+                periodSeconds: 1
+                failureThreshold: 60
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                  ephemeral-storage: {{ .Values.builder.ephemeralStorage.buildkitRequest | quote }}
+                limits:
+                  cpu: "2"
+                  memory: 2Gi
+                  ephemeral-storage: {{ .Values.builder.ephemeralStorage.buildkitLimit | quote }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - { name: buildkit-socket, mountPath: /run/buildkit }
+                - { name: buildkit-state, mountPath: /home/user/.local/share/buildkit }
+                - { name: work, mountPath: /tmp }
+          containers:
+            - name: builder
+              image: "{{ .Values.image.registry }}/raibitserver/builder{{ if .Values.image.digests.builder }}@{{ .Values.image.digests.builder }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              env:
+                - name: RAIBITSERVER_BUILDER_ROLE
+                  value: executor
+                - name: RAIBITSERVER_CONTROL_PLANE_REMOTE_URL
+                  value: {{ printf "https://%s-builder-dispatcher:%v" (include "raibitserver.fullname" .) .Values.builder.dispatch.port | quote }}
+                - name: RAIBITSERVER_DISPATCH_CA_FILE
+                  value: /var/run/secrets/raibitserver/dispatch/ca.crt
+                - name: RAIBITSERVER_DISPATCH_CLIENT_CERT_FILE
+                  value: /var/run/secrets/raibitserver/dispatch/client.crt
+                - name: RAIBITSERVER_DISPATCH_CLIENT_KEY_FILE
+                  value: /var/run/secrets/raibitserver/dispatch/client.key
+                - name: RAIBITSERVER_DISPATCH_REQUEST_TIMEOUT_SECONDS
+                  value: {{ .Values.builder.dispatch.requestTimeoutSeconds | quote }}
+                - name: RAIBITSERVER_EXECUTE
+                  value: {{ ternary "1" "0" .Values.production | quote }}
+                - name: RAIBITSERVER_PRODUCTION
+                  value: {{ ternary "1" "0" .Values.production | quote }}
+                - name: RAIBITSERVER_ALLOW_ANONYMOUS_GIT
+                  value: {{ ternary "1" "0" .Values.builder.anonymousGit.enabled | quote }}
+                - name: RAIBITSERVER_BUILDER
+                  value: buildctl
+                - name: RAIBITSERVER_WORKER_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.uid
+                - name: RAIBITSERVER_BUILDER_ISOLATION
+                  value: {{ .Values.builder.isolation.mode | quote }}
+                - name: RAIBITSERVER_RUN_ONCE
+                  value: "1"
+                - name: RAIBITSERVER_BUILD_TIMEOUT_SECONDS
+                  value: {{ .Values.builder.buildTimeoutSeconds | quote }}
+                - name: RAIBITSERVER_GENERATED_DOCKERFILE_FRONTEND
+                  value: {{ .Values.builder.generatedDockerfile.frontend | quote }}
+                - name: RAIBITSERVER_GENERATED_NODE_IMAGE
+                  value: {{ .Values.builder.generatedDockerfile.nodeImage | quote }}
+                - name: RAIBITSERVER_REGISTRY_CREDENTIAL_BROKER_URL
+                  value: {{ .Values.builder.registryCredentials.brokerURL | quote }}
+                - name: RAIBITSERVER_REGISTRY_CREDENTIAL_BROKER_TOKEN_FILE
+                  value: /var/run/secrets/raibitserver/registry-broker/token
+                - name: RAIBITSERVER_REGISTRY_CREDENTIAL_MIN_TTL_SECONDS
+                  value: {{ .Values.builder.registryCredentials.minTTLSeconds | quote }}
+                - name: RAIBITSERVER_REGISTRY_CREDENTIAL_MAX_TTL_SECONDS
+                  value: {{ .Values.builder.registryCredentials.maxTTLSeconds | quote }}
+                - name: RAIBITSERVER_REGISTRY
+                  value: {{ .Values.builder.registry | quote }}
+                - name: RAIBITSERVER_PUSH
+                  value: {{ ternary "1" "0" .Values.builder.push | quote }}
+                - name: RAIBITSERVER_WORKSPACE
+                  value: /workspace
+                - name: RAIBITSERVER_BUILD_METADATA_DIR
+                  value: /metadata
+                - name: RAIBITSERVER_SCAN
+                  value: {{ ternary "1" "0" .Values.builder.scan.enabled | quote }}
+                - name: RAIBITSERVER_SCANNER
+                  value: {{ .Values.builder.scan.command | quote }}
+                - name: RAIBITSERVER_SCAN_SEVERITY
+                  value: {{ .Values.builder.scan.severity | quote }}
+                - name: RAIBITSERVER_SIGN
+                  value: {{ ternary "1" "0" .Values.builder.signing.enabled | quote }}
+                - name: RAIBITSERVER_SIGNER
+                  value: {{ .Values.builder.signing.command | quote }}
+{{ if .Values.builder.signing.existingSecret }}
+                - name: RAIBITSERVER_SIGNING_KEY
+                  value: /var/run/secrets/raibitserver/signing/cosign.key
+                - name: COSIGN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.builder.signing.existingSecret | quote }}
+                      key: {{ .Values.builder.signing.passwordKey | quote }}
+                      optional: true
+{{ end }}
+                - name: BUILDKIT_HOST
+                  value: unix:///run/buildkit/buildkitd.sock
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 256Mi
+                  ephemeral-storage: {{ .Values.builder.ephemeralStorage.builderRequest | quote }}
+                limits:
+                  cpu: "2"
+                  memory: 2Gi
+                  ephemeral-storage: {{ .Values.builder.ephemeralStorage.builderLimit | quote }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - { name: buildkit-socket, mountPath: /run/buildkit }
+                - { name: work, mountPath: /tmp }
+                - { name: workspace, mountPath: /workspace }
+                - { name: metadata, mountPath: /metadata }
+{{ if .Values.builder.dispatch.existingSecret }}
+                - { name: dispatch-mtls, mountPath: /var/run/secrets/raibitserver/dispatch, readOnly: true }
+{{ end }}
+{{ if .Values.builder.signing.existingSecret }}
+                - { name: signing-key, mountPath: /var/run/secrets/raibitserver/signing, readOnly: true }
+{{ end }}
+{{ if .Values.builder.registryCredentials.existingSecret }}
+                - { name: registry-broker-token, mountPath: /var/run/secrets/raibitserver/registry-broker, readOnly: true }
+{{ end }}
+          restartPolicy: Never
+          volumes:
+            - name: buildkit-socket
+              emptyDir:
+                sizeLimit: {{ .Values.builder.ephemeralStorage.socketSizeLimit | quote }}
+            - name: buildkit-state
+              emptyDir:
+                sizeLimit: {{ .Values.builder.buildkitStateSizeLimit | quote }}
+            - name: work
+              emptyDir:
+                sizeLimit: {{ .Values.builder.ephemeralStorage.workSizeLimit | quote }}
+            - name: workspace
+              emptyDir:
+                sizeLimit: {{ .Values.builder.workspaceSizeLimit | quote }}
+            - name: metadata
+              emptyDir:
+                sizeLimit: {{ .Values.builder.ephemeralStorage.metadataSizeLimit | quote }}
+{{ if .Values.builder.dispatch.existingSecret }}
+            - name: dispatch-mtls
+              secret:
+                secretName: {{ .Values.builder.dispatch.existingSecret | quote }}
+                defaultMode: 0440
+                items:
+                  - { key: {{ .Values.builder.dispatch.caKey | quote }}, path: ca.crt }
+                  - { key: {{ .Values.builder.dispatch.clientCertificateKey | quote }}, path: client.crt }
+                  - { key: {{ .Values.builder.dispatch.clientKeyKey | quote }}, path: client.key }
+{{ end }}
+{{ if .Values.builder.registryCredentials.existingSecret }}
+            - name: registry-broker-token
+              secret:
+                secretName: {{ .Values.builder.registryCredentials.existingSecret | quote }}
+                defaultMode: 0440
+                items:
+                  - { key: {{ .Values.builder.registryCredentials.tokenKey | quote }}, path: token }
+{{ end }}
+{{ if .Values.builder.signing.existingSecret }}
+            - name: signing-key
+              secret:
+                secretName: {{ .Values.builder.signing.existingSecret | quote }}
+                items:
+                  - { key: {{ .Values.builder.signing.keyKey | quote }}, path: cosign.key }
+{{ end }}

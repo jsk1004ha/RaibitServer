@@ -52,6 +52,9 @@ async function main(argv: string[]) {
     return print(await cloneRepository({ ...cliOptions(rest), repoUrl: service.repoUrl, branch: service.branch, name: service.name, commitSha: service.commitSha || service.commitHash, dryRun: !hasFlag(rest, '--execute') }));
   }
   if (command === 'build-execute') {
+    if (hasFlag(rest, '--execute')) {
+      throw new Error('legacy TypeScript builder is dry-run only; use the Go builder control-plane worker for live builds');
+    }
     const payload = await readJsonFile(file);
     const service = selectService(payload, rest);
     return print(await executeBuildWorkflow({ projectSlug: payload.project?.slug || payload.slug || payload.project?.name, registry: payload.registry, ...service }, payload.filesByService?.[String(service.name)] || payload.files || {}, {

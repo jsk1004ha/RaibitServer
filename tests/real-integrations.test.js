@@ -60,14 +60,18 @@ test('git clone adapter can execute a real local clone when git is available', a
 });
 
 test('BuildKit/Docker and registry execution plans are real commands but dry-run by default', async () => {
-  const plan = buildExecutionPlan(service, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, buildArgs: { SECRET_TOKEN: 'super-secret-value' }, metadataFile: '/tmp/build-metadata.json' });
+  assert.throws(
+    () => buildExecutionPlan(service, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, buildArgs: { SECRET_TOKEN: 'super-secret-value' }, metadataFile: '/tmp/build-metadata.json' }),
+    /secret-looking build arg.*BuildKit secret mount/i,
+  );
+  const plan = buildExecutionPlan(service, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, buildArgs: { PUBLIC_VERSION: '2026.07' }, metadataFile: '/tmp/build-metadata.json' });
   assert.match(plan.buildCommand, /docker buildx build/);
   assert.match(plan.buildCommand, /--push/);
   assert.match(plan.buildCommand, /--metadata-file/);
   assert.doesNotMatch(plan.buildCommand, /super-secret-value/);
   assert.equal(plan.push, true);
 
-  const result = await executeBuildWorkflow(service, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, buildArgs: { SECRET_TOKEN: 'super-secret-value' }, metadataFile: '/tmp/build-metadata.json' });
+  const result = await executeBuildWorkflow(service, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, buildArgs: { PUBLIC_VERSION: '2026.07' }, metadataFile: '/tmp/build-metadata.json' });
   assert.equal(result.dryRun, true);
   assert.match(result.imageDigest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(result.steps.some((step) => step.type === 'git-clone'), true);
@@ -125,6 +129,11 @@ test('kubectl apply and DB provisioning paths create executable dry-run artifact
 test('HS256 JWT auth enforces RBAC on protected API routes', async () => {
   const secret = 'unit-test-secret';
   const controlPlane = new RAIBITSERVERControlPlane();
+  const viewerUser = controlPlane.store.createUser({ email: 'viewer-1@example.com', approvalStatus: 'APPROVED' });
+  const developerUser = controlPlane.store.createUser({ email: 'dev-1@example.com', approvalStatus: 'APPROVED' });
+  const scopedViewerUser = controlPlane.store.createUser({ email: 'viewer-a@example.com', approvalStatus: 'APPROVED' });
+  const scopedDeveloperUser = controlPlane.store.createUser({ email: 'dev-a@example.com', approvalStatus: 'APPROVED' });
+  const scopedMaintainerUser = controlPlane.store.createUser({ email: 'maint-a@example.com', approvalStatus: 'APPROVED' });
   const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret } }));
   server.listen(0);
   await once(server, 'listening');
@@ -136,7 +145,7 @@ test('HS256 JWT auth enforces RBAC on protected API routes', async () => {
     const malformed = await request(port, 'POST', '/projects', { organizationId: 'org-1', name: 'demo' }, 'not.a.jwt');
     assert.equal(malformed.statusCode, 401);
 
-    const viewerToken = signJwtHs256({ sub: 'viewer-1', role: 'viewer' }, secret);
+    const viewerToken = signJwtHs256({ sub: viewerUser.id, role: 'viewer' }, secret);
     const denied = await request(port, 'POST', '/projects', { organizationId: 'org-1', name: 'demo' }, viewerToken);
     assert.equal(denied.statusCode, 403);
 
@@ -144,7 +153,7 @@ test('HS256 JWT auth enforces RBAC on protected API routes', async () => {
     const created = await request(port, 'POST', '/projects', { organizationId: 'org-1', name: 'demo' }, ownerToken);
     assert.equal(created.statusCode, 201);
 
-    const developerToken = signJwtHs256({ sub: 'dev-1', role: 'developer', projectIds: ['project-1'] }, secret);
+    const developerToken = signJwtHs256({ sub: developerUser.id, role: 'developer', projectIds: ['project-1'] }, secret);
     const deniedScope = await request(port, 'POST', '/services', { projectId: 'project-2', name: 'api' }, developerToken);
     assert.equal(deniedScope.statusCode, 403);
 
@@ -152,15 +161,18 @@ test('HS256 JWT auth enforces RBAC on protected API routes', async () => {
     const orgB = controlPlane.store.createOrganization({ name: 'Org B', slug: 'org-b' });
     const projectA = controlPlane.store.createProject({ organizationId: orgA.id, name: 'alpha', slug: 'alpha' });
     const projectB = controlPlane.store.createProject({ organizationId: orgB.id, name: 'beta', slug: 'beta' });
+    controlPlane.store.addMember({ organizationId: orgA.id, userId: scopedViewerUser.id, role: 'viewer' });
+    controlPlane.store.addMember({ organizationId: orgA.id, userId: scopedDeveloperUser.id, role: 'developer' });
+    controlPlane.store.addMember({ organizationId: orgA.id, userId: scopedMaintainerUser.id, role: 'maintainer' });
     const ownResource = controlPlane.store.createResource({ projectId: projectA.id, name: 'pg', engine: 'postgresql' });
     const otherResource = controlPlane.store.createResource({ projectId: projectB.id, name: 'pg', engine: 'postgresql' });
-    const scopedViewer = signJwtHs256({ sub: 'viewer-a', role: 'viewer', organizationId: orgA.id }, secret);
+    const scopedViewer = signJwtHs256({ sub: scopedViewerUser.id, role: 'viewer', organizationId: orgA.id }, secret);
     const viewerConsole = await request(port, 'POST', `/resources/${ownResource.id}/console/query`, { query: 'SELECT 1' }, scopedViewer);
     assert.equal(viewerConsole.statusCode, 403);
-    const scopedDeveloper = signJwtHs256({ sub: 'dev-a', role: 'developer', organizationId: orgA.id }, secret);
+    const scopedDeveloper = signJwtHs256({ sub: scopedDeveloperUser.id, role: 'developer', organizationId: orgA.id }, secret);
     const developerConsole = await request(port, 'POST', `/resources/${ownResource.id}/console/query`, { query: 'SELECT 1' }, scopedDeveloper);
     assert.equal(developerConsole.statusCode, 403);
-    const scopedMaintainer = signJwtHs256({ sub: 'maint-a', role: 'maintainer', organizationId: orgA.id }, secret);
+    const scopedMaintainer = signJwtHs256({ sub: scopedMaintainerUser.id, role: 'maintainer', organizationId: orgA.id }, secret);
     const ownConsole = await request(port, 'POST', `/resources/${ownResource.id}/console/query`, { query: 'SELECT 1', connectionUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil' }, scopedMaintainer);
     assert.equal(ownConsole.statusCode, 200);
     assert.equal(ownConsole.body.mode, 'connection-info');

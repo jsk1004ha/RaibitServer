@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { runCommand, commandToString, type CommandSpec } from './command-runner.ts';
 import { slugify } from './ids.ts';
@@ -11,7 +12,22 @@ export function validateGitUrl(repoUrl: string) {
 }
 
 export function redactGitUrl(url: string) {
-  return String(url).replace(/(https:\/\/)([^/@\s]+)@/i, '$1****@');
+  const value = String(url || '');
+  try {
+    const parsed = new URL(value);
+    if (parsed.username || parsed.password) {
+      parsed.username = '****';
+      parsed.password = '';
+    }
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (isCredentialQueryKey(key)) parsed.searchParams.set(key, '****');
+    }
+    return parsed.toString();
+  } catch {
+    return value
+      .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/@\s]+)@/i, '$1****@')
+      .replace(/([?&](?:access[_-]?token|token|api[_-]?key|password|credential|auth)=)[^&#\s]*/gi, '$1****');
+  }
 }
 
 function withToken(repoUrl: string, token?: string) {
@@ -43,8 +59,8 @@ export async function cloneRepository(options: Record<string, any>) {
   const dryRun = options.dryRun !== false;
   if (!dryRun) await fs.mkdir(path.dirname(destination), { recursive: true });
   const clone: CommandSpec = gitCloneCommand({ ...options, repoUrl, branch, destination });
-  const askPassPath = !dryRun && options.token ? await writeAskPassScript(destination, String(options.token)) : null;
-  if (askPassPath) clone.env = { ...(clone.env || {}), GIT_ASKPASS: askPassPath };
+  const askPass = !dryRun && options.token ? await writeAskPassScript(String(options.token)) : null;
+  if (askPass) clone.env = { ...(clone.env || {}), GIT_ASKPASS: askPass.scriptPath };
   const steps = [];
   try {
     steps.push(await runCommand(clone, { dryRun, timeoutMs: options.timeoutMs || 10 * 60 * 1000 }));
@@ -52,9 +68,9 @@ export async function cloneRepository(options: Record<string, any>) {
       steps.push(await runCommand({ executable: 'git', args: ['checkout', String(options.commitSha)], cwd: destination }, { dryRun, timeoutMs: options.timeoutMs || 10 * 60 * 1000 }));
     }
   } finally {
-    if (askPassPath) {
-      await fs.writeFile(askPassPath, '#!/bin/sh\nexit 1\n', { mode: 0o700 }).catch(() => undefined);
-      await fs.unlink(askPassPath).catch(() => undefined);
+    if (askPass) {
+      await fs.writeFile(askPass.scriptPath, '#!/bin/sh\nexit 1\n', { mode: 0o700 }).catch(() => undefined);
+      await fs.rm(askPass.directory, { recursive: true, force: true }).catch(() => undefined);
     }
   }
   return {
@@ -70,23 +86,32 @@ export async function cloneRepository(options: Record<string, any>) {
 }
 
 
-async function writeAskPassScript(destination: string, token: string) {
-  const dir = path.dirname(destination);
-  await fs.mkdir(dir, { recursive: true });
-  const script = path.join(dir, `.raibitserver-git-askpass-${process.pid}.sh`);
-  const body = `#!/bin/sh
+async function writeAskPassScript(token: string) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'raibitserver-git-askpass-'));
+  try {
+    await fs.chmod(directory, 0o700);
+    const script = path.join(directory, 'askpass.sh');
+    const body = `#!/bin/sh
 case "$1" in
   *Username*) printf '%s\n' 'x-access-token' ;;
   *) printf '%s\n' ${shSingleQuote(token)} ;;
 esac
 `;
-  await fs.writeFile(script, body, { mode: 0o700 });
-  await fs.chmod(script, 0o700);
-  return script;
+    await fs.writeFile(script, body, { mode: 0o700 });
+    await fs.chmod(script, 0o700);
+    return { directory, scriptPath: script };
+  } catch (error) {
+    await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function shSingleQuote(value: string) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+function isCredentialQueryKey(key: string) {
+  return /(?:secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)/i.test(key);
 }
 
 export function sourceCheckoutPlan(service: Record<string, any>, options: Record<string, any> = {}) {

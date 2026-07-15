@@ -1,5 +1,6 @@
 import { loadDashboardOverview, apiAction } from '../lib/api';
 import { ConsoleShell, MetricStrip, StatusBadge } from '../components/console-ui';
+import { LoadErrorSummary } from '../components/console-ui';
 import { Icon } from '../components/icon';
 import { ProjectCard } from '../components/project-card';
 
@@ -10,8 +11,9 @@ export default async function HomePage() {
   const projects = state.projects || [];
   const createOrgSlug = projects[0]?.organizationSlug || projects[0]?.organizationId || subject?.organizationSlug || subject?.organizationId || 'default';
   const health = state.health.body?.status === 'ok';
+  const isAuthenticated = Boolean(user || subject);
   return (
-    <ConsoleShell active="overview" orgValue={createOrgSlug} crumbs={`${createOrgSlug} / 운영 현황`} actions={<><a className="btn" href="/github">GitHub 연결</a><a className="btn btn-primary" href={`/org/${createOrgSlug}/projects/new`}>새 프로젝트</a></>}>
+    <ConsoleShell active="overview" orgValue={createOrgSlug} crumbs={`${createOrgSlug} / 운영 현황`} actions={<><a className="btn" href="/github">GitHub 연결</a><a className="btn btn-primary" href={`/org/${createOrgSlug}/projects/new`}>새 프로젝트</a>{isAuthenticated ? <form method="post" action={apiAction('/auth/logout')} className="inline-actions"><input type="hidden" name="_returnTo" value="/login" /><button className="btn" type="submit">로그아웃</button></form> : null}</>}>
       <section className="page" data-od-id="org-dashboard">
         <header className="page-header">
           <div>
@@ -21,6 +23,8 @@ export default async function HomePage() {
           </div>
           <StatusBadge status={health ? 'healthy' : 'offline'} />
         </header>
+
+        <LoadErrorSummary issues={state.loadErrors} />
 
         <MetricStrip items={[
           { label: '운영 중인 프로젝트', value: projects.length, detail: '제어 영역 기준', progress: Math.min(projects.length * 10, 100) },
@@ -53,10 +57,10 @@ export default async function HomePage() {
                 <a className="quick-action" href={`/org/${createOrgSlug}/projects/new`}><Icon name="plus" /><span>새 프로젝트</span></a>
                 <a className="quick-action" href="/github"><Icon name="arrow-top-right-on-square" /><span>GitHub 연결</span></a>
                 <a className="quick-action" href="/login"><Icon name="shield-check" /><span>로그인</span></a>
-                <a className="quick-action" href={apiAction('/health')}><Icon name="server-stack" /><span>API 상태</span></a>
+                <a className="quick-action" href="#control-plane-status" data-health-endpoint={apiAction('/health')}><Icon name="server-stack" /><span>API 상태</span></a>
               </nav>
             </article>
-            <article className="card">
+            <article className="card" id="control-plane-status">
               <div className="card-title"><h2>제어 영역 정보</h2><StatusBadge status={health ? 'healthy' : 'offline'} /></div>
               <div className="stack">
                 <p><span className="label">엔드포인트</span><br /><span className="mono">{state.context.baseUrl}</span></p>

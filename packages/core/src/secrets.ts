@@ -21,11 +21,15 @@ export function maskSecrets(input) {
   if (!input || typeof input !== 'object') return input;
   const output = {};
   for (const [key, value] of Object.entries(input)) {
-    output[key] = isSecretKey(key) && value !== null && value !== undefined && typeof value !== 'object'
+    output[key] = !isSafeSecretMetadataKey(key) && isSecretKey(key) && value !== null && value !== undefined && typeof value !== 'object'
       ? maskSecretValue(value)
       : maskSecrets(value);
   }
   return output;
+}
+
+function isSafeSecretMetadataKey(key) {
+  return ['secretname', 'connectionsecretname', 'credentialsecretuid'].includes(String(key || '').trim().toLowerCase());
 }
 
 
