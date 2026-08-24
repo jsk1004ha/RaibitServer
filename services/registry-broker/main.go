@@ -33,14 +33,14 @@ const (
 )
 
 type config struct {
-	Port               string
-	RegistryHost       string
-	RegistryPrefix     string
-	RegistryService    string
-	RegistryIssuer     string
-	BrokerToken        string
-	SessionHMACKey     []byte
-	TokenPrivateKey    *rsa.PrivateKey
+	Port                string
+	RegistryHost        string
+	RegistryPrefix      string
+	RegistryService     string
+	RegistryIssuer      string
+	BrokerToken         string
+	SessionHMACKey      []byte
+	TokenPrivateKey     *rsa.PrivateKey
 	TokenCertificateX5C string
 }
 
@@ -83,14 +83,14 @@ type registryAccess struct {
 }
 
 type registryJWTClaims struct {
-	Issuer   string           `json:"iss"`
-	Subject  string           `json:"sub"`
-	Audience string           `json:"aud"`
-	Expires  int64            `json:"exp"`
-	NotBefore int64           `json:"nbf"`
-	IssuedAt int64            `json:"iat"`
-	JWTID    string           `json:"jti"`
-	Access   []registryAccess `json:"access"`
+	Issuer    string           `json:"iss"`
+	Subject   string           `json:"sub"`
+	Audience  string           `json:"aud"`
+	Expires   int64            `json:"exp"`
+	NotBefore int64            `json:"nbf"`
+	IssuedAt  int64            `json:"iat"`
+	JWTID     string           `json:"jti"`
+	Access    []registryAccess `json:"access"`
 }
 
 type tokenResponse struct {
@@ -207,8 +207,6 @@ func (s *server) broker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := s.now()
-	// Stay comfortably inside the Builder's [min,max] acceptance window so
-	// network latency cannot put a credential below minTTL or beyond maxTTL.
 	ttl := req.MinTTLSeconds + (req.MaxTTLSeconds-req.MinTTLSeconds)/2
 	if ttl < req.MinTTLSeconds {
 		ttl = req.MinTTLSeconds
@@ -272,9 +270,6 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		for _, action := range actions {
 			switch action {
 			case "pull":
-				// Pull is intentionally anonymous because tenant Pod manifests do not
-				// carry imagePullSecrets. The registry is reachable only through the
-				// internal split-horizon route.
 				granted = append(granted, "pull")
 			case "push":
 				if credential != nil && name == credential.Repository && containsAction(credential.Actions, "push") {
