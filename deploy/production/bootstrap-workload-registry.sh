@@ -60,14 +60,14 @@ sudo k3s ctr -n k8s.io images ls | grep -F "raibit-registry-broker:${VERSION}" >
 echo "broker image imported: $BROKER_IMAGE"
 
 echo
- echo "=== 2. Resolve immutable Distribution image ==="
+echo "=== 2. Resolve immutable Distribution image ==="
 REGISTRY_DIGEST="$(docker buildx imagetools inspect "registry:${REGISTRY_VERSION}" | awk '$1=="Digest:" {print $2; exit}')"
 [[ "$REGISTRY_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "ERROR: failed to resolve registry:${REGISTRY_VERSION} digest" >&2; exit 1; }
 REGISTRY_IMAGE="docker.io/library/registry@${REGISTRY_DIGEST}"
 echo "registry image: $REGISTRY_IMAGE"
 
 echo
- echo "=== 3. Ensure Builder broker token ==="
+echo "=== 3. Ensure Builder broker token ==="
 if ! kubectl -n "$APP_NS" get secret "$BROKER_TOKEN_SECRET" >/dev/null 2>&1; then
   BROKER_TOKEN_NEW="$(openssl rand -hex 32)"
   kubectl -n "$APP_NS" create secret generic "$BROKER_TOKEN_SECRET" \
@@ -78,7 +78,7 @@ BROKER_TOKEN="$(kubectl -n "$APP_NS" get secret "$BROKER_TOKEN_SECRET" -o jsonpa
 [ -n "$BROKER_TOKEN" ] || { echo "ERROR: broker token is empty" >&2; exit 1; }
 
 echo
- echo "=== 4. Create registry token signing key ==="
+echo "=== 4. Create registry token signing key ==="
 SIGN_DIR="$HOME/.config/raibitserver/registry-auth"
 mkdir -p "$SIGN_DIR"
 chmod 700 "$SIGN_DIR"
@@ -120,7 +120,7 @@ kubectl -n "$INFRA_NS" create secret generic raibit-registry-runtime \
 unset SESSION_HMAC_KEY REGISTRY_HTTP_SECRET
 
 echo
- echo "=== 5. Registry configuration ==="
+echo "=== 5. Registry configuration ==="
 cat > /tmp/raibit-registry-config.yml <<EOF
 version: 0.1
 log:
@@ -155,7 +155,7 @@ kubectl -n "$INFRA_NS" create configmap raibit-registry-config \
 rm -f /tmp/raibit-registry-config.yml
 
 echo
- echo "=== 6. Deploy registry + broker + HTTPS ingresses ==="
+echo "=== 6. Deploy registry + broker + HTTPS ingresses ==="
 cat > /tmp/raibit-registry-stack.yaml <<EOF
 apiVersion: v1
 kind: Service
@@ -205,8 +205,7 @@ spec:
             - name: registry
               containerPort: 5000
           readinessProbe:
-            httpGet:
-              path: /v2/
+            tcpSocket:
               port: registry
             initialDelaySeconds: 3
             periodSeconds: 5
@@ -445,27 +444,15 @@ kubectl -n "$INFRA_NS" rollout status statefulset/raibit-registry --timeout=240s
 kubectl -n "$INFRA_NS" rollout status deployment/raibit-registry-auth --timeout=180s
 
 echo
- echo "=== 7. Internal split DNS ==="
-COREFILE="$(kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}')"
-if ! grep -q '/etc/coredns/custom/.*\.override' <<<"$COREFILE"; then
-  echo "ERROR: this CoreDNS installation does not expose the K3s custom .override import; refusing to rewrite Corefile automatically" >&2
-  exit 1
-fi
-cat > /tmp/raibit-coredns-custom.yaml <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: coredns-custom
-  namespace: kube-system
-data:
-  raibit-registry.override: |
-    hosts {
-      ${NODE_IP} ${REGISTRY_HOST} ${AUTH_HOST}
-      fallthrough
-    }
-EOF
-kubectl apply -f /tmp/raibit-coredns-custom.yaml
-rm -f /tmp/raibit-coredns-custom.yaml
+echo "=== 7. Internal split DNS ==="
+# K3s CoreDNS already uses the hosts plugin against the NodeHosts key. Extend
+# that existing file rather than loading a second hosts plugin.
+NODEHOSTS="$(kubectl -n kube-system get configmap coredns -o jsonpath='{.data.NodeHosts}')"
+NODEHOSTS_FILTERED="$(printf '%s\n' "$NODEHOSTS" | grep -Ev "[[:space:]](${REGISTRY_HOST//./\\.}|${AUTH_HOST//./\\.})([[:space:]]|$)" || true)"
+NODEHOSTS_NEW="${NODEHOSTS_FILTERED}"$'\n'"${NODE_IP} ${REGISTRY_HOST} ${AUTH_HOST}"$'\n'
+NODEHOSTS_JSON="$(printf '%s' "$NODEHOSTS_NEW" | jq -Rs .)"
+kubectl -n kube-system patch configmap coredns --type=merge \
+  -p "{\"data\":{\"NodeHosts\":${NODEHOSTS_JSON}}}" >/dev/null
 kubectl -n kube-system rollout restart deployment/coredns >/dev/null
 kubectl -n kube-system rollout status deployment/coredns --timeout=120s
 
@@ -477,7 +464,7 @@ getent hosts "$REGISTRY_HOST"
 getent hosts "$AUTH_HOST"
 
 echo
- echo "=== 8. HTTPS/token/broker smoke tests ==="
+echo "=== 8. HTTPS/token/broker smoke tests ==="
 curl -fsS "https://${AUTH_HOST}/healthz" >/dev/null
 CHALLENGE="$(curl -sSI "https://${REGISTRY_HOST}/v2/" | tr -d '\r' | grep -i '^www-authenticate:' || true)"
 grep -Fq "https://${AUTH_HOST}/token" <<<"$CHALLENGE" || { echo "ERROR: registry auth challenge is missing expected token realm" >&2; echo "$CHALLENGE" >&2; exit 1; }
@@ -532,7 +519,7 @@ chmod 600 "$HOME/.config/raibitserver/workload-registry.env"
 unset BROKER_TOKEN BROKER_USERNAME BROKER_PASSWORD BROKER_RESPONSE
 
 echo
- echo "=== COMPLETE ==="
+echo "=== COMPLETE ==="
 echo "builder.registry: ${REGISTRY_HOST}/${REGISTRY_PREFIX}"
 echo "broker URL:       https://${AUTH_HOST}/broker"
 echo "broker Secret:    ${BROKER_TOKEN_SECRET}"
