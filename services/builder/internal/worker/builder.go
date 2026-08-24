@@ -851,7 +851,13 @@ func (b *Builder) signImage(ctx context.Context, state *buildContext, digest str
 		_ = b.Store.AppendDeploymentEvent(ctx, controlplane.DeploymentEventInput{DeploymentID: state.Deployment.ID, Type: "build.image_sign_failed", Message: "image signing failed", Metadata: map[string]any{"tool": b.Config.Signer, "digest": digest, "result": "failed", "dryRun": b.Config.DryRun}})
 		return err
 	}
-	args := []string{"sign", "--yes"}
+	args := []string{
+		"sign",
+		"--yes",
+		"--new-bundle-format=false",
+		"--use-signing-config=false",
+		"--registry-referrers-mode=legacy",
+	}
 	if b.Config.SigningKeyPath != "" {
 		args = append(args, "--key", b.Config.SigningKeyPath)
 	}

@@ -136,6 +136,16 @@ func TestBuilderScansAndSignsDigestBeforeImageReady(t *testing.T) {
 	if got := runner.commandNames(); strings.Join(got, ",") != "buildctl,trivy,cosign" {
 		t.Fatalf("expected build, scan, sign ordering, got %#v", got)
 	}
+	signArgs := strings.Join(runner.commands[len(runner.commands)-1].Args, " ")
+	for _, required := range []string{
+		"--new-bundle-format=false",
+		"--use-signing-config=false",
+		"--registry-referrers-mode=legacy",
+	} {
+		if !strings.Contains(signArgs, required) {
+			t.Fatalf("cosign signing command missing %q: %s", required, signArgs)
+		}
+	}
 	state := readState(t, stateFile)
 	if deployment := firstByID(t, state, "deployments", "dep_1"); deployment["status"] != "IMAGE_READY" {
 		t.Fatalf("deployment not image-ready after supply-chain checks: %#v", deployment)
