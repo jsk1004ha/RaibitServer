@@ -4,22 +4,22 @@ import { domainPlanForProject, projectConsoleHostname, resourceConsoleHostname, 
 import { compileProject } from '../packages/core/src/manifest-compiler.ts';
 import { previewRuntimePlan } from '../packages/core/src/preview-deployments.ts';
 
-test('service hostnames use subdomain-first single-label routing', () => {
+test('service hostnames use flat single-label routing under the base domain', () => {
   assert.equal(
     serviceHostname({ organizationSlug: 'gdg-hongik', projectSlug: 'festival-2026', serviceName: 'web' }),
-    'gdg-hongik--festival-2026.apps.raibitserver.app',
+    'apps--gdg-hongik--festival-2026.raibitserver.app',
   );
   assert.equal(
     serviceHostname({ organizationSlug: 'gdg-hongik', projectSlug: 'festival-2026', serviceName: 'web', preview: 'pr-32' }),
-    'pr-32-gdg-hongik--festival-2026.preview.raibitserver.app',
+    'preview--pr-32--gdg-hongik--festival-2026.raibitserver.app',
   );
 });
 
 test('tenant project host labels preserve slug boundaries', () => {
   const victim = { organizationSlug: 'victim-team', projectSlug: 'api', baseDomain: 'example.test' };
   const attacker = { organizationSlug: 'victim', projectSlug: 'team-api', baseDomain: 'example.test' };
-  assert.equal(serviceHostname(victim), 'victim-team--api.apps.example.test');
-  assert.equal(serviceHostname(attacker), 'victim--team-api.apps.example.test');
+  assert.equal(serviceHostname(victim), 'apps--victim-team--api.example.test');
+  assert.equal(serviceHostname(attacker), 'apps--victim--team-api.example.test');
   assert.notEqual(serviceHostname(victim), serviceHostname(attacker));
   assert.notEqual(
     serviceHostname({ ...victim, preview: 'pr-7' }),
@@ -27,18 +27,18 @@ test('tenant project host labels preserve slug boundaries', () => {
   );
 });
 
-test('individual service/resource screens get separated console subdomains', () => {
+test('individual service/resource screens get separated flat console hostnames', () => {
   assert.equal(
     serviceConsoleHostname({ organizationSlug: 'gdg-hongik', projectSlug: 'festival-2026', serviceName: 'api' }),
-    'gdg-hongik--festival-2026-api.console.raibitserver.app',
+    'console--gdg-hongik--festival-2026-api.raibitserver.app',
   );
   assert.equal(
     resourceConsoleHostname({ organizationSlug: 'gdg-hongik', projectSlug: 'festival-2026', resourceName: 'postgres' }),
-    'gdg-hongik--festival-2026-postgres.resources.raibitserver.app',
+    'resources--gdg-hongik--festival-2026-postgres.raibitserver.app',
   );
 });
 
-test('project domain plan separates platform, app, preview, console, and resource zones', () => {
+test('project domain plan keeps platform hosts and uses one wildcard TLS zone for tenant routes', () => {
   const plan = domainPlanForProject({
     organization: { slug: 'gdg-hongik' },
     project: { slug: 'festival-2026' },
@@ -46,9 +46,9 @@ test('project domain plan separates platform, app, preview, console, and resourc
     resources: [{ name: 'postgres', engine: 'postgresql' }],
   });
   assert.equal(plan.platform.dashboard, 'app.raibitserver.app');
-  assert.equal(plan.services.find((service) => service.name === 'web').publicHostname, 'gdg-hongik--festival-2026.apps.raibitserver.app');
+  assert.equal(plan.services.find((service) => service.name === 'web').publicHostname, 'apps--gdg-hongik--festival-2026.raibitserver.app');
   assert.equal(plan.services.find((service) => service.name === 'worker').publicHostname, null);
-  assert.equal(plan.wildcardTls.includes('*.apps.raibitserver.app'), true);
+  assert.deepEqual(plan.wildcardTls, ['*.raibitserver.app']);
 });
 
 test('preview runtime plan creates isolated workload and cleanup selector', () => {
@@ -59,13 +59,13 @@ test('preview runtime plan creates isolated workload and cleanup selector', () =
     deploymentId: 'dep_1',
     pullRequestNumber: 32,
   });
-  assert.equal(plan.url, 'https://pr-32-gdg-hongik--festival-2026.preview.raibitserver.app');
+  assert.equal(plan.url, 'https://preview--pr-32--gdg-hongik--festival-2026.raibitserver.app');
   assert.equal(plan.kubernetes.workloadName, 'pr-32-web-1fee3c968086');
   assert.equal(plan.kubernetes.labels['raibitserver.io/preview'], 'true');
   assert.match(plan.kubernetes.cleanupSelector, /raibitserver\.io\/deployment=dep_1/);
 });
 
-test('compiled ingress uses subdomain-first generated host when no custom domain exists', () => {
+test('compiled ingress uses flat generated host when no custom domain exists', () => {
   const compiled = compileProject({
     organization: { slug: 'gdg-hongik' },
     project: { slug: 'festival-2026' },
@@ -73,8 +73,8 @@ test('compiled ingress uses subdomain-first generated host when no custom domain
     resources: [],
   });
   const ingress = compiled.manifests.find((manifest) => manifest.kind === 'Ingress');
-  assert.equal(ingress.spec.rules[0].host, 'gdg-hongik--festival-2026.apps.raibitserver.app');
-  assert.equal(compiled.domainPlan.services[0].consoleHostname, 'gdg-hongik--festival-2026-web.console.raibitserver.app');
+  assert.equal(ingress.spec.rules[0].host, 'apps--gdg-hongik--festival-2026.raibitserver.app');
+  assert.equal(compiled.domainPlan.services[0].consoleHostname, 'console--gdg-hongik--festival-2026-web.raibitserver.app');
 });
 
 test('multiple public web services receive stable production and preview hosts', () => {
@@ -90,12 +90,12 @@ test('multiple public web services receive stable production and preview hosts',
     .map((service) => [service.name, { production: service.publicHostname, preview: service.previewPattern }]));
   const expected = {
     api: {
-      production: 'gdg-hongik--festival-2026--api.apps.raibitserver.app',
-      preview: 'pr-{number}-gdg-hongik--festival-2026--api.preview.raibitserver.app',
+      production: 'apps--gdg-hongik--festival-2026--api.raibitserver.app',
+      preview: 'preview--pr-{number}--gdg-hongik--festival-2026--api.raibitserver.app',
     },
     web: {
-      production: 'gdg-hongik--festival-2026.apps.raibitserver.app',
-      preview: 'pr-{number}-gdg-hongik--festival-2026.preview.raibitserver.app',
+      production: 'apps--gdg-hongik--festival-2026.raibitserver.app',
+      preview: 'preview--pr-{number}--gdg-hongik--festival-2026.raibitserver.app',
     },
   };
   assert.deepEqual(hostMap(services), expected);
@@ -117,8 +117,8 @@ test('multiple public web services receive stable production and preview hosts',
 
   const apiPreview = previewRuntimePlan({ organization, project, service: services[0], pullRequestNumber: 32 });
   const webPreview = previewRuntimePlan({ organization, project, service: services[1], pullRequestNumber: 32 });
-  assert.equal(apiPreview.host, 'pr-32-gdg-hongik--festival-2026--api.preview.raibitserver.app');
-  assert.equal(webPreview.host, 'pr-32-gdg-hongik--festival-2026.preview.raibitserver.app');
+  assert.equal(apiPreview.host, 'preview--pr-32--gdg-hongik--festival-2026--api.raibitserver.app');
+  assert.equal(webPreview.host, 'preview--pr-32--gdg-hongik--festival-2026.raibitserver.app');
   assert.notEqual(apiPreview.host, webPreview.host);
 
   const withoutNamedWeb = [
@@ -126,8 +126,8 @@ test('multiple public web services receive stable production and preview hosts',
     { name: 'api', type: 'web' },
   ];
   assert.deepEqual(hostMap(withoutNamedWeb), hostMap([...withoutNamedWeb].reverse()));
-  assert.equal(hostMap(withoutNamedWeb).api.production, 'gdg-hongik--festival-2026--api.apps.raibitserver.app');
-  assert.equal(hostMap(withoutNamedWeb).frontend.production, 'gdg-hongik--festival-2026--frontend.apps.raibitserver.app');
+  assert.equal(hostMap(withoutNamedWeb).api.production, 'apps--gdg-hongik--festival-2026--api.raibitserver.app');
+  assert.equal(hostMap(withoutNamedWeb).frontend.production, 'apps--gdg-hongik--festival-2026--frontend.raibitserver.app');
 });
 
 test('service lifecycle changes never reassign the project base host', () => {
@@ -137,7 +137,7 @@ test('service lifecycle changes never reassign the project base host', () => {
   };
   const apiHost = (services) => domainPlanForProject({ ...input, services }).services
     .find((service) => service.name === 'api').publicHostname;
-  const expected = 'gdg-hongik--festival-2026--api.apps.raibitserver.app';
+  const expected = 'apps--gdg-hongik--festival-2026--api.raibitserver.app';
 
   assert.equal(apiHost([{ name: 'api', type: 'web' }]), expected);
   assert.equal(apiHost([{ name: 'api', type: 'web' }, { name: 'zzz', type: 'web' }]), expected);
@@ -170,10 +170,10 @@ test('long production and preview route labels are bounded deterministically', (
     assert.ok(service.previewPattern.split('.')[0].length <= 63, service.previewPattern);
   }
 
-  assert.equal(webHost, 'club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1aae2be83a21.apps.raibitserver.app');
-  assert.equal(apiHost, 'club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-c53d1bfc23ce.apps.raibitserver.app');
-  assert.equal(webPreview, 'pr-32-club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1aae2be83a21.preview.raibitserver.app');
-  assert.equal(apiPreview, 'pr-32-club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-c53d1bfc23ce.preview.raibitserver.app');
+  assert.equal(webHost, 'apps--club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-f685a6d8b3db.raibitserver.app');
+  assert.equal(apiHost, 'apps--club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-f027e0adb928.raibitserver.app');
+  assert.equal(webPreview, 'preview--pr-32--club-aaaaaaaaaaaaaaaaaaaaa-1aae2be83a21.raibitserver.app');
+  assert.equal(apiPreview, 'preview--pr-32--club-aaaaaaaaaaaaaaaaaaaaa-c53d1bfc23ce.raibitserver.app');
 
   const publicHosts = [
     webHost,
@@ -185,10 +185,10 @@ test('long production and preview route labels are bounded deterministically', (
     projectConsoleHostname({ organizationSlug: organization.slug, projectSlug: project.slug }),
     workspaceConsoleHostname({ organizationSlug: organization.slug }),
   ];
-  assert.equal(publicHosts[4], 'club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-aea88c2165fd.console.raibitserver.app');
-  assert.equal(publicHosts[5], 'club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-741e03c433cc.resources.raibitserver.app');
-  assert.equal(publicHosts[6], 'club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1aae2be83a21.console.raibitserver.app');
-  assert.equal(publicHosts[7], 'club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-8e3e3e737f50.console.raibitserver.app');
+  assert.equal(publicHosts[4], 'console--club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-eb89d81060b2.raibitserver.app');
+  assert.equal(publicHosts[5], 'resources--club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-cb4fe7c45e64.raibitserver.app');
+  assert.equal(publicHosts[6], 'console--club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-df0498a09034.raibitserver.app');
+  assert.equal(publicHosts[7], 'console--club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-13937423f373.raibitserver.app');
   for (const host of publicHosts) assert.ok(host.split('.')[0].length <= 63, host);
 
   const compiled = compileProject({
