@@ -5,14 +5,15 @@ import YAML from 'yaml';
 
 const repo = new URL('..', import.meta.url);
 
-test('Cloudflare Tunnel docs lock RAIBITSERVER wildcard and security guardrails', async () => {
+test('Cloudflare Tunnel docs lock flat wildcard and security guardrails', async () => {
   const doc = await fs.readFile(new URL('docs/cloudflare-tunnel.md', repo), 'utf8');
 
   for (const required of [
-    '*.apps.<BASE_DOMAIN>',
-    '*.preview.<BASE_DOMAIN>',
-    '*.console.<BASE_DOMAIN>',
-    '*.resources.<BASE_DOMAIN>',
+    '*.<BASE_DOMAIN>',
+    'apps--gdg-hongik--festival-2026.<BASE_DOMAIN>',
+    'preview--pr-32--gdg-hongik--festival-2026.<BASE_DOMAIN>',
+    'console--gdg-hongik--festival-2026-api.<BASE_DOMAIN>',
+    'resources--gdg-hongik--festival-2026-postgres.<BASE_DOMAIN>',
     '내부 Kubernetes Ingress Controller',
     'Cloudflare Access',
     'RAIBITSERVER_DASHBOARD_BASIC_AUTH',
@@ -24,12 +25,16 @@ test('Cloudflare Tunnel docs lock RAIBITSERVER wildcard and security guardrails'
     assert.match(doc, new RegExp(escapeRegExp(required)));
   }
 
+  assert.doesNotMatch(doc, /\*\.apps\.<BASE_DOMAIN>/);
   assert.doesNotMatch(doc, /test\.\*\.example\.com.*권장/);
 });
 
-test('Cloudflare Tunnel example routes wildcard zones to one ingress controller', async () => {
+test('Cloudflare Tunnel example routes one free-tier wildcard to Traefik websecure', async () => {
   const example = await fs.readFile(new URL('deploy/production/cloudflare-tunnel.example.yml', repo), 'utf8');
-  const config = YAML.parse(example.replaceAll('<TUNNEL_UUID>', '00000000-0000-0000-0000-000000000000'));
+  const rendered = example
+    .replaceAll('<TUNNEL_UUID>', '00000000-0000-0000-0000-000000000000')
+    .replaceAll('<TRAEFIK_ORIGIN>', '172.31.99.245');
+  const config = YAML.parse(rendered);
   const rules = config.ingress;
 
   assert.ok(Array.isArray(rules));
@@ -37,17 +42,16 @@ test('Cloudflare Tunnel example routes wildcard zones to one ingress controller'
     rules.filter((rule) => rule.hostname).map((rule) => rule.hostname),
     [
       'api.raibitserver.app',
-      'admin.raibitserver.app',
       'console.raibitserver.app',
-      '*.apps.raibitserver.app',
-      '*.preview.raibitserver.app',
-      '*.console.raibitserver.app',
-      '*.resources.raibitserver.app',
+      '*.raibitserver.app',
     ],
   );
 
   const originServices = new Set(rules.filter((rule) => rule.hostname).map((rule) => rule.service));
-  assert.deepEqual([...originServices], ['http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80']);
+  assert.deepEqual([...originServices], ['https://172.31.99.245:443']);
+  assert.equal(rules[0].originRequest.originServerName, 'api.raibitserver.app');
+  assert.equal(rules[1].originRequest.originServerName, 'console.raibitserver.app');
+  assert.equal(rules[2].originRequest.noTLSVerify, true);
   assert.equal(rules.at(-1).service, 'http_status:404');
   assert.equal(rules.some((rule) => /\.\*\./.test(String(rule.hostname || ''))), false);
   assert.equal(rules.some((rule) => String(rule.service || '').startsWith('tcp://')), false);
