@@ -4,10 +4,13 @@ import { slugify } from './ids.ts';
 
 type AnyRecord = Record<string, any>;
 
+// All generated tenant routes are single-label subdomains of the base domain so
+// a single free wildcard certificate (*.example.com) covers production apps,
+// previews, service consoles, and resource consoles.
 // PostgreSQL stores pull-request numbers as a signed 32-bit integer. Reserving
-// ten digits keeps the same bounded route identity valid for every PR number,
-// so replacing {number} in preview patterns produces the runtime hostname.
-const MAX_PREVIEW_ROUTE_IDENTITY_LENGTH = 49;
+// ten digits keeps preview patterns and runtime hostnames identical after
+// replacing {number}.
+const MAX_PREVIEW_ROUTE_IDENTITY_LENGTH = 39;
 
 export const SUBDOMAIN_ZONES = Object.freeze({
   DASHBOARD: 'app',
@@ -30,27 +33,26 @@ export function serviceHostname({ organizationSlug = 'org', projectSlug = 'proje
   const routeIdentity = serviceRouteIdentity(organizationSlug, projectSlug, serviceName);
   const label = preview
     ? previewRouteLabel(normalizeRoutePart(preview), routeIdentity)
-    : boundedDnsLabel(routeIdentity);
-  const zone = preview ? SUBDOMAIN_ZONES.PREVIEW : SUBDOMAIN_ZONES.APPS;
-  return `${label}.${zone}.${baseDomain}`;
+    : zonedRouteLabel(SUBDOMAIN_ZONES.APPS, routeIdentity);
+  return `${label}.${baseDomain}`;
 }
 
 export function serviceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'service', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
-  const label = boundedDnsLabel(`${tenantRouteIdentity(organizationSlug, projectSlug)}-${normalizeRoutePart(serviceName)}`);
-  return `${label}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
+  const identity = `${tenantRouteIdentity(organizationSlug, projectSlug)}-${normalizeRoutePart(serviceName)}`;
+  return `${zonedRouteLabel(SUBDOMAIN_ZONES.CONSOLE, identity)}.${baseDomain}`;
 }
 
 export function resourceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', resourceName = 'resource', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
-  const label = boundedDnsLabel(`${tenantRouteIdentity(organizationSlug, projectSlug)}-${normalizeRoutePart(resourceName)}`);
-  return `${label}.${SUBDOMAIN_ZONES.RESOURCES}.${baseDomain}`;
+  const identity = `${tenantRouteIdentity(organizationSlug, projectSlug)}-${normalizeRoutePart(resourceName)}`;
+  return `${zonedRouteLabel(SUBDOMAIN_ZONES.RESOURCES, identity)}.${baseDomain}`;
 }
 
 export function projectConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
-  return `${boundedDnsLabel(tenantRouteIdentity(organizationSlug, projectSlug))}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
+  return `${zonedRouteLabel(SUBDOMAIN_ZONES.CONSOLE, tenantRouteIdentity(organizationSlug, projectSlug))}.${baseDomain}`;
 }
 
 export function workspaceConsoleHostname({ organizationSlug = 'org', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
-  return `${boundedDnsLabel(normalizeRoutePart(organizationSlug))}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
+  return `${zonedRouteLabel(SUBDOMAIN_ZONES.CONSOLE, normalizeRoutePart(organizationSlug))}.${baseDomain}`;
 }
 
 export function internalServiceHostname({ projectSlug = 'project', serviceName = 'service' }: AnyRecord = {}) {
@@ -94,12 +96,7 @@ export function domainPlanForProject(spec: AnyRecord = {}) {
       consoleHostname: resourceConsoleHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, resourceName: resource.name, baseDomain }),
       internalHostname: `${slugify(resource.name)}.${projectSlug}.svc.cluster.local`,
     })),
-    wildcardTls: [
-      `*.${SUBDOMAIN_ZONES.APPS}.${baseDomain}`,
-      `*.${SUBDOMAIN_ZONES.PREVIEW}.${baseDomain}`,
-      `*.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`,
-      `*.${SUBDOMAIN_ZONES.RESOURCES}.${baseDomain}`,
-    ],
+    wildcardTls: [`*.${baseDomain}`],
   };
 }
 
@@ -108,18 +105,20 @@ function isPublicWebService(service: AnyRecord) {
 }
 
 function previewHostnamePattern({ organizationSlug, projectSlug, serviceName, publicService, baseDomain }: AnyRecord) {
-  const prefix = 'pr-{number}-';
   const identity = publicService
     ? serviceRouteIdentity(organizationSlug, projectSlug, serviceName)
     : tenantRouteIdentity(organizationSlug, projectSlug);
   const routeLabel = boundedDnsLabel(identity, MAX_PREVIEW_ROUTE_IDENTITY_LENGTH);
-  return `${prefix}${routeLabel}.${SUBDOMAIN_ZONES.PREVIEW}.${baseDomain}`;
+  return `${SUBDOMAIN_ZONES.PREVIEW}--pr-{number}--${routeLabel}.${baseDomain}`;
 }
 
 function previewRouteLabel(preview: string, routeIdentity: string) {
-  const identityLimit = Math.min(MAX_PREVIEW_ROUTE_IDENTITY_LENGTH, 63 - preview.length - 1);
-  if (identityLimit <= 0) return boundedDnsLabel(`${preview}-${routeIdentity}`);
-  return `${preview}-${boundedDnsLabel(routeIdentity, identityLimit)}`;
+  const routeLabel = boundedDnsLabel(routeIdentity, MAX_PREVIEW_ROUTE_IDENTITY_LENGTH);
+  return `${SUBDOMAIN_ZONES.PREVIEW}--${preview}--${routeLabel}`;
+}
+
+function zonedRouteLabel(zone: string, routeIdentity: string) {
+  return boundedDnsLabel(`${zone}--${routeIdentity}`);
 }
 
 function tenantRouteIdentity(organizationSlug: any, projectSlug: any) {
