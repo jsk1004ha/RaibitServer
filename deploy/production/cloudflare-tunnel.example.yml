@@ -1,11 +1,13 @@
 # Example locally-managed Cloudflare Tunnel config for RAIBITSERVER.
-# Replace <TUNNEL_UUID>, credential path, and raibitserver.app before use.
-# Run cloudflared inside the cluster or on a host that can reach the internal
-# Kubernetes ingress controller service.
+# Replace <TUNNEL_UUID>, credential path, origin address, and raibitserver.app
+# before use. Run cloudflared on a host that can reach the internal Traefik
+# websecure endpoint.
 #
-# Do not add per-service tunnel rules such as
-# user--project.apps.raibitserver.app. Keep Cloudflare at zone-level
-# wildcard routing and let Kubernetes Ingress route by Host.
+# Generated tenant routes are deliberately flattened to one DNS label under the
+# base domain (for example apps--org--project.raibitserver.app). This keeps every
+# generated route inside the free Universal SSL wildcard *.raibitserver.app.
+# Do not add per-service tunnel rules; route one wildcard to Traefik and let
+# Kubernetes Ingress perform the final Host match.
 
 tunnel: <TUNNEL_UUID>
 credentials-file: /etc/cloudflared/<TUNNEL_UUID>.json
@@ -15,32 +17,25 @@ originRequest:
   noHappyEyeballs: true
 
 ingress:
-  # Platform API: keep JWT/RBAC/rate limits enabled in RAIBITSERVER.
+  # Platform control plane.
   - hostname: api.raibitserver.app
-    service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
+    service: https://<TRAEFIK_ORIGIN>:443
+    originRequest:
+      originServerName: api.raibitserver.app
+      httpHostHeader: api.raibitserver.app
 
-  # Dashboard/Admin: also protect this hostname with Cloudflare Access and keep
-  # RAIBITSERVER_DASHBOARD_BASIC_AUTH enabled in the app.
-  - hostname: admin.raibitserver.app
-    service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
   - hostname: console.raibitserver.app
-    service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
+    service: https://<TRAEFIK_ORIGIN>:443
+    originRequest:
+      originServerName: console.raibitserver.app
+      httpHostHeader: console.raibitserver.app
 
-  # Tenant workloads and preview apps. Kubernetes Ingress owns the final Host
-  # match for user--project.apps and pr-N-user--project.preview.
-  - hostname: "*.apps.raibitserver.app"
-    service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
-  - hostname: "*.preview.raibitserver.app"
-    service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
+  # All generated tenant app/preview/console/resource hostnames are exactly one
+  # label below the base domain. Kubernetes Ingress owns the final Host match.
+  - hostname: "*.raibitserver.app"
+    service: https://<TRAEFIK_ORIGIN>:443
+    originRequest:
+      noTLSVerify: true
 
-  # Management and resource consoles: protect both wildcard zones with
-  # Cloudflare Access, then keep RAIBITSERVER RBAC inside the API.
-  - hostname: "*.console.raibitserver.app"
-    service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
-  - hostname: "*.resources.raibitserver.app"
-    service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
-
-  # Never expose PostgreSQL/MySQL/Redis/registry ports here for general users.
-  # Use RAIBITSERVER mediated consoles for DB UI and WARP/private network/SSH
-  # bastion for operator-only TCP access.
+  # Never expose PostgreSQL/MySQL/Redis/registry/Kubernetes API ports here.
   - service: http_status:404
