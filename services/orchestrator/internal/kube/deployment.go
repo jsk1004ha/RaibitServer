@@ -20,7 +20,7 @@ const (
 	maxRuntimeArrayEntries         = 64
 	maxRuntimeEntryBytes           = 4096
 	maxCronScheduleBytes           = 128
-	maxPreviewRouteIdentityLength  = 49
+	maxPreviewRouteIdentityLength  = 39
 	tenantQuotaName                = "tenant-resource-budget"
 	defaultIngressGatewayNamespace = "ingress-nginx"
 )
@@ -161,14 +161,17 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	if serviceRouteName != "web" {
 		serviceRouteIdentity += "--" + serviceRouteName
 	}
-	serviceRouteLabel := boundedDNSName(serviceRouteIdentity, serviceRouteIdentity, 63)
-	host := serviceRouteLabel + ".apps." + domain
+	// Keep every generated tenant route directly under the base domain so one
+	// wildcard certificate (*.example.com) covers production and preview apps.
+	serviceRouteLabel := boundedDNSName("apps--"+serviceRouteIdentity, "apps--"+serviceRouteIdentity, 63)
+	host := serviceRouteLabel + "." + domain
 	preview := false
 	if deployment.DeploymentType == "preview" && deployment.PullRequestNumber > 0 {
 		preview = true
 		previewKey := "pr-" + strconv.Itoa(deployment.PullRequestNumber)
-		previewLabel := previewKey + "-" + boundedDNSName(serviceRouteIdentity, serviceRouteIdentity, maxPreviewRouteIdentityLength)
-		host = previewLabel + ".preview." + domain
+		previewRouteLabel := boundedDNSName(serviceRouteIdentity, serviceRouteIdentity, maxPreviewRouteIdentityLength)
+		previewLabel := "preview--" + previewKey + "--" + previewRouteLabel
+		host = previewLabel + "." + domain
 		serviceName = previewKey + "-" + baseServiceName
 		serviceName = identityDNSName(serviceName, deployment.ID, 63)
 	}

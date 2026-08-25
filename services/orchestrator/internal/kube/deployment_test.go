@@ -267,6 +267,85 @@ func TestWorkloadNamesAndStableIdentityLabels(t *testing.T) {
 	}
 }
 
+func TestSpecFromStateUsesFlatSingleLabelHostnames(t *testing.T) {
+	project := &store.Project{
+		ID:               "project-1",
+		OrganizationID:   "org-1",
+		OrganizationSlug: "demo",
+		Slug:             "hello",
+	}
+
+	web := &store.Service{
+		ID:        "service-web",
+		ProjectID: project.ID,
+		Slug:      "web",
+		Type:      "web",
+		ImageURL:  "registry.local/web:1",
+		Port:      3000,
+		Replicas:  1,
+	}
+
+	production := &store.Deployment{
+		ID:        "deployment-production",
+		ServiceID: web.ID,
+		ProjectID: project.ID,
+		ImageURL:  "registry.local/web:1",
+	}
+
+	productionSpec := SpecFromState(project, web, production, "raibit.kr")
+	if got, want := productionSpec.Host, "apps--demo--hello.raibit.kr"; got != want {
+		t.Fatalf("production host = %q, want %q", got, want)
+	}
+
+	api := &store.Service{
+		ID:        "service-api",
+		ProjectID: project.ID,
+		Slug:      "api",
+		Type:      "web",
+		ImageURL:  "registry.local/api:1",
+		Port:      3000,
+		Replicas:  1,
+	}
+
+	apiSpec := SpecFromState(project, api, &store.Deployment{
+		ID:        "deployment-api",
+		ServiceID: api.ID,
+		ProjectID: project.ID,
+		ImageURL:  "registry.local/api:1",
+	}, "raibit.kr")
+
+	if got, want := apiSpec.Host, "apps--demo--hello--api.raibit.kr"; got != want {
+		t.Fatalf("additional service host = %q, want %q", got, want)
+	}
+
+	previewSpec := SpecFromState(project, web, &store.Deployment{
+		ID:                "deployment-preview",
+		ServiceID:         web.ID,
+		ProjectID:         project.ID,
+		DeploymentType:    "preview",
+		PullRequestNumber: 32,
+		ImageURL:          "registry.local/web:1",
+	}, "raibit.kr")
+
+	if got, want := previewSpec.Host, "preview--pr-32--demo--hello.raibit.kr"; got != want {
+		t.Fatalf("preview host = %q, want %q", got, want)
+	}
+
+	for _, host := range []string{
+		productionSpec.Host,
+		apiSpec.Host,
+		previewSpec.Host,
+	} {
+		label := strings.SplitN(host, ".", 2)[0]
+		if len(label) > 63 {
+			t.Fatalf("generated hostname label exceeds DNS limit: %q", host)
+		}
+		if strings.Contains(host, ".apps.") || strings.Contains(host, ".preview.") {
+			t.Fatalf("generated hostname must stay one level below the base domain: %q", host)
+		}
+	}
+}
+
 func TestPreviewObjectNamesAreDeploymentSpecificAndCleanupIsolated(t *testing.T) {
 	project := &store.Project{ID: "project-1", OrganizationID: strings.Repeat("organization-", 7), Slug: strings.Repeat("project-", 10)}
 	service := &store.Service{ID: "service-1", ProjectID: "project-1", Slug: strings.Repeat("preview-service-", 7), Type: "web", ImageURL: "registry.local/web:1", Port: 8080, Replicas: 1}
