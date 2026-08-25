@@ -32,7 +32,11 @@ test('tenant build executors require a dedicated rootless BuildKit node pool', a
   assert.match(builder, /nodeSelector:/);
   assert.match(builder, /tolerations:/);
   assert.doesNotMatch(builder, /docker\.sock|privileged:\s*true/);
-  assert.doesNotMatch(builder, /--oci-worker-no-process-sandbox/, 'tenant builds must retain BuildKit process sandboxing');
+  assert.match(
+    builder,
+    /--oci-worker-no-process-sandbox/,
+    'rootless BuildKit under the isolated executor runtime requires the no-process-sandbox mode',
+  );
   assert.match(values, /raibitserver\.io\/workload:\s*build/);
 });
 
@@ -142,11 +146,31 @@ test('production Helm uses a chart-managed live verification hook with least-pri
   }
   assert.match(hook, /CLIENT_CONFIG_MODE[\s\S]*EXPECTED_CLIENT_SERVICE_NAMESPACE[\s\S]*EXPECTED_CLIENT_SERVICE_NAME/);
   assert.match(hook, /EXPECTED_CLIENT_URL_HOST[\s\S]*EXPECTED_CLIENT_URL_PATH/);
-  assert.match(hook, /rules\[\*\][\s\S]*\.scope[\s\S]*\.apiGroups[\s\S]*\.apiVersions[\s\S]*\.operations[\s\S]*\.resources/);
+  assert.match(
+    hook,
+    /webhook_json[\s\S]*jq -c --arg name[\s\S]*\.webhooks\[\][\s\S]*select\(\.name == \$name\)/,
+    'preflight must select the configured webhook as structured JSON',
+  );
+  assert.ok(hook.includes('.rules[]?'), 'preflight must semantically inspect every webhook rule');
+  for (const field of ['.scope', '.apiGroups', '.apiVersions', '.operations', '.resources']) {
+    assert.ok(hook.includes(field), `preflight must semantically inspect webhook rule field ${field}`);
+  }
   for (const workloadRuleValue of ['Namespaced', 'v1', 'CREATE', 'UPDATE', 'pods']) {
     assert.match(hook, new RegExp(workloadRuleValue), `preflight must require webhook rule value ${workloadRuleValue}`);
   }
-  assert.match(hook, /namespaceSelector[\s\S]*objectSelector[\s\S]*matchLabels/);
+  assert.ok(
+    hook.includes('.namespaceSelector | safe_selector'),
+    'preflight must semantically validate namespaceSelector',
+  );
+  assert.ok(
+    hook.includes('.objectSelector | safe_selector'),
+    'preflight must semantically validate objectSelector',
+  );
+  assert.match(
+    hook,
+    /matchLabels[\s\S]*raibitserver\.io\/managed[\s\S]*true/,
+    'selector validation must retain the managed-namespace label contract',
+  );
   assert.match(hook, /raibitserver\.io\/managed[\s\S]*true/);
   assert.match(hook, /TRUST_ROOT_NAMESPACE[\s\S]*TRUST_ROOT_SECRET[\s\S]*TRUST_ROOT_KEY/);
   assert.match(hook, /jsonpath=\{\.data\['\$\{TRUST_ROOT_JSONPATH_KEY\}'\]\}/, 'trust-root lookup must query the configured data key exactly');

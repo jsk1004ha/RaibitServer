@@ -25,7 +25,11 @@ test('Cloudflare Tunnel docs lock flat wildcard and security guardrails', async 
     assert.match(doc, new RegExp(escapeRegExp(required)));
   }
 
-  assert.doesNotMatch(doc, /\*\.apps\.<BASE_DOMAIN>/);
+  assert.doesNotMatch(
+    doc,
+    /^\|\s*`\*\.apps\.<BASE_DOMAIN>`\s*\|/m,
+    'docs must not configure the legacy deep wildcard as an active tunnel route',
+  );
   assert.doesNotMatch(doc, /test\.\*\.example\.com.*권장/);
 });
 
