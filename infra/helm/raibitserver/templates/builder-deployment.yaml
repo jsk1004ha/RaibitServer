@@ -269,7 +269,12 @@ spec:
               restartPolicy: Always
               image: "{{ .Values.builder.buildkitImage }}{{ if .Values.builder.buildkitDigest }}@{{ .Values.builder.buildkitDigest }}{{ end }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
-              args: ["--addr", "unix:///run/buildkit/buildkitd.sock"]
+              env:
+                - name: TMPDIR
+                  value: /tmp
+                - name: XDG_RUNTIME_DIR
+                  value: /run/buildkit
+              args: ["--addr", "unix:///run/buildkit/buildkitd.sock", "--oci-worker-no-process-sandbox"]
               startupProbe:
                 exec:
                   command: ["/bin/sh", "-ec", "test -S /run/buildkit/buildkitd.sock"]
@@ -285,13 +290,15 @@ spec:
                   memory: 2Gi
                   ephemeral-storage: {{ .Values.builder.ephemeralStorage.buildkitLimit | quote }}
               securityContext:
-                allowPrivilegeEscalation: false
+                allowPrivilegeEscalation: true
                 readOnlyRootFilesystem: true
                 runAsNonRoot: true
                 runAsUser: 1000
                 runAsGroup: 1000
-                capabilities:
-                  drop: ["ALL"]
+                seccompProfile:
+                  type: Unconfined
+                appArmorProfile:
+                  type: Unconfined
               volumeMounts:
                 - { name: buildkit-socket, mountPath: /run/buildkit }
                 - { name: buildkit-state, mountPath: /home/user/.local/share/buildkit }

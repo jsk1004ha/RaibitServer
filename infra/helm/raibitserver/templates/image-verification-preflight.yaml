@@ -243,53 +243,71 @@ spec:
                   ;;
               esac
 
-              webhook_rules="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].rules[*]}{.scope}{\"|\"}{range .apiGroups[*]}{.}{\",\"}{end}{\"|\"}{range .apiVersions[*]}{.}{\",\"}{end}{\"|\"}{range .operations[*]}{.}{\",\"}{end}{\"|\"}{range .resources[*]}{.}{\",\"}{end}{\"\\n\"}{end}")"
-              workload_rule_matches=false
-              while IFS='|' read -r scope api_groups api_versions operations resources; do
-                if [ "${scope}" = "Namespaced" ] &&
-                   [ "${api_groups}" = "," ] &&
-                   [ "${api_versions}" = "v1," ] &&
-                   [ "${resources}" = "pods," ]; then
-                  case "${operations}" in
-                    *"CREATE,"*) has_create=true ;;
-                    *) has_create=false ;;
-                  esac
-                  case "${operations}" in
-                    *"UPDATE,"*) has_update=true ;;
-                    *) has_update=false ;;
-                  esac
-                  if [ "${has_create}" = true ] && [ "${has_update}" = true ]; then
-                    workload_rule_matches=true
-                  fi
-                fi
-              done <<EOF
-              ${webhook_rules}
-              EOF
-              if [ "${workload_rule_matches}" != true ]; then
+              # Read the selected webhook once as JSON. kubectl JSONPath nested
+              # range expressions do not reliably retain their parent context,
+              # so semantic checks are performed with jq instead.
+              webhook_json="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" \
+                --output json | \
+                jq -c --arg name "${WEBHOOK_NAME}" \
+                  '.webhooks[] | select(.name == $name)')"
+
+              if [ -z "${webhook_json}" ]; then
+                echo "webhook ${WEBHOOK_NAME} was not found in ${WEBHOOK_CONFIGURATION}" >&2
+                exit 1
+              fi
+
+              # A wildcard scope also covers namespaced Pods. The rule may
+              # include additional resources such as pods/ephemeralcontainers;
+              # it only needs to include core/v1 pods with CREATE+UPDATE.
+              if ! printf '%s\n' "${webhook_json}" | jq -e '
+                [
+                  .rules[]?
+                  | select(
+                      ((.scope // "*") == "*" or .scope == "Namespaced")
+                      and ((.apiGroups // []) | index("") != null)
+                      and ((.apiVersions // []) | index("v1") != null)
+                      and ((.operations // []) | index("CREATE") != null)
+                      and ((.operations // []) | index("UPDATE") != null)
+                      and ((.resources // []) | index("pods") != null)
+                    )
+                ]
+                | length > 0
+              ' >/dev/null; then
                 echo "webhook ${WEBHOOK_NAME} must cover namespaced core/v1 pods for CREATE and UPDATE" >&2
                 exit 1
               fi
 
-              selector_is_safe() {
-                all_values="$1"
-                managed_value="$2"
-                expressions="$3"
-                if [ -z "${all_values}" ] && [ -z "${expressions}" ]; then
-                  return 0
-                fi
-                [ "${all_values}" = "${MANAGED_SELECTOR_VALUE}," ] &&
-                  [ "${managed_value}" = "${MANAGED_SELECTOR_VALUE}" ] &&
-                  [ -z "${expressions}" ]
-              }
-              namespace_selector_values="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].namespaceSelector.matchLabels[*]}{.}{\",\"}{end}")"
-              namespace_managed_value="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={.webhooks[?(@.name==\"${WEBHOOK_NAME}\")].namespaceSelector.matchLabels.raibitserver\\.io/managed}")"
-              namespace_selector_expressions="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].namespaceSelector.matchExpressions[*]}{.key}{\":\"}{.operator}{\":\"}{range .values[*]}{.}{\",\"}{end}{\";\"}{end}")"
-              object_selector_values="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].objectSelector.matchLabels[*]}{.}{\",\"}{end}")"
-              object_managed_value="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={.webhooks[?(@.name==\"${WEBHOOK_NAME}\")].objectSelector.matchLabels.raibitserver\\.io/managed}")"
-              object_selector_expressions="$(kubectl get validatingwebhookconfiguration "${WEBHOOK_CONFIGURATION}" --output "jsonpath={range .webhooks[?(@.name==\"${WEBHOOK_NAME}\")].objectSelector.matchExpressions[*]}{.key}{\":\"}{.operator}{\":\"}{range .values[*]}{.}{\",\"}{end}{\";\"}{end}")"
-              if ! selector_is_safe "${namespace_selector_values}" "${namespace_managed_value}" "${namespace_selector_expressions}" ||
-                 ! selector_is_safe "${object_selector_values}" "${object_managed_value}" "${object_selector_expressions}"; then
-                echo "webhook ${WEBHOOK_NAME} selectors must be absent or exactly ${MANAGED_SELECTOR_KEY}=${MANAGED_SELECTOR_VALUE}" >&2
+              # policy-controller currently adds the Knative exclusion
+              # expression. Allow only that known expression in addition to
+              # the exact RaibitServer managed-namespace label.
+              if ! printf '%s\n' "${webhook_json}" | jq -e '
+                def safe_selector:
+                  . as $s
+                  | (
+                      $s == null
+                      or $s == {}
+                      or (
+                        (($s.matchLabels // {}) ==
+                          {"raibitserver.io/managed":"true"})
+                        and (
+                          (($s.matchExpressions // []) | length) == 0
+                          or (
+                            (($s.matchExpressions // []) | length) == 1
+                            and $s.matchExpressions[0].key ==
+                              "webhooks.knative.dev/exclude"
+                            and $s.matchExpressions[0].operator ==
+                              "DoesNotExist"
+                            and (($s.matchExpressions[0].values // []) | length) == 0
+                          )
+                        )
+                      )
+                    );
+
+                (.namespaceSelector | safe_selector)
+                and
+                (.objectSelector | safe_selector)
+              ' >/dev/null; then
+                echo "webhook ${WEBHOOK_NAME} selectors are outside the allowed RaibitServer policy-controller contract" >&2
                 exit 1
               fi
 
