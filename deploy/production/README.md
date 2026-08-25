@@ -83,10 +83,15 @@ Disposable local cluster smoke test가 필요하면 [Live E2E](../../docs/live-e
 
 Cloudflare Tunnel을 production ingress 앞단으로 사용할 수 있지만, Tunnel은 HTTP/HTTPS edge 진입점으로만 둡니다.
 
-- `*.apps.<BASE_DOMAIN>`, `*.preview.<BASE_DOMAIN>`, `*.console.<BASE_DOMAIN>`, `*.resources.<BASE_DOMAIN>`를 내부 Kubernetes Ingress Controller 하나로 보냅니다.
-- `<user>--<project>.apps.<BASE_DOMAIN>` 같은 개별 tenant host는 Kubernetes Ingress Host rule이 처리합니다.
-- `test.*.<BASE_DOMAIN>` 같은 중간 wildcard는 tunnel rule로 설계하지 않습니다.
-- `admin`, `console`, `*.console`, `*.resources`에는 Cloudflare Access를 붙이고, Dashboard 앱의 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`도 유지합니다.
+무료/자체 운영 배포에서는 generated tenant hostname을 모두 base domain 바로 아래 **한 개 DNS label**로 평탄화합니다. 그러면 Cloudflare Universal SSL의 `*.<BASE_DOMAIN>` wildcard 하나로 app/preview/console/resource 주소를 모두 커버할 수 있습니다.
+
+- 플랫폼 주소는 `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`을 유지합니다.
+- tenant 서비스는 `apps--<org>--<project>[--<service>].<BASE_DOMAIN>` 형태를 사용합니다.
+- preview는 `preview--pr-<number>--<org>--<project>[--<service>].<BASE_DOMAIN>` 형태를 사용합니다.
+- service/resource console은 각각 `console--...<BASE_DOMAIN>`, `resources--...<BASE_DOMAIN>` 형태를 사용합니다.
+- Cloudflare Tunnel에는 `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`, `*.<BASE_DOMAIN>`만 두고 최종 tenant Host match는 Kubernetes Ingress가 처리합니다.
+- `test.*.<BASE_DOMAIN>` 같은 중간 wildcard나 `*.apps.<BASE_DOMAIN>` 같은 multi-level wildcard route는 사용하지 않습니다.
+- `console`, `console--*`, `resources--*`에는 Cloudflare Access를 붙이고, Dashboard 앱의 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`도 유지합니다.
 - `/api/*`, `/api/*/stream`, `/github/webhooks`, `/api/github/webhooks`는 Cloudflare cache bypass로 둡니다.
 - DB/TCP/registry/Kubernetes API/NodePort는 일반 사용자 public tunnel로 노출하지 않습니다.
 - origin 서버 방화벽은 public inbound를 닫고 `cloudflared` outbound와 내부 cluster traffic만 허용합니다.
