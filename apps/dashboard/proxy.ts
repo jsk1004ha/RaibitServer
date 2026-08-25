@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { dashboardRequestUrl, dashboardSecurityHeaders, SESSION_COOKIE_NAME } from './lib/request-security.js';
+import {
+  consoleOriginHref,
+  dashboardRequestUrl,
+  dashboardSecurityHeaders,
+  publicHostnameForConsole,
+  SESSION_COOKIE_NAME,
+} from './lib/request-security.js';
 
 function unauthorizedResponse(headers: Record<string, string>) {
   return new NextResponse('Dashboard admin authentication required.', {
@@ -29,23 +35,35 @@ export function proxy(request: NextRequest) {
     configuredOrigin: process.env.RAIBITSERVER_DASHBOARD_ORIGIN,
   });
   const requestHostUrl = dashboardRequestUrl(request.url, { host, forwardedProto });
-  const consoleRequest = isConsoleHostname(
-    new URL(requestHostUrl).hostname,
+  const requestHostname = new URL(requestHostUrl).hostname;
+  const dashboardPlane = dashboardPlaneForHostname(
+    requestHostname,
     process.env.RAIBITSERVER_CONSOLE_URL,
+    process.env.RAIBITSERVER_BASE_DOMAIN || process.env.BASE_DOMAIN,
   );
+  const consoleRequest = dashboardPlane === 'console';
+  const protectedDashboardHost = dashboardPlane !== null;
   const headers = dashboardSecurityHeaders({
     nonce,
     production: process.env.NODE_ENV === 'production',
     https: new URL(publicRequestUrl).protocol === 'https:',
   });
+  const pathname = request.nextUrl.pathname;
+  if (isConfiguredPublicHostname(requestHostname, process.env.RAIBITSERVER_CONSOLE_URL)
+    && (isLoginPage(pathname) || isProtectedPage(pathname))) {
+    const target = consoleOriginHref(
+      process.env.RAIBITSERVER_CONSOLE_URL,
+      `${pathname}${request.nextUrl.search}`,
+    );
+    return redirectResponse(new URL(target), headers);
+  }
   const configured = process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH;
-  if (configured) {
+  if (configured && protectedDashboardHost) {
     const credentials = parseBasicHeader(request.headers.get('authorization'));
     if (!credentials || credentials !== configured) return unauthorizedResponse(headers);
   }
-  const pathname = request.nextUrl.pathname;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE_NAME)?.value);
-  const requiresSession = isProtectedPage(pathname) || (consoleRequest && isConsolePage(pathname));
+  const requiresSession = isProtectedPage(pathname) || (protectedDashboardHost && isConsolePage(pathname));
   if (requiresSession && !hasSession) {
     const login = new URL('/login', publicRequestUrl);
     login.searchParams.set('next', consoleRequest && pathname === '/' ? '/console' : `${pathname}${request.nextUrl.search}`);
@@ -78,21 +96,68 @@ function redirectResponse(location: URL, headers: Record<string, string>) {
 }
 
 function isConsolePage(pathname: string) {
-  if (pathname === '/login' || pathname.startsWith('/login/')) return false;
+  if (isLoginPage(pathname)) return false;
   if (pathname.startsWith('/api/')) return false;
   return !/\.(?:avif|css|gif|ico|jpe?g|js|png|svg|webp|woff2?)$/i.test(pathname);
 }
 
-function isConsoleHostname(hostname: string, configuredConsoleUrl?: string) {
-  const normalized = hostname.toLowerCase().replace(/\.$/, '');
-  if (normalized === 'console.raibit.kr' || normalized === 'console.raibitserver.app') return true;
-  if (normalized.startsWith('console--') && normalized.endsWith('.raibitserver.app')) return true;
-  if (normalized.endsWith('.console.raibitserver.app')) return true;
-  try {
-    return Boolean(configuredConsoleUrl) && normalized === new URL(configuredConsoleUrl).hostname.toLowerCase().replace(/\.$/, '');
-  } catch {
-    return false;
+function dashboardPlaneForHostname(hostname: string, configuredConsoleUrl?: string, configuredBaseDomain?: string) {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) return null;
+  const configuredConsoleHostname = hostnameFromUrl(configuredConsoleUrl);
+  if (normalized === configuredConsoleHostname
+    || normalized === 'console.raibit.kr'
+    || normalized === 'console.raibitserver.app') return 'console';
+
+  const baseDomains = new Set(['raibit.kr', 'raibitserver.app']);
+  const configuredPublicHostname = publicHostnameForConsole(configuredConsoleUrl);
+  if (configuredPublicHostname) baseDomains.add(configuredPublicHostname);
+  const normalizedBaseDomain = normalizeHostname(configuredBaseDomain);
+  if (normalizedBaseDomain) baseDomains.add(normalizedBaseDomain);
+
+  for (const baseDomain of baseDomains) {
+    if (isPlaneHostname(normalized, 'console', baseDomain)) return 'console';
+    if (isPlaneHostname(normalized, 'resources', baseDomain)) return 'resources';
   }
+  return null;
+}
+
+function isPlaneHostname(hostname: string, plane: 'console' | 'resources', baseDomain: string) {
+  const suffix = `.${baseDomain}`;
+  if (!hostname.endsWith(suffix)) return false;
+  const routeLabel = hostname.slice(0, -suffix.length);
+  return (routeLabel.startsWith(`${plane}--`) && routeLabel.length > `${plane}--`.length && !routeLabel.includes('.'))
+    || (hostname.endsWith(`.${plane}.${baseDomain}`) && hostname !== `${plane}.${baseDomain}`);
+}
+
+function isConfiguredPublicHostname(hostname: string, configuredConsoleUrl?: string) {
+  const publicHostname = publicHostnameForConsole(configuredConsoleUrl);
+  return Boolean(publicHostname) && normalizeHostname(hostname) === publicHostname;
+}
+
+function hostnameFromUrl(value?: string) {
+  try {
+    const candidate = new URL(value || '');
+    return ['http:', 'https:'].includes(candidate.protocol)
+      && !candidate.username
+      && !candidate.password
+      && !candidate.search
+      && !candidate.hash
+      ? normalizeHostname(candidate.hostname)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeHostname(value?: string) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/^\.+|\.+$/g, '');
+  if (!normalized || normalized.length > 253 || normalized.includes('..')) return null;
+  return /^[a-z0-9.-]+$/.test(normalized) ? normalized : null;
+}
+
+function isLoginPage(pathname: string) {
+  return pathname === '/login' || pathname.startsWith('/login/');
 }
 
 function isProtectedPage(pathname: string) {

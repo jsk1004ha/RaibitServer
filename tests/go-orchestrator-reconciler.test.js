@@ -38,6 +38,25 @@ test('Go orchestrator reconciler contract is executable when Go exists or static
   assert.match(kube, /readOnlyRootFilesystem/);
 });
 
+test('Go hostname expectations stay on the flat single-label routing contract', async () => {
+  const [kubeTest, reconcilerTest] = await Promise.all([
+    fs.readFile('services/orchestrator/internal/kube/deployment_test.go', 'utf8'),
+    fs.readFile('services/orchestrator/internal/reconciler/reconciler_test.go', 'utf8'),
+  ]);
+  for (const hostname of [
+    'apps--gdg-hongik--festival-2026.raibitserver.local',
+    'apps--gdg-hongik--festival-2026--api.raibitserver.local',
+    'preview--pr-32--gdg-hongik--festival-2026.raibitserver.local',
+    'preview--pr-32--gdg-hongik--festival-2026--api.raibitserver.local',
+    'apps--victim-team--api.example.test',
+    'apps--victim--team-api.example.test',
+  ]) assert.match(kubeTest, new RegExp(hostname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(reconcilerTest, /apps--org-1--demo\.test\.local/);
+  assert.match(reconcilerTest, /preview--pr-42--org-1--demo\.test\.local/);
+  assert.doesNotMatch(kubeTest, /gdg-hongik--festival-2026(?:--api)?\.apps\.raibitserver\.local/);
+  assert.doesNotMatch(reconcilerTest, /org-1--demo\.apps\.test\.local|pr-42-org-1--demo\.preview\.test\.local/);
+});
+
 test('Go orchestrator network policy stays namespace-scoped instead of all-namespace wildcard', async () => {
   const [kube, kubeTest] = await Promise.all([
     fs.readFile('services/orchestrator/internal/kube/deployment.go', 'utf8'),

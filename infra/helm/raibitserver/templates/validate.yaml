@@ -14,14 +14,26 @@
 {{- if not .Values.dashboard.enabled -}}
 {{- fail "production dashboard must be enabled" -}}
 {{- end -}}
+{{- if not (regexMatch "^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[^?#]*)?$" (default "" .Values.dashboard.consoleUrl)) -}}
+{{- fail "production dashboard.consoleUrl must be an explicit HTTPS URL" -}}
+{{- end -}}
 {{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" .Values.image.digests.dashboard)) -}}
 {{- fail "production platform image dashboard requires a valid sha256 digest" -}}
 {{- end -}}
 {{- if not .Values.ingress.enabled -}}
 {{- fail "production ingress must be enabled" -}}
 {{- end -}}
-{{- if or (not .Values.ingress.hosts.api) (not .Values.ingress.hosts.dashboard) -}}
-{{- fail "production ingress API and dashboard hosts are required" -}}
+{{- if or (not .Values.ingress.hosts.public) (not .Values.ingress.hosts.api) (not .Values.ingress.hosts.dashboard) -}}
+{{- fail "production ingress public, API, and dashboard hosts are required" -}}
+{{- end -}}
+{{- if eq .Values.ingress.hosts.public .Values.ingress.hosts.dashboard -}}
+{{- fail "production ingress public and dashboard hosts must be distinct" -}}
+{{- end -}}
+{{- if ne .Values.ingress.hosts.dashboard (printf "console.%s" .Values.ingress.hosts.public) -}}
+{{- fail "production ingress dashboard host must be console.<public-host>" -}}
+{{- end -}}
+{{- if ne .Values.dashboard.consoleUrl (printf "https://%s/console" .Values.ingress.hosts.dashboard) -}}
+{{- fail "production dashboard.consoleUrl must match the dashboard ingress host and /console path" -}}
 {{- end -}}
 {{- if or (not .Values.ingress.tls.enabled) (not .Values.ingress.tls.existingSecret) -}}
 {{- fail "production ingress TLS must be enabled with an existing secret" -}}

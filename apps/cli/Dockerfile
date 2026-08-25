@@ -6,11 +6,13 @@ RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/cli/package.json apps/cli/package.json
 COPY packages/api-client/package.json packages/api-client/package.json
+COPY packages/config/package.json packages/config/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/schemas/package.json packages/schemas/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/cli apps/cli
 COPY packages/api-client packages/api-client
+COPY packages/config packages/config
 COPY packages/core packages/core
 COPY packages/schemas packages/schemas
 RUN pnpm --filter @raibitserver/cli exec tsc -p tsconfig.json \

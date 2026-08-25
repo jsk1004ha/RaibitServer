@@ -275,7 +275,7 @@ func TestRunOnceAppliesImageReadyDeploymentAndPersistsReadyState(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(manifest)
-	if !strings.Contains(text, "registry.local/demo/web@"+digest) || !strings.Contains(text, "NetworkPolicy") || !strings.Contains(text, "Ingress") || !strings.Contains(text, "org-1--demo.apps.test.local") {
+	if !strings.Contains(text, "registry.local/demo/web@"+digest) || !strings.Contains(text, "NetworkPolicy") || !strings.Contains(text, "Ingress") || !strings.Contains(text, "apps--org-1--demo.test.local") {
 		t.Fatalf("manifest missing expected workload pieces: %s", text)
 	}
 	state := readState(t, stateFile)
@@ -469,7 +469,7 @@ func TestRunOnceCleansPreviewDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(manifest), "pr-42-web") || !strings.Contains(string(manifest), "pr-42-org-1--demo.preview.test.local") || !strings.Contains(string(manifest), "raibitserver.io/preview") {
+	if !strings.Contains(string(manifest), "pr-42-web") || !strings.Contains(string(manifest), "preview--pr-42--org-1--demo.test.local") || !strings.Contains(string(manifest), "raibitserver.io/preview") {
 		t.Fatalf("preview cleanup manifest must target isolated preview workload: %s", string(manifest))
 	}
 	if strings.Contains(string(manifest), `"kind": "Namespace"`) {

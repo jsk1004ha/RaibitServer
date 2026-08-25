@@ -71,10 +71,12 @@ observability:
 
 dashboard:
   enabled: true
+  consoleUrl: https://console.production.example/console
 
 ingress:
   enabled: true
   hosts:
+    public: production.example
     api: api.production.example
     dashboard: console.production.example
   tls:

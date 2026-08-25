@@ -14,7 +14,7 @@ Infrastructure definition          -> Terraform + Helm/Kubernetes manifests
 ## Product invariants
 - User workloads always resolve to a container image and Kubernetes-style runtime desired state.
 - User Dockerfiles take priority over framework detection/buildpacks/custom defaults.
-- Service execution URLs use user-project subdomain-first routing: `<user>-<project>.apps.raibitserver.app`; preview remains under `.preview`, service screens under `.console`, and resource screens under `.resources` using the same user-project label with service/resource suffixes when needed.
+- Generated tenant URLs use flat single-label routing under the base domain: `apps--<user>--<project>.raibitserver.app`, `preview--pr-<number>--<user>--<project>.raibitserver.app`, `console--...`, and `resources--...`.
 - Projects are multi-service: web, private service, worker, cron job, one-off job, and managed resources.
 - Managed databases/storage/cache/vector/queue are catalog resources, not raw compose containers.
 - The API stores desired state; Go infrastructure services reconcile actual state.

@@ -41,6 +41,8 @@ spec:
             - { name: HOSTNAME, value: "0.0.0.0" }
             - name: RAIBITSERVER_API_URL
               value: {{ printf "http://%s-api:%d/api" (include "raibitserver.fullname" .) (int .Values.api.port) | quote }}
+            - name: RAIBITSERVER_CONSOLE_URL
+              value: {{ .Values.dashboard.consoleUrl | quote }}
           ports:
             - { name: http, containerPort: {{ .Values.dashboard.port }}, protocol: TCP }
           startupProbe:

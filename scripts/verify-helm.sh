@@ -34,6 +34,13 @@ grep -q 'helm.sh/hook: pre-install,pre-upgrade' "$OUTPUT_DIR/production.yaml"
 grep -q 'kind: ValidatingAdmissionPolicy' "$OUTPUT_DIR/production.yaml"
 grep -q 'kind: CustomResourceDefinition' "$OUTPUT_DIR/production.yaml"
 grep -q 'app.kubernetes.io/name: raibitserver-dashboard' "$OUTPUT_DIR/production.yaml"
+grep -q 'name: RAIBITSERVER_CONSOLE_URL' "$OUTPUT_DIR/production.yaml"
+grep -q 'value: "https://console.production.example/console"' "$OUTPUT_DIR/production.yaml"
+grep -q 'host: "production.example"' "$OUTPUT_DIR/production.yaml"
+if grep -q 'RAIBITSERVER_COOKIE_DOMAIN\|RAIBITSERVER_DASHBOARD_ORIGIN' "$OUTPUT_DIR/production.yaml"; then
+  echo "dual-host dashboard must keep host-only cookies and request-derived origins" >&2
+  exit 1
+fi
 grep -q 'kind: CronJob' "$OUTPUT_DIR/production.yaml"
 grep -q 'name: raibitserver-builder-dispatcher' "$OUTPUT_DIR/production.yaml"
 grep -q 'name: raibitserver-builder-executor' "$OUTPUT_DIR/production.yaml"
@@ -216,6 +223,7 @@ expect_render_failure missing-trust-root-namespace --set-string security.imageVe
 expect_render_failure missing-trust-root-key --set-string security.imageVerification.trustRoot.key=
 expect_render_failure missing-platform-digest --set-string image.digests.api=
 expect_render_failure missing-dashboard-digest --set-string image.digests.dashboard=
+expect_render_failure missing-dashboard-console-url --set-string dashboard.consoleUrl=
 expect_render_failure missing-postgresql-provider-image --set-string provisioner.providerImages.postgresql=
 expect_render_failure missing-mysql-provider-image --set-string provisioner.providerImages.mysql=
 expect_render_failure missing-mariadb-provider-image --set-string provisioner.providerImages.mariadb=
@@ -238,6 +246,12 @@ expect_render_failure disabled-provisioner-execution --set provisioner.execute=f
 expect_render_failure invalid-provisioner-health-interval --set provisioner.healthIntervalSeconds=0
 expect_render_failure disabled-tls --set ingress.tls.enabled=false
 expect_render_failure missing-tls-secret --set-string ingress.tls.existingSecret=
+expect_render_failure missing-public-host --set-string ingress.hosts.public=
+expect_render_failure shared-public-dashboard-host --set-string ingress.hosts.public=console.production.example
+expect_render_failure mismatched-dashboard-host \
+  --set-string ingress.hosts.dashboard=dashboard.production.example \
+  --set-string dashboard.consoleUrl=https://dashboard.production.example/console
+expect_render_failure mismatched-dashboard-console-url --set-string dashboard.consoleUrl=https://other.production.example/console
 expect_render_failure invalid-ingress-gateway-namespace --set-string ingress.gatewayNamespace=INVALID/namespace
 expect_render_failure missing-ingress-gateway-namespace --set-string ingress.gatewayNamespace=
 expect_render_failure missing-buildkit-digest --set-string builder.buildkitDigest=

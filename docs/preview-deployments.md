@@ -5,10 +5,10 @@
 ## URL 패턴
 
 ```txt
-pr-<number>-<user>--<project>.preview.<BASE_DOMAIN>
+preview--pr-<number>--<user>--<project>.<BASE_DOMAIN>
 ```
 
-서비스 실행 URL은 `<user>--<project>.apps.<BASE_DOMAIN>`이고, preview URL도 같은 boundary-safe user--project label 앞에 PR 번호를 붙입니다. Kubernetes workload 이름은 계속 service 단위로 분리합니다.
+서비스 실행 URL은 `apps--<user>--<project>.<BASE_DOMAIN>`이고, preview URL도 같은 boundary-safe user--project identity를 flat label 안에 넣습니다. Kubernetes workload 이름은 계속 service 단위로 분리합니다.
 
 ## 생성 흐름
 

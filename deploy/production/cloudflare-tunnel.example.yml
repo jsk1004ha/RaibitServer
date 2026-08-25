@@ -18,6 +18,12 @@ originRequest:
 
 ingress:
   # Platform control plane.
+  - hostname: raibitserver.app
+    service: https://<TRAEFIK_ORIGIN>:443
+    originRequest:
+      originServerName: raibitserver.app
+      httpHostHeader: raibitserver.app
+
   - hostname: api.raibitserver.app
     service: https://<TRAEFIK_ORIGIN>:443
     originRequest:

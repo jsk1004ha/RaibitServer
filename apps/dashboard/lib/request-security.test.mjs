@@ -4,12 +4,15 @@ import {
   SESSION_COOKIE_NAME,
 	boundedPassThrough,
 	browserSafePayload,
+	configuredConsoleHref,
+	consoleOriginHref,
 	dashboardRequestUrl,
 	dashboardSecurityHeaders,
 	extractSessionToken,
 	fetchWithInitialResponseTimeout,
   isSameOriginMutation,
 	projectCreatePayloadFromForm,
+	publicHostnameForConsole,
 	readBoundedBody,
 	responseStatusAllowsBody,
   sessionCookieOptions,
@@ -18,7 +21,7 @@ import {
   upstreamPath,
 } from './request-security.js';
 
-test('session cookie is HttpOnly and only Secure when configured or in production', () => {
+test('session cookie is host-only, HttpOnly and only Secure when configured or in production', () => {
   assert.equal(SESSION_COOKIE_NAME, 'raibitserver_session');
   assert.deepEqual(sessionCookieOptions({ NODE_ENV: 'development' }), {
     httpOnly: true,
@@ -30,6 +33,18 @@ test('session cookie is HttpOnly and only Secure when configured or in productio
   assert.equal(sessionCookieOptions({ NODE_ENV: 'production' }).secure, true);
   assert.equal(sessionCookieOptions({ NODE_ENV: 'production', RAIBITSERVER_SESSION_COOKIE_SECURE: 'false' }).secure, true);
   assert.equal(sessionCookieOptions({ NODE_ENV: 'development', RAIBITSERVER_SESSION_COOKIE_SECURE: 'true' }).secure, true);
+  assert.equal(sessionCookieOptions({ NODE_ENV: 'production', RAIBITSERVER_COOKIE_DOMAIN: '.raibit.kr' }).domain, undefined);
+});
+
+test('console navigation accepts only credential-free HTTP origins and derives the public apex safely', () => {
+  const configured = 'https://console.raibit.kr/console';
+  assert.equal(configuredConsoleHref(configured), configured);
+  assert.equal(consoleOriginHref(configured, '/login?mode=signup'), 'https://console.raibit.kr/login?mode=signup');
+  assert.equal(publicHostnameForConsole(configured), 'raibit.kr');
+  assert.equal(configuredConsoleHref('javascript:alert(1)'), '/console');
+  assert.equal(consoleOriginHref('https://user:secret@console.raibit.kr/console', '/login'), '/login');
+  assert.equal(consoleOriginHref(configured, '//attacker.example'), '/console');
+  assert.equal(publicHostnameForConsole('https://dashboard.example.test/console'), null);
 });
 
 test('mutation origin validation requires an exact same-origin Origin or Referer', () => {

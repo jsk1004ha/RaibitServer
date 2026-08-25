@@ -34,6 +34,7 @@ api:
     targetCPUUtilizationPercentage: 70
 dashboard:
   enabled: true
+  consoleUrl: ""
   replicas: 2
   port: 3000
   resources:
@@ -214,6 +215,7 @@ ingress:
   gatewayNamespace: ingress-nginx
   annotations: {}
   hosts:
+    public: raibitserver.app
     api: api.raibitserver.app
     dashboard: console.raibitserver.app
   tls:

@@ -66,6 +66,97 @@ test('console host protects non-login pages without trusting lookalike hosts', {
   }
 });
 
+test('flat console and resource hosts require their own host session on trusted base domains', { concurrency: false }, () => {
+  const originalBasicAuth = process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH;
+  const originalDashboardOrigin = process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
+  const originalBaseDomain = process.env.RAIBITSERVER_BASE_DOMAIN;
+  delete process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH;
+  delete process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
+  process.env.RAIBITSERVER_BASE_DOMAIN = 'raibit.kr';
+  try {
+    for (const host of [
+      'console--org--project.raibit.kr',
+      'resources--org--project--postgres.raibit.kr',
+      'console--org--project.raibitserver.app',
+      'resources--org--project--postgres.raibitserver.app',
+    ]) {
+      const anonymous = proxy(new NextRequest(`https://${host}/activity`));
+      assert.equal(anonymous.status, 307, host);
+      assert.equal(anonymous.headers.get('location'), `https://${host}/login?next=%2Factivity`);
+
+      const authenticated = proxy(new NextRequest(`https://${host}/activity`, {
+        headers: { cookie: 'raibitserver_session=signed-session' },
+      }));
+      assert.equal(authenticated.status, 200, host);
+    }
+
+    for (const host of [
+      'console--org--project.raibit.kr.attacker.example',
+      'resources--org--project--postgres.raibitserver.app.attacker.example',
+    ]) {
+      assert.equal(proxy(new NextRequest(`https://${host}/activity`)).status, 200, host);
+    }
+  } finally {
+    restoreEnvironment('RAIBITSERVER_DASHBOARD_BASIC_AUTH', originalBasicAuth);
+    restoreEnvironment('RAIBITSERVER_DASHBOARD_ORIGIN', originalDashboardOrigin);
+    restoreEnvironment('RAIBITSERVER_BASE_DOMAIN', originalBaseDomain);
+  }
+});
+
+test('public apex sends login and protected navigation to the configured console host', { concurrency: false }, () => {
+  const originalBasicAuth = process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH;
+  const originalDashboardOrigin = process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
+  const originalConsoleUrl = process.env.RAIBITSERVER_CONSOLE_URL;
+  delete process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH;
+  delete process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
+  process.env.RAIBITSERVER_CONSOLE_URL = 'https://console.raibit.kr/console';
+  try {
+    const signup = proxy(new NextRequest('https://raibit.kr/login?mode=signup'));
+    assert.equal(signup.status, 307);
+    assert.equal(signup.headers.get('location'), 'https://console.raibit.kr/login?mode=signup');
+
+    const consolePage = proxy(new NextRequest('https://raibit.kr/console?tab=projects'));
+    assert.equal(consolePage.status, 307);
+    assert.equal(consolePage.headers.get('location'), 'https://console.raibit.kr/console?tab=projects');
+
+    assert.equal(proxy(new NextRequest('https://raibit.kr/')).status, 200);
+    assert.equal(proxy(new NextRequest('https://raibit.kr.attacker.example/login')).status, 200);
+  } finally {
+    restoreEnvironment('RAIBITSERVER_DASHBOARD_BASIC_AUTH', originalBasicAuth);
+    restoreEnvironment('RAIBITSERVER_DASHBOARD_ORIGIN', originalDashboardOrigin);
+    restoreEnvironment('RAIBITSERVER_CONSOLE_URL', originalConsoleUrl);
+  }
+});
+
+test('optional Basic Auth protects dashboard planes without closing the public landing', { concurrency: false }, () => {
+  const originalBasicAuth = process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH;
+  const originalDashboardOrigin = process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
+  const originalConsoleUrl = process.env.RAIBITSERVER_CONSOLE_URL;
+  process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH = 'review:secret';
+  delete process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
+  process.env.RAIBITSERVER_CONSOLE_URL = 'https://console.raibit.kr/console';
+  try {
+    const publicLanding = proxy(new NextRequest('https://raibit.kr/'));
+    assert.equal(publicLanding.status, 200);
+
+    const publicLogin = proxy(new NextRequest('https://raibit.kr/login?mode=signup'));
+    assert.equal(publicLogin.status, 307);
+    assert.equal(publicLogin.headers.get('location'), 'https://console.raibit.kr/login?mode=signup');
+
+    const anonymousConsole = proxy(new NextRequest('https://console.raibit.kr/login'));
+    assert.equal(anonymousConsole.status, 401);
+
+    const authenticatedConsole = proxy(new NextRequest('https://console.raibit.kr/login', {
+      headers: { authorization: `Basic ${Buffer.from('review:secret').toString('base64')}` },
+    }));
+    assert.equal(authenticatedConsole.status, 200);
+  } finally {
+    restoreEnvironment('RAIBITSERVER_DASHBOARD_BASIC_AUTH', originalBasicAuth);
+    restoreEnvironment('RAIBITSERVER_DASHBOARD_ORIGIN', originalDashboardOrigin);
+    restoreEnvironment('RAIBITSERVER_CONSOLE_URL', originalConsoleUrl);
+  }
+});
+
 test('production login links return to the public raibit.kr landing instead of looping on the console root', async () => {
   const loginPage = await readFile(new URL('../apps/dashboard/app/login/page.tsx', import.meta.url), 'utf8');
   assert.match(loginPage, /process\.env\.NODE_ENV === 'production' \? 'https:\/\/raibit\.kr\/' : '\/'/);

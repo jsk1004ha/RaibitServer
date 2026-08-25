@@ -16,11 +16,21 @@ spec:
   {{- if .Values.ingress.tls.enabled }}
   tls:
     - hosts:
+        - {{ .Values.ingress.hosts.public | quote }}
         - {{ .Values.ingress.hosts.api | quote }}
         - {{ .Values.ingress.hosts.dashboard | quote }}
       secretName: {{ .Values.ingress.tls.existingSecret | quote }}
   {{- end }}
   rules:
+    - host: {{ .Values.ingress.hosts.public | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "raibitserver.fullname" . }}-dashboard
+                port: { name: http }
     - host: {{ .Values.ingress.hosts.api | quote }}
       http:
         paths:

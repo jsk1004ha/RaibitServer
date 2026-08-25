@@ -61,7 +61,7 @@ export default function PrivacyPage() {
         </article>
 
         <article className="privacy-section">
-          <span>07</span><div><h2>쿠키의 이용</h2><p>로그인 상태 유지를 위해 <code>raibitserver_session</code> 쿠키를 사용합니다. 이 쿠키는 JavaScript에서 읽을 수 없는 HttpOnly 방식이며, HTTPS 환경에서는 Secure 속성을 사용하고 SameSite=Lax로 설정됩니다. 로그아웃하면 즉시 삭제되며 브라우저 설정에서도 쿠키를 삭제할 수 있습니다.</p></div>
+          <span>07</span><div><h2>쿠키의 이용</h2><p>로그인 상태 유지를 위해 <code>raibitserver_session</code> 쿠키를 사용합니다. 이 쿠키는 JavaScript에서 읽을 수 없는 HttpOnly 방식이며, HTTPS 환경에서는 Secure 속성을 사용하고 SameSite=Lax와 host-only 범위로 설정됩니다. 로그아웃하면 즉시 삭제되며 브라우저 설정에서도 쿠키를 삭제할 수 있습니다.</p></div>
         </article>
 
         <article className="privacy-section">

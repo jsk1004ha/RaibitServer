@@ -728,7 +728,7 @@ Beta에서 GitHub check-run과 PR comment는 권장이나 필수는 아니다.
 - GitHub App/API: `/integrations/github`, `/github/installations`, `/github/installations/:installationId/repositories`, `/github/repositories/import`, `/projects/:projectId/services/:serviceId/github`, `/github/repositories/:repositoryId/sync`.
 - Webhook contract: Nest는 `rawBody: true`로 원문 payload를 유지하고 prototype/Nest handler가 `x-github-event`, `x-github-delivery`, `x-hub-signature-256`를 받아 HMAC 검증, delivery dedupe, `WebhookEvent` 저장을 수행한다.
 - Push deployment: push fixture가 repository-attached service를 찾아 `build-and-deploy` WorkflowJob과 production deployment를 생성한다.
-- PR preview: opened/synchronize/reopened fixture가 `preview-deploy` WorkflowJob, preview deployment, `https://pr-N-user--project.preview.raibitserver.app` URL, `pr-N-service` Kubernetes workload plan을 생성한다.
+- PR preview: opened/synchronize/reopened fixture가 `preview-deploy` WorkflowJob, preview deployment, `https://preview--pr-N--user--project.raibitserver.app` URL, `pr-N-service` Kubernetes workload plan을 생성한다.
 - Preview cleanup: closed fixture가 `preview-cleanup` WorkflowJob을 만들고 기존 preview deployment에 `PREVIEW_CLEANUP_REQUESTED`와 `preview.cleanup.requested` event를 남긴다. Go orchestrator는 preview workload 이름을 `pr-N-service`로 격리해 production workload를 덮어쓰거나 삭제하지 않는다.
 - Outbound plan: 실제 GitHub API 호출 없이도 commit status/check-run/PR comment payload를 deterministic plan으로 반환하며, PR comment와 commit status target URL에는 preview URL이 포함된다.
 - Local proof: `tests/api-contract-github-resource-console.test.js`, `tests/api-contract-sync.test.js`, `tests/domain-router.test.js`, `tests/go-orchestrator-reconciler.test.js`, `pnpm e2e:dry`의 `githubWebhookEvidence`.

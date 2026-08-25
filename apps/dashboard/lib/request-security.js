@@ -20,15 +20,46 @@ export function sessionCookieOptions(env = process.env) {
   const maxAge = Number.isFinite(configuredMaxAge)
     ? Math.min(Math.max(configuredMaxAge, 300), 604_800)
     : 28_800;
-  const domain = cookieDomain(env.RAIBITSERVER_COOKIE_DOMAIN);
-  return { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge, ...(domain ? { domain } : {}) };
+  // User workloads are sibling hosts under the same base domain. A Domain
+  // attribute would send this bearer-token cookie to tenant-controlled apps.
+  return { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge };
 }
 
-function cookieDomain(value) {
-  const domain = String(value || '').trim().toLowerCase();
-  if (!domain) return '';
-  if (!/^\.?[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(domain) || domain.includes('..')) return '';
-  return domain;
+export function configuredConsoleHref(value, fallback = '/console') {
+  return parseConsoleUrl(value)?.toString() || safeDashboardPath(fallback);
+}
+
+export function consoleOriginHref(value, path, fallback = path) {
+  const consoleUrl = parseConsoleUrl(value);
+  if (!consoleUrl || !isSafeDashboardPath(path)) return safeDashboardPath(fallback);
+  return new URL(path, consoleUrl.origin).toString();
+}
+
+export function publicHostnameForConsole(value) {
+  const hostname = parseConsoleUrl(value)?.hostname.toLowerCase().replace(/\.$/, '') || '';
+  return hostname.startsWith('console.') && hostname.length > 'console.'.length
+    ? hostname.slice('console.'.length)
+    : null;
+}
+
+function parseConsoleUrl(value) {
+  if (typeof value !== 'string' || !value) return null;
+  try {
+    const candidate = new URL(value);
+    if (!['http:', 'https:'].includes(candidate.protocol)) return null;
+    if (candidate.username || candidate.password || candidate.search || candidate.hash) return null;
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+function safeDashboardPath(value) {
+  return isSafeDashboardPath(value) ? value : '/console';
+}
+
+function isSafeDashboardPath(value) {
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !value.includes('\\');
 }
 
 export function isSameOriginMutation(requestUrl, origin, referer) {

@@ -4,7 +4,7 @@
 
 ## 적용 범위
 
-무료/자체 운영 환경에서는 Cloudflare Universal SSL의 `*.<BASE_DOMAIN>` 한 장으로 모든 generated tenant hostname을 커버할 수 있도록 tenant route를 **base domain 바로 아래 한 개 DNS label**로 평탄화합니다. Cloudflare Tunnel은 `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`, `*.<BASE_DOMAIN>`만 public HTTPS 진입점으로 사용합니다.
+무료/자체 운영 환경에서는 Cloudflare Universal SSL의 `*.<BASE_DOMAIN>` 한 장으로 모든 generated tenant hostname을 커버할 수 있도록 tenant route를 **base domain 바로 아래 한 개 DNS label**로 평탄화합니다. Cloudflare Tunnel은 공개 apex, `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`, `*.<BASE_DOMAIN>`을 public HTTPS 진입점으로 사용합니다.
 
 중간 wildcard(`test.*.example.com`)나 `*.apps.<BASE_DOMAIN>`처럼 더 깊은 hostname을 생성하지 않습니다.
 
@@ -23,6 +23,7 @@ Cloudflare Tunnel에는 각 tenant service hostname을 직접 나열하지 않�
 
 | Cloudflare hostname | 내부 대상 | 최종 라우팅 주체 |
 | --- | --- | --- |
+| `<BASE_DOMAIN>` | 내부 Kubernetes Ingress Controller | 공개 Dashboard Ingress |
 | `api.<BASE_DOMAIN>` | 내부 Kubernetes Ingress Controller | API Ingress |
 | `console.<BASE_DOMAIN>` | 내부 Kubernetes Ingress Controller | Dashboard Ingress |
 | `*.<BASE_DOMAIN>` | 내부 Kubernetes Ingress Controller | tenant app/preview/console/resource Ingress |
@@ -51,7 +52,7 @@ Generated hostname은 모두 한 label 안에 route 종류와 tenant identity를
 | `console--*.<BASE_DOMAIN>` | 로그인 사용자 + 조직/운영자 정책. 앱 내부 RBAC는 계속 필수 |
 | `resources--*.<BASE_DOMAIN>` | 로그인 사용자 + DB/resource 권한 정책. 앱 내부 `db:*` permission은 계속 필수 |
 
-Dashboard는 로그인 API가 발급한 JWT를 HttpOnly 쿠키로 저장합니다. `console`과 `console--*`은 이 세션을 필수로 검사하고, `/admin`은 API가 검증한 `userRole=ADMIN`도 확인합니다. `RAIBITSERVER_COOKIE_DOMAIN=.raibit.kr`처럼 메인과 콘솔 서브도메인이 공유하는 쿠키 도메인을 설정하며 Cloudflare Access는 추가 방어선으로 사용합니다.
+Dashboard는 로그인 API가 발급한 JWT를 HttpOnly 쿠키로 저장하고 Secure·host-only 범위를 적용합니다. 공개 apex의 로그인·가입·콘솔 탐색은 중앙 `console.<BASE_DOMAIN>`으로 이동합니다. 부모 도메인 쿠키는 `apps--*` 사용자 워크로드에도 bearer token을 전송하므로 설정하지 않습니다. `console--*`과 `resources--*`을 별도로 라우팅하는 경우에는 각 host의 자체 로그인이나 검증된 일회용 인증 교환이 필요하며 Cloudflare Access는 추가 방어선으로 사용합니다. `/admin`은 API가 검증한 `userRole=ADMIN`도 확인합니다.
 
 ## API, SSE, webhook cache/WAF 규칙
 
@@ -86,9 +87,9 @@ Tunnel이 있어도 origin port가 인터넷에 열려 있으면 공격자는 Cl
 
 - [ ] `cloudflared`가 내부 Kubernetes Ingress Controller의 HTTPS/websecure endpoint만 origin으로 사용한다.
 - [ ] generated tenant hostname이 모두 `*.<BASE_DOMAIN>` 한 단계 아래에 있다.
-- [ ] Tunnel ingress rule은 `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`, `*.<BASE_DOMAIN>`와 catch-all만 사용한다.
+- [ ] Tunnel ingress rule은 공개 apex, `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`, `*.<BASE_DOMAIN>`와 catch-all만 사용한다.
 - [ ] `console`, `console--*`, `resources--*`에 Cloudflare Access 정책이 있다.
-- [ ] `RAIBITSERVER_COOKIE_DOMAIN`이 메인/콘솔 서브도메인을 안전하게 공유하도록 설정되어 있다.
+- [ ] Dashboard 세션 쿠키가 중앙 콘솔 host-only이며 사용자 workload host로 전송되지 않는다.
 - [ ] `/api/*`, `/api/*/stream`, `/github/webhooks`, `/api/github/webhooks` cache bypass rule이 있다.
 - [ ] WAF skip은 webhook false positive가 증명된 rule/path에만 최소 범위로 둔다.
 - [ ] tenant apps/API에는 Cloudflare rate limiting이 있고, 앱 내부 JWT/RBAC/quota/audit이 켜져 있다.

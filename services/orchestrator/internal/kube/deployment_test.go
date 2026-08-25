@@ -687,7 +687,7 @@ func TestSpecFromStateUsesUserProjectAppsHostnames(t *testing.T) {
 		&store.Deployment{ID: "dep-1", ServiceID: "svc-1", ProjectID: "project-1", ImageURL: "registry.local/web:1"},
 		"raibitserver.local",
 	)
-	if production.Host != "gdg-hongik--festival-2026.apps.raibitserver.local" {
+	if production.Host != "apps--gdg-hongik--festival-2026.raibitserver.local" {
 		t.Fatalf("expected user-project apps host, got %q", production.Host)
 	}
 
@@ -697,7 +697,7 @@ func TestSpecFromStateUsesUserProjectAppsHostnames(t *testing.T) {
 		&store.Deployment{ID: "dep_1", ServiceID: "svc-1", ProjectID: "project-1", ImageURL: "registry.local/web:1", DeploymentType: "preview", PullRequestNumber: 32},
 		"raibitserver.local",
 	)
-	if preview.Host != "pr-32-gdg-hongik--festival-2026.preview.raibitserver.local" {
+	if preview.Host != "preview--pr-32--gdg-hongik--festival-2026.raibitserver.local" {
 		t.Fatalf("expected preview user-project host, got %q", preview.Host)
 	}
 	if preview.Name != "pr-32-web-1fee3c968086" {
@@ -716,21 +716,21 @@ func TestSpecFromStateAssignsStableHostsToMultipleWebServices(t *testing.T) {
 	apiProduction := SpecFromState(project, api, production, "raibitserver.local")
 	production.ServiceID = web.ID
 	webProduction := SpecFromState(project, web, production, "raibitserver.local")
-	if apiProduction.Host != "gdg-hongik--festival-2026--api.apps.raibitserver.local" || webProduction.Host != "gdg-hongik--festival-2026.apps.raibitserver.local" {
+	if apiProduction.Host != "apps--gdg-hongik--festival-2026--api.raibitserver.local" || webProduction.Host != "apps--gdg-hongik--festival-2026.raibitserver.local" {
 		t.Fatalf("expected stable service-specific production hosts, got %q and %q", apiProduction.Host, webProduction.Host)
 	}
 
 	frontend := &store.Service{ID: "svc-frontend", ProjectID: project.ID, Name: "frontend", Slug: "frontend", Type: "web", ImageURL: "registry.local/frontend:1"}
 	production.ServiceID = frontend.ID
 	frontendProduction := SpecFromState(project, frontend, production, "raibitserver.local")
-	if frontendProduction.Host != "gdg-hongik--festival-2026--frontend.apps.raibitserver.local" {
+	if frontendProduction.Host != "apps--gdg-hongik--festival-2026--frontend.raibitserver.local" {
 		t.Fatalf("non-web-named services must never claim the base host, got %q", frontendProduction.Host)
 	}
 	preview.ServiceID = api.ID
 	apiPreview := SpecFromState(project, api, preview, "raibitserver.local")
 	preview.ServiceID = web.ID
 	webPreview := SpecFromState(project, web, preview, "raibitserver.local")
-	if apiPreview.Host != "pr-32-gdg-hongik--festival-2026--api.preview.raibitserver.local" || webPreview.Host != "pr-32-gdg-hongik--festival-2026.preview.raibitserver.local" {
+	if apiPreview.Host != "preview--pr-32--gdg-hongik--festival-2026--api.raibitserver.local" || webPreview.Host != "preview--pr-32--gdg-hongik--festival-2026.raibitserver.local" {
 		t.Fatalf("expected stable service-specific preview hosts, got %q and %q", apiPreview.Host, webPreview.Host)
 	}
 	if apiProduction.Host == webProduction.Host || apiPreview.Host == webPreview.Host {
@@ -749,19 +749,19 @@ func TestSpecFromStateBoundsLongRouteLabelsLikeTypeScript(t *testing.T) {
 	preview := &store.Deployment{ID: "dep-2", ProjectID: project.ID, ImageURL: "registry.local/app:1", DeploymentType: "preview", PullRequestNumber: 32}
 
 	production.ServiceID = web.ID
-	if got := SpecFromState(project, web, production, "raibitserver.local").Host; got != "club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1aae2be83a21.apps.raibitserver.local" {
+	if got := SpecFromState(project, web, production, "raibitserver.local").Host; got != "apps--club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-f685a6d8b3db.raibitserver.local" {
 		t.Fatalf("unexpected bounded web host %q", got)
 	}
 	production.ServiceID = api.ID
-	if got := SpecFromState(project, api, production, "raibitserver.local").Host; got != "club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-c53d1bfc23ce.apps.raibitserver.local" {
+	if got := SpecFromState(project, api, production, "raibitserver.local").Host; got != "apps--club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-f027e0adb928.raibitserver.local" {
 		t.Fatalf("unexpected bounded api host %q", got)
 	}
 	preview.ServiceID = web.ID
-	if got := SpecFromState(project, web, preview, "raibitserver.local").Host; got != "pr-32-club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1aae2be83a21.preview.raibitserver.local" {
+	if got := SpecFromState(project, web, preview, "raibitserver.local").Host; got != "preview--pr-32--club-aaaaaaaaaaaaaaaaaaaaa-1aae2be83a21.raibitserver.local" {
 		t.Fatalf("unexpected bounded web preview host %q", got)
 	}
 	preview.ServiceID = api.ID
-	if got := SpecFromState(project, api, preview, "raibitserver.local").Host; got != "pr-32-club-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-c53d1bfc23ce.preview.raibitserver.local" {
+	if got := SpecFromState(project, api, preview, "raibitserver.local").Host; got != "preview--pr-32--club-aaaaaaaaaaaaaaaaaaaaa-c53d1bfc23ce.raibitserver.local" {
 		t.Fatalf("unexpected bounded api preview host %q", got)
 	}
 	if got := SpecFromState(project, web, production, "raibitserver.local").Namespace; got != "organization-cuid--project-bbbbbbbbbbbbbbbbbbbbbbb-0629a21786b1" {
@@ -778,7 +778,7 @@ func TestSpecFromStateUsesOrganizationSlugForPublicHostAndIDForNamespace(t *test
 	deployment := &store.Deployment{ID: "dep-1", ServiceID: service.ID, ProjectID: project.ID, ImageURL: "registry.local/web:1"}
 
 	spec := SpecFromState(project, service, deployment, "raibitserver.local")
-	if spec.Host != "gdg-hongik--festival-2026.apps.raibitserver.local" {
+	if spec.Host != "apps--gdg-hongik--festival-2026.raibitserver.local" {
 		t.Fatalf("public host must use the organization slug, got %q", spec.Host)
 	}
 	if spec.Namespace != "organization-cuid--festival-2026" {
@@ -799,7 +799,7 @@ func TestSpecFromStatePreservesTenantProjectHostBoundaries(t *testing.T) {
 		&store.Deployment{ID: "dep-2", ServiceID: "svc-2", ProjectID: "project-2", ImageURL: "registry.local/web:1"},
 		"example.test",
 	)
-	if victim.Host != "victim-team--api.apps.example.test" || attacker.Host != "victim--team-api.apps.example.test" {
+	if victim.Host != "apps--victim-team--api.example.test" || attacker.Host != "apps--victim--team-api.example.test" {
 		t.Fatalf("expected boundary-safe hosts, got %q and %q", victim.Host, attacker.Host)
 	}
 	if victim.Host == attacker.Host || victim.Namespace == attacker.Namespace {

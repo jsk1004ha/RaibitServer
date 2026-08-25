@@ -1,6 +1,7 @@
 import Image from 'next/image';
 import { PublicFooter } from '../components/public-footer';
 import { loadPublicSites } from '../lib/api';
+import { configuredConsoleHref, consoleOriginHref } from '../lib/request-security.js';
 
 const landingVariants = ['center', 'spotlight', 'editorial'] as const;
 
@@ -8,14 +9,16 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
   const query = await searchParams;
   const requestedVariant = String(query.variant || 'editorial');
   const variant = landingVariants.includes(requestedVariant as any) ? requestedVariant : 'editorial';
-  const consoleUrl = process.env.RAIBITSERVER_CONSOLE_URL || '/console';
+  const consoleUrl = configuredConsoleHref(process.env.RAIBITSERVER_CONSOLE_URL);
+  const loginUrl = consoleOriginHref(process.env.RAIBITSERVER_CONSOLE_URL, '/login');
+  const signupUrl = consoleOriginHref(process.env.RAIBITSERVER_CONSOLE_URL, '/login?mode=signup');
   const sites = await loadPublicSites(5);
 
   return (
     <main className={`landing-page landing-variant-${variant}`}>
       <nav className="landing-nav" aria-label="메인 탐색">
         <a className="landing-brand" href="/"><Image src="/raibit-logo.jpg" alt="라이빗 로고" width={36} height={36} priority /><span>RAIBIT SERVER</span></a>
-        <div className="landing-nav-actions"><a className="btn btn-ghost" href="/status">운영 현황</a><a className="btn btn-ghost" href="/login">로그인</a><a className="btn btn-primary" href={consoleUrl}>콘솔 들어가기</a></div>
+        <div className="landing-nav-actions"><a className="btn btn-ghost" href="/status">운영 현황</a><a className="btn btn-ghost" href={loginUrl}>로그인</a><a className="btn btn-primary" href={consoleUrl}>콘솔 들어가기</a></div>
       </nav>
 
       <section className="landing-hero" aria-labelledby="landing-title">
@@ -23,7 +26,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
           <p className="eyebrow">RAIBIT HOSTING SERVICE</p>
           <h1 id="landing-title">만들고,<br />올리고,<br />운영하세요.</h1>
           <p>인천과학고등학교의 최고 정보 동아리 라이빗의 호스팅 서비스입니다.</p>
-          <div className="landing-actions"><a className="btn btn-primary" href={consoleUrl}>콘솔 시작하기</a><a className="btn" href="/login?mode=signup">가입 신청</a></div>
+          <div className="landing-actions"><a className="btn btn-primary" href={consoleUrl}>콘솔 시작하기</a><a className="btn" href={signupUrl}>가입 신청</a></div>
         </div>
         <div className="landing-logo-wrap" aria-hidden="true"><Image src="/raibit-logo.jpg" alt="" width={340} height={340} priority /></div>
       </section>

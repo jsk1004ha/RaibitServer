@@ -12,7 +12,7 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 - **컨테이너 우선 빌드**: 사용자 Dockerfile을 최우선으로 사용하고, 없을 때만 프레임워크 감지/생성 Dockerfile fallback을 사용합니다.
 - **BuildKit 캐시 경로**: builder는 inline cache와 선택적 registry cache(`cache-from/cache-to`) 및 패키지 매니저 cache mount를 계획해 반복 배포 시간을 줄입니다.
 - **관리형 리소스**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, SQLite, Object Storage, Qdrant/vector, NATS/queue를 카탈로그 리소스로 다룹니다.
-- **서브도메인 라우팅**: 서비스 실행 URL은 `<user>--<project>.apps.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 boundary-safe user--project label을 기준으로 분리합니다.
+- **서브도메인 라우팅**: 서비스 실행 URL은 `apps--<user>--<project>.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 flat single-label 규칙을 따릅니다.
 - **승인·쿼터·감사**: 비동아리 사용자는 관리자 승인 후 쿼터 안에서 사용하고, 주요 작업은 감사 로그와 사용량에 반영됩니다.
 - **실시간 운영 UX**: 배포/런타임 로그는 조회 API와 SSE snapshot stream을 모두 제공하고, 쿼터 응답은 게이지/경고를 포함합니다.
 - **안전한 기본값**: namespace 격리, NetworkPolicy, non-root 컨테이너, privileged/hostPath 차단, 리소스 제한, secret masking을 기본으로 적용합니다.
@@ -136,7 +136,7 @@ node src/cli.js compose examples/docker-compose.yml
 | --- | --- |
 | DB/상태 | `DATABASE_URL`, `RAIBITSERVER_PERSISTENCE`, `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_STORE`, `RAIBITSERVER_CONTROL_PLANE_FILE`, `REDIS_URL` |
 | Secret/Auth | `JWT_SECRET`, `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_AUTH_ISSUER`, `RAIBITSERVER_SESSION_TTL_SECONDS`, `RAIBITSERVER_AUTH_RATE_LIMIT`, `RAIBITSERVER_TRUST_PROXY_HEADERS`, `ENCRYPTION_KEY`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS` |
-| Dashboard/API | `PORT`, `RAIBITSERVER_API_URL`, `RAIBITSERVER_CONSOLE_URL`, `RAIBITSERVER_DASHBOARD_ORIGIN`, `RAIBITSERVER_COOKIE_DOMAIN`, `RAIBITSERVER_DASHBOARD_BASIC_AUTH` |
+| Dashboard/API | `PORT`, `RAIBITSERVER_API_URL`, `RAIBITSERVER_CONSOLE_URL`, `RAIBITSERVER_DASHBOARD_ORIGIN`, `RAIBITSERVER_DASHBOARD_BASIC_AUTH` |
 | Build/Runtime | `REGISTRY_URL`, `RAIBITSERVER_REGISTRY`, `RAIBITSERVER_REGISTRY_USERNAME`, `RAIBITSERVER_REGISTRY_PASSWORD`, `RAIBITSERVER_BUILDKIT_CACHE`, `RAIBITSERVER_BUILDKIT_CACHE_REF`, `KUBECONFIG`, `RAIBITSERVER_KUBE_CONTEXT`, `BASE_DOMAIN`, `RAIBITSERVER_BASE_DOMAIN`, `RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE`, `RAIBITSERVER_EXECUTE`, `RAIBITSERVER_PUSH` |
 | Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
 | Provider | `RAIBITSERVER_POSTGRES_PROVIDER_URL`, `POSTGRES_PROVIDER_URL`, `RAIBITSERVER_PROVIDER_POSTGRESQL_IMAGE`, `RAIBITSERVER_PROVIDER_MYSQL_IMAGE`, `RAIBITSERVER_PROVIDER_MARIADB_IMAGE`, `RAIBITSERVER_PROVIDER_MONGODB_IMAGE`, `RAIBITSERVER_PROVIDER_REDIS_IMAGE`, `RAIBITSERVER_PROVIDER_VALKEY_IMAGE`, `RAIBITSERVER_PROVIDER_MINIO_IMAGE`, `RAIBITSERVER_PROVIDER_QDRANT_IMAGE`, `RAIBITSERVER_PROVIDER_NATS_IMAGE` |
@@ -195,18 +195,18 @@ GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드
 | --- | --- |
 | API | `api.raibitserver.app` |
 | Main/Dashboard | `raibit.kr` 공개 랜딩, `console.raibit.kr` 로그인 전용 콘솔 |
-| 서비스 실행 URL | `*.apps.raibitserver.app` |
-| PR preview URL | `*.preview.raibitserver.app` |
-| 서비스 관리 화면 | `*.console.raibitserver.app` |
-| 리소스 관리 화면 | `*.resources.raibitserver.app` |
+| 서비스 실행 URL | `apps--<org>--<project>.raibitserver.app` |
+| PR preview URL | `preview--pr-<number>--<org>--<project>.raibitserver.app` |
+| 서비스 관리 화면 | `console--<org>--<project>-<service>.raibitserver.app` |
+| 리소스 관리 화면 | `resources--<org>--<project>-<resource>.raibitserver.app` |
 
-서비스 실행 host는 slug 경계 충돌을 막기 위해 user와 project 사이에 `--`를 둔 `<user>--<project>.apps.<BASE_DOMAIN>` 패턴으로 생성됩니다. PR preview host는 `pr-<number>-<user>--<project>.preview.<BASE_DOMAIN>`이고, 개별 service/resource 관리 화면은 충돌 방지를 위해 `<user>--<project>-<service>.console.<BASE_DOMAIN>` 및 `<user>--<project>-<resource>.resources.<BASE_DOMAIN>`를 사용합니다. 따라서 `*.apps`, `*.preview`, `*.console`, `*.resources` wildcard 인증서를 준비해야 합니다.
+서비스 실행 host는 slug 경계 충돌을 막기 위해 `apps--<user>--<project>.<BASE_DOMAIN>` 패턴으로 생성됩니다. PR preview는 `preview--pr-<number>--<user>--<project>.<BASE_DOMAIN>`, service/resource 관리 화면은 `console--...` 및 `resources--...` 단일 label을 사용합니다. 따라서 `*.<BASE_DOMAIN>` wildcard 인증서 하나로 generated route를 처리할 수 있습니다.
 
-Cloudflare Tunnel을 쓰는 경우 각 tenant service hostname을 tunnel ingress rule에 직접 매핑하지 마세요. Tunnel은 `*.apps.<BASE_DOMAIN>`, `*.preview.<BASE_DOMAIN>`, `*.console.<BASE_DOMAIN>`, `*.resources.<BASE_DOMAIN>` 같은 zone-level wildcard를 **내부 Kubernetes Ingress Controller 하나**로 보내고, 최종 Host 기반 라우팅은 Kubernetes Ingress가 담당해야 합니다. Cloudflare Tunnel hostname wildcard는 `*.example.com` 형태만 쓰고 `test.*.example.com` 같은 중간 wildcard에 의존하지 않습니다. 자세한 예시는 [Cloudflare Tunnel 운영 가이드](docs/cloudflare-tunnel.md)와 [production tunnel 예시](deploy/production/cloudflare-tunnel.example.yml)를 참고하세요.
+Cloudflare Tunnel을 쓰는 경우 각 tenant hostname을 직접 매핑하지 마세요. 공개 apex와 `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`, `*.<BASE_DOMAIN>`을 **내부 Kubernetes Ingress Controller 하나**로 보내고, 최종 Host 기반 라우팅은 Kubernetes Ingress가 담당해야 합니다. Cloudflare Tunnel hostname wildcard는 `*.example.com` 형태만 쓰고 `test.*.example.com` 같은 중간 wildcard에 의존하지 않습니다. 자세한 예시는 [Cloudflare Tunnel 운영 가이드](docs/cloudflare-tunnel.md)와 [production tunnel 예시](deploy/production/cloudflare-tunnel.example.yml)를 참고하세요.
 
 Tenant NetworkPolicy는 임의의 사용자 라벨이 아니라 Kubernetes 예약 네임스페이스 라벨 `kubernetes.io/metadata.name`으로 ingress controller를 식별합니다. 기본 네임스페이스는 `ingress-nginx`이며, 다른 네임스페이스를 쓰면 Helm `ingress.gatewayNamespace`를 설정하세요. 이 값은 같은 release의 API, Go orchestrator, ValidatingAdmissionPolicy에 함께 렌더되고 tenant 프로젝트 입력으로는 변경할 수 없습니다.
 
-> 보안 필수: `raibit.kr`의 랜딩과 `/public/sites`만 공개합니다. `console.raibit.kr`, `/console`, `/org`, `/github`는 API 로그인으로 발급된 HttpOnly 세션 쿠키가 있어야 하며, `/admin`과 관리자 메뉴는 JWT의 `userRole=ADMIN`인 계정만 사용할 수 있습니다. production에서는 `RAIBITSERVER_COOKIE_DOMAIN=.raibit.kr`을 설정하고 Cloudflare Access/MFA를 추가 방어선으로 둘 수 있습니다.
+> 보안 필수: `raibit.kr`의 랜딩과 `/public/sites`만 공개합니다. 로그인·가입·콘솔 경로는 `console.raibit.kr`로 이동하며 세션 쿠키는 host-only로 유지합니다. 부모 도메인 쿠키는 `apps--*.raibit.kr` 사용자 워크로드에도 bearer token을 보내므로 사용하지 않습니다. `/admin`과 관리자 메뉴는 JWT의 `userRole=ADMIN`인 계정만 사용할 수 있으며 Cloudflare Access/MFA를 추가 방어선으로 둘 수 있습니다.
 
 ### 4. production 환경 변수 예시
 
@@ -242,8 +242,8 @@ RAIBITSERVER_EMAIL_WEBHOOK_TOKEN=<mail-bridge-token>
 # Dashboard -> API
 RAIBITSERVER_API_URL=https://api.raibitserver.app/api
 RAIBITSERVER_CONSOLE_URL=https://console.raibit.kr/console
-RAIBITSERVER_DASHBOARD_ORIGIN=https://console.raibit.kr
-RAIBITSERVER_COOKIE_DOMAIN=.raibit.kr
+# public/console dual-host에서는 RAIBITSERVER_DASHBOARD_ORIGIN을 설정하지 않습니다.
+# 세션 쿠키는 console.raibit.kr host-only로 유지합니다.
 RAIBITSERVER_DASHBOARD_BASIC_AUTH=<optional-extra-user>:<strong-random-password>
 
 # Kubernetes / runtime

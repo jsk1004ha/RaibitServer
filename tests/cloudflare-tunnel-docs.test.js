@@ -16,7 +16,8 @@ test('Cloudflare Tunnel docs lock flat wildcard and security guardrails', async 
     'resources--gdg-hongik--festival-2026-postgres.<BASE_DOMAIN>',
     '내부 Kubernetes Ingress Controller',
     'Cloudflare Access',
-    'RAIBITSERVER_COOKIE_DOMAIN',
+    'host-only',
+    '부모 도메인 쿠키',
     'HttpOnly 쿠키',
     'userRole=ADMIN',
     '/api/*/stream',
@@ -33,6 +34,7 @@ test('Cloudflare Tunnel docs lock flat wildcard and security guardrails', async 
     'docs must not configure the legacy deep wildcard as an active tunnel route',
   );
   assert.doesNotMatch(doc, /test\.\*\.example\.com.*권장/);
+  assert.doesNotMatch(doc, /RAIBITSERVER_COOKIE_DOMAIN/);
 });
 
 test('Cloudflare Tunnel example routes one free-tier wildcard to Traefik websecure', async () => {
@@ -47,6 +49,7 @@ test('Cloudflare Tunnel example routes one free-tier wildcard to Traefik websecu
   assert.deepEqual(
     rules.filter((rule) => rule.hostname).map((rule) => rule.hostname),
     [
+      'raibitserver.app',
       'api.raibitserver.app',
       'console.raibitserver.app',
       '*.raibitserver.app',
@@ -55,9 +58,10 @@ test('Cloudflare Tunnel example routes one free-tier wildcard to Traefik websecu
 
   const originServices = new Set(rules.filter((rule) => rule.hostname).map((rule) => rule.service));
   assert.deepEqual([...originServices], ['https://172.31.99.245:443']);
-  assert.equal(rules[0].originRequest.originServerName, 'api.raibitserver.app');
-  assert.equal(rules[1].originRequest.originServerName, 'console.raibitserver.app');
-  assert.equal(rules[2].originRequest.noTLSVerify, true);
+  assert.equal(rules[0].originRequest.originServerName, 'raibitserver.app');
+  assert.equal(rules[1].originRequest.originServerName, 'api.raibitserver.app');
+  assert.equal(rules[2].originRequest.originServerName, 'console.raibitserver.app');
+  assert.equal(rules[3].originRequest.noTLSVerify, true);
   assert.equal(rules.at(-1).service, 'http_status:404');
   assert.equal(rules.some((rule) => /\.\*\./.test(String(rule.hostname || ''))), false);
   assert.equal(rules.some((rule) => String(rule.service || '').startsWith('tcp://')), false);

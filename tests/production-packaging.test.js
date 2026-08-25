@@ -51,6 +51,12 @@ test('runtime images contain only the executables their production entrypoints r
   assert.match(dashboard, /server\.js/);
   assert.match(cli, /packages\/api-client\/src\/index\.ts[\s\S]*api-client-runtime/);
   assert.match(cli, /dist\/index\.js/);
+  const cliInstall = cli.indexOf('RUN pnpm install --frozen-lockfile');
+  const cliCompile = cli.indexOf('RUN pnpm --filter @raibitserver/cli exec tsc -p tsconfig.json');
+  const cliConfigManifest = cli.indexOf('COPY packages/config/package.json packages/config/package.json');
+  const cliConfigSource = cli.indexOf('COPY packages/config packages/config');
+  assert.ok(cliConfigManifest >= 0 && cliConfigManifest < cliInstall, 'CLI image must copy the shared config manifest before install');
+  assert.ok(cliConfigSource > cliInstall && cliConfigSource < cliCompile, 'CLI image must copy the shared tsconfig before compilation');
 
   assert.match(builder, /\b(?:apt-get|apk)\b[\s\S]{0,300}\bgit\b/i, 'builder image must install git');
   for (const executable of ['buildctl', 'trivy', 'cosign']) {
@@ -98,12 +104,15 @@ test('Helm exposes both control-plane web surfaces through fail-closed productio
   assert.match(api, /include\s+"raibitserver\.fullname"/);
   assert.match(dashboard, /kind:\s*Deployment/);
   assert.match(dashboard, /NODE_ENV[\s\S]*production/);
+  assert.match(dashboard, /RAIBITSERVER_CONSOLE_URL[\s\S]*\.Values\.dashboard\.consoleUrl/);
+  assert.doesNotMatch(dashboard, /RAIBITSERVER_(?:COOKIE_DOMAIN|DASHBOARD_ORIGIN)/);
   assert.match(dashboard, /readinessProbe:[\s\S]*livenessProbe:/);
   assert.match(api, /NODE_ENV[\s\S]*production/);
   assert.match(api, /readinessProbe:[\s\S]*livenessProbe:/);
 
   assert.ok((services.match(/kind:\s*Service/g) || []).length >= 2, 'API and dashboard need Services');
   assert.match(ingress, /tls:[\s\S]*secretName:/);
+  assert.match(ingress, /\.Values\.ingress\.hosts\.public[\s\S]*-dashboard/);
   assert.match(ingress, /backend:[\s\S]*service:/);
   assert.match(migration, /kind:\s*Job/);
   assert.match(migration, /helm\.sh\/hook:\s*pre-install,pre-upgrade/);
@@ -114,8 +123,12 @@ test('Helm exposes both control-plane web surfaces through fail-closed productio
   assert.match(availability, /kind:\s*HorizontalPodAutoscaler/);
   assert.match(values, /runtimeSecrets:[\s\S]*existingSecret:/);
   assert.match(values, /dashboard:[\s\S]*replicas:/);
+  assert.match(values, /dashboard:[\s\S]*consoleUrl:\s*["']{2}/);
+  assert.match(values, /ingress:[\s\S]*hosts:[\s\S]*public:\s*raibitserver\.app/);
   assert.match(values, /ingress:[\s\S]*tls:[\s\S]*existingSecret:/);
   assert.match(fixture, /dashboard:\s*[\s\S]*host:/);
+  assert.match(fixture, /dashboard:[\s\S]*consoleUrl:\s*https:\/\/console\.production\.example\/console/);
+  assert.match(fixture, /hosts:[\s\S]*public:\s*production\.example/);
   assert.match(fixture, /runtimeSecrets:[\s\S]*existingSecret:\s*ci-/);
 
   const chartTemplates = await Promise.all((await fs.readdir('infra/helm/raibitserver/templates')).map(async (name) => [name, await fs.readFile(`infra/helm/raibitserver/templates/${name}`, 'utf8')]));
@@ -534,6 +547,7 @@ test('production Helm verification exercises packaging fail-closed boundaries', 
   const verifier = await fs.readFile('scripts/verify-helm.sh', 'utf8');
   for (const scenario of [
     'missing-dashboard-digest',
+    'missing-dashboard-console-url',
     'missing-database-secret',
     'missing-runtime-secret',
     'disabled-migration',
@@ -543,6 +557,10 @@ test('production Helm verification exercises packaging fail-closed boundaries', 
     'unsupported-kubernetes-version',
     'disabled-tls',
     'missing-tls-secret',
+    'missing-public-host',
+    'shared-public-dashboard-host',
+    'mismatched-dashboard-host',
+    'mismatched-dashboard-console-url',
     'missing-log-ingester-digest',
     'missing-metrics-ingester-digest',
     'missing-observability-kubernetes-egress',
