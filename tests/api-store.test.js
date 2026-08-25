@@ -32,7 +32,11 @@ test('HTTP API serves health, catalog, and manifest planning', async () => {
     assert.equal(manifest.manifests.some((m) => m.kind === 'Ingress'), true);
 
     const project = controlPlane.store.createProject({ organizationId: org.id, name: 'demo', slug: 'demo' });
-    const service = controlPlane.store.createService({ projectId: project.id, name: 'api' });
+    const service = controlPlane.store.createService({ projectId: project.id, name: 'api', type: 'web', status: 'image-ready' });
+    controlPlane.store.attachDomain({ projectId: project.id, serviceId: service.id, domain: 'demo.apps.raibit.kr', verified: true });
+    controlPlane.store.createDeployment({ serviceId: service.id, status: 'READY', deploymentType: 'production' });
+    const publicSites = await request(port, 'GET', '/public/sites?limit=5');
+    assert.deepEqual(publicSites.sites, [{ id: project.id, name: 'demo', owner: 'GDG Seoul', status: 'LIVE', url: 'https://demo.apps.raibit.kr' }]);
     const deployment = controlPlane.store.createDeployment({ serviceId: service.id });
     const job = controlPlane.store.enqueueWorkflowJob({ type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id } });
     assert.equal(job.status, 'queued');

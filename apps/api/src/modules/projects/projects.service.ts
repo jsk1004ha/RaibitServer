@@ -7,6 +7,7 @@ export class ProjectsService {
   constructor(private readonly controlPlane: RAIBITSERVERService) {}
 
   listProjects(subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.listProjects(subject, options); }
+  listPublicSites(limit?: string) { return this.controlPlane.listPublicSites(limit); }
   createProject(project: ProjectSpec, subject: Record<string, any>) { return this.controlPlane.createProject(project, subject); }
   getProject(projectId: string, subject: Record<string, any>) { return this.controlPlane.getProject(projectId, subject); }
   overview(projectId: string, subject: Record<string, any>) { return this.controlPlane.projectOverview(projectId, subject); }

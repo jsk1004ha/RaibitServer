@@ -160,6 +160,9 @@ export async function issueSignupEmailVerificationCode(repository: any, input: R
   const target = repositoryForEmailVerification(repository);
   const env = options.env || process.env;
   const email = normalizeEmail(input.email);
+  const name = requiredSignupString(input.name, 'name');
+  const studentId = requiredSignupString(input.studentId, 'student_id');
+  const clubMemberClaim = normalizeClubMemberClaim(input.clubMemberClaim);
   const organizationSlug = input.organizationSlug || input.orgSlug || personalOrganizationSlug(email);
   const [userCount, passwordHash, existing, existingOrganization] = await Promise.all([
     countUsersForRepository(target),
@@ -170,7 +173,9 @@ export async function issueSignupEmailVerificationCode(repository: any, input: R
   const policy = signupPolicyForAccount(input, email, { firstUser: userCount === 0, env });
   const payload = {
     kind: 'signup',
-    name: input.name || email,
+    name,
+    studentId,
+    clubMemberClaim,
     email,
     passwordHash,
     organizationSlug,
@@ -277,7 +282,9 @@ export async function verifyEmailCodeAndCreateSession(repository: any, input: Re
     : payload.policy || signupPolicyForAccount({}, email, { firstUser: userCount === 0, env });
   const organization = await target.createOrganization({ name: payload.organizationName || payload.organizationSlug, slug: payload.organizationSlug, plan: payload.plan || 'free' });
   const user = await target.createUser({
-    name: payload.name || email,
+    name: requiredSignupString(payload.name, 'name'),
+    studentId: requiredSignupString(payload.studentId, 'student_id'),
+    clubMemberClaim: Boolean(payload.clubMemberClaim),
     email,
     passwordHash: payload.passwordHash,
     role: policy.role,
@@ -374,6 +381,8 @@ function emailVerificationPaddingPayload() {
   return {
     kind: EMAIL_VERIFICATION_PADDING_PURPOSE,
     name: '',
+    studentId: '',
+    clubMemberClaim: false,
     email: '',
     passwordHash: '',
     organizationSlug: '',
@@ -438,4 +447,13 @@ function statusError(message: string, statusCode: number) {
   const error = new Error(message);
   (error as any).statusCode = statusCode;
   return error;
+}
+
+function requiredSignupString(value: any, field: string) {
+  if (typeof value !== 'string' || !value.trim()) throw statusError(`${field}_is_required`, 400);
+  return value.trim();
+}
+
+function normalizeClubMemberClaim(value: any) {
+  return value === true || ['1', 'true', 'yes', 'club_member'].includes(String(value || '').trim().toLowerCase());
 }

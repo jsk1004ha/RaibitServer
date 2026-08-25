@@ -24,11 +24,10 @@ test('dashboard mutations return to the console with explicit success and error 
 	assert.doesNotMatch(flash, />\{(?:code|noticeCode)\}</);
 });
 
-test('API loader failures stay sanitized, preserve fallback data and surface on every data page', async () => {
+test('API loader failures stay sanitized, preserve fallback data and surface on authenticated data pages', async () => {
 	const [api, shell, ...pages] = await Promise.all([
 		read('../apps/dashboard/lib/api.ts'),
 		read('../apps/dashboard/components/console-ui.tsx'),
-		read('../apps/dashboard/app/page.tsx'),
 		read('../apps/dashboard/app/admin/page.tsx'),
 		read('../apps/dashboard/app/github/page.tsx'),
 		read('../apps/dashboard/app/org/[orgSlug]/projects/page.tsx'),
@@ -55,14 +54,15 @@ test('dangerous actions require an explicit target-specific confirmation', async
 });
 
 test('project creation displays the route organization but does not submit tenant identity', async () => {
-	const [createProject, route] = await Promise.all([
+	const [createProject, wizard, route] = await Promise.all([
 		read('../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx'),
+		read('../apps/dashboard/components/project-create-wizard.tsx'),
 		read('../apps/dashboard/app/api/control/[...path]/route.ts'),
 	]);
-	assert.match(createProject, /value=\{orgSlug\}\s+readOnly/);
-	assert.match(createProject, /로그인한 계정에서 확인합니다/);
-	assert.match(createProject, /name="serviceName"/);
-	assert.doesNotMatch(createProject, /name="organizationId"/);
+	assert.match(wizard, /value=\{orgSlug\}\s+readOnly/);
+	assert.match(wizard, /로그인 권한으로 확인/);
+	assert.match(wizard, /name="serviceName"/);
+	assert.doesNotMatch(`${createProject}\n${wizard}`, /name="organizationId"/);
 	assert.match(route, /projectCreatePayloadFromForm/);
 });
 
@@ -75,11 +75,10 @@ test('project cards render API aggregate service and resource counts', async () 
 });
 
 test('authenticated users can clear their dashboard session through the same-origin BFF', async () => {
-	const home = await read('../apps/dashboard/app/page.tsx');
-	assert.match(home, /isAuthenticated\s*=\s*Boolean\(user \|\| subject\)/);
-	assert.match(home, /method="post"\s+action=\{apiAction\('\/auth\/logout'\)\}/);
-	assert.match(home, /name="_returnTo"\s+value="\/login"/);
-	assert.match(home, />로그아웃<\/button>/);
+	const shell = await read('../apps/dashboard/components/console-ui.tsx');
+	assert.match(shell, /method="post"\s+action=\{apiAction\('\/auth\/logout'\)\}/);
+	assert.match(shell, /name="_returnTo"\s+value="\/login"/);
+	assert.match(shell, />로그아웃<\/button>/);
 });
 
 test('dashboard request hardening uses the supported Next proxy convention', async () => {
@@ -89,7 +88,8 @@ test('dashboard request hardening uses the supported Next proxy convention', asy
 	]);
 	assert.match(proxy, /export function proxy\(request: NextRequest\)/);
 	for (const marker of ['dashboardSecurityHeaders', 'content-security-policy', 'x-nonce']) assert.match(proxy, new RegExp(marker));
-	assert.match(proxy, /hasServerApiToken/);
+	assert.match(proxy, /request\.cookies\.get\(SESSION_COOKIE_NAME\)/);
+	assert.doesNotMatch(proxy, /RAIBITSERVER_DASHBOARD_TOKEN|hasServerApiToken/);
 	assert.match(layout, /export const dynamic = 'force-dynamic'/, 'nonce CSP requires request-time rendering');
 });
 
@@ -128,9 +128,8 @@ test('dashboard has route-level loading, error, not-found, accessible controls a
 	assert.match(loading, /aria-live="polite"/);
 	assert.match(error, /role="alert"/);
 	assert.match(notFound, /찾을 수 없습니다/);
-	for (const target of ['#overview', '#services', '#deployments', '#resources']) assert.match(project, new RegExp(`href="${target}"`));
-	for (const target of ['overview', 'services', 'deployments', 'resources']) assert.match(project, new RegExp(`id="${target}"`));
-	assert.match(project, /tab-disabled/);
+	for (const target of ['overview', 'services', 'deployments', 'resources']) assert.match(project, new RegExp(`\\?view=${target}`));
+	assert.match(project, /<SectionNav items=\{navItems\} current=\{view\}/);
 	assert.doesNotMatch(project, /href=\{apiAction\(`\/services\/\$\{state\.services\[0\]\.id\}\/logs`\)\}/);
 	assert.match(css, /min-height:\s*44px/);
 	assert.match(css, /-webkit-overflow-scrolling:\s*touch/);

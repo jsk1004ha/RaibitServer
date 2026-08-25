@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
+const readText = async (path) => (await fs.readFile(path, 'utf8')).replace(/\r\n/g, '\n');
+
 const dockerfiles = [
   'apps/api/Dockerfile',
   'apps/dashboard/Dockerfile',
@@ -124,7 +126,7 @@ test('Helm exposes both control-plane web surfaces through fail-closed productio
 
 test('Helm installs platform CRDs and scopes cluster RBAC names per release', async () => {
   const [workerSecurity, crdNames, chart] = await Promise.all([
-    fs.readFile('infra/helm/raibitserver/templates/worker-security.yaml', 'utf8'),
+    readText('infra/helm/raibitserver/templates/worker-security.yaml'),
     fs.readdir('infra/helm/raibitserver/crds'),
     fs.readFile('infra/helm/raibitserver/Chart.yaml', 'utf8'),
   ]);
@@ -158,7 +160,7 @@ test('production provisioner wires digest-pinned providers behind tenant-scoped 
     fs.readFile('infra/helm/raibitserver/values.yaml', 'utf8'),
     fs.readFile('infra/helm/raibitserver/ci-production-values.yaml', 'utf8'),
     fs.readFile('scripts/verify-helm.sh', 'utf8'),
-    fs.readFile('infra/helm/raibitserver/templates/worker-security.yaml', 'utf8'),
+    readText('infra/helm/raibitserver/templates/worker-security.yaml'),
     fs.readFile('infra/helm/raibitserver/templates/validate.yaml', 'utf8'),
   ]);
   const providers = [
@@ -262,7 +264,7 @@ test('production provisioner wires digest-pinned providers behind tenant-scoped 
 
 test('orchestrator cluster authority is admission-confined to compiler-owned application tenants', async () => {
   const [workerSecurity, providerCompiler, verifier, values, orchestratorDeployment, apiDeployment] = await Promise.all([
-    fs.readFile('infra/helm/raibitserver/templates/worker-security.yaml', 'utf8'),
+    readText('infra/helm/raibitserver/templates/worker-security.yaml'),
     fs.readFile('services/provisioner/internal/provider/compiler.go', 'utf8'),
     fs.readFile('scripts/verify-helm.sh', 'utf8'),
     fs.readFile('infra/helm/raibitserver/values.yaml', 'utf8'),
@@ -356,7 +358,7 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
 
 test('provider tenant admission accepts only compiler-shaped resources and preserves ownership', async () => {
   const [workerSecurity, verifier, providerCompiler] = await Promise.all([
-    fs.readFile('infra/helm/raibitserver/templates/worker-security.yaml', 'utf8'),
+    readText('infra/helm/raibitserver/templates/worker-security.yaml'),
     fs.readFile('scripts/verify-helm.sh', 'utf8'),
     fs.readFile('services/provisioner/internal/provider/compiler.go', 'utf8'),
   ]);

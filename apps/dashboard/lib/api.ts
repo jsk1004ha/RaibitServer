@@ -28,7 +28,7 @@ export type DashboardLoadIssue = {
 export async function dashboardApiContext(): Promise<DashboardApiContext> {
   const baseUrl = (process.env.RAIBITSERVER_API_URL || 'http://localhost:3000/api').replace(/\/$/, '');
   const sessionToken = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
-  const token = sessionToken || process.env.RAIBITSERVER_DASHBOARD_TOKEN || process.env.RAIBITSERVER_TOKEN;
+  const token = sessionToken;
   return { baseUrl, token, headers: token ? { authorization: `Bearer ${token}` } : {} };
 }
 
@@ -158,25 +158,23 @@ export async function loadProjectConsole(projectId: string, context?: DashboardA
     resources,
     deployments,
     previewDeployments: deployments.filter((deployment: any) => String(deployment.deploymentType || '').toLowerCase() === 'preview'),
-    // Detailed buildLogResults, deploymentEventResults, and runtimeLogResults are
-    // intentionally deferred to detail screens to avoid a 2D request fan-out.
-    buildLogs: [],
-    deploymentEvents: [],
-    runtimeLogs: [],
-    resourceConsoles: resources.map((resource: any) => ({ resource, schema: null, browse: null })),
+    // Detailed operational data is loaded only by its focused screen.
     loadErrors: collectLoadIssues([['프로젝트 개요', overview]]),
   };
 }
 
-export async function loadResourceConsole(resourceId: string, context?: DashboardApiContext) {
+export async function loadResourceConsole(resourceId: string, view = 'overview', context?: DashboardApiContext) {
   const resolved = context || await dashboardApiContext();
+  const needsOverviewData = view === 'overview' || view === 'schema';
+  const needsStructureData = view === 'schema';
+  const fallback = <T,>(body: T): DashboardApiResult<T> => ({ ok: true, status: 200, body });
   const [resource, schema, tables, collections, keys, browse] = await Promise.all([
     getJson(`/resources/${encodeURIComponent(resourceId)}`, { id: resourceId }, resolved),
-    getJson(`/resources/${encodeURIComponent(resourceId)}/console/schema`, { schema: {} }, resolved),
-    getJson(`/resources/${encodeURIComponent(resourceId)}/console/tables`, { tables: [] }, resolved),
-    getJson(`/resources/${encodeURIComponent(resourceId)}/console/collections`, { collections: [] }, resolved),
-    getJson(`/resources/${encodeURIComponent(resourceId)}/console/keys`, { keys: [] }, resolved),
-    postJson(`/resources/${encodeURIComponent(resourceId)}/console/browse`, {}, {}, resolved),
+    needsOverviewData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/schema`, { schema: {} }, resolved) : fallback({ schema: {} }),
+    needsStructureData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/tables`, { tables: [] }, resolved) : fallback({ tables: [] }),
+    needsStructureData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/collections`, { collections: [] }, resolved) : fallback({ collections: [] }),
+    needsStructureData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/keys`, { keys: [] }, resolved) : fallback({ keys: [] }),
+    needsStructureData ? postJson(`/resources/${encodeURIComponent(resourceId)}/console/browse`, {}, {}, resolved) : fallback({}),
   ]);
   return {
     context: resolved,
@@ -206,6 +204,7 @@ export async function loadAdminConsole(context?: DashboardApiContext) {
   const users = snapshot.body?.users || [];
   return {
     context: resolved,
+    authorized: snapshot.ok,
     users,
     pendingUsers: users.filter((user: any) => String(user.approvalStatus || '').toUpperCase() === 'PENDING'),
     quotas: snapshot.body?.quotas || [],
@@ -250,4 +249,9 @@ export async function loadGitHubConsole(context?: DashboardApiContext) {
       ...collectLoadIssues(serviceLoads.map((row) => ['프로젝트 서비스', row.result] as [string, DashboardApiResult])),
     ],
   };
+}
+
+export async function loadPublicSites(limit = 5) {
+  const result = await getJson(`/public/sites?limit=${Math.max(0, Math.min(limit, 5))}`, { sites: [] });
+  return result.body?.sites || [];
 }

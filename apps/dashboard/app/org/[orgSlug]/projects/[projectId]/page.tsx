@@ -1,97 +1,81 @@
-import { apiAction, loadProjectConsole } from '../../../../../lib/api';
-import { ConsoleShell, MetricStrip, StatusBadge } from '../../../../../components/console-ui';
-import { LoadErrorSummary } from '../../../../../components/console-ui';
+import { apiAction, collectLoadIssues, getJson, loadProjectConsole } from '../../../../../lib/api';
+import { ConsoleShell, LoadErrorSummary, LogViewer, MetricStrip, SectionNav, StatusBadge } from '../../../../../components/console-ui';
 
-export default async function ProjectDetailPage({ params }: { params: Promise<{ orgSlug: string; projectId: string }> }) {
-  const { orgSlug, projectId } = await params;
+const views = ['overview', 'services', 'new-service', 'deployments', 'resources', 'new-resource', 'logs', 'settings'] as const;
+type ProjectView = typeof views[number];
+
+export default async function ProjectDetailPage({ params, searchParams }: { params: Promise<{ orgSlug: string; projectId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const [{ orgSlug, projectId }, query] = await Promise.all([params, searchParams]);
+  const requestedView = String(query.view || 'overview');
+  const view: ProjectView = views.includes(requestedView as ProjectView) ? requestedView as ProjectView : 'overview';
   const state = await loadProjectConsole(projectId);
+  const logService = state.services[0];
+  const runtimeLogs = view === 'logs' && logService
+    ? await getJson(`/services/${encodeURIComponent(logService.id)}/logs`, { logs: [] }, state.context)
+    : null;
+  const loadErrors = runtimeLogs
+    ? [...state.loadErrors, ...collectLoadIssues([['런타임 로그', runtimeLogs]])]
+    : state.loadErrors;
   const projectName = state.project.name || state.project.slug || projectId;
+  const base = `/org/${orgSlug}/projects/${projectId}`;
+  const navItems = [
+    { id: 'overview', label: '현황', description: '프로젝트 상태', href: `${base}?view=overview` },
+    { id: 'services', label: '서비스', description: '실행 단위', href: `${base}?view=services` },
+    { id: 'deployments', label: '배포', description: '배포 기록', href: `${base}?view=deployments` },
+    { id: 'resources', label: '리소스', description: '데이터 계층', href: `${base}?view=resources` },
+    { id: 'logs', label: '로그', description: '실행 기록', href: `${base}?view=logs` },
+    { id: 'settings', label: '설정', description: '프로젝트 관리', href: `${base}?view=settings` },
+  ];
+
   return (
-    <ConsoleShell active="projects" orgValue={orgSlug} projectValue={projectName} crumbs={`${orgSlug} / ${projectName} / 개요`} actions={<><a className="btn" href="#services">새 서비스</a>{state.services.length ? <button className="btn btn-primary" type="submit" form="deploy-first-service">배포</button> : <a className="btn btn-primary" href="#services">서비스 먼저 만들기</a>}</>}>
-      <section className="page" data-od-id="project-overview">
-        <header className="page-header">
-          <div><p className="eyebrow">프로젝트 콘솔</p><h1 className="page-title">{projectName}</h1><p className="page-subtitle">서비스, 배포, 리소스 현황을 확인하고 세부 운영 화면으로 이동하세요.</p></div>
-          <StatusBadge status={state.project.status || 'healthy'} />
-        </header>
+    <ConsoleShell active="projects" orgValue={orgSlug} orgRouteValue={orgSlug} projectValue={projectName} projectId={projectId}>
+      <section className="page page-focus" data-od-id="project-overview">
+        <header className="page-header"><div><h1 className="page-title">{projectName}</h1><p className="page-subtitle">서비스 · 배포 · 리소스</p></div><StatusBadge status={state.project.status || 'healthy'} /></header>
+        <LoadErrorSummary issues={loadErrors} />
+        <SectionNav items={navItems} current={view} label="프로젝트 콘솔 화면" />
 
-        <LoadErrorSummary issues={state.loadErrors} />
-
-        <ol className="tabs" aria-label="프로젝트 영역" style={{ listStyle: 'none', paddingLeft: 0 }}>
-          <li><a className="tab active" aria-current="location" href="#overview">개요</a></li>
-          <li><a className="tab" href="#services">서비스</a></li>
-          <li><a className="tab" href="#deployments">배포</a></li>
-          <li><a className="tab" href="#resources">리소스</a></li>
-          <li><span className="tab tab-disabled" aria-disabled="true">도메인 · 준비 중</span></li>
-          <li><span className="tab tab-disabled" aria-disabled="true">환경 변수 · 준비 중</span></li>
-          <li><span className="tab tab-disabled" aria-disabled="true">감사 · 준비 중</span></li>
-          <li><span className="tab tab-disabled" aria-disabled="true">설정 · 준비 중</span></li>
-        </ol>
-
-        <div id="overview" className="section-anchor">
+        {view === 'overview' ? <div className="project-overview project-overview-compact">
           <MetricStrip items={[
-            { label: '서비스', value: state.services.length, detail: '웹, 워커, 예약·일회성 작업', tone: 'ok' },
-            { label: '리소스', value: state.resources.length, detail: '관리형 카탈로그', tone: 'info' },
+            { label: '서비스', value: state.services.length, detail: '실행 컨테이너', tone: 'ok' },
+            { label: '리소스', value: state.resources.length, detail: '관리형 데이터', tone: 'info' },
             { label: '배포', value: state.deployments.length, detail: `미리보기 ${state.previewDeployments.length}개`, tone: 'warn' },
           ]} />
-        </div>
-
-        <section className="dashboard-grid">
-          <article className="stack">
-            <section className="card section-anchor" id="services">
-              <div className="card-title"><h2>서비스 만들기</h2><span className="badge info">Dockerfile 우선</span></div>
-              <form method="post" action={apiAction(`/projects/${projectId}/services`, state.context)} className="form-grid">
-                <label>서비스 이름 <input name="name" placeholder="예: web" required /></label>
-                <label>서비스 유형 <select name="type" defaultValue="web"><option value="web">웹</option><option value="private">비공개 서비스</option><option value="worker">워커</option><option value="cron">예약 작업</option><option value="job">일회성 작업</option></select></label>
-                <label>소스 유형 <select name="sourceType" defaultValue="github"><option value="github">GitHub / Git 소스</option><option value="image">빌드된 이미지</option><option value="local">로컬 Dockerfile</option></select></label>
-                <label>저장소 URL <input name="repoUrl" placeholder="https://github.com/org/repo.git" /></label>
-                <label>브랜치 <input name="branch" placeholder="main" /></label>
-                <label>이미지 <input name="imageUrl" placeholder="registry.example.com/team/web:tag" /></label>
-                <label>Dockerfile 경로 <input name="dockerfilePath" placeholder="Dockerfile" /></label>
-                <label>빌드 컨텍스트 <input name="buildContext" placeholder="." /></label>
-                <button type="submit">서비스 만들기</button>
-              </form>
+          <div className="overview-summary-grid">
+            <section className="console-surface overview-operation-list">
+              <div className="card-title"><h2>운영 구성</h2><StatusBadge status={state.project.status || 'healthy'} /></div>
+              <a href={`${base}?view=services`}><span><strong>서비스</strong><small>웹·워커·예약 작업</small></span><b>{state.services.length}</b><i>관리 →</i></a>
+              <a href={`${base}?view=resources`}><span><strong>리소스</strong><small>DB·캐시·스토리지</small></span><b>{state.resources.length}</b><i>관리 →</i></a>
+              <a href={`${base}?view=deployments`}><span><strong>배포</strong><small>운영·미리보기 기록</small></span><b>{state.deployments.length}</b><i>확인 →</i></a>
             </section>
-
-            <section className="card">
-              <div className="card-title"><h2>서비스와 배포</h2><a className="btn btn-ghost" href="#deployments">배포 내역</a></div>
-              <table className="table"><thead><tr><th>이름</th><th>유형</th><th>상태</th><th>소스</th><th>작업</th></tr></thead><tbody>
-                {state.services.map((service: any, index: number) => (
-                  <tr key={service.id}><td><strong>{service.name || service.slug}</strong><p className="muted">{service.id}</p></td><td className="mono">{service.type || 'web'}</td><td><StatusBadge status={service.status || 'created'} /></td><td className="mono">{service.repoUrl || service.imageUrl || '소스 없음'}</td><td className="table-actions"><form id={index === 0 ? 'deploy-first-service' : undefined} method="post" action={apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)} className="inline-actions"><input type="hidden" name="deploymentType" value="production" /><button type="submit">운영 환경에 배포</button></form><form method="post" action={apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)} className="inline-actions" style={{ marginTop: 8 }}><input type="hidden" name="deploymentType" value="preview" /><button type="submit">미리보기 만들기</button></form></td></tr>
-                ))}
-              </tbody></table>
+            <section className="console-surface overview-recent">
+              <div className="card-title"><h2>최근 배포</h2><a className="subtle-link" href={`${base}?view=deployments`}>전체 보기 →</a></div>
+              {state.deployments.length ? <div className="overview-recent-list">{state.deployments.slice(0, 4).map((deployment: any) => <a key={deployment.id} href={`${base}/deployments/${deployment.id}`}><span><strong>{deployment.serviceName || '서비스'}</strong><small>{deployment.deploymentType || 'production'}</small></span><StatusBadge status={deployment.status} /></a>)}</div> : <div className="overview-compact-empty"><strong>아직 배포가 없습니다.</strong><p>서비스에서 첫 배포를 시작하세요.</p><a className="subtle-link" href={`${base}?view=services`}>서비스로 이동 →</a></div>}
             </section>
+          </div>
+          <nav className="overview-quick-actions" aria-label="프로젝트 빠른 작업"><a href={`${base}?view=new-service`}>+ 서비스 만들기</a><a href={`${base}?view=new-resource`}>+ 리소스 추가</a><a href="/github?step=attach">↗ 저장소 연결</a></nav>
+        </div> : null}
 
-            <section className="card section-anchor" id="deployments">
-              <div className="card-title"><h2>배포 내역</h2><span className="badge info">로그와 이벤트</span></div>
-              {state.deployments.length ? <table className="table"><tbody>{state.deployments.map((deployment: any) => <tr key={deployment.id}><td>{deployment.serviceName}</td><td>{deployment.deploymentType}</td><td><StatusBadge status={deployment.status} /></td><td className="mono">{deployment.imageDigest || deployment.imageUrl || '이미지 대기 중'}</td><td>{deployment.errorCode || deployment.errorMessage || '오류 없음'}</td><td><a className="subtle-link" href={`/org/${orgSlug}/projects/${projectId}/deployments/${deployment.id}`}>빌드 로그·배포 이벤트 상세 화면에서 불러오기</a></td></tr>)}</tbody></table> : <p className="muted">아직 배포가 없습니다.</p>}
-              <h3 style={{ marginTop: 18 }}>미리보기 배포</h3>
-              {state.previewDeployments.length ? <ul>{state.previewDeployments.map((deployment: any) => <li key={deployment.id}><a className="subtle-link" href={`/org/${orgSlug}/projects/${projectId}/deployments/${deployment.id}`}>{deployment.serviceName} PR #{deployment.pullRequestNumber || 'manual'} · {deployment.status}</a></li>)}</ul> : <p className="muted">미리보기 배포가 없습니다.</p>}
-            </section>
-          </article>
+        {view === 'new-service' ? <form method="post" action={apiAction(`/projects/${projectId}/services`, state.context)} className="form-surface stack single-activity activity-card">
+          <input type="hidden" name="_returnTo" value={`${base}?view=services`} />
+          <div><h2>서비스 만들기</h2><p className="muted">컨테이너 실행 단위</p></div>
+          <div className="form-grid"><label>서비스 이름 <input name="name" placeholder="예: web" required /></label><label>서비스 유형 <select name="type" defaultValue="web"><option value="web">웹</option><option value="private">비공개 서비스</option><option value="worker">워커</option><option value="cron">예약 작업</option><option value="job">일회성 작업</option></select></label><label>소스 유형 <select name="sourceType" defaultValue="github"><option value="github">GitHub / Git 소스</option><option value="image">빌드된 이미지</option><option value="local">로컬 Dockerfile</option></select></label><label>저장소 URL <input name="repoUrl" placeholder="https://github.com/org/repo.git" /></label><label>브랜치 <input name="branch" placeholder="main" /></label><label>이미지 <input name="imageUrl" placeholder="registry.example.com/team/web:tag" /></label><label>Dockerfile 경로 <input name="dockerfilePath" placeholder="Dockerfile" /></label><label>빌드 컨텍스트 <input name="buildContext" placeholder="." /></label></div>
+          <div className="workflow-actions"><a className="btn btn-ghost" href={`${base}?view=services`}>취소</a><button className="btn btn-primary" type="submit">서비스 만들기</button></div>
+        </form> : null}
 
-          <aside className="stack">
-            <section className="card section-anchor" id="resources">
-              <div className="card-title"><h2>리소스 추가</h2><span className="badge ok">카탈로그</span></div>
-              <form method="post" action={apiAction(`/projects/${projectId}/resources`, state.context)} className="stack">
-                <label>리소스 이름 <input name="name" placeholder="예: postgres" required /></label>
-                <label>엔진 <select name="engine" defaultValue="postgresql"><option value="postgresql">PostgreSQL</option><option value="sqlite">SQLite</option><option value="redis">Redis</option><option value="valkey">Valkey</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="mongodb">MongoDB</option><option value="object-storage">객체 저장소</option><option value="qdrant">Qdrant</option><option value="nats">NATS</option></select></label>
-                <button type="submit">리소스 추가</button>
-              </form>
-            </section>
-            <section className="card">
-              <div className="card-title"><h2>관리형 리소스</h2><span className="badge ok">공급자 관리</span></div>
-              <p className="muted">스키마, 데이터 탐색, /console/query 작업은 리소스 상세 화면의 /console/schema 경로에서 필요한 때만 불러옵니다.</p>
-              <div className="stack" style={{ marginTop: 12 }}>{state.resources.map((resource: any) => <article key={resource.id} className="card"><div className="card-title"><h2>{resource.name}</h2><StatusBadge status={resource.status || 'provisioning'} /></div><p className="mono muted">{resource.engine}</p><a className="subtle-link" href={`/org/${orgSlug}/projects/${projectId}/resources/${resource.id}/console`}>리소스 콘솔 상세 화면에서 불러오기</a></article>)}</div>
-            </section>
-            <section className="card danger-zone"><div className="card-title"><h2>위험 영역</h2><span className="badge danger">감사 로그 필수</span></div><p className="muted">프로젝트 삭제, 운영 배포 되돌리기, 보안 정보 교체에는 확인 문구와 감사 로그가 필요합니다.</p></section>
-          </aside>
-        </section>
+        {view === 'services' ? <section className="console-surface single-activity activity-card">
+          <div className="card-title"><h2>서비스</h2><div className="inline-actions"><span className="badge info">{state.services.length}개</span><a className="btn btn-primary" href={`${base}?view=new-service`}>새 서비스</a></div></div>
+          {state.services.length ? <table className="table"><thead><tr><th>이름</th><th>유형</th><th>상태</th><th>소스</th><th>배포</th></tr></thead><tbody>{state.services.map((service: any) => <tr key={service.id}><td><strong>{service.name || service.slug}</strong><p className="muted">{service.id}</p></td><td className="mono">{service.type || 'web'}</td><td><StatusBadge status={service.status || 'created'} /></td><td className="mono">{service.repoUrl || service.imageUrl || '소스 없음'}</td><td className="table-actions"><form method="post" action={apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)} className="inline-actions"><input type="hidden" name="_returnTo" value={`${base}?view=deployments`} /><input type="hidden" name="deploymentType" value="production" /><button className="btn btn-primary" type="submit">운영 배포</button></form><form method="post" action={apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)} className="inline-actions"><input type="hidden" name="_returnTo" value={`${base}?view=deployments`} /><input type="hidden" name="deploymentType" value="preview" /><button className="btn" type="submit">미리보기</button></form></td></tr>)}</tbody></table> : <div className="empty-state"><strong>서비스가 없습니다.</strong><a className="btn btn-primary" href={`${base}?view=new-service`}>첫 서비스 만들기</a></div>}
+        </section> : null}
 
-        <section className="grid grid-3" style={{ marginTop: 16 }}>
-          <article className="card"><div className="card-title"><h2>빌드 로그</h2><span className="badge info">필요할 때</span></div><p className="muted">선택한 배포의 마스킹된 로그를 상세 화면에서 불러오기</p></article>
-          <article className="card"><div className="card-title"><h2>배포 이벤트</h2><span className="badge info">필요할 때</span></div><p className="muted">선택한 배포의 이벤트를 상세 화면에서 불러오기</p></article>
-          <article className="card"><div className="card-title"><h2>런타임 로그</h2><span className="badge info">준비 중</span></div><p className="muted" role="status">서비스별 런타임 로그 화면은 준비 중입니다. 현재는 배포 상세 화면에서 빌드 로그와 이벤트를 확인하세요.</p></article>
-        </section>
+        {view === 'deployments' ? <section className="console-surface single-activity activity-card"><div className="card-title"><h2>배포 내역</h2><span className="badge info">로그와 이벤트</span></div>{state.deployments.length ? <table className="table"><thead><tr><th>서비스</th><th>유형</th><th>상태</th><th>이미지</th><th>상세</th></tr></thead><tbody>{state.deployments.map((deployment: any) => <tr key={deployment.id}><td>{deployment.serviceName}</td><td>{deployment.deploymentType}</td><td><StatusBadge status={deployment.status} /></td><td className="mono">{deployment.imageDigest || deployment.imageUrl || '이미지 대기 중'}</td><td><a className="subtle-link" href={`${base}/deployments/${deployment.id}`}>배포 상세</a></td></tr>)}</tbody></table> : <p className="muted">아직 배포가 없습니다.</p>}</section> : null}
+
+        {view === 'resources' ? <section className="console-surface single-activity activity-card"><div className="card-title"><h2>관리형 리소스</h2><div className="inline-actions"><span className="badge ok">{state.resources.length}개</span><a className="btn btn-primary" href={`${base}?view=new-resource`}>리소스 추가</a></div></div>{state.resources.length ? <div className="data-list">{state.resources.map((resource: any) => <a key={resource.id} href={`${base}/resources/${resource.id}/console`}><span><strong>{resource.name}</strong><small>{resource.engine}</small></span><StatusBadge status={resource.status || 'provisioning'} /><span aria-hidden="true">→</span></a>)}</div> : <div className="empty-state"><strong>리소스가 없습니다.</strong><a className="btn btn-primary" href={`${base}?view=new-resource`}>첫 리소스 추가</a></div>}</section> : null}
+
+        {view === 'new-resource' ? <form method="post" action={apiAction(`/projects/${projectId}/resources`, state.context)} className="form-surface stack single-activity activity-card"><input type="hidden" name="_returnTo" value={`${base}?view=resources`} /><div><h2>리소스 추가</h2><p className="muted">관리형 데이터 계층</p></div><div className="form-grid"><label>리소스 이름 <input name="name" placeholder="예: postgres" required /></label><label>엔진 <select name="engine" defaultValue="postgresql"><option value="postgresql">PostgreSQL</option><option value="sqlite">SQLite</option><option value="redis">Redis</option><option value="valkey">Valkey</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="mongodb">MongoDB</option><option value="object-storage">객체 저장소</option><option value="qdrant">Qdrant</option><option value="nats">NATS</option></select></label></div><div className="workflow-actions"><a className="btn btn-ghost" href={`${base}?view=resources`}>취소</a><button className="btn btn-primary" type="submit">리소스 추가</button></div></form> : null}
+
+        {view === 'logs' ? <section className="console-surface single-activity activity-card"><div className="card-title"><h2>런타임 로그</h2><span className="badge info">{logService?.name || '서비스'}</span></div>{logService ? <LogViewer rows={runtimeLogs?.body?.logs || []} field="line" empty="표시할 런타임 로그가 없습니다." /> : <p className="muted">서비스 없음</p>}</section> : null}
+
+        {view === 'settings' ? <section className="form-surface danger-zone single-activity activity-card"><div className="card-title"><h2>프로젝트 설정</h2><span className="badge danger">주의</span></div><p className="muted">위험 작업은 확인 후 실행</p></section> : null}
       </section>
     </ConsoleShell>
   );

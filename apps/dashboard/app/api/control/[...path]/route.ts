@@ -162,7 +162,9 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
   }
 
   if (isMutation) {
-    const successPath = path === '/auth/login' || path === '/auth/email/verify' ? '/' : returnPath;
+    const successPath = path === '/auth/signup'
+      ? signupVerificationPath(body?.email)
+      : returnPath;
     const response = isFormSubmission
       ? NextResponse.redirect(new URL(withFlashMessage(browserRequestUrl, successPath, 'notice', 'saved'), browserRequestUrl), 303)
       : responseStatusAllowsBody(upstream.status)
@@ -196,6 +198,12 @@ function applySessionCookie(response: NextResponse, path: string, payload: any) 
   const cookieOptions = { ...sessionCookieOptions(), sameSite: 'lax' as const };
   if (token) response.cookies.set(SESSION_COOKIE_NAME, token, cookieOptions);
   if (path === '/auth/logout') response.cookies.set(SESSION_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
+}
+
+function signupVerificationPath(email: unknown) {
+  const target = new URL('/login?mode=verify', 'http://dashboard.local');
+  if (typeof email === 'string' && email.length <= 320) target.searchParams.set('email', email);
+  return `${target.pathname}${target.search}`;
 }
 
 async function readMutationBody(request: NextRequest) {

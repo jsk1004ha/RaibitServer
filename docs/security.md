@@ -50,7 +50,7 @@ Runtime workload policy는 다음을 차단합니다.
 
 - Cloudflare Tunnel은 origin IP 은닉과 edge policy 적용 수단이며, RAIBITSERVER의 JWT/RBAC/quota/audit/tenant isolation을 대체하지 않습니다.
 - `*.apps`, `*.preview`, `*.console`, `*.resources` tunnel wildcard는 내부 Kubernetes Ingress Controller로만 보내고 Kubernetes Ingress가 Host 기반 라우팅을 담당합니다.
-- `admin`, `console`, `*.console`, `*.resources`는 Cloudflare Access로 보호하고, Dashboard 내부 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`도 유지합니다.
+- `admin`, `console`, `*.console`, `*.resources`는 Dashboard의 HttpOnly JWT 세션과 앱 내부 RBAC로 보호하고, Cloudflare Access/MFA를 추가 방어선으로 사용합니다.
 - `/api/*`, SSE stream, GitHub webhook은 cache bypass를 적용하고, webhook은 HMAC 검증을 계속 앱에서 수행합니다.
 - DB/TCP/registry/Kubernetes API/NodePort는 public tunnel에 열지 않고, 운영자 접근은 WARP/private network/SSH bastion으로 분리합니다.
 - origin bypass를 막기 위해 production firewall은 직접 inbound를 닫고 `cloudflared` outbound와 내부 cluster traffic만 허용합니다.

@@ -20,6 +20,8 @@ async function signup(repository, email, organizationSlug) {
   return issueSignupEmailVerificationCode(repository, {
     email,
     password: 'correct-horse',
+    name: email.split('@')[0],
+    studentId: '2500',
     organizationSlug,
   }, { jwtSecret, env: verificationEnv });
 }

@@ -20,7 +20,15 @@ export function sessionCookieOptions(env = process.env) {
   const maxAge = Number.isFinite(configuredMaxAge)
     ? Math.min(Math.max(configuredMaxAge, 300), 604_800)
     : 28_800;
-  return { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge };
+  const domain = cookieDomain(env.RAIBITSERVER_COOKIE_DOMAIN);
+  return { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge, ...(domain ? { domain } : {}) };
+}
+
+function cookieDomain(value) {
+  const domain = String(value || '').trim().toLowerCase();
+  if (!domain) return '';
+  if (!/^\.?[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(domain) || domain.includes('..')) return '';
+  return domain;
 }
 
 export function isSameOriginMutation(requestUrl, origin, referer) {

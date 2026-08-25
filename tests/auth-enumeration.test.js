@@ -8,6 +8,8 @@ import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts'
 import { issueSignupEmailVerificationCode, resendEmailVerificationCode } from '../packages/core/src/email-verification.ts';
 import { hashPassword } from '../packages/core/src/identity.ts';
 
+const signupPayload = (input) => ({ name: 'Enumeration Test', studentId: '2500', ...input });
+
 test('signup returns the same generic response for registered and unregistered targets', async () => {
   const controlPlane = new RAIBITSERVERControlPlane();
   controlPlane.store.createUser({
@@ -196,11 +198,11 @@ test('signup and resend do not expose account state when email delivery fails', 
     emailVerifiedAt: new Date().toISOString(),
     approvalStatus: 'APPROVED',
   });
-  await issueSignupEmailVerificationCode(controlPlane.store, {
+  await issueSignupEmailVerificationCode(controlPlane.store, signupPayload({
     email: 'pending-delivery@example.com',
     password: 'correct-horse',
     organizationSlug: 'pending-delivery',
-  }, {
+  }), {
     jwtSecret: 'auth-enumeration-delivery-secret',
     env: {
       NODE_ENV: 'test',
@@ -221,12 +223,12 @@ test('signup and resend do not expose account state when email delivery fails', 
   const options = { jwtSecret: 'auth-enumeration-delivery-secret', env: failingEnv };
 
   try {
-    const registeredSignup = await issueSignupEmailVerificationCode(controlPlane.store, {
+    const registeredSignup = await issueSignupEmailVerificationCode(controlPlane.store, signupPayload({
       email: 'registered-delivery@example.com', password: 'correct-horse', organizationSlug: 'registered-delivery-attempt',
-    }, options);
-    const unknownSignup = await issueSignupEmailVerificationCode(controlPlane.store, {
+    }), options);
+    const unknownSignup = await issueSignupEmailVerificationCode(controlPlane.store, signupPayload({
       email: 'unknown-delivery@example.com', password: 'correct-horse', organizationSlug: 'unknown-delivery',
-    }, options);
+    }), options);
     const registeredResend = await resendEmailVerificationCode(controlPlane.store, { email: 'registered-delivery@example.com' }, options);
     const unknownResend = await resendEmailVerificationCode(controlPlane.store, { email: 'never-pending@example.com' }, options);
     const pendingResend = await resendEmailVerificationCode(controlPlane.store, { email: 'pending-delivery@example.com' }, options);
@@ -260,11 +262,11 @@ test('signup uses a bounded user count instead of a full repository snapshot', a
   };
   const scheduled = [];
 
-  const result = await issueSignupEmailVerificationCode(repository, {
+  const result = await issueSignupEmailVerificationCode(repository, signupPayload({
     email: 'bounded-count@example.test',
     password: 'correct-horse',
     organizationSlug: 'bounded-count',
-  }, {
+  }), {
     jwtSecret: 'bounded-count-signup-secret',
     env: verificationEnv(),
     scheduleDelivery: (task) => scheduled.push(task),
@@ -312,11 +314,11 @@ test('signup performs the same bounded public work for new, registered, and orga
 
     let result;
     const scryptCalls = await countAsyncScryptCalls(async () => {
-      result = await issueSignupEmailVerificationCode(tracked.repository, {
+      result = await issueSignupEmailVerificationCode(tracked.repository, signupPayload({
         email: `${scenario.name}@example.test`,
         password: 'correct-horse',
         organizationSlug: 'timing-target',
-      }, options);
+      }), options);
     });
 
     assert.deepEqual(result, { accepted: true }, scenario.name);
@@ -383,11 +385,11 @@ test('organization-collision padding preserves an existing signup challenge', as
   controlPlane.store.createOrganization({ name: 'Already claimed', slug: 'already-claimed' });
   const scheduled = [];
 
-  const result = await issueSignupEmailVerificationCode(controlPlane.store, {
+  const result = await issueSignupEmailVerificationCode(controlPlane.store, signupPayload({
     email,
     password: 'replacement-password',
     organizationSlug: 'already-claimed',
-  }, {
+  }), {
     jwtSecret: 'preserve-pending-signup-secret',
     env: verificationEnv(),
     scheduleDelivery: (task) => scheduled.push(task),
@@ -424,11 +426,11 @@ test('signup and resend return after durable challenge persistence without await
   let signupOperation;
 
   try {
-    signupOperation = issueSignupEmailVerificationCode(controlPlane.store, {
+    signupOperation = issueSignupEmailVerificationCode(controlPlane.store, signupPayload({
       email,
       password: 'correct-horse',
       organizationSlug: 'durable-async',
-    }, options);
+    }), options);
     const signup = await settleBefore(signupOperation, 1_000, 'signup waited for webhook delivery');
     assert.deepEqual(signup, { accepted: true });
     assert.ok(controlPlane.store.findPendingEmailVerificationCode(email, 'signup'), 'signup challenge must be durable before returning');
@@ -461,7 +463,7 @@ async function startApi(controlPlane) {
 
 function request(port, path, body) {
   return new Promise((resolve, reject) => {
-    const payload = JSON.stringify(body);
+    const payload = JSON.stringify(path === '/auth/signup' ? signupPayload(body) : body);
     const req = http.request({
       host: '127.0.0.1',
       port,
@@ -516,6 +518,8 @@ function createPendingSignup(repository, email) {
     payload: {
       kind: 'signup',
       name: email,
+      studentId: '2500',
+      clubMemberClaim: false,
       email,
       passwordHash: hashPassword('correct-horse'),
       organizationSlug: 'pending-timing',

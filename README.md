@@ -136,7 +136,7 @@ node src/cli.js compose examples/docker-compose.yml
 | --- | --- |
 | DB/상태 | `DATABASE_URL`, `RAIBITSERVER_PERSISTENCE`, `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_STORE`, `RAIBITSERVER_CONTROL_PLANE_FILE`, `REDIS_URL` |
 | Secret/Auth | `JWT_SECRET`, `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_AUTH_ISSUER`, `RAIBITSERVER_SESSION_TTL_SECONDS`, `RAIBITSERVER_AUTH_RATE_LIMIT`, `RAIBITSERVER_TRUST_PROXY_HEADERS`, `ENCRYPTION_KEY`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS` |
-| Dashboard/API | `PORT`, `RAIBITSERVER_API_URL`, `RAIBITSERVER_DASHBOARD_TOKEN`, `RAIBITSERVER_TOKEN`, `RAIBITSERVER_DASHBOARD_BASIC_AUTH` |
+| Dashboard/API | `PORT`, `RAIBITSERVER_API_URL`, `RAIBITSERVER_CONSOLE_URL`, `RAIBITSERVER_DASHBOARD_ORIGIN`, `RAIBITSERVER_COOKIE_DOMAIN`, `RAIBITSERVER_DASHBOARD_BASIC_AUTH` |
 | Build/Runtime | `REGISTRY_URL`, `RAIBITSERVER_REGISTRY`, `RAIBITSERVER_REGISTRY_USERNAME`, `RAIBITSERVER_REGISTRY_PASSWORD`, `RAIBITSERVER_BUILDKIT_CACHE`, `RAIBITSERVER_BUILDKIT_CACHE_REF`, `KUBECONFIG`, `RAIBITSERVER_KUBE_CONTEXT`, `BASE_DOMAIN`, `RAIBITSERVER_BASE_DOMAIN`, `RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE`, `RAIBITSERVER_EXECUTE`, `RAIBITSERVER_PUSH` |
 | Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
 | Provider | `RAIBITSERVER_POSTGRES_PROVIDER_URL`, `POSTGRES_PROVIDER_URL`, `RAIBITSERVER_PROVIDER_POSTGRESQL_IMAGE`, `RAIBITSERVER_PROVIDER_MYSQL_IMAGE`, `RAIBITSERVER_PROVIDER_MARIADB_IMAGE`, `RAIBITSERVER_PROVIDER_MONGODB_IMAGE`, `RAIBITSERVER_PROVIDER_REDIS_IMAGE`, `RAIBITSERVER_PROVIDER_VALKEY_IMAGE`, `RAIBITSERVER_PROVIDER_MINIO_IMAGE`, `RAIBITSERVER_PROVIDER_QDRANT_IMAGE`, `RAIBITSERVER_PROVIDER_NATS_IMAGE` |
@@ -194,7 +194,7 @@ GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드
 | 용도 | 예시 |
 | --- | --- |
 | API | `api.raibitserver.app` |
-| Dashboard/Admin | `admin.raibitserver.app` 또는 `console.raibitserver.app` (반드시 별도 인증 계층 적용) |
+| Main/Dashboard | `raibit.kr` 공개 랜딩, `console.raibit.kr` 로그인 전용 콘솔 |
 | 서비스 실행 URL | `*.apps.raibitserver.app` |
 | PR preview URL | `*.preview.raibitserver.app` |
 | 서비스 관리 화면 | `*.console.raibitserver.app` |
@@ -206,7 +206,7 @@ Cloudflare Tunnel을 쓰는 경우 각 tenant service hostname을 tunnel ingress
 
 Tenant NetworkPolicy는 임의의 사용자 라벨이 아니라 Kubernetes 예약 네임스페이스 라벨 `kubernetes.io/metadata.name`으로 ingress controller를 식별합니다. 기본 네임스페이스는 `ingress-nginx`이며, 다른 네임스페이스를 쓰면 Helm `ingress.gatewayNamespace`를 설정하세요. 이 값은 같은 release의 API, Go orchestrator, ValidatingAdmissionPolicy에 함께 렌더되고 tenant 프로젝트 입력으로는 변경할 수 없습니다.
 
-> 보안 필수: 대시보드는 서버 토큰(`RAIBITSERVER_DASHBOARD_TOKEN`/`RAIBITSERVER_TOKEN`)으로 API 데이터를 렌더링할 수 있으므로 public ingress에 노출할 때 반드시 별도 인증 계층을 적용하세요. 기본 구성에서는 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`를 `username:password` 형식으로 설정해야 하며, 서버 토큰이 있는데 basic auth가 없으면 대시보드 요청은 503으로 차단됩니다.
+> 보안 필수: `raibit.kr`의 랜딩과 `/public/sites`만 공개합니다. `console.raibit.kr`, `/console`, `/org`, `/github`는 API 로그인으로 발급된 HttpOnly 세션 쿠키가 있어야 하며, `/admin`과 관리자 메뉴는 JWT의 `userRole=ADMIN`인 계정만 사용할 수 있습니다. production에서는 `RAIBITSERVER_COOKIE_DOMAIN=.raibit.kr`을 설정하고 Cloudflare Access/MFA를 추가 방어선으로 둘 수 있습니다.
 
 ### 4. production 환경 변수 예시
 
@@ -241,8 +241,10 @@ RAIBITSERVER_EMAIL_WEBHOOK_TOKEN=<mail-bridge-token>
 
 # Dashboard -> API
 RAIBITSERVER_API_URL=https://api.raibitserver.app/api
-RAIBITSERVER_DASHBOARD_TOKEN=<dashboard-server-side-token>
-RAIBITSERVER_DASHBOARD_BASIC_AUTH=<admin-user>:<strong-random-password>
+RAIBITSERVER_CONSOLE_URL=https://console.raibit.kr/console
+RAIBITSERVER_DASHBOARD_ORIGIN=https://console.raibit.kr
+RAIBITSERVER_COOKIE_DOMAIN=.raibit.kr
+RAIBITSERVER_DASHBOARD_BASIC_AUTH=<optional-extra-user>:<strong-random-password>
 
 # Kubernetes / runtime
 KUBECONFIG=/etc/raibitserver/kubeconfig
@@ -281,6 +283,7 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 - Nest API는 부팅 시 `PORT`, `RAIBITSERVER_AUTH_RATE_LIMIT`, production auth/secret 설정을 먼저 검증합니다. `NODE_ENV=production`에서는 32자 미만 `RAIBITSERVER_AUTH_JWT_SECRET`, 32자 미만 `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS`가 있는데 32자 미만 `RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN`, `RAIBITSERVER_AUTH_DISABLED=1`, `RAIBITSERVER_AUTH_DEV_HEADERS=1`, `RAIBITSERVER_AUTH_DEV_TOKEN=1`이 모두 fail-fast로 차단됩니다.
 - `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다. 특히 인증 비활성화는 `NODE_ENV=production`에서는 무시되며, 로컬에서도 `RAIBITSERVER_AUTH_DISABLED_CONFIRM=I_UNDERSTAND_THIS_GRANTS_GLOBAL_OWNER` 확인값이 있어야만 활성화됩니다. dev header 인증은 추가로 `RAIBITSERVER_DEV_HEADER_BIND_LOCAL=1`이 있어야만 켜집니다.
 - 인증 rate limit은 기본적으로 소켓 원격 주소를 사용하고 `X-Forwarded-For`를 신뢰하지 않습니다. signup, 이메일 인증·재발송, 로그인은 처리 전에 durable email/action, source/action, 전체 auth-flow source, global bucket을 모두 선차감하며 성공해도 bucket을 reset하지 않습니다. 키에는 원문 이메일이나 source 대신 secret-keyed digest를 저장합니다. 따라서 로그인 성공 여부나 계정 존재 여부로 제한을 우회할 수 없고, 한 source의 이메일 순환 공격과 한 이메일의 source 순환 공격을 함께 제한합니다. Cloudflare Access/Tunnel, Nginx, Ingress처럼 신뢰된 프록시만 API 앞에 있고 origin bypass가 방화벽으로 막힌 경우에만 `RAIBITSERVER_TRUST_PROXY_HEADERS=1`을 설정하세요.
+- 가입 신청은 이메일/비밀번호와 함께 이름·학번을 필수로 저장합니다. 관리자는 승인 화면에서 이름/학번/이메일을 확인하고 `CLUB_MEMBER` 또는 `NON_CLUB`으로 승인합니다.
 - 운영 첫 admin은 더 이상 “첫 가입자”만으로 자동 승격되지 않습니다. `ADMIN_EMAILS`에 포함된 이메일이 `RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN`을 함께 제출할 때만 admin bootstrap이 허용됩니다.
 - 이메일/비밀번호 signup은 6자리 이메일 인증 코드를 먼저 발송하고, `/auth/email/verify` 성공 후에만 세션 토큰을 발급합니다. 같은 이메일로 signup을 다시 시작하면 이전에 소비되지 않은 signup 인증 코드와 payload를 무효화하고 새 payload/코드를 발급해, 악의적이거나 오래된 pending signup이 정상 가입을 계속 막거나 피해자가 공격자 지정 비밀번호/조직으로 계정을 만들게 하지 않습니다. `/auth/email/resend`는 아직 만료되지 않은 최신 pending signup payload에 대해서만 코드를 재발급합니다. 발신자는 발송 전용 주소(`RAIBITSERVER_EMAIL_FROM`, 예: `RAIBITSERVER <email-verification@raibitserver.app>`)이고, `RAIBITSERVER_EMAIL_DOMAIN`/`RAIBITSERVER_BASE_DOMAIN`/`BASE_DOMAIN`에서 자동 생성할 수도 있습니다. 이 기능은 사용자 메일함/MX를 운영하지 않으며 production은 `RAIBITSERVER_EMAIL_WEBHOOK_URL` 같은 실제 mail bridge와 발신 도메인의 SPF/DKIM/DMARC 설정이 필요합니다.
 - DB console 권한은 `db:schema:read`, `db:data:read`, `db:query:write`로 분리됩니다. 기본 developer는 schema metadata만 볼 수 있고 row data `SELECT`는 maintainer/db-admin 이상 권한이 필요합니다.

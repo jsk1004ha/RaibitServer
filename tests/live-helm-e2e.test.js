@@ -27,7 +27,7 @@ test('live Helm cleanup fails the gate when its disposable cluster cannot be rem
 });
 
 test('live Helm E2E exercises real images, migrations, API health, and an orchestrator transition', async () => {
-  const script = await fs.readFile(scriptPath, 'utf8');
+  const script = (await fs.readFile(scriptPath, 'utf8')).replace(/\r\n/g, '\n');
 
   assert.match(script, /^#!\/usr\/bin\/env bash\nset -Eeuo pipefail/m);
   assert.match(script, /for command in docker kind kubectl helm curl go/);

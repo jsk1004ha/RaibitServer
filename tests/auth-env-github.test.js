@@ -45,7 +45,7 @@ test('first auth user bootstraps as admin non-club and GitHub callback remains p
   await once(server, 'listening');
   const { port } = server.address();
   try {
-    const first = await request(port, 'POST', '/auth/signup', { email: 'first@example.com', password: 'correct-horse', organizationSlug: 'first-org' });
+    const first = await request(port, 'POST', '/auth/signup', { email: 'first@example.com', password: 'correct-horse', name: 'First User', studentId: '2501', organizationSlug: 'first-org' });
     assert.equal(first.statusCode, 201);
     assert.equal(first.body.user, undefined);
     assert.equal(first.body.organization, undefined);
@@ -54,14 +54,25 @@ test('first auth user bootstraps as admin non-club and GitHub callback remains p
     assert.equal(firstVerified.body.user.role, 'ADMIN');
     assert.equal(firstVerified.body.user.accountType, 'NON_CLUB');
     assert.equal(firstVerified.body.user.approvalStatus, 'APPROVED');
+    assert.equal(firstVerified.body.user.name, 'First User');
+    assert.equal(firstVerified.body.user.studentId, '2501');
 
-    const second = await request(port, 'POST', '/auth/signup', { email: 'second@example.com', password: 'correct-horse', organizationSlug: 'second-org', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
+    const adminSnapshot = await request(port, 'GET', '/snapshot', null, firstVerified.body.token);
+    assert.equal(adminSnapshot.statusCode, 200);
+    assert.equal(adminSnapshot.body.users[0].name, 'First User');
+    assert.equal(adminSnapshot.body.users[0].studentId, '2501');
+    const second = await request(port, 'POST', '/auth/signup', { email: 'second@example.com', password: 'correct-horse', name: 'Second User', studentId: '2502', clubMemberClaim: true, accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
     assert.equal(second.statusCode, 201);
     const secondVerified = await request(port, 'POST', '/auth/email/verify', { email: 'second@example.com', code: '111111' });
     assert.equal(secondVerified.statusCode, 200);
     assert.equal(secondVerified.body.user.role, 'USER');
     assert.equal(secondVerified.body.user.accountType, 'NON_CLUB');
+    assert.equal(secondVerified.body.user.clubMemberClaim, true);
     assert.equal(secondVerified.body.user.approvalStatus, 'PENDING');
+    assert.equal(secondVerified.body.organization.slug, 'second');
+    const secondSnapshot = await request(port, 'GET', '/snapshot', null, secondVerified.body.token);
+    assert.equal(secondSnapshot.statusCode, 401);
+    assert.equal(secondSnapshot.body.error, 'account is not approved');
     const secondBlocked = await request(port, 'POST', '/projects', { name: 'blocked', slug: 'blocked' }, secondVerified.body.token);
     assert.equal(secondBlocked.statusCode, 401);
 
@@ -182,7 +193,14 @@ test('signup sends an email code and requires verification before login issues a
   await once(server, 'listening');
   const { port } = server.address();
   try {
-    const signup = await request(port, 'POST', '/auth/signup', { email: 'verify@example.com', password: 'correct-horse', organizationSlug: 'verify-org' });
+    const missingName = await request(port, 'POST', '/auth/signup', { email: 'missing-name@example.com', password: 'correct-horse', studentId: '2598', organizationSlug: 'missing-name-org' });
+    assert.equal(missingName.statusCode, 400);
+    assert.equal(missingName.body.error, 'name_is_required');
+    const missingStudentId = await request(port, 'POST', '/auth/signup', { email: 'missing-student@example.com', password: 'correct-horse', name: 'Missing Student', organizationSlug: 'missing-student-org' });
+    assert.equal(missingStudentId.statusCode, 400);
+    assert.equal(missingStudentId.body.error, 'student_id_is_required');
+
+    const signup = await request(port, 'POST', '/auth/signup', { email: 'verify@example.com', password: 'correct-horse', name: 'Verify User', studentId: '2503', organizationSlug: 'verify-org' });
     assert.equal(signup.statusCode, 201);
     assert.equal(Boolean(signup.body.token), false);
     assert.equal(signup.body.user, undefined);
@@ -207,6 +225,8 @@ test('signup sends an email code and requires verification before login issues a
     assert.equal(verified.statusCode, 200);
     assert.equal(Boolean(verified.body.token), true);
     assert.ok(verified.body.user.emailVerifiedAt);
+    assert.equal(verified.body.user.name, 'Verify User');
+    assert.equal(verified.body.user.studentId, '2503');
     assert.equal(controlPlane.store.users.size, 1);
     assert.equal(controlPlane.store.organizations.size, 1);
     assert.equal(verified.body.user.passwordHash, undefined);
@@ -231,16 +251,17 @@ test('signup replacement invalidates stale or malicious pending email verificati
   await once(server, 'listening');
   const { port } = server.address();
   try {
-    const attackerSignup = await request(port, 'POST', '/auth/signup', { email: 'pending@example.com', password: 'attacker-password', name: 'Attacker', organizationSlug: 'attacker-org' });
+    const attackerSignup = await request(port, 'POST', '/auth/signup', { email: 'pending@example.com', password: 'attacker-password', name: 'Attacker', studentId: '6666', organizationSlug: 'attacker-org' });
     assert.equal(attackerSignup.statusCode, 201);
 
-    const victimSignup = await request(port, 'POST', '/auth/signup', { email: 'pending@example.com', password: 'victim-password', name: 'Victim', organizationSlug: 'pending-org' });
+    const victimSignup = await request(port, 'POST', '/auth/signup', { email: 'pending@example.com', password: 'victim-password', name: 'Victim', studentId: '2504', organizationSlug: 'pending-org' });
     assert.equal(victimSignup.statusCode, 201);
     assert.equal(controlPlane.store.emailVerificationCodes.filter((row) => row.email === 'pending@example.com' && !row.consumedAt).length, 1);
 
     const verified = await request(port, 'POST', '/auth/email/verify', { email: 'pending@example.com', code: '135790' });
     assert.equal(verified.statusCode, 200);
     assert.equal(verified.body.user.name, 'Victim');
+    assert.equal(verified.body.user.studentId, '2504');
     assert.equal(verified.body.organization.slug, 'pending-org');
 
     const attackerLogin = await request(port, 'POST', '/auth/login', { email: 'pending@example.com', password: 'attacker-password' });
@@ -248,16 +269,17 @@ test('signup replacement invalidates stale or malicious pending email verificati
     const victimLogin = await request(port, 'POST', '/auth/login', { email: 'pending@example.com', password: 'victim-password' });
     assert.equal(victimLogin.statusCode, 200);
 
-    const staleSignup = await request(port, 'POST', '/auth/signup', { email: 'stale@example.com', password: 'old-password', name: 'Stale', organizationSlug: 'stale-old-org' });
+    const staleSignup = await request(port, 'POST', '/auth/signup', { email: 'stale@example.com', password: 'old-password', name: 'Stale', studentId: '2505', organizationSlug: 'stale-old-org' });
     assert.equal(staleSignup.statusCode, 201);
     const staleRecord = controlPlane.store.emailVerificationCodes.find((row) => row.email === 'stale@example.com' && !row.consumedAt);
     staleRecord.expiresAt = '2000-01-01T00:00:00.000Z';
 
-    const freshSignup = await request(port, 'POST', '/auth/signup', { email: 'stale@example.com', password: 'fresh-password', name: 'Fresh', organizationSlug: 'stale-fresh-org' });
+    const freshSignup = await request(port, 'POST', '/auth/signup', { email: 'stale@example.com', password: 'fresh-password', name: 'Fresh', studentId: '2506', organizationSlug: 'stale-fresh-org' });
     assert.equal(freshSignup.statusCode, 201);
     const freshVerified = await request(port, 'POST', '/auth/email/verify', { email: 'stale@example.com', code: '135790' });
     assert.equal(freshVerified.statusCode, 200);
     assert.equal(freshVerified.body.user.name, 'Fresh');
+    assert.equal(freshVerified.body.user.studentId, '2506');
     assert.equal(freshVerified.body.organization.slug, 'stale-fresh-org');
   } finally {
     server.close();
@@ -277,7 +299,7 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
   await once(server, 'listening');
   const { port } = server.address();
   try {
-    const aliceSignup = await request(port, 'POST', '/auth/signup', { email: 'alice@example.com', password: 'correct-horse', organizationSlug: 'alice-org', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
+    const aliceSignup = await request(port, 'POST', '/auth/signup', { email: 'alice@example.com', password: 'correct-horse', name: 'Alice', studentId: '2507', organizationSlug: 'alice-org', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
     assert.equal(aliceSignup.statusCode, 201);
     assert.equal(Boolean(aliceSignup.body.token), false);
     assert.equal(aliceSignup.body.user, undefined);
@@ -289,21 +311,21 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(aliceVerified.body.user.accountType, 'NON_CLUB');
     assert.equal(aliceVerified.body.user.approvalStatus, 'APPROVED');
 
-    const bobSignup = await request(port, 'POST', '/auth/signup', { email: 'bob@example.com', password: 'correct-horse', organizationSlug: 'bob-org' });
+    const bobSignup = await request(port, 'POST', '/auth/signup', { email: 'bob@example.com', password: 'correct-horse', name: 'Bob', studentId: '2508', organizationSlug: 'bob-org' });
     assert.equal(bobSignup.statusCode, 201);
     const bobVerified = await request(port, 'POST', '/auth/email/verify', { email: 'bob@example.com', code: '135790' });
     assert.equal(bobVerified.statusCode, 200);
     assert.equal(bobVerified.body.user.accountType, 'NON_CLUB');
     assert.equal(bobVerified.body.user.approvalStatus, 'PENDING');
 
-    const eveSignup = await request(port, 'POST', '/auth/signup', { email: 'eve@example.com', password: 'correct-horse', organizationSlug: 'eve-org', plan: 'club', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
+    const eveSignup = await request(port, 'POST', '/auth/signup', { email: 'eve@example.com', password: 'correct-horse', name: 'Eve', studentId: '2509', organizationSlug: 'eve-org', plan: 'club', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
     assert.equal(eveSignup.statusCode, 201);
     const eveVerified = await request(port, 'POST', '/auth/email/verify', { email: 'eve@example.com', code: '135790' });
     assert.equal(eveVerified.statusCode, 200);
     assert.equal(eveVerified.body.user.accountType, 'NON_CLUB');
     assert.equal(eveVerified.body.user.approvalStatus, 'PENDING');
 
-    const duplicateOrg = await request(port, 'POST', '/auth/signup', { email: 'mallory@example.com', password: 'correct-horse', organizationSlug: 'alice-org' });
+    const duplicateOrg = await request(port, 'POST', '/auth/signup', { email: 'mallory@example.com', password: 'correct-horse', name: 'Mallory', studentId: '2510', organizationSlug: 'alice-org' });
     assert.equal(duplicateOrg.statusCode, 201);
     assert.deepEqual(duplicateOrg.body.emailVerification, { accepted: true });
     assert.equal(controlPlane.store.emailVerificationCodes.some((row) => row.email === 'mallory@example.com' && row.purpose === 'signup' && !row.consumedAt), false);

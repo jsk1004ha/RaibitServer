@@ -14,6 +14,7 @@ import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentSta
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
 import { parseGitHubRepository } from './github-integration.ts';
+import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
   activityLimit,
   boundedKeysetRows,
@@ -183,6 +184,7 @@ export class InMemoryControlPlaneRepository {
       resourceCount: resourceCounts.get(String(project.id)) || 0,
     })));
   }
+  async listPublicSites(limit: unknown = 5) { return publicSitesFromSnapshot(this.store.snapshot(), limit); }
   async listUsers() { return deepClone([...this.store.users.values()].map(redactUser)); }
   async getQuotaForUser(userId: string) { return deepClone([...this.store.quotas.values()].find((row) => String(row.userId) === String(userId)) || null); }
   async listUsageRecordsForUser(userId: string, options: Record<string, any> = {}) {
@@ -343,8 +345,33 @@ export class PrismaControlPlaneRepository {
     const emailVerifiedAt = input.emailVerifiedAt === undefined ? new Date() : input.emailVerifiedAt;
     const user = await this.prisma.user.upsert({
       where: { email: input.email },
-      update: { name: input.name, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined, sessionVersion: input.passwordHash ? { increment: 1 } : undefined, role: input.role || undefined, accountType, approvalStatus: input.approvalStatus || undefined, emailVerifiedAt: input.emailVerifiedAt === undefined ? undefined : input.emailVerifiedAt },
-      create: { name: input.name, email: input.email, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || null, sessionVersion: 0, role: input.role || 'USER', accountType, approvalStatus: input.approvalStatus || 'PENDING', emailVerifiedAt },
+      update: {
+        name: input.name,
+        studentId: input.studentId === undefined ? undefined : String(input.studentId),
+        clubMemberClaim: input.clubMemberClaim === undefined ? undefined : Boolean(input.clubMemberClaim),
+        avatarUrl: input.avatarUrl || null,
+        githubId: input.githubId || null,
+        passwordHash: input.passwordHash || undefined,
+        sessionVersion: input.passwordHash ? { increment: 1 } : undefined,
+        role: input.role || undefined,
+        accountType,
+        approvalStatus: input.approvalStatus || undefined,
+        emailVerifiedAt: input.emailVerifiedAt === undefined ? undefined : input.emailVerifiedAt,
+      },
+      create: {
+        name: input.name,
+        studentId: input.studentId || '',
+        clubMemberClaim: Boolean(input.clubMemberClaim),
+        email: input.email,
+        avatarUrl: input.avatarUrl || null,
+        githubId: input.githubId || null,
+        passwordHash: input.passwordHash || null,
+        sessionVersion: 0,
+        role: input.role || 'USER',
+        accountType,
+        approvalStatus: input.approvalStatus || 'PENDING',
+        emailVerifiedAt,
+      },
     });
     return redactUser(user);
   }
@@ -567,6 +594,8 @@ export class PrismaControlPlaneRepository {
         const user = await transaction.user.create({
           data: {
             name: payload.name || email,
+            studentId: payload.studentId || '',
+            clubMemberClaim: Boolean(payload.clubMemberClaim),
             email,
             passwordHash: payload.passwordHash,
             role: policy.role || 'USER',
@@ -1011,6 +1040,49 @@ export class PrismaControlPlaneRepository {
     }));
   }
 
+  async listPublicSites(limit: unknown = 5) {
+    const take = normalizePublicSiteLimit(limit);
+    if (take === 0) return { sites: [] };
+    const services = await this.prisma.service.findMany({
+      where: {
+        type: 'web',
+        deletionRequestedAt: null,
+        domains: { some: { verified: true } },
+        deployments: {
+          some: {
+            deploymentType: { in: ['production', 'PRODUCTION'] },
+            status: { in: ['ready', 'READY'] },
+          },
+        },
+        project: { is: { deletionRequestedAt: null, status: { notIn: ['ARCHIVED', 'DELETED', 'FAILED', 'archived', 'deleted', 'failed'] } } },
+      },
+      select: {
+        id: true,
+        projectId: true,
+        name: true,
+        type: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        domains: { where: { verified: true }, select: { domain: true, verified: true, updatedAt: true }, orderBy: { updatedAt: 'desc' }, take: 1 },
+        deployments: {
+          where: {
+            deploymentType: { in: ['production', 'PRODUCTION'] },
+            status: { in: ['ready', 'READY'] },
+          },
+          select: { id: true, deploymentType: true, status: true, updatedAt: true },
+          orderBy: { updatedAt: 'desc' },
+          take: 1,
+        },
+        project: { select: { id: true, name: true, slug: true, status: true, organization: { select: { name: true, slug: true } } } },
+      },
+      distinct: ['projectId'],
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      take,
+    });
+    return publicSitesFromServices(services, take);
+  }
+
   async listUsers() {
     const users = await this.prisma.user.findMany({ orderBy: { createdAt: 'asc' } });
     return users.map(redactUser);
@@ -1033,7 +1105,7 @@ export class PrismaControlPlaneRepository {
     const limit = activityLimit(options.limit);
     const [users, quotas, auditLogs] = await Promise.all([
       this.prisma.user.findMany({
-        select: { id: true, email: true, name: true, avatarUrl: true, githubId: true, role: true, accountType: true, approvalStatus: true, emailVerifiedAt: true, createdAt: true, updatedAt: true },
+        select: { id: true, email: true, name: true, studentId: true, clubMemberClaim: true, avatarUrl: true, githubId: true, role: true, accountType: true, approvalStatus: true, emailVerifiedAt: true, createdAt: true, updatedAt: true },
         orderBy: { createdAt: 'desc' },
         take: limit,
       }),

@@ -173,7 +173,7 @@ test('session JWT lifetime is server-clamped and login brute force is rate limit
   await once(server, 'listening');
   const { port } = server.address();
   try {
-    const signup = await request(port, 'POST', '/auth/signup', { email: 'ttl@example.com', password: 'correct-horse', organizationSlug: 'ttl-org', expiresInSeconds: 315360000 });
+    const signup = await request(port, 'POST', '/auth/signup', { email: 'ttl@example.com', password: 'correct-horse', name: 'TTL User', studentId: '2591', organizationSlug: 'ttl-org', expiresInSeconds: 315360000 });
     assert.equal(signup.statusCode, 201);
     assert.equal(signup.body.user, undefined);
     const verified = await request(port, 'POST', '/auth/email/verify', { email: 'ttl@example.com', code: '222222' });
@@ -399,7 +399,7 @@ test('auth rate limits do not trust spoofed X-Forwarded-For unless explicitly en
   await once(server, 'listening');
   const { port } = server.address();
   try {
-    const signup = await request(port, 'POST', '/auth/signup', { email: 'xff@example.com', password: 'correct-horse', organizationSlug: 'xff-org' });
+    const signup = await request(port, 'POST', '/auth/signup', { email: 'xff@example.com', password: 'correct-horse', name: 'XFF User', studentId: '2592', organizationSlug: 'xff-org' });
     assert.equal(signup.statusCode, 201);
 
     let limited;

@@ -46,7 +46,7 @@ try {
   evidence.liveSetup = e2ePlan.setup;
   evidence.liveSetupResults = e2ePlan.mode === 'live' ? await runLiveSetup(e2ePlan.setup) : [];
 
-  const bootstrapAdmin = await request('POST', '/auth/signup', { email: 'admin@example.com', password: 'correct-horse-battery', organizationSlug: 'admin-org' });
+  const bootstrapAdmin = await request('POST', '/auth/signup', { email: 'admin@example.com', password: 'correct-horse-battery', name: 'Admin User', studentId: '2501', organizationSlug: 'admin-org' });
   assertStatus(bootstrapAdmin, 201, 'first-user admin bootstrap');
   if (bootstrapAdmin.body.user || bootstrapAdmin.body.organization) throw new Error('signup created an account before email verification');
   const adminVerified = await request('POST', '/auth/email/verify', { email: 'admin@example.com', code: emailVerificationCode });
@@ -56,7 +56,7 @@ try {
   }
   const adminToken = adminVerified.body.token;
 
-  const pending = await request('POST', '/auth/signup', { email: 'student@example.com', password: 'correct-horse-battery', organizationSlug: 'student-org' });
+  const pending = await request('POST', '/auth/signup', { email: 'student@example.com', password: 'correct-horse-battery', name: 'Student User', studentId: '2502', organizationSlug: 'student-org' });
   assertStatus(pending, 201, 'non-club signup');
   const pendingVerified = await request('POST', '/auth/email/verify', { email: 'student@example.com', code: emailVerificationCode });
   assertStatus(pendingVerified, 200, 'non-club email verification');
@@ -146,7 +146,7 @@ try {
   const previewCleanup = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', 'local-e2e-pr-closed', cleanupPayload));
   if (!previewCleanup.actions.some((action) => action.type === 'preview-cleanup-enqueued')) throw new Error('preview cleanup webhook did not enqueue cleanup');
 
-  const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', organizationSlug: 'club-org' });
+  const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', name: 'Club User', studentId: '2503', organizationSlug: 'club-org' });
   assertStatus(club, 201, 'club signup');
   if (club.body.user || club.body.organization) throw new Error('club signup created an account before email verification');
   const clubVerified = await request('POST', '/auth/email/verify', { email: 'club@example.com', code: emailVerificationCode });

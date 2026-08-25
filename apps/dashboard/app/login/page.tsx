@@ -1,62 +1,85 @@
+import Image from 'next/image';
 import { apiAction } from '../../lib/api';
-import { ConsoleShell } from '../../components/console-ui';
 
-export default function LoginPage() {
-  const githubLoginEndpoint = apiAction('/auth/github/login');
-  const githubCallbackEndpoint = apiAction('/auth/github/callback');
+const modes = ['login', 'signup', 'verify'] as const;
+
+export default async function LoginPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const query = await searchParams;
+  const requestedMode = String(query.mode || 'login');
+  const mode = modes.includes(requestedMode as any) ? requestedMode : 'login';
+  const email = String(query.email || '');
+  const next = String(query.next || '/console');
+  const error = errorMessage(String(query.error || ''));
+  const notice = String(query.notice || '');
+  const publicHomeHref = process.env.NODE_ENV === 'production' ? 'https://raibit.kr/' : '/';
   return (
-    <ConsoleShell active="auth" eyebrow="계정" orgValue="RAIBITSERVER" projectValue="인증과 승인" crumbs="계정 / 로그인" actions={<><button className="btn btn-primary" type="button" disabled aria-describedby="github-oauth-status">GitHub로 계속하기</button><a className="btn" href="/">운영 현황</a></>}>
-      <section className="page" data-od-id="landing-auth">
-        <header className="page-header">
-          <div><p className="eyebrow">RAIBITSERVER 계정</p><h1 className="page-title">로그인</h1><p className="page-subtitle">이메일 또는 GitHub 계정으로 로그인하고 가입 인증 상태를 관리합니다.</p></div>
-          <span className="badge info">보안 인증</span>
+    <main className="auth-page" data-od-id="landing-auth">
+      <a className="auth-brand" href={publicHomeHref}><Image src="/raibit-logo.jpg" alt="라이빗 로고" width={42} height={42} priority /><span>RAIBIT SERVER</span></a>
+      <section className="auth-panel">
+        <header>
+          <p className="eyebrow">RAIBIT ACCOUNT</p>
+          <h1>{mode === 'signup' ? '가입 신청' : mode === 'verify' ? '이메일 인증' : '로그인'}</h1>
+          <p>{mode === 'signup' ? '라이빗 서버 사용을 신청합니다. 관리자 확인을 위해 정확한 정보를 입력해 주세요.' : mode === 'verify' ? '이메일로 받은 6자리 코드를 입력해 주세요.' : '콘솔에 계속하려면 계정으로 로그인하세요.'}</p>
         </header>
-        <div className="callout"><strong>이메일 인증과 승인</strong><p className="muted">인증 코드를 확인한 뒤에만 계정이 만들어집니다. 이후 관리자 승인 결과가 계정의 사용 가능 기능을 결정합니다.</p></div>
-        <p className="callout muted" id="github-oauth-status" style={{ marginTop: 12 }}>GitHub OAuth 연결은 준비 중입니다. 현재 API는 OAuth 계획과 연결 대기 상태만 제공합니다. <span className="mono">GET {githubLoginEndpoint}</span></p>
-        <section className="grid grid-2 grid-start" aria-label="계정 인증" style={{ marginTop: 16 }}>
-          <form method="post" action={apiAction('/auth/login')} className="card">
-            <div className="card-title"><h2>로그인</h2><span className="badge info">인증</span></div>
-            <label>이메일 <input name="email" type="email" autoComplete="email" required /></label>
-            <label>비밀번호 <input name="password" type="password" autoComplete="current-password" required /></label>
-            <button type="submit">로그인</button>
-            <p className="muted mono">POST /auth/login</p>
+        {error ? <p className="auth-message error" role="alert">{error}</p> : null}
+        {notice ? <p className="auth-message" role="status">{notice}</p> : null}
+
+        {mode === 'login' ? <form method="post" action={apiAction('/auth/login')} className="auth-form">
+          <input name="_returnTo" type="hidden" value={next} />
+          <label>이메일<input name="email" type="email" autoComplete="email" defaultValue={email} required /></label>
+          <label>비밀번호<input name="password" type="password" autoComplete="current-password" required /></label>
+          <button type="submit">콘솔에 로그인</button>
+        </form> : null}
+
+        {mode === 'signup' ? <form method="post" action={apiAction('/auth/signup')} className="auth-form">
+          <input name="_returnTo" type="hidden" value="/login?mode=verify" />
+          <div className="form-grid">
+            <label>이름<input name="name" autoComplete="name" placeholder="홍길동" required /></label>
+            <label>학번<input name="studentId" inputMode="numeric" placeholder="예: 2512" required /></label>
+          </div>
+          <label>이메일<input name="email" type="email" autoComplete="email" defaultValue={email} required /></label>
+          <label>비밀번호<input name="password" type="password" autoComplete="new-password" minLength={8} required /></label>
+          <fieldset className="auth-choice-group">
+            <legend>라이빗 동아리원인가요?</legend>
+            <div>
+              <label><input name="clubMemberClaim" type="radio" value="1" required /><span><strong>네, 동아리원입니다</strong><small>관리자가 확인 후 동아리원 계정으로 승인합니다.</small></span></label>
+              <label><input name="clubMemberClaim" type="radio" value="0" required /><span><strong>아니요</strong><small>일반 사용자로 가입을 신청합니다.</small></span></label>
+            </div>
+          </fieldset>
+          <button type="submit">인증 코드 받기</button>
+        </form> : null}
+
+        {mode === 'verify' ? <>
+          <form method="post" action={apiAction('/auth/email/verify')} className="auth-form">
+            <input name="_returnTo" type="hidden" value={next} />
+            <label>이메일<input name="email" type="email" autoComplete="email" defaultValue={email} required /></label>
+            <label>6자리 인증 코드<input name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required /></label>
+            <button type="submit">인증하고 계속하기</button>
           </form>
-          <form method="post" action={apiAction('/auth/signup')} className="card">
-            <div className="card-title"><h2>가입 신청</h2><span className="badge warn">승인 대기</span></div>
-            <label>이메일 <input name="email" type="email" autoComplete="email" required /></label>
-            <label>비밀번호 <input name="password" type="password" autoComplete="new-password" required /></label>
-            <label>조직 슬러그 <input name="organizationSlug" placeholder="club-dev" /></label>
-            <button type="submit">인증 코드 받기</button>
-            <p className="muted mono">POST /auth/signup</p>
+          <form method="post" action={apiAction('/auth/email/resend')} className="auth-resend">
+            <input name="_returnTo" type="hidden" value={`/login?mode=verify&email=${encodeURIComponent(email)}`} /><input name="email" type="hidden" value={email} />
+            <button className="btn btn-ghost" type="submit">인증 코드 다시 보내기</button>
           </form>
-          <form method="post" action={apiAction('/auth/email/verify')} className="card">
-            <div className="card-title"><h2>이메일 인증</h2><span className="badge ok">확인</span></div>
-            <label>이메일 <input name="email" type="email" autoComplete="email" required /></label>
-            <label>6자리 인증 코드 <input name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" required /></label>
-            <button type="submit">코드 확인</button>
-            <p className="muted mono">POST /auth/email/verify</p>
-          </form>
-          <form method="post" action={apiAction('/auth/email/resend')} className="card">
-            <div className="card-title"><h2>인증 코드 다시 보내기</h2><span className="badge info">이메일</span></div>
-            <label>이메일 <input name="email" type="email" autoComplete="email" required /></label>
-            <button type="submit">인증 코드 다시 보내기</button>
-            <p className="muted mono">POST /auth/email/resend</p>
-          </form>
-          <section className="card">
-            <div className="card-title"><h2>GitHub 연결</h2><span className="badge ok">OAuth</span></div>
-            <p className="muted">현재 API는 OAuth 계획과 연결 대기 상태만 제공합니다.</p>
-            <fieldset disabled>
-              <input name="localDev" type="hidden" value="1" />
-              <label>이메일 <input name="email" type="email" autoComplete="email" /></label>
-              <label>GitHub ID <input name="githubId" placeholder="123456" /></label>
-              <label>GitHub 로그인 <input name="login" placeholder="club-member" /></label>
-              <label>조직 슬러그 <input name="organizationSlug" placeholder="github-user-org" /></label>
-              <button type="button" disabled>GitHub 연결</button>
-            </fieldset>
-            <p className="muted mono">GET {githubCallbackEndpoint}</p>
-          </section>
-        </section>
+        </> : null}
+
+        <footer>
+          {mode === 'login' ? <p>계정이 없나요? <a href={`/login?mode=signup&next=${encodeURIComponent(next)}`}>가입 신청</a></p> : <p>이미 계정이 있나요? <a href={`/login?next=${encodeURIComponent(next)}`}>로그인</a></p>}
+          <a href={publicHomeHref}>메인으로 돌아가기</a>
+        </footer>
       </section>
-    </ConsoleShell>
+    </main>
   );
+}
+
+function errorMessage(code: string) {
+  const messages: Record<string, string> = {
+    invalid_credentials: '이메일 또는 비밀번호를 확인해 주세요.',
+    email_not_verified: '먼저 이메일 인증을 완료해 주세요.',
+    session_expired: '세션이 만료되었습니다. 다시 로그인해 주세요.',
+    user_already_exists: '이미 가입된 이메일입니다.',
+    organization_slug_already_exists: '이미 사용 중인 조직 이름입니다.',
+    invalid_or_expired_email_verification_code: '인증 코드가 올바르지 않거나 만료되었습니다.',
+    request_failed: '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  };
+  return messages[code] || (code ? '요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.' : '');
 }

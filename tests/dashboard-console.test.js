@@ -8,34 +8,64 @@ test('dashboard project detail is API-backed instead of hardcoded prototype arra
   const detail = await fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(detail, /const\s+services\s*=\s*\[/);
   assert.doesNotMatch(detail, /const\s+resources\s*=\s*\[/);
-  for (const marker of ['loadProjectConsole', '/deployments', '/console/schema', '/console/query', 'sourceType', 'imageUrl', 'dockerfilePath', '서비스 만들기', '리소스 추가', '운영 환경에 배포', '미리보기 배포', '빌드 로그', '런타임 로그']) {
+  for (const marker of ['loadProjectConsole', '/deployments', '/console', 'sourceType', 'imageUrl', 'dockerfilePath', '서비스 만들기', '리소스 추가', '운영 배포', '미리보기', '런타임 로그']) {
     assert.ok(detail.includes(marker), `${marker} missing from project console page`);
   }
 });
 
-test('dashboard exposes auth, admin, GitHub, deployment log, and resource console pages wired to API routes', async () => {
-  const files = await Promise.all([
+test('dashboard exposes public, authenticated, admin, GitHub, deployment, and resource routes', async () => {
+  const [login, controlRoute, requestSecurity, admin, github, guide, deployment, resource, contributors, proxy, shell] = await Promise.all([
     fs.readFile(new URL('../apps/dashboard/app/login/page.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/app/api/control/[...path]/route.ts', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/lib/request-security.js', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/admin/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/github/page.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/app/guide/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/app/contributors/page.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/proxy.ts', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/components/console-ui.tsx', import.meta.url), 'utf8'),
   ]);
-  const combined = files.join('\n');
-  for (const marker of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend', '/auth/github/login', '/auth/github/callback', '/admin/users/', '/github/repositories/import', '/github/repositories/:repositoryId/sync', '/projects/:projectId/services/:serviceId/github', '/integrations/github', '웹훅 / 미리보기 계약', '/deployments/', '/cancel', '/rollback', 'imageDigest', 'errorCode', '/console/query', '/console/command', '/console/tables', '/console/keys', '/provision', '/attach', 'confirmed', '배포 상세', '상태와 이미지', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소', '리소스 콘솔', '스키마', '쿼리', '백업', '연결', '자격 증명 교체', '공급자 명령 실행', '프로비저닝 계획 만들기', '서비스에 연결', '저장소 연결과 미리보기 배포', 'GitHub 연결', '저장소 가져오기', '서비스에 저장소 연결', '저장소 정보 동기화', '사용자 관리', '클럽 회원으로 승인', '일반 사용자로 승인', '할당량 저장', '가입 신청', '이메일 인증', '인증 코드 다시 보내기', 'GitHub로 계속하기', 'GitHub OAuth 연결은 준비 중입니다.', '연결할 서비스가 없습니다.', '동기화할 저장소가 없습니다.']) {
-    assert.ok(combined.includes(marker), `${marker} missing from dashboard routes`);
+  for (const marker of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend']) {
+    assert.ok(login.includes(marker), `${marker} missing from login screen`);
   }
-  assert.doesNotMatch(files[3], /\/deployments\/\$\{deploymentId\}\/status/, 'tenant dashboard must not expose worker-owned deployment status mutation');
-  assert.match(files[3], /cancellationAllowed[\s\S]*?QUEUED[\s\S]*?BUILDING[\s\S]*?IMAGE_READY/);
-  assert.match(files[3], /실행 중이거나 완료된 배포는 롤백 또는 서비스 삭제를 사용하세요/);
+  for (const marker of ['PUBLIC_POST_PATHS', '/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend', 'SESSION_COOKIE_NAME', 'projectCreatePayloadFromForm']) {
+    assert.ok(controlRoute.includes(marker), `${marker} missing from same-origin control route`);
+  }
+  assert.ok(requestSecurity.includes("SESSION_COOKIE_NAME = 'raibitserver_session'"));
+  assert.match(proxy, /isProtectedPage[\s\S]*?\/console[\s\S]*?\/admin[\s\S]*?\/github[\s\S]*?\/guide[\s\S]*?\/org/);
+  assert.match(proxy, /request\.cookies\.get\(SESSION_COOKIE_NAME\)/);
+  assert.match(shell, /getJson\('\/auth\/me'/);
+  assert.match(shell, /String\(user\?\.role \|\| subject\?\.userRole \|\| ''\)\.toUpperCase\(\) === 'ADMIN'/);
+  assert.doesNotMatch(`${login}\n${controlRoute}\n${shell}`, /\/api\/(?:session|control-plane)/);
+
+  for (const marker of ['/admin/users/', '가입 신청 확인', '클럽 회원 승인', '일반 사용자 승인', '거절 확인']) {
+    assert.ok(admin.includes(marker), `${marker} missing from admin screen`);
+  }
+  for (const marker of ['/github/repositories/import', '/projects/${firstService.projectId}/services/${firstService.id}/github', '/github/repositories/${encodeURIComponent(firstRepository.fullName)}/sync', '웹훅 / 미리보기 계약', '연결할 서비스가 없습니다.', '동기화할 저장소가 없습니다.']) {
+    assert.ok(github.includes(marker), `${marker} missing from GitHub screen`);
+  }
+  assert.ok(guide.includes('사용 안내'));
+  for (const marker of ['/deployments/${deploymentId}/cancel', '/deployments/${deploymentId}/rollback', 'imageDigest', 'errorCode', '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소']) {
+    assert.ok(deployment.includes(marker), `${marker} missing from deployment screen`);
+  }
+  assert.doesNotMatch(deployment, /\/deployments\/\$\{deploymentId\}\/status/, 'tenant dashboard must not expose worker-owned deployment status mutation');
+  assert.match(deployment, /cancellationAllowed[\s\S]*?QUEUED[\s\S]*?BUILDING[\s\S]*?IMAGE_READY/);
+  assert.match(deployment, /실행 중이거나 완료된 배포는 롤백 또는 서비스 삭제를 사용하세요/);
+  for (const marker of ['/console/query', '/console/command', '/provision', '/attach', 'confirmed', '리소스 콘솔', '데이터 구조', '쿼리', '백업', '연결', '공급자 명령 실행', '계획 만들기', '서비스에 연결']) {
+    assert.ok(resource.includes(marker), `${marker} missing from resource screen`);
+  }
+  for (const marker of ['2309', '김준서', 'teacher', '최희진']) assert.ok(contributors.includes(marker));
 });
 
-test('dashboard avoids default workspace link and aggregates logs across deployments/services', async () => {
-  const home = await fs.readFile(new URL('../apps/dashboard/app/page.tsx', import.meta.url), 'utf8');
+test('dashboard avoids default workspace links and defers detail-only console data', async () => {
+  const consolePage = await fs.readFile(new URL('../apps/dashboard/app/console/page.tsx', import.meta.url), 'utf8');
   const api = await fs.readFile(new URL('../apps/dashboard/lib/api.ts', import.meta.url), 'utf8');
-  assert.doesNotMatch(home, /href="\/org\/default\/projects\/new"/);
-  for (const marker of ['createOrgSlug', 'buildLogResults', 'deploymentEventResults', 'runtimeLogResults']) {
-    assert.ok(`${home}\n${api}`.includes(marker), `${marker} missing from dashboard API-backed log aggregation`);
+  assert.doesNotMatch(consolePage, /href="\/org\/default\/projects\/new"/);
+  assert.ok(consolePage.includes('createOrgSlug'));
+  for (const eagerMarker of ['buildLogResults', 'deploymentEventResults', 'runtimeLogResults', 'resourceConsoles']) {
+    assert.ok(!api.includes(eagerMarker), `${eagerMarker} should be loaded only by its focused detail screen`);
   }
 });
 

@@ -13,12 +13,32 @@ paths:
   /snapshot: { get: { summary: Return a bounded administrative overview, parameters: [ { $ref: '#/components/parameters/limit' } ], responses: { '200': { description: Bounded users, quotas, and recent audit logs }, '403': { description: Administrator permission required } } } }
   /auth/github/login: { get: { summary: Start GitHub OAuth login, responses: { '302': { description: Redirect } } } }
   /auth/github/callback: { get: { summary: Complete GitHub OAuth login, responses: { '302': { description: Session created } } } }
-  /auth/signup: { post: { summary: Start email/password signup and request a 6-digit verification code without disclosing account state, security: [], responses: { '201': { description: Generic accepted response; account existence and delivery status are intentionally not disclosed } } } }
+  /auth/signup:
+    post:
+      summary: Start email/password signup without disclosing account state
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name, studentId]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 8 }
+                name: { type: string, minLength: 1 }
+                studentId: { type: string, minLength: 1 }
+                clubMemberClaim: { type: boolean, description: Self-declared RAIBIT club membership; administrators still approve the final account type }
+                organizationSlug: { type: string }
+      responses:
+        '201': { description: Generic accepted response; account existence and delivery status are intentionally not disclosed }
   /auth/email/verify: { post: { summary: Verify signup email code, create the account, and return scoped JWT, security: [], responses: { '200': { description: Created verified session } } } }
   /auth/email/resend: { post: { summary: Request another signup verification code without disclosing account or pending-signup state, security: [], responses: { '200': { description: Generic accepted response; account existence and delivery status are intentionally not disclosed } } } }
   /auth/login: { post: { summary: Log in and return scoped JWT, security: [], responses: { '200': { description: Session } } } }
   /auth/logout: { post: { summary: Invalidate current session, responses: { '200': { description: Logged out } } } }
   /auth/me: { get: { summary: Return current user/account/quota subject, responses: { '200': { description: Current user } } } }
+  /public/sites: { get: { summary: List up to five publicly operating web projects, security: [], responses: { '200': { description: Public sites } } } }
   /organizations: { get: { summary: List visible organizations, responses: { '200': { description: Organizations } } }, post: { summary: Create organization, responses: { '201': { description: Created } } } }
   /organizations/{organizationId}: { get: { summary: Get organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Organization } } }, patch: { summary: Update organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Updated } } } }
   /organizations/{organizationId}/members: { get: { summary: List members, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Members } } }, post: { summary: Add member, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '201': { description: Added } } } }
@@ -103,12 +123,9 @@ paths:
   /github/repositories/{repositoryId}/sync: { post: { summary: Sync repository metadata, parameters: [ { name: repositoryId, in: path, required: true, schema: { type: string } } ], responses: { '202': { description: Sync queued } } } }
   /usage/me: { get: { summary: Current user usage/quota, responses: { '200': { description: Usage } } } }
   /organizations/{organizationId}/usage: { get: { summary: Organization usage, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Usage } } } }
-  /admin/users: { get: { summary: Admin list users, responses: { '200': { description: Users } } } }
-  /admin/users/pending: { get: { summary: Admin pending users, responses: { '200': { description: Pending users } } } }
   /admin/users/{userId}/approve: { post: { summary: Approve user, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Approved } } } }
   /admin/users/{userId}/reject: { post: { summary: Reject user after explicit confirmation, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [confirmed], properties: { confirmed: { type: boolean, const: true } } } } } }, responses: { '200': { description: Rejected }, '400': { description: Explicit confirmation is required } } } }
   /admin/users/{userId}/quota: { patch: { summary: Update user quota, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Updated } } } }
-  /admin/users/{userId}/account-type: { patch: { summary: Update account type, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Updated } } } }
   /admin/usage: { get: { summary: Admin global usage, responses: { '200': { description: Usage } } } }
   /admin/audit-logs: { get: { summary: Admin audit logs, responses: { '200': { description: Audit logs } } } }
   /internal/plan/build: { post: { summary: Internal build planner, responses: { '200': { description: Plan } } } }

@@ -1,5 +1,108 @@
 # RAIBITSERVER Dashboard Design System
 
+## Source of truth
+
+- Status: Active
+- Last refreshed: 2026-08-25
+- Primary product surfaces: 공개 홈페이지, 인증, 프로젝트 콘솔, GitHub 저장소 연결, 배포 상세, 리소스 콘솔, 관리자 승인
+- Evidence reviewed: `apps/dashboard/app/**`, `apps/dashboard/components/**`, `apps/dashboard/app/globals.css`, `output/playwright/review/**`, 사용자 검토 의견, Vercel Projects·Storage 문서, Vercel Geist 디자인 시스템
+
+## Brand
+
+- Personality: Vercel처럼 정돈되고 빠르지만 초보자도 바로 이해하는 운영 도구
+- Trust signals: 라이빗 로고, 명시적 상태, 권한 경계, 마스킹된 보안 정보, 확인 가능한 단계
+- Avoid: 한 화면에 여러 폼 배치, 중첩 카드, 장식 목적의 과도한 효과, 내부 API 용어, 콘솔 안의 긴 사용 설명
+
+## Product goals
+
+- Goals: 사용자가 현재 해야 할 한 가지 행동을 바로 이해하고, 생성·연결·운영 작업을 실수 없이 완료하게 한다.
+- Non-goals: 모든 운영 정보를 한 화면에서 동시에 보여주는 고밀도 모니터링 대시보드
+- Success signals: 각 URL 또는 단계에 주 활동이 하나만 있고, 다음·이전 이동이 분명하며 모바일에서 가로 겹침이 없다.
+
+## Personas and jobs
+
+- Primary personas: 인천과학고 라이빗 동아리원, 비동아리 사용자, 관리자
+- User jobs: 프로젝트 생성, 저장소 연결, 서비스·배포·리소스 상태 확인, 관리자 가입 승인
+- Key contexts of use: 학교 PC와 개인 노트북, 모바일에서 빠른 상태 확인
+
+## Information architecture
+
+- Primary navigation: 공개 홈페이지 → 로그인 → 콘솔 → 프로젝트 → 서비스·배포·리소스별 하위 화면. 고정 상단 바는 검색과 사용 설명서만 제공한다.
+- Core routes/screens: 홈페이지, 운영 사이트 현황, 프로젝트 생성 단계, GitHub 연결 단계, 프로젝트 개요·서비스·배포·리소스·설정, 배포 개요·로그·이벤트·상태·롤백·취소, 리소스 개요·스키마·쿼리·공급자·백업·연결·프로비저닝
+- Content hierarchy: 페이지 제목 → 현재 단계/하위 화면 → 단일 주 활동 → 다음 이동
+
+## Design principles
+
+- Principle 1: 한 화면에는 하나의 정보 주제 또는 하나의 사용자 활동만 둔다.
+- Principle 2: 생성과 외부 연결은 번호가 있는 순차 단계로 진행하며 현재·완료·다음 단계를 구분한다.
+- Principle 3: Vercel의 얇은 탭·행·구분선 중심 배치를 사용하고, 초보자에게 필요한 핵심 행동부터 보여준다.
+- Density rule: 한 주제 안에서는 조밀하게, 서로 다른 주제는 별도 화면으로 분리한다.
+- Surface rule: 목록·지표·상세는 평면과 구분선을 사용하고, 카드형 작업면은 폼·위험 확인·모달에만 사용한다.
+- Tradeoffs: 고급 기능은 한 단계 더 들어가지만 첫 화면의 인지 부하와 실수 가능성을 낮춘다.
+
+## Visual language
+
+- Color: 기존 차콜·네이비와 녹색 핵심 행동 조합 유지
+- Typography: 페이지 제목 28px(모바일 24px), 섹션 18px, 본문·목록·버튼 13–14px, 보조 정보 최소 11–12px
+- Spacing/layout rhythm: 4px 단위, 얇은 탭과 행 중심, 생성 흐름은 최대 1120px의 넓은 작업 카드, 현황 화면은 실제 운영 정보로 밀도를 확보
+- Shape/radius/elevation: 기존 입력 8–9px, 패널 12–13px, 얕은 그림자 유지
+- Motion: 단계 전환 120–180ms, `prefers-reduced-motion` 준수
+- Imagery/iconography: 라이빗 로고와 기존 타입 안전 Heroicons 재사용
+
+## Components
+
+- Existing components to reuse: `ConsoleShell`, `StatusBadge`, `MetricStrip`, `LogViewer`, `JsonCard`, `Icon`
+- New/changed components: 얇은 탭형 `SectionNav`, 단계형 `SectionNav`, 데스크톱에서 최대 1080×760px 작업면을 제공하는 `ConsoleSearch`, 검색·사용 설명서 전용 고정 상단 바, `console-surface`, `form-surface`, 프로젝트 생성 단계, 주제별 사용 안내
+- Variants and states: 활성 단계, 완료 단계, 비활성 단계, 빈 상태, 준비 중, 위험 작업
+- Token/component ownership: 전역 토큰은 `globals.css`, 흐름 컴포넌트는 `apps/dashboard/components`
+
+## Accessibility
+
+- Target standard: WCAG 2.1 AA
+- Keyboard/focus behavior: 단계와 하위 화면 링크를 순서대로 탐색하고 현재 항목에 `aria-current` 제공. 메뉴 검색은 `Ctrl/⌘ + K` 또는 `/`로 열고 `Esc`로 닫으며 포커스를 복귀한다. 현재 프로젝트에서는 현황·서비스·배포·리소스·로그·설정을 검색할 수 있다. 검색 입력과 검색 버튼은 녹색 윤곽 대신 중립 구분선과 커서로 포커스를 알린다.
+- Contrast/readability: 기존 의미 색상과 텍스트 레이블 병행
+- Screen-reader semantics: 단계는 `ol`, 하위 화면은 `nav`, 폼은 명시적 레이블과 제목 사용
+- Reduced motion and sensory considerations: 반짝임·단계 전환은 감소 모션 설정에서 정지
+
+## Responsive behavior
+
+- Supported breakpoints/devices: 1440px 데스크톱, 900px 이하 태블릿·모바일, 390px 모바일 검토
+- Layout adaptations: 단계와 하위 화면 탭은 가로 스크롤, 주 활동 패널은 단일 열, 사이드바는 모바일에서 숨기고 상단 검색 팔레트로 메뉴 이동
+- Touch/hover differences: 모바일 버튼 최소 높이 44px, hover 없이도 현재 단계와 상태를 텍스트로 식별
+
+## Interaction states
+
+- Loading: 패널 크기를 유지하는 스켈레톤
+- Empty: 원인과 다음 행동 하나
+- Error: 한국어 요약과 재시도 또는 이전 단계
+- Success: 완료 상태와 다음 단계 링크
+- Disabled: 선행 조건과 비활성 이유를 인접 문구로 표시
+- Offline/slow network, if applicable: 마지막 확인 상태와 재시도 행동 표시
+
+## Content voice
+
+- Tone: 짧고 직접적인 한국어 안내
+- Terminology: 저장소, 프로젝트, 서비스, 배포, 리소스를 일관되게 사용
+- Microcopy rules: 콘솔 설명은 한 줄·몇 단어, 버튼은 행동형, 핵심 버튼 하나만 녹색 채움, 자세한 설명은 `/guide`로 이동
+- Metrics rule: 단순 개수에는 막대를 표시하지 않는다. 비율 시각화는 실제 분모와 진행률이 있을 때만 사용한다.
+- Button rule: 기본 36px, 모바일 44px. 녹색 primary는 화면당 하나, 위험 작업은 danger, 취소·탐색은 neutral/ghost.
+
+## Implementation constraints
+
+- Framework/styling system: Next.js 서버 컴포넌트 중심, 단계 입력 유지가 필요한 곳만 클라이언트 컴포넌트 사용, 기존 CSS
+- Design-token constraints: 현재 색 조합과 전역 토큰 유지
+- Performance constraints: 화면별 필요한 데이터만 장기적으로 분리하되 이번 변경은 기존 API 계약을 보존
+- Compatibility constraints: 새 의존성 금지, 기존 API 경로·권한·폼 필드 유지
+- Test/screenshot expectations: 타입 검사, 대시보드 테스트, 프로덕션 빌드, 데스크톱·모바일 실제 화면 캡처
+
+## Open questions
+
+- [ ] 실제 운영 데이터 규모가 커질 때 목록 화면의 검색·페이지네이션 기준 / 운영자 / 중간
+- [ ] 단계형 폼 임시 저장을 서버 세션까지 확장할지 여부 / 제품 담당 / 낮음
+- [x] 프로젝트 생성 레이아웃은 A 넓은 카드형으로 확정 / 사용자 검토 / 완료
+- [x] 프로젝트 현황 레이아웃은 A 조밀 요약형으로 확정 / 사용자 검토 / 완료
+- [x] Vercel 기반 초보자용 콘솔 방향을 평면 행·단일 작업면·명령 팔레트로 확정 / 사용자 요청 / 완료
+
 ## 1. 목적
 
 RAIBITSERVER 대시보드는 클럽, 학교, 소규모 팀이 프로젝트·배포·관리형 리소스를 빠르게 이해하고 안전하게 운영할 수 있는 한국어 우선 관리 콘솔이다. 기존 제어 영역 API, 라우팅, 폼 액션, 권한 및 감사 동작은 유지하고 표현 계층만 재구성한다.

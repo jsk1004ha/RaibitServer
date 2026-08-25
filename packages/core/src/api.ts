@@ -12,6 +12,7 @@ import { quotaUsageGauges, quotaWarnings } from './quota.ts';
 import { assertSystemDeploymentActor, enforceAuthAbuseLimits, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
 import { githubOAuthLoginPlan } from './github-integration.ts';
 import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
+import { publicSitesFromSnapshot } from './public-sites.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = {
@@ -28,6 +29,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       if (method === 'GET' && url.pathname === '/catalog') {
         return send(res, 200, { resources: controlPlane.catalog() });
+      }
+      if (method === 'GET' && url.pathname === '/public/sites') {
+        return send(res, 200, publicSitesFromSnapshot(controlPlane.store.snapshot(), url.searchParams.get('limit')));
       }
       if (method === 'GET' && url.pathname === '/config/runtime') {
         authorizeRequest(req, 'audit:read', auth);

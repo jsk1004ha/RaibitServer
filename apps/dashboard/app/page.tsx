@@ -1,77 +1,41 @@
-import { loadDashboardOverview, apiAction } from '../lib/api';
-import { ConsoleShell, MetricStrip, StatusBadge } from '../components/console-ui';
-import { LoadErrorSummary } from '../components/console-ui';
-import { Icon } from '../components/icon';
-import { ProjectCard } from '../components/project-card';
+import Image from 'next/image';
+import { PublicFooter } from '../components/public-footer';
+import { loadPublicSites } from '../lib/api';
 
-export default async function HomePage() {
-  const state = await loadDashboardOverview();
-  const user = state.me.body?.user;
-  const subject = state.me.body?.subject;
-  const projects = state.projects || [];
-  const createOrgSlug = projects[0]?.organizationSlug || projects[0]?.organizationId || subject?.organizationSlug || subject?.organizationId || 'default';
-  const health = state.health.body?.status === 'ok';
-  const isAuthenticated = Boolean(user || subject);
+const landingVariants = ['center', 'spotlight', 'editorial'] as const;
+
+export default async function HomePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const query = await searchParams;
+  const requestedVariant = String(query.variant || 'editorial');
+  const variant = landingVariants.includes(requestedVariant as any) ? requestedVariant : 'editorial';
+  const consoleUrl = process.env.RAIBITSERVER_CONSOLE_URL || '/console';
+  const sites = await loadPublicSites(5);
+
   return (
-    <ConsoleShell active="overview" orgValue={createOrgSlug} crumbs={`${createOrgSlug} / 운영 현황`} actions={<><a className="btn" href="/github">GitHub 연결</a><a className="btn btn-primary" href={`/org/${createOrgSlug}/projects/new`}>새 프로젝트</a>{isAuthenticated ? <form method="post" action={apiAction('/auth/logout')} className="inline-actions"><input type="hidden" name="_returnTo" value="/login" /><button className="btn" type="submit">로그아웃</button></form> : null}</>}>
-      <section className="page" data-od-id="org-dashboard">
-        <header className="page-header">
-          <div>
-            <p className="eyebrow">RAIBITSERVER · 제어 영역</p>
-            <h1 className="page-title">운영 현황</h1>
-            <p className="page-subtitle">프로젝트, 배포, 관리형 리소스 상태를 확인하세요.</p>
-          </div>
-          <StatusBadge status={health ? 'healthy' : 'offline'} />
-        </header>
+    <main className={`landing-page landing-variant-${variant}`}>
+      <nav className="landing-nav" aria-label="메인 탐색">
+        <a className="landing-brand" href="/"><Image src="/raibit-logo.jpg" alt="라이빗 로고" width={36} height={36} priority /><span>RAIBIT SERVER</span></a>
+        <div className="landing-nav-actions"><a className="btn btn-ghost" href="/status">운영 현황</a><a className="btn btn-ghost" href="/login">로그인</a><a className="btn btn-primary" href={consoleUrl}>콘솔 들어가기</a></div>
+      </nav>
 
-        <LoadErrorSummary issues={state.loadErrors} />
-
-        <MetricStrip items={[
-          { label: '운영 중인 프로젝트', value: projects.length, detail: '제어 영역 기준', progress: Math.min(projects.length * 10, 100) },
-          { label: 'GitHub 연결', value: state.github?.integrations?.length || 0, detail: '설치 및 저장소', tone: 'info', progress: 60 },
-          { label: '사용량 기록', value: state.usage?.usage?.length || 0, detail: '현재 할당량', tone: 'warn', progress: 42 },
-        ]} />
-
-        <section className="dashboard-grid">
-          <div className="stack">
-            <article className="card">
-              <div className="card-title"><h2>프로젝트</h2><span className="badge info">{projects.length}개</span></div>
-              <div className="stack">
-              {projects.length ? projects.map((project: any) => (
-                <ProjectCard key={project.id} project={{ ...project, services: project.serviceCount, resources: project.resourceCount }} href={`/org/${project.organizationSlug || project.organizationId || 'org'}/projects/${project.id}`} />
-              )) : <div><p className="muted">아직 프로젝트가 없습니다. 첫 서비스를 배포할 프로젝트를 만드세요.</p><a className="subtle-link" href={`/org/${createOrgSlug}/projects/new`}>첫 프로젝트 만들기 →</a></div>}
-              </div>
-            </article>
-            <article className="card">
-              <div className="card-title"><h2>API 및 런타임 활동</h2><StatusBadge status={health ? 'healthy' : 'offline'} /></div>
-              <div className="grid grid-2">
-                <p><span className="label">제어 영역 상태</span><br />{health ? '정상' : state.health.error || '토큰 없음 또는 API에 연결할 수 없음'}</p>
-                <p><span className="label">최근 조회</span><br />프로젝트 {projects.length}개 · 사용량 {state.usage?.usage?.length || 0}건</p>
-              </div>
-            </article>
-          </div>
-          <aside className="stack">
-            <article className="card">
-              <div className="card-title"><h2>빠른 작업</h2><span className="badge info">4개</span></div>
-              <nav className="stack" aria-label="빠른 작업">
-                <a className="quick-action" href={`/org/${createOrgSlug}/projects/new`}><Icon name="plus" /><span>새 프로젝트</span></a>
-                <a className="quick-action" href="/github"><Icon name="arrow-top-right-on-square" /><span>GitHub 연결</span></a>
-                <a className="quick-action" href="/login"><Icon name="shield-check" /><span>로그인</span></a>
-                <a className="quick-action" href="#control-plane-status" data-health-endpoint={apiAction('/health')}><Icon name="server-stack" /><span>API 상태</span></a>
-              </nav>
-            </article>
-            <article className="card" id="control-plane-status">
-              <div className="card-title"><h2>제어 영역 정보</h2><StatusBadge status={health ? 'healthy' : 'offline'} /></div>
-              <div className="stack">
-                <p><span className="label">엔드포인트</span><br /><span className="mono">{state.context.baseUrl}</span></p>
-                <p><span className="label">상태</span><br />{health ? '정상' : state.health.error || '토큰 없음 또는 API에 연결할 수 없음'}</p>
-                <p><span className="label">현재 사용자</span><br />{user?.email || subject?.id || '대시보드 토큰 없음'}</p>
-                <p><span className="label">계정</span><br />{subject?.accountType || user?.accountType || '알 수 없음'} / {subject?.approvalStatus || user?.approvalStatus || '알 수 없음'}</p>
-              </div>
-            </article>
-          </aside>
-        </section>
+      <section className="landing-hero" aria-labelledby="landing-title">
+        <div className="landing-hero-copy">
+          <p className="eyebrow">RAIBIT HOSTING SERVICE</p>
+          <h1 id="landing-title">만들고,<br />올리고,<br />운영하세요.</h1>
+          <p>인천과학고등학교의 최고 정보 동아리 라이빗의 호스팅 서비스입니다.</p>
+          <div className="landing-actions"><a className="btn btn-primary" href={consoleUrl}>콘솔 시작하기</a><a className="btn" href="/login?mode=signup">가입 신청</a></div>
+        </div>
+        <div className="landing-logo-wrap" aria-hidden="true"><Image src="/raibit-logo.jpg" alt="" width={340} height={340} priority /></div>
       </section>
-    </ConsoleShell>
+
+      <section className="public-sites landing-public-sites" aria-labelledby="landing-sites-title">
+        <header><div><p className="eyebrow">LIVE ON RAIBIT</p><h2 id="landing-sites-title">운영 중인 사이트</h2></div><a href="/status">전체 보기 →</a></header>
+        <div className="public-site-list">
+          {sites.length ? sites.map((site: any) => <a className="public-site" href={site.url} key={site.id || site.name} target="_blank" rel="noreferrer"><span><strong>{site.name}</strong><small>{site.owner}</small></span><span className="public-site-status"><i />LIVE</span><span aria-hidden="true">↗</span></a>) : <div className="public-sites-empty"><strong>운영 사이트 준비 중</strong><p>공개되면 표시됩니다.</p></div>}
+        </div>
+      </section>
+
+      <PublicFooter />
+    </main>
   );
 }

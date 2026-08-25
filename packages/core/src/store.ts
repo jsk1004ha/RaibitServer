@@ -98,7 +98,7 @@ export class ControlPlaneStore {
     return organization ? deepClone(organization) : null;
   }
 
-  createUser({ name, email, githubId = null, passwordHash = null, role = 'USER', accountType = 'NON_CLUB', approvalStatus = 'PENDING', avatarUrl = null, emailVerifiedAt = undefined }: Record<string, any>) {
+  createUser({ name, studentId = '', clubMemberClaim = false, email, githubId = null, passwordHash = null, role = 'USER', accountType = 'NON_CLUB', approvalStatus = 'PENDING', avatarUrl = null, emailVerifiedAt = undefined }: Record<string, any>) {
     const timestamp = nowIso();
     const id = stableId('usr', email || name);
     const existing = this.users.get(id);
@@ -106,6 +106,8 @@ export class ControlPlaneStore {
     const user = {
       id,
       name,
+      studentId,
+      clubMemberClaim: Boolean(clubMemberClaim),
       email: String(email || '').toLowerCase(),
       avatarUrl,
       githubId,
@@ -921,6 +923,8 @@ export class ControlPlaneStore {
     });
     const user = this.createUser({
       name: payload.name || email,
+      studentId: payload.studentId || '',
+      clubMemberClaim: Boolean(payload.clubMemberClaim),
       email,
       passwordHash: payload.passwordHash,
       role: policy.role,
