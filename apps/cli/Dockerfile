@@ -19,7 +19,7 @@ RUN pnpm --filter @raibitserver/cli exec tsc -p tsconfig.json \
     --noEmit false --declaration false --incremental false \
     --rootDir src --outDir /opt/raibitserver/cli-runtime \
     --rewriteRelativeImportExtensions true
-RUN pnpm --filter @raibitserver/cli exec tsc ../../packages/api-client/src/index.ts \
+RUN pnpm --filter @raibitserver/cli exec tsc --ignoreConfig ../../packages/api-client/src/index.ts \
     --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck \
     --declaration false --rootDir ../../packages/api-client/src \
     --outDir /opt/raibitserver/api-client-runtime

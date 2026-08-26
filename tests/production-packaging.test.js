@@ -49,7 +49,7 @@ test('runtime images contain only the executables their production entrypoints r
   assert.match(api, /node["',\s]+dist\/main\.js/);
   assert.match(dashboard, /\.next\/standalone/);
   assert.match(dashboard, /server\.js/);
-  assert.match(cli, /packages\/api-client\/src\/index\.ts[\s\S]*api-client-runtime/);
+  assert.match(cli, /exec tsc --ignoreConfig \.\.\/\.\.\/packages\/api-client\/src\/index\.ts[\s\S]*api-client-runtime/);
   assert.match(cli, /dist\/index\.js/);
   const cliInstall = cli.indexOf('RUN pnpm install --frozen-lockfile');
   const cliCompile = cli.indexOf('RUN pnpm --filter @raibitserver/cli exec tsc -p tsconfig.json');
