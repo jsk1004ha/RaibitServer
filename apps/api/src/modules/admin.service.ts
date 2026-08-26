@@ -7,6 +7,8 @@ export class AdminService {
 
   approveUser(userId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.approveUser(userId, input, subject); }
   rejectUser(userId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.rejectUser(userId, input, subject); }
+  banUser(userId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.banUser(userId, input, subject); }
+  unbanUser(userId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.unbanUser(userId, input, subject); }
   setUserQuota(userId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.setUserQuota(userId, input, subject); }
   overview(subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.adminOverview(subject, options); }
 }

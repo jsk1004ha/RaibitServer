@@ -536,14 +536,18 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (action === 'command') return send(res, 200, await controlPlane.store.runResourceConsoleCommand(resourceId, body.command || body.query, { ...body, role: subject.role, actorUserId: subject.id }));
         return send(res, 200, await controlPlane.store.browseResourceConsole(resourceId, body));
       }
-      const adminApproveMatch = url.pathname.match(/^\/admin\/users\/([^/]+)\/(approve|reject)$/);
+      const adminApproveMatch = url.pathname.match(/^\/admin\/users\/([^/]+)\/(approve|reject|ban|unban)$/);
       if (adminApproveMatch && method === 'POST') {
         const subject = authorizeAction(req, 'audit:read', auth);
         if (subject.userRole !== 'ADMIN' && subject.global !== true) return send(res, 403, { error: 'admin_required' });
         const [userId, action] = adminApproveMatch.slice(1).map(decodeURIComponent);
         const body = await readJson(req);
         if (action === 'reject') requireExplicitConfirmation(body);
-        return send(res, 200, action === 'approve' ? controlPlane.store.approveUser(userId, { ...body, actorUserId: subject.id }) : controlPlane.store.rejectUser(userId, { ...body, actorUserId: subject.id }));
+        if (action === 'ban' && String(userId) === String(subject.id)) return send(res, 400, { error: 'cannot_ban_self' });
+        if (action === 'approve') return send(res, 200, controlPlane.store.approveUser(userId, { ...body, actorUserId: subject.id }));
+        if (action === 'reject') return send(res, 200, controlPlane.store.rejectUser(userId, { ...body, actorUserId: subject.id }));
+        if (action === 'ban') return send(res, 200, controlPlane.store.banUser(userId, { ...body, actorUserId: subject.id }));
+        return send(res, 200, controlPlane.store.unbanUser(userId, { ...body, actorUserId: subject.id }));
       }
       const adminQuotaMatch = url.pathname.match(/^\/admin\/users\/([^/]+)\/quota$/);
       if (adminQuotaMatch && (method === 'PATCH' || method === 'POST')) {
@@ -841,12 +845,24 @@ function authRateSource(req: any) {
 }
 
 function assertUserApproved(user: Record<string, any>) {
+  if (isActiveUserBan(user)) {
+    const error = new Error('account_banned');
+    (error as any).statusCode = 403;
+    throw error;
+  }
   if (String(user?.approvalStatus || 'PENDING').toUpperCase() !== 'APPROVED') {
     const error = new Error('account_not_approved');
     (error as any).statusCode = 403;
     throw error;
   }
   return true;
+}
+
+function isActiveUserBan(user: Record<string, any>, now = Date.now()) {
+  if (!user?.bannedAt) return false;
+  if (!user.banExpiresAt) return true;
+  const expiresAt = new Date(user.banExpiresAt).getTime();
+  return !Number.isFinite(expiresAt) || expiresAt > now;
 }
 
 function requireExplicitConfirmation(input: Record<string, any>) {

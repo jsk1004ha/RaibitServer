@@ -150,6 +150,23 @@ export function projectCreatePayloadFromForm(body = {}) {
   };
 }
 
+export function environmentPayloadFromForm(body = {}) {
+  const key = formText(body, 'key');
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw boundaryError('invalid_form_body');
+  const rawValue = body && typeof body === 'object' ? body.value : undefined;
+  if (typeof rawValue !== 'string') throw boundaryError('invalid_form_body');
+  return {
+    entries: [{ key, value: rawValue, isSecret: formBoolean(body, 'isSecret') }],
+    source: 'dashboard',
+  };
+}
+
+export function environmentFilePayloadFromForm(body = {}) {
+  const content = body && typeof body === 'object' ? body.content : undefined;
+  if (typeof content !== 'string' || !content.trim()) throw boundaryError('invalid_form_body');
+  return { content, filename: '.env' };
+}
+
 export function formMutationMethod(requestMethod, body = {}) {
 	const method = String(requestMethod || '').toUpperCase();
 	if (method !== 'POST') return method;
@@ -405,6 +422,11 @@ function formText(body, key) {
 function allowedFormValue(body, key, allowed, fallback) {
   const value = formText(body, key).toLowerCase();
   return allowed.includes(value) ? value : fallback;
+}
+
+function formBoolean(body, key) {
+  const value = formText(body, key).toLowerCase();
+  return ['1', 'true', 'on', 'yes'].includes(value);
 }
 
 function optionalFormFields(body, keys) {

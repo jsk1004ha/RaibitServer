@@ -112,8 +112,10 @@ main SHA 변경 감지
 → 각 image digest cosign 서명
 → production-values.yaml의 digest pin 갱신 후보 생성
 → helm lint/template
-→ helm upgrade --install --atomic
+→ Helm major 확인(3: --atomic, 4: --rollback-on-failure + watcher wait)
+→ helm upgrade --install
 → API/Dashboard rollout 확인
+→ 승인 checkout의 updater를 libexec에 원자적으로 self-refresh
 → 성공한 SHA를 state에 기록
 ```
 
@@ -139,6 +141,14 @@ updater는 사람이 사용하는 repository checkout을 `git reset`하지 않�
 ~/.local/share/raibitserver-production/repository
 ```
 
+설치된 실행 파일은 다음 경로에 있으며, 성공한 rollout 뒤 같은 SHA의 checkout에 포함된 새 updater로 원자적으로 교체됩니다. 따라서 updater 자체의 수정도 다음 배포 성공 시 서버에 반영됩니다.
+
+```txt
+~/.local/libexec/raibitserver-production-auto-update
+```
+
+installer는 이 절대 경로를 systemd의 `RAIBITSERVER_UPDATER_LIBEXEC_PATH` 환경 변수로 전달합니다. root installer는 사용자 홈 아래 관리 경로의 기존 구성요소에 symlink나 일반 파일이 끼어 있으면 쓰기 전에 중단하며, 홈 아래 디렉터리·실행 파일·환경 파일은 `runuser`로 대상 사용자 권한에서 생성합니다. updater는 시작할 때 libexec 디렉터리가 canonical한 현재 실행 사용자 소유의 실제 디렉터리인지, group/world writable이 아닌지, 기존 대상이 symlink가 아닌 일반 파일인지 확인합니다. 승인 checkout의 새 스크립트도 일반 파일과 Bash 구문을 확인한 후 같은 디렉터리에서 임시 파일을 만들고 `mv`로 교체합니다. 이 검증이 실패하면 rollout이 완료되었더라도 성공 SHA를 기록하지 않으므로 운영자가 경로 권한을 수정한 뒤 안전하게 다시 실행할 수 있습니다.
+
 성공한 production SHA와 실행 상태는 별도 state 디렉터리에 기록됩니다.
 
 ```txt
@@ -161,7 +171,7 @@ sudo systemctl disable --now raibitserver-auto-update.timer
 sudo systemctl enable --now raibitserver-auto-update.timer
 ```
 
-실패한 update는 `helm --atomic`으로 release를 이전 정상 상태로 되돌리고 `deployed-sha`를 갱신하지 않습니다. 따라서 다음 정상 `main` commit이 CI를 통과하면 다시 업데이트됩니다.
+Helm 3에서는 `--atomic`, Helm 4에서는 공식 대체 flag인 `--rollback-on-failure --wait=watcher --wait-for-jobs`로 실패한 update를 이전 정상 상태로 되돌리고 준비 상태를 기다립니다. 파싱할 수 없는 버전이나 Helm 3/4 이외 major는 배포 전에 fail-fast합니다. 어떤 경우에도 실패한 실행은 `deployed-sha`를 갱신하지 않으므로 다음 정상 `main` commit이 CI를 통과하면 다시 업데이트됩니다.
 
 ## Production 안전 조건
 

@@ -98,7 +98,7 @@ export class ControlPlaneStore {
     return organization ? deepClone(organization) : null;
   }
 
-  createUser({ name, studentId = '', clubMemberClaim = false, email, githubId = null, passwordHash = null, role = 'USER', accountType = 'NON_CLUB', approvalStatus = 'PENDING', avatarUrl = null, emailVerifiedAt = undefined }: Record<string, any>) {
+  createUser({ name, studentId = '', clubMemberClaim = false, email, githubId = null, passwordHash = null, role = 'USER', accountType = 'NON_CLUB', approvalStatus = 'PENDING', avatarUrl = null, emailVerifiedAt = undefined, bannedAt = null, banExpiresAt = null, banReason = null, bannedByUserId = null }: Record<string, any>) {
     const timestamp = nowIso();
     const id = stableId('usr', email || name);
     const existing = this.users.get(id);
@@ -116,6 +116,10 @@ export class ControlPlaneStore {
       accountType: normalizeAccountType(accountType),
       approvalStatus,
       sessionVersion: Number(existing?.sessionVersion || 0) + (passwordChanged ? 1 : 0),
+      bannedAt: existing?.bannedAt ?? bannedAt,
+      banExpiresAt: existing?.banExpiresAt ?? banExpiresAt,
+      banReason: existing?.banReason ?? banReason,
+      bannedByUserId: existing?.bannedByUserId ?? bannedByUserId,
       emailVerifiedAt: emailVerifiedAt === undefined ? timestamp : emailVerifiedAt,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -1304,9 +1308,44 @@ export class ControlPlaneStore {
     return redactUser(deepClone(user));
   }
 
+  banUser(userId: string, input: Record<string, any> = {}) {
+    const user = this.users.get(userId);
+    if (!user) throw notFound(`user not found: ${userId}`);
+    const actorUserId = String(input.actorUserId || 'system');
+    if (actorUserId === String(userId)) throw forbidden('administrators cannot ban themselves');
+    const reason = normalizeBanReason(input.reason);
+    const expiresAt = normalizeBanExpiresAt(input.expiresAt);
+    user.bannedAt = nowIso();
+    user.banExpiresAt = expiresAt;
+    user.banReason = reason;
+    user.bannedByUserId = actorUserId === 'system' ? null : actorUserId;
+    user.sessionVersion = Number(user.sessionVersion || 0) + 1;
+    user.updatedAt = nowIso();
+    this.audit(actorUserId, 'user:ban', 'user', userId, { reason, expiresAt, permanent: expiresAt === null });
+    return redactUser(deepClone(user));
+  }
+
+  unbanUser(userId: string, input: Record<string, any> = {}) {
+    const user = this.users.get(userId);
+    if (!user) throw notFound(`user not found: ${userId}`);
+    const actorUserId = String(input.actorUserId || 'system');
+    user.bannedAt = null;
+    user.banExpiresAt = null;
+    user.banReason = null;
+    user.bannedByUserId = null;
+    user.sessionVersion = Number(user.sessionVersion || 0) + 1;
+    user.updatedAt = nowIso();
+    this.audit(actorUserId, 'user:unban', 'user', userId, {});
+    return redactUser(deepClone(user));
+  }
+
   enforceUserCan({ userId, action, metric = null, increment = 1 }: Record<string, any>) {
     const user = this.users.get(userId);
     if (!user) return true;
+    if (isActiveBan(user)) {
+      this.audit(userId, 'user:ban-block', action || 'action', metric || action || 'unknown', { reason: user.banReason || 'banned', expiresAt: user.banExpiresAt || null });
+      throw forbidden(`user ${userId} is banned and cannot ${action}`);
+    }
     if (user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER') return true;
     if (user.approvalStatus !== 'APPROVED') {
       this.audit(userId, 'quota:block', action || 'action', metric || action || 'unknown', { reason: user.approvalStatus || 'PENDING' });
@@ -1474,8 +1513,28 @@ function publicSecret(row: Record<string, any>) {
 }
 
 function redactUser(user: Record<string, any>) {
-  const { passwordHash, ...rest } = user;
+  const { passwordHash, bannedByUserId, ...rest } = user;
   return rest;
+}
+
+function isActiveBan(user: Record<string, any>, now = Date.now()) {
+  if (!user?.bannedAt) return false;
+  if (!user.banExpiresAt) return true;
+  const expiresAt = new Date(user.banExpiresAt).getTime();
+  return !Number.isFinite(expiresAt) || expiresAt > now;
+}
+
+function normalizeBanReason(value: any) {
+  const reason = String(value || '').trim();
+  if (!reason || reason.length > 500) throw badRequest('ban reason must be between 1 and 500 characters');
+  return reason;
+}
+
+function normalizeBanExpiresAt(value: any) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp) || timestamp <= Date.now()) throw badRequest('ban expiration must be a valid future date');
+  return new Date(timestamp).toISOString();
 }
 
 function normalizeDeploymentUpdates(updates: Record<string, any>, current: Record<string, any>) {

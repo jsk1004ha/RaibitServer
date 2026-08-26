@@ -9,7 +9,14 @@ const updater = readFileSync(updaterPath, 'utf8');
 const installer = readFileSync(installerPath, 'utf8');
 
 function bashSyntax(path) {
-  const result = spawnSync('bash', ['-n', path.pathname], { encoding: 'utf8' });
+  // Git stores these scripts with LF. Normalize a Windows checkout before
+  // sending the exact script contents to Bash over stdin so no host-path
+  // translation is involved.
+  const script = readFileSync(path, 'utf8').replaceAll('\r\n', '\n');
+  const result = spawnSync('bash', ['-n'], {
+    encoding: 'utf8',
+    input: script,
+  });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
@@ -48,7 +55,7 @@ test('production updater rebuilds and digest-pins every Helm-managed platform im
   assert.match(updater, /could not update all image digests/);
 });
 
-test('production updater preserves signing and atomic Helm deployment gates', () => {
+test('production updater preserves signing and version-appropriate Helm rollback gates', () => {
   for (const flag of [
     '--new-bundle-format=false',
     '--use-signing-config=false',
@@ -60,11 +67,30 @@ test('production updater preserves signing and atomic Helm deployment gates', ()
   assert.match(updater, /helm lint/);
   assert.match(updater, /helm template/);
   assert.match(updater, /helm upgrade --install/);
-  assert.match(updater, /--atomic/);
+  assert.match(updater, /HELM_VERSION=.*helm version --template/);
+  assert.match(updater, /3\)[\s\S]*HELM_SAFETY_FLAGS=\(--atomic\)/);
+  assert.match(updater, /4\)[\s\S]*--rollback-on-failure --wait=watcher --wait-for-jobs/);
+  assert.match(updater, /unsupported Helm major version/);
   assert.match(updater, /rollout status deployment\/raibitserver-api/);
   assert.match(updater, /rollout status deployment\/raibitserver-dashboard/);
   assert.doesNotMatch(updater, /docker login/);
   assert.doesNotMatch(updater, /GITHUB_TOKEN/);
+});
+
+test('production updater self-refreshes atomically only after rollout succeeds', () => {
+  assert.match(updater, /UPDATER_LIBEXEC_PATH=.*\.local\/libexec/);
+  assert.match(updater, /libexec directory must be a real directory/);
+  assert.match(updater, /must be canonical and contain no symlinks/);
+  assert.match(updater, /must not be group\/world writable/);
+  assert.match(updater, /regular non-symlink file/);
+  assert.match(updater, /bash -n "\$UPDATER_SOURCE"/);
+  assert.match(updater, /mktemp "\$\{UPDATER_LIBEXEC_DIR\}\/\.raibitserver-production-auto-update\.XXXXXX"/);
+  assert.match(updater, /mv -- "\$UPDATER_TMP" "\$UPDATER_LIBEXEC_PATH"/);
+
+  const rollout = updater.indexOf('rollout status deployment/raibitserver-dashboard');
+  const refresh = updater.indexOf('mv -- "$UPDATER_TMP" "$UPDATER_LIBEXEC_PATH"');
+  const state = updater.indexOf('deployed-sha.tmp');
+  assert.ok(rollout >= 0 && refresh > rollout && state > refresh, 'self-refresh must follow rollout and precede success state');
 });
 
 test('production updater is serialized and records success only after rollout', () => {
@@ -79,6 +105,13 @@ test('systemd installer runs as the server user on a five-minute inactive interv
   assert.match(installer, /User=\$\{TARGET_USER\}/);
   assert.match(installer, /SupplementaryGroups=docker/);
   assert.match(installer, /EnvironmentFile=-\$\{ENV_FILE\}/);
+  assert.match(installer, /Environment=RAIBITSERVER_UPDATER_LIBEXEC_PATH=\$\{UPDATER_INSTALLED\}/);
+  assert.match(installer, /Refuse user-controlled symlinks/);
+  assert.match(installer, /managed path contains a non-directory or symlink/);
+  assert.match(installer, /refusing to replace symlinked updater target/);
+  assert.match(installer, /runuser -u "\$TARGET_USER" -- install -d -m 700/);
+  assert.match(installer, /runuser -u "\$TARGET_USER" -- install -m 0755/);
+  assert.match(installer, /runuser -u "\$TARGET_USER" -- sh -c 'umask 077/);
   assert.match(installer, /OnUnitInactiveSec=5min/);
   assert.match(installer, /Persistent=true/);
   assert.match(installer, /systemctl enable --now "\$TIMER_NAME"/);

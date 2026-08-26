@@ -41,12 +41,47 @@ IMAGE_PREFIX="${RAIBITSERVER_IMAGE_PREFIX:-ghcr.io/jsk1004ha/raibitserver}"
 COSIGN_KEY="${RAIBITSERVER_COSIGN_KEY:-k8s://raibitserver-system/raibitserver-cosign-signing}"
 HELM_TIMEOUT="${RAIBITSERVER_HELM_TIMEOUT:-20m}"
 GITHUB_API="${RAIBITSERVER_GITHUB_API:-https://api.github.com}"
+UPDATER_LIBEXEC_PATH="${RAIBITSERVER_UPDATER_LIBEXEC_PATH:-${HOME}/.local/libexec/raibitserver-production-auto-update}"
 
 export KUBECONFIG
 
-for command_name in git curl jq docker cosign kubectl helm flock python3 awk mktemp; do
+for command_name in git curl jq docker cosign kubectl helm flock python3 awk mktemp cp chmod mv bash dirname; do
   require_command "$command_name"
 done
+
+[[ "$UPDATER_LIBEXEC_PATH" == /* ]] \
+  || fail "updater libexec path must be absolute: $UPDATER_LIBEXEC_PATH"
+
+UPDATER_LIBEXEC_DIR="$(dirname -- "$UPDATER_LIBEXEC_PATH")"
+python3 - "$UPDATER_LIBEXEC_DIR" "$UPDATER_LIBEXEC_PATH" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+directory = Path(sys.argv[1])
+target = Path(sys.argv[2])
+
+if not directory.is_dir() or directory.is_symlink():
+    raise SystemExit(f'updater libexec directory must be a real directory: {directory}')
+if directory.resolve(strict=True) != directory:
+    raise SystemExit(f'updater libexec directory must be canonical and contain no symlinks: {directory}')
+if target.parent != directory or target.name in {'', '.', '..'}:
+    raise SystemExit(f'updater libexec target is not a direct child of its directory: {target}')
+
+directory_stat = directory.stat()
+if directory_stat.st_uid != os.geteuid():
+    raise SystemExit(f'updater libexec directory is not owned by the updater user: {directory}')
+if directory_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+    raise SystemExit(f'updater libexec directory must not be group/world writable: {directory}')
+
+if target.exists() or target.is_symlink():
+    target_stat = target.lstat()
+    if not stat.S_ISREG(target_stat.st_mode) or target.is_symlink():
+        raise SystemExit(f'updater libexec target must be a regular non-symlink file: {target}')
+    if target_stat.st_uid != os.geteuid():
+        raise SystemExit(f'updater libexec target is not owned by the updater user: {target}')
+PY
 
 [[ -r "$KUBECONFIG" ]] || fail "kubeconfig is not readable: $KUBECONFIG"
 [[ -r "$VALUES_FILE" ]] || fail "production values file is not readable: $VALUES_FILE"
@@ -150,6 +185,9 @@ CHART_DIR="${WORKTREE}/infra/helm/raibitserver"
 
 RUN_DIR="$(mktemp -d "${STATE_DIR}/run.XXXXXX")"
 cleanup() {
+  if [[ -n "${UPDATER_TMP:-}" ]]; then
+    rm -f -- "$UPDATER_TMP"
+  fi
   rm -rf "$RUN_DIR"
 }
 trap cleanup EXIT
@@ -307,16 +345,35 @@ helm template "$HELM_RELEASE" "$CHART_DIR" \
   --namespace "$NAMESPACE" \
   -f "$CANDIDATE_VALUES" >/dev/null
 
-log "deploying ${TARGET_SHA} with Helm --atomic"
+HELM_VERSION="$(helm version --template '{{.Version}}')"
+if [[ "$HELM_VERSION" =~ ^v?([0-9]+)(\.|$) ]]; then
+  HELM_MAJOR="${BASH_REMATCH[1]}"
+else
+  fail "could not determine Helm major version from: $HELM_VERSION"
+fi
+
+case "$HELM_MAJOR" in
+  3)
+    HELM_SAFETY_FLAGS=(--atomic)
+    ;;
+  4)
+    HELM_SAFETY_FLAGS=(--rollback-on-failure --wait=watcher --wait-for-jobs)
+    ;;
+  *)
+    fail "unsupported Helm major version ${HELM_MAJOR}; only Helm 3 and Helm 4 are approved"
+    ;;
+esac
+
+log "deploying ${TARGET_SHA} with Helm ${HELM_MAJOR} rollback protection"
 helm upgrade --install "$HELM_RELEASE" "$CHART_DIR" \
   --namespace "$NAMESPACE" \
   --create-namespace \
   -f "$CANDIDATE_VALUES" \
-  --atomic \
+  "${HELM_SAFETY_FLAGS[@]}" \
   --timeout "$HELM_TIMEOUT"
 
-# Helm --atomic has already waited for the release, but keep explicit checks for
-# the two user-facing control-plane deployments before recording success.
+# Helm rollback protection has already waited for the release, but keep explicit
+# checks for the two user-facing control-plane deployments before recording success.
 kubectl -n "$NAMESPACE" rollout status deployment/raibitserver-api --timeout=5m
 kubectl -n "$NAMESPACE" rollout status deployment/raibitserver-dashboard --timeout=5m
 
@@ -326,6 +383,20 @@ if [[ -e "$VALUES_FILE" ]]; then
   chmod --reference="$VALUES_FILE" "$VALUES_TMP" 2>/dev/null || chmod 600 "$VALUES_TMP"
 fi
 mv "$VALUES_TMP" "$VALUES_FILE"
+
+UPDATER_SOURCE="${WORKTREE}/deploy/production/auto-update.sh"
+[[ -f "$UPDATER_SOURCE" && ! -L "$UPDATER_SOURCE" ]] \
+  || fail "approved checkout updater must be a regular non-symlink file"
+bash -n "$UPDATER_SOURCE" \
+  || fail "approved checkout updater failed Bash syntax validation"
+
+UPDATER_TMP="$(mktemp "${UPDATER_LIBEXEC_DIR}/.raibitserver-production-auto-update.XXXXXX")"
+cp -- "$UPDATER_SOURCE" "$UPDATER_TMP"
+chmod 0755 "$UPDATER_TMP"
+bash -n "$UPDATER_TMP" \
+  || fail "copied updater failed Bash syntax validation"
+mv -- "$UPDATER_TMP" "$UPDATER_LIBEXEC_PATH"
+log "refreshed production updater from ${TARGET_SHA}"
 
 printf '%s\n' "$TARGET_SHA" >"${STATE_DIR}/deployed-sha.tmp"
 mv "${STATE_DIR}/deployed-sha.tmp" "${STATE_DIR}/deployed-sha"

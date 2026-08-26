@@ -19,6 +19,18 @@ export class AdminController {
   }
 
   @RequirePermission('audit:read')
+  @Post(':userId/ban')
+  ban(@Param('userId') userId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.adminService.banUser(userId, input || {}, req.raibitSubject);
+  }
+
+  @RequirePermission('audit:read')
+  @Post(':userId/unban')
+  unban(@Param('userId') userId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.adminService.unbanUser(userId, input || {}, req.raibitSubject);
+  }
+
+  @RequirePermission('audit:read')
   @Patch(':userId/quota')
   quota(@Param('userId') userId: string, @Body() input: Record<string, any>, @Req() req: any) {
     return this.adminService.setUserQuota(userId, input || {}, req.raibitSubject);

@@ -1,11 +1,12 @@
 # RAIBITSERVER 문서 허브
 
-RAIBITSERVER 문서는 README를 짧은 진입점으로 유지하고, 세부 설명을 목적별 문서로 분리합니다. 처음 보는 사람은 [루트 README](../README.md)에서 빠른 시작을 확인한 뒤 필요한 문서로 이동하면 됩니다.
+RAIBITSERVER 문서는 README를 짧은 진입점으로 유지하고, 세부 설명을 목적별 문서로 분리합니다. 처음 보는 사람은 [처음 사용 가이드](getting-started.md)를 순서대로 따라간 뒤 필요한 운영 문서로 이동하면 됩니다.
 
 ## 빠른 길찾기
 
 | 상황 | 먼저 볼 문서 |
 | --- | --- |
+| 설치부터 첫 배포까지 천천히 따라 하고 싶다 | [처음 사용 가이드](getting-started.md) |
 | 프로젝트가 무엇인지 알고 싶다 | [README](../README.md), [아키텍처](architecture.md) |
 | 로컬에서 검증하고 싶다 | [로컬 E2E](local-e2e.md), [검증 명령](verification-commands.md) |
 | 실제 클러스터 smoke test가 필요하다 | [Live E2E](live-e2e.md) |
@@ -21,6 +22,7 @@ RAIBITSERVER 문서는 README를 짧은 진입점으로 유지하고, 세부 설
 
 | 문서 | 목적 | 주요 독자 |
 | --- | --- | --- |
+| [getting-started.md](getting-started.md) | 설치, 4단계 프로젝트 생성, 자동 감지, secret, AI 배포, 밴, 자동 업데이트를 화면 순서대로 설명 | 처음 사용하는 사용자, 운영자 |
 | [architecture.md](architecture.md) | TypeScript 제어 평면과 Go reconcilers 구조 설명 | 개발자, 운영자 |
 | [local-e2e.md](local-e2e.md) | 외부 부작용 없는 dry-run E2E 실행법 | 개발자, CI 관리자 |
 | [live-e2e.md](live-e2e.md) | Docker/kind·k3d/kubectl 기반 live E2E 절차 | 운영자, 릴리스 담당자 |

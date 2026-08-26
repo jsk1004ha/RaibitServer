@@ -487,9 +487,9 @@ test('guide keeps detailed help in one topic per screen', async () => {
     read('../apps/dashboard/proxy.ts'),
   ]);
   for (const marker of [
-    "const topics = ['projects', 'deployments', 'resources', 'github'] as const",
-    '프로젝트 시작', '배포 관리', '리소스 사용', 'GitHub 연결',
-    '/guide?topic=projects', '/guide?topic=deployments', '/guide?topic=resources', '/guide?topic=github',
+    "const topics = ['projects', 'source', 'environment', 'deployments', 'resources', 'github', 'administration'] as const",
+    '프로젝트 시작', '소스 자동 인식', '환경 변수와 비밀키', 'AI 배포와 수동 배포', '관리형 리소스', 'GitHub 연결', '사용자 승인과 밴',
+    '/guide?topic=projects', '/guide?topic=source', '/guide?topic=environment', '/guide?topic=deployments', '/guide?topic=resources', '/guide?topic=github', '/guide?topic=administration',
     '<ConsoleShell active="guide"', '<SectionNav items={navItems} current={topic}',
   ]) {
     assert.ok(guide.includes(marker), `${marker} guide marker missing`);
@@ -659,7 +659,7 @@ test('admin console focuses on signup identity review and approval actions', asy
   assert.ok(admin.includes('<ConsoleShell active="admin"'));
   assert.match(admin, /<h1\s+className="page-title">가입 신청 확인<\/h1>/);
   assert.ok(admin.includes("if (!state.authorized) redirect('/console')"));
-  assert.ok(admin.includes("state.pendingUsers.length ? '승인 대기 신청' : '전체 사용자'"));
+  assert.ok(admin.includes('<h2>승인 대기 신청</h2>'));
   for (const action of ['클럽 회원 승인', '일반 사용자 승인', '거절']) {
     assert.match(admin, new RegExp(`>\\s*${action}\\s*<`), `${action} admin action missing`);
   }
@@ -678,6 +678,9 @@ test('admin console focuses on signup identity review and approval actions', asy
   }
   assert.ok(admin.includes('roleLabels[user.role ||'));
   assert.ok(admin.includes('accountTypeLabels[user.accountType]'));
+  for (const marker of ['사용자 이용 제한', '/ban', '/unban', 'user.isBanned', '밴 즉시 기존 로그인 세션이 모두 만료됩니다.']) {
+    assert.ok(admin.includes(marker), `${marker} user-ban marker missing`);
+  }
   assert.doesNotMatch(admin, /<td>\{user\.role\s*\|\|\s*'USER'\}\s*\/\s*\{user\.accountType\}<\/td>/);
   assert.ok(!admin.includes('새 가입은 NON_CLUB / PENDING'));
 });
@@ -746,6 +749,23 @@ test('project overview keeps the selected compact summary without preview contro
   ]) {
     assert.ok(!`${page}\n${css}`.includes(removed), `${removed} discarded overview preview marker remains`);
   }
+});
+
+test('project operations expose compact deployment controls, secret management, and AI safety review', async () => {
+  const [page, css] = await Promise.all([
+    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
+    read('../apps/dashboard/app/globals.css'),
+  ]);
+
+  for (const marker of [
+    'service-deploy-actions', '환경 변수', '.env 텍스트 가져오기', '비밀값으로 암호화하여 저장',
+    "id: 'agent'", 'AI 배포 관리자', '/deployment-agent/plan', '/deployment-agent/apply',
+    '외부 AI에는 서비스 이름·유형과 위협 코드만 전달합니다.',
+  ]) {
+    assert.ok(page.includes(marker), `${marker} project operation marker missing`);
+  }
+  assert.match(css, /\.service-deploy-actions\s+\.btn\s*\{[^}]*min-height:\s*36px/s);
+  assert.match(css, /@media\s*\(max-width:\s*720px\)[\s\S]*?\.service-deploy-actions\s+\.btn\s*\{[^}]*min-height:\s*44px/);
 });
 
 test('focused form grids use a single activity surface without changing the shared grid', async () => {

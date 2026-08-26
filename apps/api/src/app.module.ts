@@ -5,6 +5,7 @@ import { ControlPlaneModule } from './control-plane.module';
 import { AdminModule } from './modules/admin.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { DeploymentsModule } from './modules/deployments/deployments.module';
+import { DeploymentAgentModule } from './modules/deployment-agent/deployment-agent.module';
 import { EnvironmentModule } from './modules/environment/environment.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { ProjectsModule } from './modules/projects/projects.module';
@@ -19,6 +20,7 @@ import { UsageModule } from './modules/usage.module';
     ProjectsModule,
     ServicesModule,
     DeploymentsModule,
+    DeploymentAgentModule,
     ResourcesModule,
     EnvironmentModule,
     IntegrationsModule,

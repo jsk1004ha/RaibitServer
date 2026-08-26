@@ -4,7 +4,7 @@
 
 RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로컬 예제, 관리형 DB와 리소스를 하나의 프로젝트 모델로 묶습니다. 사용자의 서비스는 항상 **컨테이너 이미지**와 **Kubernetes desired state**로 변환되며, TypeScript 제어 평면이 원하는 상태를 저장하고 Go 인프라 서비스가 실제 빌드·배포·프로비저닝을 조정합니다.
 
-이 README는 처음 온 사람이 빠르게 이해하고 실행할 수 있도록 핵심만 담습니다. 세부 운영 문서는 [문서 허브](docs/README.md)에 목적별로 분리했습니다.
+이 README는 처음 온 사람이 빠르게 이해하고 실행할 수 있도록 핵심만 담습니다. 화면을 따라 첫 배포까지 진행하려면 [처음 사용 가이드](docs/getting-started.md), 세부 운영 자료를 찾으려면 [문서 허브](docs/README.md)를 먼저 보세요.
 
 ## 주요 기능
 
@@ -14,6 +14,10 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 - **관리형 리소스**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, SQLite, Object Storage, Qdrant/vector, NATS/queue를 카탈로그 리소스로 다룹니다.
 - **서브도메인 라우팅**: 서비스 실행 URL은 `apps--<user>--<project>.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 flat single-label 규칙을 따릅니다.
 - **승인·쿼터·감사**: 비동아리 사용자는 관리자 승인 후 쿼터 안에서 사용하고, 주요 작업은 감사 로그와 사용량에 반영됩니다.
+- **AI 배포 관리자**: 서비스별 위협을 먼저 검사하고, 안전한 서비스만 결정적 재검증을 거쳐 순서대로 배포합니다. 외부 AI는 선택 사항이며 secret을 받거나 보안 차단을 해제할 수 없습니다.
+- **환경 변수 보관함**: 서비스별 일반값과 암호화된 비밀값을 관리하고, `.env` 텍스트를 가져오며, API와 화면에는 secret 원문 대신 마스킹된 값을 제공합니다.
+- **사용자 밴**: 관리자가 사유와 선택적 만료 시각을 기록해 계정을 제한하고 기존 세션을 즉시 무효화할 수 있습니다.
+- **CI 승인 자동 업데이트**: production 서버가 `main`의 정확한 SHA에 대한 CI 성공을 확인한 뒤 digest 고정·서명·Helm rollback 보호를 거쳐 최신 버전을 반영합니다.
 - **실시간 운영 UX**: 배포/런타임 로그는 조회 API와 SSE snapshot stream을 모두 제공하고, 쿼터 응답은 게이지/경고를 포함합니다.
 - **안전한 기본값**: namespace 격리, NetworkPolicy, non-root 컨테이너, privileged/hostPath 차단, 리소스 제한, secret masking을 기본으로 적용합니다.
 - **빌드 경로 격리**: `buildContext`/`dockerfilePath`는 서비스 소스 디렉터리 내부로 강제되어 worker 호스트 경로 유출을 차단합니다.
@@ -114,6 +118,7 @@ node src/cli.js compose examples/docker-compose.yml
 
 | 필요 | 문서 |
 | --- | --- |
+| 처음 설치하고 화면을 따라 사용하기 | [docs/getting-started.md](docs/getting-started.md) |
 | 전체 문서 목록 | [docs/README.md](docs/README.md) |
 | 시스템 구조 | [docs/architecture.md](docs/architecture.md) |
 | 로컬 dry-run E2E | [docs/local-e2e.md](docs/local-e2e.md) |
@@ -141,6 +146,7 @@ node src/cli.js compose examples/docker-compose.yml
 | Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
 | Provider | `RAIBITSERVER_POSTGRES_PROVIDER_URL`, `POSTGRES_PROVIDER_URL`, `RAIBITSERVER_PROVIDER_POSTGRESQL_IMAGE`, `RAIBITSERVER_PROVIDER_MYSQL_IMAGE`, `RAIBITSERVER_PROVIDER_MARIADB_IMAGE`, `RAIBITSERVER_PROVIDER_MONGODB_IMAGE`, `RAIBITSERVER_PROVIDER_REDIS_IMAGE`, `RAIBITSERVER_PROVIDER_VALKEY_IMAGE`, `RAIBITSERVER_PROVIDER_MINIO_IMAGE`, `RAIBITSERVER_PROVIDER_QDRANT_IMAGE`, `RAIBITSERVER_PROVIDER_NATS_IMAGE` |
 | GitHub App/OAuth | `RAIBITSERVER_GITHUB_CLIENT_ID`, `RAIBITSERVER_GITHUB_CLIENT_SECRET`, `RAIBITSERVER_GITHUB_REDIRECT_URI`, `RAIBITSERVER_GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` |
+| AI 배포 조언(선택) | `RAIBITSERVER_AI_AGENT_URL`, `RAIBITSERVER_AI_AGENT_TOKEN`, `RAIBITSERVER_AI_AGENT_MODEL` |
 
 Production 실행 전 필수 설정은 [production 배포 문서](deploy/production/README.md)를 확인하세요.
 GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드시 수행하므로 `RAIBITSERVER_GITHUB_WEBHOOK_SECRET`(또는 `GITHUB_WEBHOOK_SECRET`)이 비어 있으면 요청을 거부합니다.

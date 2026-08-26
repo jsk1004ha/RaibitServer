@@ -8,6 +8,8 @@ import {
 	consoleOriginHref,
 	dashboardRequestUrl,
 	dashboardSecurityHeaders,
+	environmentFilePayloadFromForm,
+	environmentPayloadFromForm,
 	extractSessionToken,
 	fetchWithInitialResponseTimeout,
   formMutationMethod,
@@ -156,6 +158,23 @@ test('project creation form becomes one atomic desired-state payload', () => {
 		}],
 		resources: [],
 	});
+});
+
+test('environment forms become bounded API payloads without putting secret values in metadata', () => {
+	assert.deepEqual(environmentPayloadFromForm({ key: 'API_TOKEN', value: 'secret value', isSecret: 'on' }), {
+		entries: [{ key: 'API_TOKEN', value: 'secret value', isSecret: true }],
+		source: 'dashboard',
+	});
+	assert.deepEqual(environmentPayloadFromForm({ key: 'NODE_ENV', value: 'production' }), {
+		entries: [{ key: 'NODE_ENV', value: 'production', isSecret: false }],
+		source: 'dashboard',
+	});
+	assert.deepEqual(environmentFilePayloadFromForm({ content: 'API_TOKEN=secret\nNODE_ENV=production' }), {
+		content: 'API_TOKEN=secret\nNODE_ENV=production',
+		filename: '.env',
+	});
+	assert.throws(() => environmentPayloadFromForm({ key: 'INVALID-KEY', value: 'value' }), (error) => error?.code === 'invalid_form_body');
+	assert.throws(() => environmentFilePayloadFromForm({ content: '  ' }), (error) => error?.code === 'invalid_form_body');
 });
 
 test('HTML forms can safely request only supported mutation methods', () => {

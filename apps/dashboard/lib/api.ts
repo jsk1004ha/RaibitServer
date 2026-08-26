@@ -201,12 +201,18 @@ export async function loadAdminConsole(context?: DashboardApiContext) {
     getJson('/snapshot', { users: [], quotas: [], auditLogs: [] }, resolved),
     getJson('/usage/me', { usage: [], quota: null }, resolved),
   ]);
-  const users = snapshot.body?.users || [];
+  const rawUsers = snapshot.body?.users || [];
+  const now = Date.now();
+  const isActivelyBanned = (user: any) => Boolean(user?.bannedAt)
+    && (!user.banExpiresAt || !Number.isFinite(new Date(user.banExpiresAt).getTime()) || new Date(user.banExpiresAt).getTime() > now);
+  const users = rawUsers.map((user: any) => ({ ...user, isBanned: isActivelyBanned(user) }));
   return {
     context: resolved,
     authorized: snapshot.ok,
     users,
     pendingUsers: users.filter((user: any) => String(user.approvalStatus || '').toUpperCase() === 'PENDING'),
+    approvedUsers: users.filter((user: any) => String(user.approvalStatus || '').toUpperCase() === 'APPROVED' && !user.isBanned),
+    bannedUsers: users.filter((user: any) => user.isBanned),
     quotas: snapshot.body?.quotas || [],
     auditLogs: snapshot.body?.auditLogs || [],
     usage: usage.body,

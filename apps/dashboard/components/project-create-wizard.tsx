@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { type FormEvent, useRef, useState } from 'react';
 
 const steps = [
   { id: 'project', label: '프로젝트', description: '이름과 식별자' },
@@ -24,8 +24,14 @@ export function ProjectCreateWizard({ action, orgSlug }: { action: string; orgSl
     setStep((current) => Math.min(current + 1, steps.length - 1));
   }
 
+  function guardSubmit(event: FormEvent<HTMLFormElement>) {
+    if (step === steps.length - 1) return;
+    event.preventDefault();
+    moveNext();
+  }
+
   return (
-    <form ref={formRef} method="post" action={action} className="workflow-form workflow-form-wide card">
+    <form ref={formRef} method="post" action={action} onSubmit={guardSubmit} className="workflow-form workflow-form-wide card">
       <input type="hidden" name="_returnTo" value={`/org/${orgSlug}/projects`} />
       <ol className="workflow-steps" aria-label="프로젝트 만들기 단계">
         {steps.map((item, index) => (

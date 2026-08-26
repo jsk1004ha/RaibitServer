@@ -6,6 +6,8 @@ import {
   browserSafePayload,
   dashboardRequestUrl,
   extractSessionToken,
+  environmentFilePayloadFromForm,
+  environmentPayloadFromForm,
   fetchWithInitialResponseTimeout,
   formMutationMethod,
   isSameOriginMutation,
@@ -83,6 +85,8 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
       delete body._confirmProject;
       returnPath = safeReturnPath(browserRequestUrl, requestedReturn, request.headers.get('referer'));
       if (isFormSubmission && upstreamMethod === 'POST' && path === '/projects') body = projectCreatePayloadFromForm(body);
+      if (isFormSubmission && upstreamMethod === 'POST' && /\/projects\/[^/]+\/services\/[^/]+\/env$/.test(path)) body = environmentPayloadFromForm(body);
+      if (isFormSubmission && upstreamMethod === 'POST' && /\/projects\/[^/]+\/services\/[^/]+\/env-file$/.test(path)) body = environmentFilePayloadFromForm(body);
     } catch (error) {
       const code = requestBodyErrorCode(error);
       if (isFormSubmission) return formErrorRedirect(browserRequestUrl, returnPath, code);

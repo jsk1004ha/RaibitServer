@@ -2,6 +2,7 @@ import { BUILD_MODES, DEFAULT_DOMAIN, DEFAULT_PORT, DEFAULT_REGISTRY, SOURCE_TYP
 import { detectFramework } from './framework-detector.ts';
 import { slugify } from './ids.ts';
 import { serviceHostname } from './domain-router.ts';
+import { discoverSource, filesAtSourceRoot, normalizeSourcePath } from './source-discovery.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -15,17 +16,14 @@ function normalizeMode(mode: any) {
   return BUILD_MODES.AUTO;
 }
 
-function hasDockerfile(files: AnyRecord = {}, dockerfilePath = 'Dockerfile') {
-  return Object.prototype.hasOwnProperty.call(files, dockerfilePath) || Object.prototype.hasOwnProperty.call(files, './Dockerfile') || Object.prototype.hasOwnProperty.call(files, 'Dockerfile');
-}
-
 export function resolveBuildStrategy(service: AnyRecord = {}, files: AnyRecord = {}) {
   const sourceType = service.sourceType || SOURCE_TYPES.GITHUB;
   const requestedMode = normalizeMode(service.buildMode);
   const name = slugify(service.name || 'service');
-  const rootDirectory = service.rootDirectory || '.';
-  const dockerfilePath = service.dockerfilePath || 'Dockerfile';
-  const buildContext = service.buildContext || rootDirectory;
+  const discovery = discoverSource(files, { rootDirectory: service.rootDirectory, serviceName: service.name });
+  const rootDirectory = normalizeSourcePath(service.rootDirectory || discovery.rootDirectory);
+  const dockerfilePath = normalizeSourcePath(service.dockerfilePath || discovery.dockerfilePath || 'Dockerfile');
+  const buildContext = normalizeSourcePath(service.buildContext || rootDirectory);
   const customBuildCommand = service.buildCommand || service.customBuildCommand || null;
   const image = service.image || service.imageUrl || null;
 
@@ -44,7 +42,7 @@ export function resolveBuildStrategy(service: AnyRecord = {}, files: AnyRecord =
     });
   }
 
-  if (requestedMode === BUILD_MODES.DOCKERFILE || service.dockerfilePath || hasDockerfile(files, dockerfilePath)) {
+  if (requestedMode === BUILD_MODES.DOCKERFILE || service.dockerfilePath || discovery.dockerfilePath) {
     return buildPlan({
       mode: BUILD_MODES.DOCKERFILE,
       name,
@@ -81,7 +79,7 @@ export function resolveBuildStrategy(service: AnyRecord = {}, files: AnyRecord =
     });
   }
 
-  const detected = detectFramework(files);
+  const detected = detectFramework(filesAtSourceRoot(files, rootDirectory));
   if (requestedMode === BUILD_MODES.AUTO && detected.framework !== 'unknown') {
     const isStatic = detected.runtime === 'static';
     return buildPlan({

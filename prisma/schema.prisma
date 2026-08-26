@@ -20,6 +20,10 @@ model User {
   accountType    String       @default("NON_CLUB")
   approvalStatus String       @default("PENDING")
   sessionVersion Int          @default(0)
+  bannedAt       DateTime?
+  banExpiresAt   DateTime?
+  banReason      String?
+  bannedByUserId String?
   emailVerifiedAt DateTime?   @default(now())
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -29,6 +33,8 @@ model User {
   auditLogs      AuditLog[]
   githubIntegrations GitHubIntegration[]
   emailVerificationCodes EmailVerificationCode[]
+
+  @@index([bannedAt, banExpiresAt])
 }
 
 model EmailVerificationCode {

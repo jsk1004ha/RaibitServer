@@ -555,6 +555,19 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return repository.rejectUser(userId, { ...input, actorUserId: subject.id });
   }
 
+  async banUser(userId: string, input: Record<string, any>, subject: Record<string, any>) {
+    assertAdmin(subject);
+    if (String(userId) === String(subject.id)) throw new BadRequestException('cannot_ban_self');
+    const repository: any = await this.repositoryPromise;
+    return repository.banUser(userId, { ...input, actorUserId: subject.id });
+  }
+
+  async unbanUser(userId: string, input: Record<string, any>, subject: Record<string, any>) {
+    assertAdmin(subject);
+    const repository: any = await this.repositoryPromise;
+    return repository.unbanUser(userId, { ...input, actorUserId: subject.id });
+  }
+
   async adminOverview(subject: Record<string, any>, options: Record<string, any> = {}) {
     assertAdmin(subject);
     const repository: any = await this.repositoryPromise;
@@ -738,9 +751,17 @@ function assertNestEmailVerified(user: Record<string, any>) {
 }
 
 function assertNestUserApproved(user: Record<string, any>) {
+  if (isActiveUserBan(user)) throw new ForbiddenException('account_banned');
   if (String(user?.approvalStatus || 'PENDING').toUpperCase() !== 'APPROVED') {
     throw new ForbiddenException('account_not_approved');
   }
+}
+
+function isActiveUserBan(user: Record<string, any>, now = Date.now()) {
+  if (!user?.bannedAt) return false;
+  if (!user.banExpiresAt) return true;
+  const expiresAt = new Date(user.banExpiresAt).getTime();
+  return !Number.isFinite(expiresAt) || expiresAt > now;
 }
 
 function authRateLimitError(resetAt: number) {

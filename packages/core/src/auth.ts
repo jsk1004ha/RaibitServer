@@ -96,6 +96,7 @@ export function subjectFromRequest(req: any, auth: Record<string, any> = {}) {
 export function assertCurrentSession(subject: Record<string, any>, user: Record<string, any> | null | undefined) {
   if (subject?.authMode !== 'jwt' || subject?.global === true || subject?.claims?.global === true) return true;
   if (!user) throw unauthorized('session user no longer exists');
+  if (isUserBanned(user)) throw unauthorized('account is banned');
   if (String(user.approvalStatus || 'PENDING').toUpperCase() !== 'APPROVED') {
     throw unauthorized('account is not approved');
   }
@@ -105,6 +106,13 @@ export function assertCurrentSession(subject: Record<string, any>, user: Record<
     throw unauthorized('session has been revoked');
   }
   return true;
+}
+
+export function isUserBanned(user: Record<string, any> | null | undefined, now = Date.now()) {
+  if (!user?.bannedAt) return false;
+  if (!user.banExpiresAt) return true;
+  const expiresAt = new Date(user.banExpiresAt).getTime();
+  return !Number.isFinite(expiresAt) || expiresAt > now;
 }
 
 export function requireAction(subject: Record<string, any>, action: string) {

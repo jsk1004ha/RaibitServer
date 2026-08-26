@@ -236,6 +236,8 @@ export class InMemoryControlPlaneRepository {
   async processNextWorkflowJob(handlers: Record<string, any>, options: Record<string, any> = {}) { return this.store.processNextWorkflowJob(handlers, options); }
   async approveUser(userId: string, input: Record<string, any> = {}) { return this.store.approveUser(userId, input); }
   async rejectUser(userId: string, input: Record<string, any> = {}) { return this.store.rejectUser(userId, input); }
+  async banUser(userId: string, input: Record<string, any> = {}) { return this.store.banUser(userId, input); }
+  async unbanUser(userId: string, input: Record<string, any> = {}) { return this.store.unbanUser(userId, input); }
   async setQuota(input: Record<string, any>) { return this.store.setQuota(input); }
   async enforceUserCan(input: Record<string, any>) { return this.store.enforceUserCan(input); }
   async writeDesiredProject(projectSpec: Record<string, any>) {
@@ -1473,6 +1475,39 @@ export class PrismaControlPlaneRepository {
     return redactUser(user);
   }
 
+  async banUser(userId: string, input: Record<string, any> = {}) {
+    const actorUserId = auditActorUserId(input.actorUserId);
+    if (actorUserId && actorUserId === String(userId)) throw forbiddenError('administrators cannot ban themselves');
+    const reason = normalizeBanReason(input.reason);
+    const expiresAt = normalizeBanExpiresAt(input.expiresAt);
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({
+        where: { id: userId },
+        data: {
+          bannedAt: new Date(),
+          banExpiresAt: expiresAt,
+          banReason: reason,
+          bannedByUserId: actorUserId,
+          sessionVersion: { increment: 1 },
+        },
+      });
+      await tx.auditLog.create({ data: { actorUserId, action: 'user:ban', targetType: 'user', targetId: userId, metadata: maskSecrets({ reason, expiresAt: expiresAt?.toISOString() || null, permanent: expiresAt === null }) } });
+      return redactUser(user);
+    });
+  }
+
+  async unbanUser(userId: string, input: Record<string, any> = {}) {
+    const actorUserId = auditActorUserId(input.actorUserId);
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({
+        where: { id: userId },
+        data: { bannedAt: null, banExpiresAt: null, banReason: null, bannedByUserId: null, sessionVersion: { increment: 1 } },
+      });
+      await tx.auditLog.create({ data: { actorUserId, action: 'user:unban', targetType: 'user', targetId: userId, metadata: {} } });
+      return redactUser(user);
+    });
+  }
+
   async setQuota(input: Record<string, any>) {
     const accountType = normalizeAccountType(input.accountType);
     return this.prisma.quota.upsert({
@@ -1484,7 +1519,12 @@ export class PrismaControlPlaneRepository {
 
   async enforceUserCan(input: Record<string, any>) {
     const user = await this.prisma.user.findUnique({ where: { id: input.userId } });
-    if (!user || user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER') return true;
+    if (!user) return true;
+    if (isActiveBan(user)) {
+      await this.prisma.auditLog.create({ data: { actorUserId: input.userId, action: 'user:ban-block', targetType: input.action || 'action', targetId: input.metric || input.action || 'unknown', metadata: { reason: user.banReason || 'banned', expiresAt: user.banExpiresAt?.toISOString() || null } } });
+      throw forbiddenError(`user ${input.userId} is banned and cannot ${input.action}`);
+    }
+    if (user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER') return true;
     if (user.approvalStatus !== 'APPROVED') {
       await this.prisma.auditLog.create({ data: { actorUserId: input.userId, action: 'quota:block', targetType: input.action || 'action', targetId: input.metric || input.action || 'unknown', metadata: { reason: user.approvalStatus || 'PENDING' } } });
       const error = new Error(`user ${input.userId} is ${user.approvalStatus || 'PENDING'} and cannot ${input.action}`);
@@ -2391,7 +2431,7 @@ function maskEnvRow(row: Record<string, any>) {
 }
 
 function redactUser(user: Record<string, any>) {
-  const { passwordHash, ...rest } = user;
+  const { passwordHash, bannedByUserId, ...rest } = user;
   return rest;
 }
 
@@ -2406,6 +2446,34 @@ function forbiddenError(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 403;
   return error;
+}
+
+function isActiveBan(user: Record<string, any>, now = Date.now()) {
+  if (!user?.bannedAt) return false;
+  if (!user.banExpiresAt) return true;
+  const expiresAt = new Date(user.banExpiresAt).getTime();
+  return !Number.isFinite(expiresAt) || expiresAt > now;
+}
+
+function normalizeBanReason(value: any) {
+  const reason = String(value || '').trim();
+  if (!reason || reason.length > 500) {
+    const error = new Error('ban reason must be between 1 and 500 characters');
+    (error as any).statusCode = 400;
+    throw error;
+  }
+  return reason;
+}
+
+function normalizeBanExpiresAt(value: any) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp) || timestamp <= Date.now()) {
+    const error = new Error('ban expiration must be a valid future date');
+    (error as any).statusCode = 400;
+    throw error;
+  }
+  return new Date(timestamp);
 }
 
 function auditActorUserId(value: any) {
