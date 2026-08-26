@@ -119,14 +119,18 @@ bash deploy/production/bootstrap-workload-registry.sh
 
 첫 파일은 확인용 non-secret 설정이고, 두 번째 파일은 `builder.registry`, broker URL, 기존 Kubernetes Secret 이름, 전용 게이트웨이 namespace·Pod label·port만 담는 Helm overlay입니다. 자동 updater는 overlay와 모든 상위 디렉터리의 종류·소유자·쓰기 권한을 검사하고, symlink를 따라가지 않는 file descriptor에서 최대 1 MiB의 immutable snapshot을 만든 뒤 `helm lint`, `helm template`, `helm upgrade` 세 단계에 같은 snapshot을 적용합니다.
 
-현재 서버에서 `registry credential broker request failed`가 발생한 뒤 이 수정으로 복구할 때는 최신 checkout에서 bootstrap과 updater installer를 한 번 다시 실행하고 서비스를 시작합니다.
+자동 updater는 기존 `raibit-registry` StatefulSet을 발견하면 overlay나 새 상태 파일이 아직 없어도 workload registry를 관리 대상으로 인식합니다. CI를 통과한 정확한 commit에서 `registry-broker` image를 별도로 build·서명하고, [`reconcile-workload-registry-gateway.sh`](reconcile-workload-registry-gateway.sh)로 전용 TLS gateway, 상대 registry URL, NetworkPolicy, CoreDNS split DNS를 재조정합니다. 변경 전에 API server dry-run을 수행하며, 기존 상태와 적용 직후 상태를 따로 저장합니다. 이후 단계가 실패하면 UID·spec·annotation 또는 ConfigMap 값이 적용 직후 상태와 정확히 같을 때만 이전 상태로 되돌립니다. 다른 운영 작업이 동시에 값을 바꾼 경우에는 그 변경을 덮어쓰지 않고 중단합니다. 처음 생성되어 이전 spec이 없는 객체도 경합 가능성이 있는 무조건 삭제를 하지 않으며, 명시적인 복구 오류를 남깁니다.
+
+재조정과 평상시 5분 점검에서는 빌더 Secret과 broker runtime Secret의 **값을 출력하지 않고 SHA-256만 비교**합니다. 이어서 전용 ClusterIP·TLS 경로로 실제 `POST /broker` 요청을 보내 짧은 수명의 자격증명이 발급되는지 확인하고, registry `/v2/`가 정확히 HTTP 401과 하나의 Bearer challenge를 반환하는지 검사합니다. realm은 `https://registry-auth.<domain>/token`, service는 설정된 registry service와 정확히 일치해야 합니다. 따라서 Deployment가 Ready라는 이유만으로 고장 난 토큰·라우팅을 정상으로 오판하지 않습니다.
+
+이미 구버전 자동 updater가 설치된 서버에서 `registry credential broker request failed`를 복구할 때는 timer를 그대로 두면 됩니다. 첫 주기는 CI를 통과한 새 `main`을 일반 platform에 반영하고 updater 자체를 교체하며, 다음 약 5분 주기는 새 updater가 registry gateway를 탐지해 재조정합니다. 진행 상황은 다음 명령으로 두 주기 모두 확인합니다.
 
 ```sh
-bash deploy/production/bootstrap-workload-registry.sh
-sudo bash deploy/production/install-auto-update.sh "$USER"
-sudo systemctl start raibitserver-auto-update.service
+systemctl status raibitserver-auto-update.timer
 journalctl -u raibitserver-auto-update.service -f
 ```
+
+timer가 아직 설치되지 않은 새 서버만 먼저 `bootstrap-workload-registry.sh`를 실행한 뒤 `install-auto-update.sh`를 설치합니다.
 
 수동 Helm 배포를 하는 서버라면 기존 production values 뒤에 overlay를 추가합니다. 아래 예시는 Helm 3용입니다.
 
@@ -149,18 +153,23 @@ Helm 4에서는 마지막 줄의 `--atomic` 대신 `--rollback-on-failure --wait
 
 ```txt
 main SHA 변경 감지
-→ 그 정확한 SHA의 push CI 확인
+→ 저장된 registry 상태 digest와 실제 broker 발급·토큰 일치 상태 확인
+→ 새 SHA 또는 drift가 있으면 그 정확한 SHA의 push CI 확인
 → CI completed/success일 때만 전용 checkout으로 fetch
-→ Helm 관리 platform image 7개 build/push
+→ platform 변경 시 Helm 관리 image 7개 build/push
+→ registry 변경·drift 시 registry-broker image build/push
 → 각 image digest cosign 서명
 → production-values.yaml의 digest pin 갱신 후보 생성
 → workload registry overlay의 소유권·권한 검사 및 snapshot 생성
-→ 두 values를 함께 사용해 helm lint/template
+→ registry overlay 후보로 helm lint/template 사전 검증
+→ 전용 TLS gateway·registry config·CoreDNS를 비교 후 재조정
+→ 두 values를 함께 사용해 최종 helm lint/template
 → Helm major 확인(3: --atomic, 4: --rollback-on-failure + watcher wait)
 → helm upgrade --install
 → API/Dashboard rollout 확인
+→ 실제 broker 발급과 registry challenge를 다시 확인
 → 승인 checkout의 updater를 libexec에 원자적으로 self-refresh
-→ 성공한 SHA를 state에 기록
+→ 성공한 platform·registry SHA와 상태 digest를 state에 기록
 ```
 
 CI가 아직 실행 중이면 다음 timer 주기까지 기다립니다. CI가 실패한 SHA는 production에 배포하지 않으며, 새로운 `main` SHA가 생길 때까지 현재 release를 유지합니다. updater는 `flock`으로 직렬화되어 이전 build/deploy가 끝나기 전에 다음 실행이 겹치지 않습니다.
@@ -198,10 +207,13 @@ installer는 이 절대 경로를 systemd의 `RAIBITSERVER_UPDATER_LIBEXEC_PATH`
 ```txt
 ~/.local/state/raibitserver-auto-update/deployed-sha
 ~/.local/state/raibitserver-auto-update/deployed-input-digest
+~/.local/state/raibitserver-auto-update/registry-reconciled-sha
+~/.local/state/raibitserver-auto-update/registry-reconciled-input-digest
+~/.local/state/raibitserver-auto-update/registry-reconciled-state-digest
 ~/.local/state/raibitserver-auto-update/last-success.json
 ```
 
-`deployed-input-digest`는 production values와 실제 적용한 workload registry overlay snapshot의 SHA-256입니다. `main` SHA가 같아도 두 설정 중 하나가 바뀌면 updater는 `already running`으로 종료하지 않고 같은 승인 commit을 다시 검증·배포합니다. 이 state가 없는 구버전 updater에서 처음 전환할 때도 한 번 재조정되므로, 새 overlay가 기존 commit에 누락되는 상황을 막습니다.
+`deployed-input-digest`는 production values와 실제 적용한 workload registry overlay snapshot의 SHA-256입니다. registry용 세 상태 파일은 마지막으로 재조정한 commit·입력 digest·Kubernetes desired-state digest를 따로 기록합니다. `main` SHA가 같아도 설정이나 gateway/NetworkPolicy/registry config/CoreDNS가 달라지거나 실제 broker 점검이 실패하면 updater는 `already running`으로 종료하지 않고 같은 승인 commit을 다시 검증해 복구합니다. 이 state가 없는 구버전 updater에서 처음 전환할 때도 한 번 재조정되므로 새 overlay가 기존 commit에 누락되는 상황을 막습니다.
 
 서버별 non-secret 설정은 설치 시 다음 파일에 생성되며 필요하면 수정할 수 있습니다.
 

@@ -47,99 +47,10 @@ print(digest.hexdigest())
 PY
 }
 
-: "${HOME:?HOME is required}"
-
-REPOSITORY="${RAIBITSERVER_GITHUB_REPOSITORY:-jsk1004ha/RaibitServer}"
-REPO_URL="${RAIBITSERVER_REPO_URL:-https://github.com/${REPOSITORY}.git}"
-BRANCH="${RAIBITSERVER_DEPLOY_BRANCH:-main}"
-DEPLOY_ROOT="${RAIBITSERVER_DEPLOY_ROOT:-${HOME}/.local/share/raibitserver-production}"
-WORKTREE="${RAIBITSERVER_DEPLOY_WORKTREE:-${DEPLOY_ROOT}/repository}"
-STATE_DIR="${RAIBITSERVER_AUTO_UPDATE_STATE_DIR:-${HOME}/.local/state/raibitserver-auto-update}"
-VALUES_FILE="${RAIBITSERVER_VALUES_FILE:-${HOME}/production-values.yaml}"
-REGISTRY_VALUES_FILE="${RAIBITSERVER_REGISTRY_VALUES_FILE:-${HOME}/.config/raibitserver/workload-registry-values.yaml}"
-KUBECONFIG="${KUBECONFIG:-${RAIBITSERVER_KUBECONFIG:-${HOME}/.kube/config}}"
-HELM_RELEASE="${RAIBITSERVER_HELM_RELEASE:-raibitserver}"
-NAMESPACE="${RAIBITSERVER_NAMESPACE:-raibitserver-system}"
-BUILDX_BUILDER="${RAIBITSERVER_BUILDX_BUILDER:-raibit-prod-builder}"
-PLATFORM="${RAIBITSERVER_BUILD_PLATFORM:-linux/amd64}"
-IMAGE_PREFIX="${RAIBITSERVER_IMAGE_PREFIX:-ghcr.io/jsk1004ha/raibitserver}"
-COSIGN_KEY="${RAIBITSERVER_COSIGN_KEY:-k8s://raibitserver-system/raibitserver-cosign-signing}"
-HELM_TIMEOUT="${RAIBITSERVER_HELM_TIMEOUT:-20m}"
-GITHUB_API="${RAIBITSERVER_GITHUB_API:-https://api.github.com}"
-UPDATER_LIBEXEC_PATH="${RAIBITSERVER_UPDATER_LIBEXEC_PATH:-${HOME}/.local/libexec/raibitserver-production-auto-update}"
-
-export KUBECONFIG
-
-for command_name in git curl jq docker cosign kubectl helm flock python3 awk mktemp cp chmod mv bash dirname; do
-  require_command "$command_name"
-done
-
-[[ "$UPDATER_LIBEXEC_PATH" == /* ]] \
-  || fail "updater libexec path must be absolute: $UPDATER_LIBEXEC_PATH"
-
-UPDATER_LIBEXEC_DIR="$(dirname -- "$UPDATER_LIBEXEC_PATH")"
-python3 - "$UPDATER_LIBEXEC_DIR" "$UPDATER_LIBEXEC_PATH" <<'PY'
-import os
-from pathlib import Path
-import stat
-import sys
-
-directory = Path(sys.argv[1])
-target = Path(sys.argv[2])
-
-if not directory.is_dir() or directory.is_symlink():
-    raise SystemExit(f'updater libexec directory must be a real directory: {directory}')
-if directory.resolve(strict=True) != directory:
-    raise SystemExit(f'updater libexec directory must be canonical and contain no symlinks: {directory}')
-if target.parent != directory or target.name in {'', '.', '..'}:
-    raise SystemExit(f'updater libexec target is not a direct child of its directory: {target}')
-
-directory_stat = directory.stat()
-if directory_stat.st_uid != os.geteuid():
-    raise SystemExit(f'updater libexec directory is not owned by the updater user: {directory}')
-if directory_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-    raise SystemExit(f'updater libexec directory must not be group/world writable: {directory}')
-
-if target.exists() or target.is_symlink():
-    target_stat = target.lstat()
-    if not stat.S_ISREG(target_stat.st_mode) or target.is_symlink():
-        raise SystemExit(f'updater libexec target must be a regular non-symlink file: {target}')
-    if target_stat.st_uid != os.geteuid():
-        raise SystemExit(f'updater libexec target is not owned by the updater user: {target}')
-PY
-
-[[ -r "$KUBECONFIG" ]] || fail "kubeconfig is not readable: $KUBECONFIG"
-[[ -r "$VALUES_FILE" ]] || fail "production values file is not readable: $VALUES_FILE"
-[[ -w "$VALUES_FILE" ]] || fail "production values file is not writable: $VALUES_FILE"
-
-docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 \
-  || fail "docker buildx builder is unavailable: $BUILDX_BUILDER"
-
-mkdir -p "$DEPLOY_ROOT" "$STATE_DIR"
-chmod 700 "$DEPLOY_ROOT" "$STATE_DIR"
-
-exec 9>"${STATE_DIR}/update.lock"
-if ! flock -n 9; then
-  log "another updater instance is already running"
-  exit 0
-fi
-
-RUN_DIR="$(mktemp -d "${STATE_DIR}/run.XXXXXX")"
-cleanup() {
-  if [[ -n "${UPDATER_TMP:-}" ]]; then
-    rm -f -- "$UPDATER_TMP"
-  fi
-  rm -rf "$RUN_DIR"
-}
-trap cleanup EXIT
-
-REGISTRY_VALUES_SOURCE=""
-REGISTRY_VALUES_SNAPSHOT=""
-if [[ -e "$REGISTRY_VALUES_FILE" || -L "$REGISTRY_VALUES_FILE" ]]; then
-  [[ "$REGISTRY_VALUES_FILE" == /* ]] \
-    || fail "workload registry values path must be absolute: $REGISTRY_VALUES_FILE"
-  REGISTRY_VALUES_SNAPSHOT="${RUN_DIR}/workload-registry-values.yaml"
-  python3 - "$HOME" "$REGISTRY_VALUES_FILE" "$REGISTRY_VALUES_SNAPSHOT" <<'PY'
+snapshot_registry_values() {
+  local source="$1"
+  local destination="$2"
+  python3 - "$HOME" "$source" "$destination" <<'PY'
 import os
 from pathlib import Path
 import stat
@@ -216,6 +127,245 @@ try:
 finally:
     os.close(source_fd)
 PY
+}
+
+registry_state_digest() {
+  local observed_dir="${RUN_DIR}/registry-observed"
+  mkdir -p "$observed_dir"
+
+  kubectl -n "$REGISTRY_INFRA_NAMESPACE" get deployment raibit-registry-auth -o json \
+    >"${observed_dir}/gateway-deployment.json" || return 1
+  kubectl -n "$REGISTRY_INFRA_NAMESPACE" get service raibit-registry-auth -o json \
+    >"${observed_dir}/gateway-service.json" || return 1
+  kubectl -n "$REGISTRY_INFRA_NAMESPACE" get ingress raibit-registry-auth -o json \
+    >"${observed_dir}/gateway-ingress.json" || return 1
+  kubectl -n "$REGISTRY_INFRA_NAMESPACE" get networkpolicy raibit-registry-auth-ingress -o json \
+    >"${observed_dir}/gateway-network-policy.json" || return 1
+  kubectl -n "$REGISTRY_INFRA_NAMESPACE" get networkpolicy raibit-registry-ingress -o json \
+    >"${observed_dir}/registry-network-policy.json" || return 1
+  kubectl -n "$REGISTRY_INFRA_NAMESPACE" get configmap raibit-registry-config -o json \
+    >"${observed_dir}/registry-config.json" || return 1
+  kubectl -n "$REGISTRY_INFRA_NAMESPACE" get statefulset raibit-registry -o json \
+    >"${observed_dir}/registry-statefulset.json" || return 1
+  kubectl -n kube-system get configmap coredns -o json \
+    >"${observed_dir}/coredns.json" || return 1
+
+  python3 - "$observed_dir" "$WORKLOAD_REGISTRY_HOST" "$WORKLOAD_REGISTRY_AUTH_HOST" <<'PY'
+from pathlib import Path
+import hashlib
+import ipaddress
+import json
+import re
+import sys
+
+root = Path(sys.argv[1])
+registry_host, auth_host = sys.argv[2:]
+
+def load(name):
+    return json.loads((root / name).read_text())
+
+deployment = load('gateway-deployment.json')
+service = load('gateway-service.json')
+ingress = load('gateway-ingress.json')
+gateway_policy = load('gateway-network-policy.json')
+registry_policy = load('registry-network-policy.json')
+registry_config = load('registry-config.json')
+registry_statefulset = load('registry-statefulset.json')
+coredns = load('coredns.json')
+
+if int(deployment.get('status', {}).get('availableReplicas', 0)) < 1:
+    raise SystemExit('registry gateway has no available replica')
+if int(registry_statefulset.get('status', {}).get('readyReplicas', 0)) < 1:
+    raise SystemExit('workload registry has no ready replica')
+
+broker_images = [
+    container.get('image', '')
+    for container in deployment.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+    if container.get('name') == 'broker'
+]
+if len(broker_images) != 1 or not re.fullmatch(
+    r'ghcr\.io/[a-z0-9][a-z0-9._/-]*/registry-broker@sha256:[0-9a-f]{64}',
+    broker_images[0],
+):
+    raise SystemExit('registry broker image is not an exact GHCR digest')
+
+gateway_ip = service.get('spec', {}).get('clusterIP', '')
+try:
+    ipaddress.ip_address(gateway_ip)
+except ValueError as error:
+    raise SystemExit('registry gateway has an invalid ClusterIP') from error
+
+config = registry_config.get('data', {}).get('config.yml')
+if not isinstance(config, str):
+    raise SystemExit('registry config is missing config.yml')
+config_digest = hashlib.sha256(config.encode()).hexdigest()
+recorded_digest = (
+    registry_statefulset.get('spec', {})
+    .get('template', {})
+    .get('metadata', {})
+    .get('annotations', {})
+    .get('raibitserver.io/registry-config-sha256')
+)
+if recorded_digest != config_digest:
+    raise SystemExit('registry config checksum does not match the StatefulSet')
+
+node_hosts = coredns.get('data', {}).get('NodeHosts')
+if not isinstance(node_hosts, str):
+    raise SystemExit('CoreDNS NodeHosts is missing')
+matches = []
+for line in node_hosts.splitlines():
+    parts = line.split()
+    if len(parts) >= 2 and ({registry_host, auth_host} & set(parts[1:])):
+        matches.append(parts)
+if matches != [[gateway_ip, registry_host, auth_host]]:
+    raise SystemExit('CoreDNS registry split DNS is not exact')
+
+state = {
+    'gatewayDeployment': deployment.get('spec'),
+    'gatewayService': service.get('spec'),
+    'gatewayIngress': {
+        'entrypoints': ingress.get('metadata', {}).get('annotations', {}).get(
+            'traefik.ingress.kubernetes.io/router.entrypoints'
+        ),
+        'spec': ingress.get('spec'),
+    },
+    'gatewayNetworkPolicy': gateway_policy.get('spec'),
+    'registryNetworkPolicy': registry_policy.get('spec'),
+    'registryConfig': config,
+    'registryConfigDigest': recorded_digest,
+    'splitDNS': matches,
+}
+encoded = json.dumps(state, sort_keys=True, separators=(',', ':')).encode()
+print(hashlib.sha256(encoded).hexdigest())
+PY
+}
+
+registry_runtime_healthy() {
+  [[ -f "$REGISTRY_CHECKER" && ! -L "$REGISTRY_CHECKER" ]] || {
+    log "CI-approved registry gateway health checker is missing or unsafe"
+    return 1
+  }
+  git -C "$WORKTREE" diff --quiet "$TARGET_SHA" -- "$REGISTRY_CHECKER_REPOSITORY_PATH" || {
+    log "registry gateway health checker differs from the CI-approved commit"
+    return 1
+  }
+  bash -n "$REGISTRY_CHECKER" || {
+    log "CI-approved registry gateway health checker has invalid Bash syntax"
+    return 1
+  }
+
+  RAIBITSERVER_IMAGE_PREFIX="$IMAGE_PREFIX" \
+  REGISTRY_HOST="$WORKLOAD_REGISTRY_HOST" \
+  AUTH_HOST="$WORKLOAD_REGISTRY_AUTH_HOST" \
+  REGISTRY_PREFIX="$WORKLOAD_REGISTRY_PREFIX" \
+  REGISTRY_SERVICE="$WORKLOAD_REGISTRY_SERVICE" \
+  INFRA_NS="$REGISTRY_INFRA_NAMESPACE" \
+  APP_NS="$NAMESPACE" \
+  BROKER_TOKEN_SECRET="$REGISTRY_BROKER_TOKEN_SECRET" \
+    bash "$REGISTRY_CHECKER"
+}
+
+: "${HOME:?HOME is required}"
+
+REPOSITORY="${RAIBITSERVER_GITHUB_REPOSITORY:-jsk1004ha/RaibitServer}"
+REPO_URL="${RAIBITSERVER_REPO_URL:-https://github.com/${REPOSITORY}.git}"
+BRANCH="${RAIBITSERVER_DEPLOY_BRANCH:-main}"
+DEPLOY_ROOT="${RAIBITSERVER_DEPLOY_ROOT:-${HOME}/.local/share/raibitserver-production}"
+WORKTREE="${RAIBITSERVER_DEPLOY_WORKTREE:-${DEPLOY_ROOT}/repository}"
+STATE_DIR="${RAIBITSERVER_AUTO_UPDATE_STATE_DIR:-${HOME}/.local/state/raibitserver-auto-update}"
+VALUES_FILE="${RAIBITSERVER_VALUES_FILE:-${HOME}/production-values.yaml}"
+REGISTRY_VALUES_FILE="${HOME}/.config/raibitserver/workload-registry-values.yaml"
+REGISTRY_RECONCILER="${WORKTREE}/deploy/production/reconcile-workload-registry-gateway.sh"
+REGISTRY_CHECKER_REPOSITORY_PATH="deploy/production/check-workload-registry-gateway.sh"
+REGISTRY_CHECKER="${WORKTREE}/${REGISTRY_CHECKER_REPOSITORY_PATH}"
+WORKLOAD_REGISTRY_BASE_DOMAIN="${BASE_DOMAIN:-${RAIBITSERVER_BASE_DOMAIN:-raibit.kr}}"
+WORKLOAD_REGISTRY_HOST="${REGISTRY_HOST:-registry.${WORKLOAD_REGISTRY_BASE_DOMAIN}}"
+WORKLOAD_REGISTRY_AUTH_HOST="${AUTH_HOST:-registry-auth.${WORKLOAD_REGISTRY_BASE_DOMAIN}}"
+WORKLOAD_REGISTRY_PREFIX="${REGISTRY_PREFIX:-raibitserver}"
+WORKLOAD_REGISTRY_SERVICE="${REGISTRY_SERVICE:-raibit-registry}"
+REGISTRY_BROKER_TOKEN_SECRET="${BROKER_TOKEN_SECRET:-raibitserver-registry-broker-token}"
+REGISTRY_INFRA_NAMESPACE="${INFRA_NS:-raibitserver-infra}"
+KUBECONFIG="${KUBECONFIG:-${RAIBITSERVER_KUBECONFIG:-${HOME}/.kube/config}}"
+HELM_RELEASE="${RAIBITSERVER_HELM_RELEASE:-raibitserver}"
+NAMESPACE="${RAIBITSERVER_NAMESPACE:-raibitserver-system}"
+BUILDX_BUILDER="${RAIBITSERVER_BUILDX_BUILDER:-raibit-prod-builder}"
+PLATFORM="${RAIBITSERVER_BUILD_PLATFORM:-linux/amd64}"
+IMAGE_PREFIX="${RAIBITSERVER_IMAGE_PREFIX:-ghcr.io/jsk1004ha/raibitserver}"
+COSIGN_KEY="${RAIBITSERVER_COSIGN_KEY:-k8s://raibitserver-system/raibitserver-cosign-signing}"
+HELM_TIMEOUT="${RAIBITSERVER_HELM_TIMEOUT:-20m}"
+GITHUB_API="${RAIBITSERVER_GITHUB_API:-https://api.github.com}"
+UPDATER_LIBEXEC_PATH="${RAIBITSERVER_UPDATER_LIBEXEC_PATH:-${HOME}/.local/libexec/raibitserver-production-auto-update}"
+
+export KUBECONFIG
+
+for command_name in git curl jq docker cosign kubectl helm flock python3 awk mktemp mkdir cp chmod cmp mv bash dirname; do
+  require_command "$command_name"
+done
+
+[[ "$UPDATER_LIBEXEC_PATH" == /* ]] \
+  || fail "updater libexec path must be absolute: $UPDATER_LIBEXEC_PATH"
+
+UPDATER_LIBEXEC_DIR="$(dirname -- "$UPDATER_LIBEXEC_PATH")"
+python3 - "$UPDATER_LIBEXEC_DIR" "$UPDATER_LIBEXEC_PATH" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+directory = Path(sys.argv[1])
+target = Path(sys.argv[2])
+
+if not directory.is_dir() or directory.is_symlink():
+    raise SystemExit(f'updater libexec directory must be a real directory: {directory}')
+if directory.resolve(strict=True) != directory:
+    raise SystemExit(f'updater libexec directory must be canonical and contain no symlinks: {directory}')
+if target.parent != directory or target.name in {'', '.', '..'}:
+    raise SystemExit(f'updater libexec target is not a direct child of its directory: {target}')
+
+directory_stat = directory.stat()
+if directory_stat.st_uid != os.geteuid():
+    raise SystemExit(f'updater libexec directory is not owned by the updater user: {directory}')
+if directory_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+    raise SystemExit(f'updater libexec directory must not be group/world writable: {directory}')
+
+if target.exists() or target.is_symlink():
+    target_stat = target.lstat()
+    if not stat.S_ISREG(target_stat.st_mode) or target.is_symlink():
+        raise SystemExit(f'updater libexec target must be a regular non-symlink file: {target}')
+    if target_stat.st_uid != os.geteuid():
+        raise SystemExit(f'updater libexec target is not owned by the updater user: {target}')
+PY
+
+[[ -r "$KUBECONFIG" ]] || fail "kubeconfig is not readable: $KUBECONFIG"
+[[ -r "$VALUES_FILE" ]] || fail "production values file is not readable: $VALUES_FILE"
+[[ -w "$VALUES_FILE" ]] || fail "production values file is not writable: $VALUES_FILE"
+
+docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 \
+  || fail "docker buildx builder is unavailable: $BUILDX_BUILDER"
+
+mkdir -p "$DEPLOY_ROOT" "$STATE_DIR"
+chmod 700 "$DEPLOY_ROOT" "$STATE_DIR"
+
+exec 9>"${STATE_DIR}/update.lock"
+if ! flock -n 9; then
+  log "another updater instance is already running"
+  exit 0
+fi
+
+RUN_DIR="$(mktemp -d "${STATE_DIR}/run.XXXXXX")"
+cleanup() {
+  if [[ -n "${UPDATER_TMP:-}" ]]; then
+    rm -f -- "$UPDATER_TMP"
+  fi
+  rm -rf "$RUN_DIR"
+}
+trap cleanup EXIT
+
+REGISTRY_VALUES_SOURCE=""
+REGISTRY_VALUES_SNAPSHOT=""
+if [[ -e "$REGISTRY_VALUES_FILE" || -L "$REGISTRY_VALUES_FILE" ]]; then
+  REGISTRY_VALUES_SNAPSHOT="${RUN_DIR}/workload-registry-values.yaml"
+  snapshot_registry_values "$REGISTRY_VALUES_FILE" "$REGISTRY_VALUES_SNAPSHOT"
   REGISTRY_VALUES_SOURCE="$REGISTRY_VALUES_SNAPSHOT"
   log "using verified workload registry Helm overlay snapshot"
 fi
@@ -239,12 +389,60 @@ valid_sha "$TARGET_SHA" || fail "could not resolve a valid ${BRANCH} SHA"
 
 DEPLOYED_SHA="$(cat "${STATE_DIR}/deployed-sha" 2>/dev/null || true)"
 DEPLOYED_INPUT_DIGEST="$(cat "${STATE_DIR}/deployed-input-digest" 2>/dev/null || true)"
+REGISTRY_RECONCILED_SHA="$(cat "${STATE_DIR}/registry-reconciled-sha" 2>/dev/null || true)"
+REGISTRY_RECONCILED_INPUT_DIGEST="$(cat "${STATE_DIR}/registry-reconciled-input-digest" 2>/dev/null || true)"
+REGISTRY_RECONCILED_STATE_DIGEST="$(cat "${STATE_DIR}/registry-reconciled-state-digest" 2>/dev/null || true)"
+
+REGISTRY_MANAGED=0
+if [[ -n "$REGISTRY_VALUES_SNAPSHOT" \
+  || -n "$REGISTRY_RECONCILED_SHA" \
+  || -n "$REGISTRY_RECONCILED_INPUT_DIGEST" \
+  || -n "$REGISTRY_RECONCILED_STATE_DIGEST" ]]; then
+  REGISTRY_MANAGED=1
+else
+  if ! REGISTRY_STATEFULSET_NAME="$(
+    kubectl -n "$REGISTRY_INFRA_NAMESPACE" get statefulset raibit-registry \
+      --ignore-not-found -o name
+  )"; then
+    fail "could not determine whether the workload registry is installed"
+  fi
+  if [[ -n "$REGISTRY_STATEFULSET_NAME" ]]; then
+    REGISTRY_MANAGED=1
+  fi
+fi
+
+PLATFORM_RECONCILE_REQUIRED=1
 if [[ "$TARGET_SHA" == "$DEPLOYED_SHA" && "$CURRENT_INPUT_DIGEST" == "$DEPLOYED_INPUT_DIGEST" ]]; then
+  PLATFORM_RECONCILE_REQUIRED=0
+fi
+
+REGISTRY_RECONCILE_REQUIRED=0
+if [[ "$REGISTRY_MANAGED" == 1 ]]; then
+  REGISTRY_RECONCILE_REQUIRED=1
+  if [[ -n "$REGISTRY_VALUES_SNAPSHOT" \
+    && "$TARGET_SHA" == "$REGISTRY_RECONCILED_SHA" \
+    && "$CURRENT_INPUT_DIGEST" == "$REGISTRY_RECONCILED_INPUT_DIGEST" \
+    && -n "$REGISTRY_RECONCILED_STATE_DIGEST" ]]; then
+    if REGISTRY_OBSERVED_STATE_DIGEST="$(registry_state_digest)" \
+      && valid_input_digest "$REGISTRY_OBSERVED_STATE_DIGEST" \
+      && [[ "$REGISTRY_OBSERVED_STATE_DIGEST" == "$REGISTRY_RECONCILED_STATE_DIGEST" ]] \
+      && registry_runtime_healthy; then
+      REGISTRY_RECONCILE_REQUIRED=0
+    else
+      log "registry gateway desired state, token parity, or live broker probe is unhealthy; scheduling repair"
+    fi
+  fi
+fi
+
+if [[ "$PLATFORM_RECONCILE_REQUIRED" == 0 && "$REGISTRY_RECONCILE_REQUIRED" == 0 ]]; then
   log "already running ${TARGET_SHA}"
   exit 0
 fi
-if [[ "$TARGET_SHA" == "$DEPLOYED_SHA" ]]; then
+if [[ "$PLATFORM_RECONCILE_REQUIRED" == 1 && "$TARGET_SHA" == "$DEPLOYED_SHA" ]]; then
   log "deployment inputs changed for ${TARGET_SHA}; reconciling the existing commit"
+fi
+if [[ "$REGISTRY_RECONCILE_REQUIRED" == 1 ]]; then
+  log "registry gateway state is missing or stale; scheduling an exact gateway reconcile"
 fi
 
 REJECTED_SHA="$(cat "${STATE_DIR}/rejected-sha" 2>/dev/null || true)"
@@ -314,15 +512,23 @@ CHART_DIR="${WORKTREE}/infra/helm/raibitserver"
 
 # key|Dockerfile|GHCR repository suffix. All Dockerfiles use the repository root
 # as their build context, which keeps workspace/package COPY contracts intact.
-IMAGE_TARGETS=(
-  'api|apps/api/Dockerfile|api'
-  'dashboard|apps/dashboard/Dockerfile|dashboard'
-  'orchestrator|services/orchestrator/Dockerfile|orchestrator'
-  'builder|services/builder/Dockerfile|builder'
-  'provisioner|services/provisioner/Dockerfile|provisioner'
-  'logIngester|services/log-ingester/Dockerfile|log-ingester'
-  'metricsIngester|services/metrics-ingester/Dockerfile|metrics-ingester'
-)
+IMAGE_TARGETS=()
+if [[ "$PLATFORM_RECONCILE_REQUIRED" == 1 ]]; then
+  IMAGE_TARGETS+=(
+    'api|apps/api/Dockerfile|api'
+    'dashboard|apps/dashboard/Dockerfile|dashboard'
+    'orchestrator|services/orchestrator/Dockerfile|orchestrator'
+    'builder|services/builder/Dockerfile|builder'
+    'provisioner|services/provisioner/Dockerfile|provisioner'
+    'logIngester|services/log-ingester/Dockerfile|log-ingester'
+    'metricsIngester|services/metrics-ingester/Dockerfile|metrics-ingester'
+  )
+fi
+if [[ "$REGISTRY_RECONCILE_REQUIRED" == 1 ]]; then
+  IMAGE_TARGETS+=(
+    'registryBroker|services/registry-broker/Dockerfile|registry-broker'
+  )
+fi
 
 declare -A DIGESTS=()
 SHORT_SHA="${TARGET_SHA:0:12}"
@@ -361,6 +567,8 @@ for target in "${IMAGE_TARGETS[@]}"; do
     "$image_ref"
 done
 
+CANDIDATE_VALUES="${RUN_DIR}/production-values.yaml"
+if [[ "$PLATFORM_RECONCILE_REQUIRED" == 1 ]]; then
 DIGEST_JSON="${RUN_DIR}/digests.json"
 jq -n \
   --arg api "${DIGESTS[api]}" \
@@ -380,7 +588,6 @@ jq -n \
     metricsIngester: $metricsIngester
   }' >"$DIGEST_JSON"
 
-CANDIDATE_VALUES="${RUN_DIR}/production-values.yaml"
 python3 - "$VALUES_FILE" "$CANDIDATE_VALUES" "$DIGEST_JSON" "$IMAGE_PREFIX" <<'PY'
 from pathlib import Path
 import json
@@ -458,6 +665,61 @@ if expected_prefix != image_prefix:
 
 destination.write_text('\n'.join(lines) + '\n')
 PY
+else
+  cp -- "$VALUES_FILE" "$CANDIDATE_VALUES"
+  chmod 600 "$CANDIDATE_VALUES"
+fi
+
+if [[ "$REGISTRY_RECONCILE_REQUIRED" == 1 ]]; then
+  [[ -f "$REGISTRY_RECONCILER" && ! -L "$REGISTRY_RECONCILER" ]] \
+    || fail "CI-approved registry gateway reconciler must be a regular non-symlink file"
+  bash -n "$REGISTRY_RECONCILER" \
+    || fail "CI-approved registry gateway reconciler has invalid Bash syntax"
+
+  REGISTRY_BROKER_IMAGE="${IMAGE_PREFIX}/registry-broker@${DIGESTS[registryBroker]}"
+  REGISTRY_VALUES_CANDIDATE="${RUN_DIR}/workload-registry-values.candidate.yaml"
+  REGISTRY_BROKER_IMAGE="$REGISTRY_BROKER_IMAGE" \
+  RAIBITSERVER_IMAGE_PREFIX="$IMAGE_PREFIX" \
+  REGISTRY_HOST="$WORKLOAD_REGISTRY_HOST" \
+  AUTH_HOST="$WORKLOAD_REGISTRY_AUTH_HOST" \
+  REGISTRY_PREFIX="$WORKLOAD_REGISTRY_PREFIX" \
+  REGISTRY_SERVICE="$WORKLOAD_REGISTRY_SERVICE" \
+  INFRA_NS="$REGISTRY_INFRA_NAMESPACE" \
+  APP_NS="$NAMESPACE" \
+  BROKER_TOKEN_SECRET="$REGISTRY_BROKER_TOKEN_SECRET" \
+  REGISTRY_VALUES_FILE="$REGISTRY_VALUES_FILE" \
+    bash "$REGISTRY_RECONCILER" --render-values >"$REGISTRY_VALUES_CANDIDATE"
+  chmod 600 "$REGISTRY_VALUES_CANDIDATE"
+
+  log "validating the registry gateway Helm overlay before cluster mutation"
+  helm lint "$CHART_DIR" -f "$CANDIDATE_VALUES" -f "$REGISTRY_VALUES_CANDIDATE"
+  helm template "$HELM_RELEASE" "$CHART_DIR" \
+    --namespace "$NAMESPACE" \
+    -f "$CANDIDATE_VALUES" \
+    -f "$REGISTRY_VALUES_CANDIDATE" >/dev/null
+
+  log "reconciling the dedicated workload registry gateway"
+  REGISTRY_BROKER_IMAGE="$REGISTRY_BROKER_IMAGE" \
+  RAIBITSERVER_IMAGE_PREFIX="$IMAGE_PREFIX" \
+  REGISTRY_HOST="$WORKLOAD_REGISTRY_HOST" \
+  AUTH_HOST="$WORKLOAD_REGISTRY_AUTH_HOST" \
+  REGISTRY_PREFIX="$WORKLOAD_REGISTRY_PREFIX" \
+  REGISTRY_SERVICE="$WORKLOAD_REGISTRY_SERVICE" \
+  INFRA_NS="$REGISTRY_INFRA_NAMESPACE" \
+  APP_NS="$NAMESPACE" \
+  BROKER_TOKEN_SECRET="$REGISTRY_BROKER_TOKEN_SECRET" \
+  REGISTRY_VALUES_FILE="$REGISTRY_VALUES_FILE" \
+    bash "$REGISTRY_RECONCILER"
+
+  REGISTRY_VALUES_SNAPSHOT="${RUN_DIR}/workload-registry-values.reconciled.yaml"
+  snapshot_registry_values "$REGISTRY_VALUES_FILE" "$REGISTRY_VALUES_SNAPSHOT"
+  cmp -s "$REGISTRY_VALUES_CANDIDATE" "$REGISTRY_VALUES_SNAPSHOT" \
+    || fail "reconciled registry overlay differs from its validated candidate"
+  REGISTRY_VALUES_SOURCE="$REGISTRY_VALUES_SNAPSHOT"
+  CURRENT_INPUT_DIGEST="$(deployment_input_digest "$VALUES_FILE" "$REGISTRY_VALUES_SOURCE")"
+  valid_input_digest "$CURRENT_INPUT_DIGEST" \
+    || fail "could not calculate the reconciled deployment input digest"
+fi
 
 HELM_VALUES_ARGS=(-f "$CANDIDATE_VALUES")
 if [[ -n "$REGISTRY_VALUES_SNAPSHOT" ]]; then
@@ -502,6 +764,16 @@ helm upgrade --install "$HELM_RELEASE" "$CHART_DIR" \
 kubectl -n "$NAMESPACE" rollout status deployment/raibitserver-api --timeout=5m
 kubectl -n "$NAMESPACE" rollout status deployment/raibitserver-dashboard --timeout=5m
 
+REGISTRY_APPLIED_STATE_DIGEST=""
+if [[ "$REGISTRY_MANAGED" == 1 ]]; then
+  registry_runtime_healthy \
+    || fail "registry gateway live broker verification failed after deployment"
+  REGISTRY_APPLIED_STATE_DIGEST="$(registry_state_digest)" \
+    || fail "could not observe the reconciled registry gateway state"
+  valid_input_digest "$REGISTRY_APPLIED_STATE_DIGEST" \
+    || fail "reconciled registry gateway state digest is invalid"
+fi
+
 VALUES_TMP="${VALUES_FILE}.auto-update.$$"
 cp "$CANDIDATE_VALUES" "$VALUES_TMP"
 if [[ -e "$VALUES_FILE" ]]; then
@@ -531,10 +803,31 @@ printf '%s\n' "$TARGET_SHA" >"${STATE_DIR}/deployed-sha.tmp"
 mv "${STATE_DIR}/deployed-sha.tmp" "${STATE_DIR}/deployed-sha"
 printf '%s\n' "$APPLIED_INPUT_DIGEST" >"${STATE_DIR}/deployed-input-digest.tmp"
 mv "${STATE_DIR}/deployed-input-digest.tmp" "${STATE_DIR}/deployed-input-digest"
+if [[ "$REGISTRY_MANAGED" == 1 ]]; then
+  printf '%s\n' "$TARGET_SHA" >"${STATE_DIR}/registry-reconciled-sha.tmp"
+  mv "${STATE_DIR}/registry-reconciled-sha.tmp" "${STATE_DIR}/registry-reconciled-sha"
+  printf '%s\n' "$APPLIED_INPUT_DIGEST" >"${STATE_DIR}/registry-reconciled-input-digest.tmp"
+  mv "${STATE_DIR}/registry-reconciled-input-digest.tmp" "${STATE_DIR}/registry-reconciled-input-digest"
+  printf '%s\n' "$REGISTRY_APPLIED_STATE_DIGEST" >"${STATE_DIR}/registry-reconciled-state-digest.tmp"
+  mv "${STATE_DIR}/registry-reconciled-state-digest.tmp" "${STATE_DIR}/registry-reconciled-state-digest"
+fi
 
-cat >"${STATE_DIR}/last-success.json.tmp" <<EOF
-{"sha":"${TARGET_SHA}","inputDigest":"${APPLIED_INPUT_DIGEST}","ciRunId":"${CI_RUN_ID}","deployedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
+LAST_SUCCESS_REGISTRY_SHA=""
+if [[ "$REGISTRY_MANAGED" == 1 ]]; then
+  LAST_SUCCESS_REGISTRY_SHA="$TARGET_SHA"
+fi
+jq -cn \
+  --arg sha "$TARGET_SHA" \
+  --arg inputDigest "$APPLIED_INPUT_DIGEST" \
+  --arg registryReconciledSha "$LAST_SUCCESS_REGISTRY_SHA" \
+  --arg registryStateDigest "$REGISTRY_APPLIED_STATE_DIGEST" \
+  --arg ciRunId "$CI_RUN_ID" \
+  --arg deployedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{sha:$sha,inputDigest:$inputDigest,ciRunId:$ciRunId,deployedAt:$deployedAt}
+   + if $registryReconciledSha == "" then {} else {
+       registryReconciledSha:$registryReconciledSha,
+       registryStateDigest:$registryStateDigest
+     } end' >"${STATE_DIR}/last-success.json.tmp"
 mv "${STATE_DIR}/last-success.json.tmp" "${STATE_DIR}/last-success.json"
 
 log "production is now running ${TARGET_SHA}"

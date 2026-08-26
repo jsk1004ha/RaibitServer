@@ -6,9 +6,13 @@ import test from 'node:test';
 const updaterPath = new URL('../deploy/production/auto-update.sh', import.meta.url);
 const installerPath = new URL('../deploy/production/install-auto-update.sh', import.meta.url);
 const registryBootstrapPath = new URL('../deploy/production/bootstrap-workload-registry.sh', import.meta.url);
+const registryGatewayReconcilerPath = new URL('../deploy/production/reconcile-workload-registry-gateway.sh', import.meta.url);
+const registryGatewayCheckerPath = new URL('../deploy/production/check-workload-registry-gateway.sh', import.meta.url);
 const updater = readFileSync(updaterPath, 'utf8');
 const installer = readFileSync(installerPath, 'utf8');
 const registryBootstrap = readFileSync(registryBootstrapPath, 'utf8');
+const registryGatewayReconciler = readFileSync(registryGatewayReconcilerPath, 'utf8');
+const registryGatewayChecker = readFileSync(registryGatewayCheckerPath, 'utf8');
 
 function bashSyntax(path) {
   // Git stores these scripts with LF. Normalize a Windows checkout before
@@ -26,6 +30,8 @@ test('production auto-update shell scripts have valid bash syntax', () => {
   bashSyntax(updaterPath);
   bashSyntax(installerPath);
   bashSyntax(registryBootstrapPath);
+  bashSyntax(registryGatewayReconcilerPath);
+  bashSyntax(registryGatewayCheckerPath);
 });
 
 test('production updater only deploys the exact main SHA after successful CI', () => {
@@ -47,6 +53,7 @@ test('production updater rebuilds and digest-pins every Helm-managed platform im
     ['provisioner', 'services/provisioner/Dockerfile', 'provisioner'],
     ['logIngester', 'services/log-ingester/Dockerfile', 'log-ingester'],
     ['metricsIngester', 'services/metrics-ingester/Dockerfile', 'metrics-ingester'],
+    ['registryBroker', 'services/registry-broker/Dockerfile', 'registry-broker'],
   ];
 
   for (const parts of expected) {
@@ -80,6 +87,99 @@ test('production updater preserves signing and version-appropriate Helm rollback
   assert.doesNotMatch(updater, /GITHUB_TOKEN/);
 });
 
+test('production updater prevalidates then reconciles the digest-pinned registry gateway', () => {
+  assert.match(updater, /REGISTRY_RECONCILER=.*reconcile-workload-registry-gateway\.sh/);
+  assert.match(updater, /REGISTRY_RECONCILE_REQUIRED=1/);
+  assert.match(updater, /TARGET_SHA.*DEPLOYED_SHA.*CURRENT_INPUT_DIGEST.*DEPLOYED_INPUT_DIGEST.*REGISTRY_RECONCILE_REQUIRED/s);
+  assert.match(updater, /REGISTRY_BROKER_IMAGE=.*DIGESTS\[registryBroker\]/);
+  assert.match(updater, /bash "\$REGISTRY_RECONCILER" --render-values/);
+  assert.match(updater, /snapshot_registry_values.*workload-registry-values\.reconciled\.yaml/s);
+  assert.match(updater, /reconciled registry overlay differs from its validated candidate/);
+
+  const render = updater.indexOf('bash "$REGISTRY_RECONCILER" --render-values');
+  const preflight = updater.indexOf('validating the registry gateway Helm overlay before cluster mutation');
+  const reconcile = updater.indexOf('reconciling the dedicated workload registry gateway');
+  const finalHelm = updater.indexOf('validating Helm release candidate');
+  const state = updater.indexOf('deployed-sha.tmp');
+  assert.ok(
+    render >= 0 && preflight > render && reconcile > preflight && finalHelm > reconcile && state > finalHelm,
+    'Helm preflight must precede gateway mutation, final Helm validation, and success state',
+  );
+});
+
+test('registry gateway reconciler uses exact TLS identities without a shared ingress exception', () => {
+  assert.ok(registryGatewayReconciler.includes("'/registry-broker@sha256:') + r'[0-9a-f]{64}'"));
+  assert.match(registryGatewayReconciler, /relativeurls: true/);
+  assert.match(registryGatewayReconciler, /name: internal-tls[\s\S]*port: 443[\s\S]*targetPort: 8443/);
+  assert.match(registryGatewayReconciler, /BROKER_HOST[\s\S]*INTERNAL_TLS_PORT[\s\S]*REGISTRY_UPSTREAM_URL/);
+  assert.match(registryGatewayReconciler, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*port: 8443/);
+  assert.match(registryGatewayReconciler, /GATEWAY_CLUSTER_IP_RAW=.*service raibit-registry-auth/);
+  assert.ok(registryGatewayReconciler.includes(
+    "output.append(f'{gateway_ip} {registry_host} {auth_host}')",
+  ));
+  assert.match(registryGatewayReconciler, /privateGateway:[\s\S]*enabled: true[\s\S]*servicePort: 443[\s\S]*port: 8443/);
+  assert.match(registryGatewayReconciler, /rollout status deployment\/raibit-registry-auth/);
+  assert.match(registryGatewayReconciler, /https:\/\/\$\{AUTH_HOST\}\/broker/);
+  assert.match(registryGatewayReconciler, /builder and broker token Secrets do not match/);
+  assert.match(registryGatewayReconciler, /registry credential broker issuance smoke test failed/);
+  assert.match(registryGatewayReconciler, /REGISTRY_STATUS.*!= 401/s);
+  assert.match(registryGatewayReconciler, /www-authenticate:/i);
+  assert.match(registryGatewayReconciler, /--rawfile old "\$NODEHOSTS_CURRENT_FILE" --rawfile new "\$NODEHOSTS_NEW_FILE"/);
+  assert.match(registryGatewayReconciler, /rollback_coredns_nodehosts/);
+  assert.match(registryGatewayReconciler, /rollback_registry_state/);
+  assert.match(registryGatewayReconciler, /rollback_gateway_resources/);
+  assert.match(registryGatewayReconciler, /capture_gateway_applied_state/);
+  assert.match(registryGatewayReconciler, /registry-statefulset\.applied\.json/);
+  assert.match(registryGatewayReconciler, /"path":"\/metadata\/uid"/);
+  assert.match(registryGatewayReconciler, /registry StatefulSet could not be refreshed before mutation/);
+  assert.match(registryGatewayReconciler, /--slurpfile previous "\$REGISTRY_STATEFULSET_PREVIOUS"[\s\S]*"path":"\/metadata\/uid"[\s\S]*"path":"\/spec\/template"/);
+  assert.match(registryGatewayReconciler, /REGISTRY_STATEFULSET_APPLIED="\$REGISTRY_STATEFULSET_DESIRED"/);
+  assert.match(registryGatewayReconciler, /\.metadata\.uid == \$expected\[0\]\.metadata\.uid[\s\S]*\.spec\.template == \$expected\[0\]\.spec\.template/);
+  assert.match(registryGatewayReconciler, /registry-restarted-at/);
+  assert.doesNotMatch(registryGatewayReconciler, /rollout restart statefulset\/raibit-registry/);
+  const gatewayRestoreStart = registryGatewayReconciler.indexOf('restore_gateway_spec()');
+  const gatewayRestoreEnd = registryGatewayReconciler.indexOf('rollback_gateway_resources()', gatewayRestoreStart);
+  const gatewayRestore = registryGatewayReconciler.slice(gatewayRestoreStart, gatewayRestoreEnd);
+  assert.doesNotMatch(gatewayRestore, /metadata\/annotations/);
+  assert.match(registryGatewayReconciler, /exactly one authentication challenge/);
+  assert.match(registryGatewayReconciler, /duplicate parameter/);
+  assert.match(registryGatewayReconciler, /registry overlay installation failed and exact full rollback also failed/);
+  assert.doesNotMatch(registryGatewayReconciler, /NODEHOSTS_(?:CURRENT|NEW)="\$\(/);
+  assert.doesNotMatch(registryGatewayReconciler, /egressCIDRs|NODE_CIDR|\/32|sudo|docker login/);
+});
+
+test('production updater detects live registry gateway drift before its early exit', () => {
+  assert.match(updater, /REGISTRY_MANAGED=0/);
+  assert.match(updater, /get statefulset raibit-registry[\s\S]*--ignore-not-found -o name/);
+  assert.match(updater, /could not determine whether the workload registry is installed/);
+  assert.match(updater, /if \[\[ "\$REGISTRY_MANAGED" == 1 \]\]; then/);
+  assert.match(updater, /registry_state_digest\(\)/);
+  assert.match(updater, /availableReplicas/);
+  assert.match(updater, /readyReplicas/);
+  assert.match(updater, /registry config checksum does not match the StatefulSet/);
+  assert.match(updater, /CoreDNS registry split DNS is not exact/);
+  assert.match(updater, /registry-reconciled-state-digest/);
+  assert.match(updater, /REGISTRY_OBSERVED_STATE_DIGEST.*REGISTRY_RECONCILED_STATE_DIGEST/s);
+  assert.match(updater, /registry_runtime_healthy/);
+  assert.match(updater, /check-workload-registry-gateway\.sh/);
+  assert.match(updater, /git -C "\$WORKTREE" diff --quiet "\$TARGET_SHA" -- "\$REGISTRY_CHECKER_REPOSITORY_PATH"/);
+  assert.match(updater, /token parity, or live broker probe is unhealthy; scheduling repair/);
+  assert.match(registryGatewayChecker, /builder and broker token Secrets do not match/);
+  assert.match(registryGatewayChecker, /https:\/\/\$\{AUTH_HOST\}\/broker/);
+  assert.match(registryGatewayChecker, /registry credential broker issuance smoke test failed/);
+  assert.match(registryGatewayChecker, /REGISTRY_STATUS.*== 401/s);
+  assert.match(registryGatewayChecker, /exactly one authentication challenge/);
+  assert.match(registryGatewayChecker, /CoreDNS registry split DNS is not exact/);
+
+  const observedState = updater.indexOf('REGISTRY_OBSERVED_STATE_DIGEST="$(registry_state_digest)"');
+  const liveProbe = updater.indexOf('&& registry_runtime_healthy', observedState);
+  const earlyExit = updater.indexOf('already running ${TARGET_SHA}');
+  assert.ok(
+    observedState >= 0 && liveProbe > observedState && earlyExit > liveProbe,
+    'the updater must run a live broker probe before its unchanged-release early exit',
+  );
+});
+
 test('production updater applies the generated workload registry overlay through every Helm gate', () => {
   assert.match(updater, /REGISTRY_VALUES_FILE=.*workload-registry-values\.yaml/);
   assert.match(updater, /workload registry values must be a regular non-symlink file/);
@@ -93,9 +193,7 @@ test('production updater applies the generated workload registry overlay through
   assert.match(updater, /HELM_VALUES_ARGS=\(-f "\$CANDIDATE_VALUES"\)/);
   assert.match(updater, /HELM_VALUES_ARGS\+=\(-f "\$REGISTRY_VALUES_SNAPSHOT"\)/);
   assert.equal((updater.match(/"\$\{HELM_VALUES_ARGS\[@\]\}"/g) || []).length, 3, 'lint, template, and upgrade must consume the same values list');
-  assert.match(installer, /REGISTRY_VALUES_FILE=.*workload-registry-values\.yaml/);
-  assert.doesNotMatch(installer, /REGISTRY_VALUES_FILE="\$\{RAIBITSERVER_REGISTRY_VALUES_FILE:-/);
-  assert.match(installer, /RAIBITSERVER_REGISTRY_VALUES_FILE=\$\{REGISTRY_VALUES_FILE\}/);
+  assert.doesNotMatch(installer, /RAIBITSERVER_REGISTRY_VALUES_FILE/);
 });
 
 test('production updater reconciles values changes even when the main SHA is unchanged', () => {
@@ -106,7 +204,7 @@ test('production updater reconciles values changes even when the main SHA is unc
   assert.match(updater, /deployment inputs changed.*reconciling the existing commit/);
   assert.match(updater, /APPLIED_INPUT_DIGEST=.*deployment_input_digest/);
   assert.match(updater, /deployed-input-digest\.tmp/);
-  assert.match(updater, /"inputDigest":"\$\{APPLIED_INPUT_DIGEST\}"/);
+  assert.match(updater, /--arg inputDigest "\$APPLIED_INPUT_DIGEST"/);
 });
 
 test('workload registry bootstrap emits a dedicated TLS gateway and a secure Helm overlay', () => {
