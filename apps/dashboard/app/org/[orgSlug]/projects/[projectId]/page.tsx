@@ -1,14 +1,27 @@
 import { apiAction, collectLoadIssues, getJson, loadProjectConsole } from '../../../../../lib/api';
 import { ConsoleShell, LoadErrorSummary, LogViewer, MetricStrip, SectionNav, StatusBadge } from '../../../../../components/console-ui';
 
-const views = ['overview', 'services', 'new-service', 'deployments', 'resources', 'new-resource', 'logs', 'settings'] as const;
+const views = ['overview', 'services', 'new-service', 'edit-service', 'deployments', 'resources', 'new-resource', 'logs', 'settings'] as const;
 type ProjectView = typeof views[number];
+
+function queryText(value: string | string[] | undefined) {
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '');
+}
+
+function exactPattern(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 export default async function ProjectDetailPage({ params, searchParams }: { params: Promise<{ orgSlug: string; projectId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const [{ orgSlug, projectId }, query] = await Promise.all([params, searchParams]);
-  const requestedView = String(query.view || 'overview');
+  const requestedView = queryText(query.view) || 'overview';
   const view: ProjectView = views.includes(requestedView as ProjectView) ? requestedView as ProjectView : 'overview';
   const state = await loadProjectConsole(projectId);
+  const selectedServiceId = queryText(query.serviceId);
+  const selectedService = state.services.find((service: any) => String(service.id) === selectedServiceId) || null;
+  const serviceSettings = selectedService
+    ? { ...(selectedService.desiredState || {}), ...(selectedService.desiredSpec || {}), ...selectedService }
+    : null;
   const logService = state.services[0];
   const runtimeLogs = view === 'logs' && logService
     ? await getJson(`/services/${encodeURIComponent(logService.id)}/logs`, { logs: [] }, state.context)
@@ -17,6 +30,7 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
     ? [...state.loadErrors, ...collectLoadIssues([['런타임 로그', runtimeLogs]])]
     : state.loadErrors;
   const projectName = state.project.name || state.project.slug || projectId;
+  const deletionPending = ['DELETE_REQUESTED', 'DELETING'].includes(String(state.project.status || '').toUpperCase());
   const base = `/org/${orgSlug}/projects/${projectId}`;
   const navItems = [
     { id: 'overview', label: '현황', description: '프로젝트 상태', href: `${base}?view=overview` },
@@ -32,7 +46,7 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
       <section className="page page-focus" data-od-id="project-overview">
         <header className="page-header"><div><h1 className="page-title">{projectName}</h1><p className="page-subtitle">서비스 · 배포 · 리소스</p></div><StatusBadge status={state.project.status || 'healthy'} /></header>
         <LoadErrorSummary issues={loadErrors} />
-        <SectionNav items={navItems} current={view} label="프로젝트 콘솔 화면" />
+        <SectionNav items={navItems} current={view === 'edit-service' ? 'services' : view} label="프로젝트 콘솔 화면" />
 
         {view === 'overview' ? <div className="project-overview project-overview-compact">
           <MetricStrip items={[
@@ -64,8 +78,32 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
 
         {view === 'services' ? <section className="console-surface single-activity activity-card">
           <div className="card-title"><h2>서비스</h2><div className="inline-actions"><span className="badge info">{state.services.length}개</span><a className="btn btn-primary" href={`${base}?view=new-service`}>새 서비스</a></div></div>
-          {state.services.length ? <table className="table"><thead><tr><th>이름</th><th>유형</th><th>상태</th><th>소스</th><th>배포</th></tr></thead><tbody>{state.services.map((service: any) => <tr key={service.id}><td><strong>{service.name || service.slug}</strong><p className="muted">{service.id}</p></td><td className="mono">{service.type || 'web'}</td><td><StatusBadge status={service.status || 'created'} /></td><td className="mono">{service.repoUrl || service.imageUrl || '소스 없음'}</td><td className="table-actions"><form method="post" action={apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)} className="inline-actions"><input type="hidden" name="_returnTo" value={`${base}?view=deployments`} /><input type="hidden" name="deploymentType" value="production" /><button className="btn btn-primary" type="submit">운영 배포</button></form><form method="post" action={apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)} className="inline-actions"><input type="hidden" name="_returnTo" value={`${base}?view=deployments`} /><input type="hidden" name="deploymentType" value="preview" /><button className="btn" type="submit">미리보기</button></form></td></tr>)}</tbody></table> : <div className="empty-state"><strong>서비스가 없습니다.</strong><a className="btn btn-primary" href={`${base}?view=new-service`}>첫 서비스 만들기</a></div>}
+          {state.services.length ? <table className="table"><thead><tr><th>이름</th><th>유형</th><th>상태</th><th>소스</th><th>배포</th><th>관리</th></tr></thead><tbody>{state.services.map((service: any) => <tr key={service.id}><td><strong>{service.name || service.slug}</strong><p className="muted">{service.id}</p></td><td className="mono">{service.type || 'web'}</td><td><StatusBadge status={service.status || 'created'} /></td><td className="mono">{service.repoUrl || service.imageUrl || '소스 없음'}</td><td className="table-actions"><form method="post" action={apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)} className="inline-actions"><input type="hidden" name="_returnTo" value={`${base}?view=deployments`} /><input type="hidden" name="deploymentType" value="production" /><button className="btn btn-primary" type="submit">운영 배포</button></form><form method="post" action={apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)} className="inline-actions"><input type="hidden" name="_returnTo" value={`${base}?view=deployments`} /><input type="hidden" name="deploymentType" value="preview" /><button className="btn" type="submit">미리보기</button></form></td><td><a className="btn btn-ghost" href={`${base}?view=edit-service&serviceId=${encodeURIComponent(service.id)}`}>설정</a></td></tr>)}</tbody></table> : <div className="empty-state"><strong>서비스가 없습니다.</strong><a className="btn btn-primary" href={`${base}?view=new-service`}>첫 서비스 만들기</a></div>}
         </section> : null}
+
+        {view === 'edit-service' ? serviceSettings ? <form method="post" action={apiAction(`/services/${serviceSettings.id}`, state.context)} className="form-surface stack single-activity activity-card">
+          <input type="hidden" name="_method" value="PATCH" />
+          <input type="hidden" name="_returnTo" value={`${base}?view=services`} />
+          <div><h2>{serviceSettings.name || '서비스'} 설정</h2><p className="muted">빌드와 실행 설정</p></div>
+          <div className="form-grid">
+            <label>서비스 이름 <input name="name" defaultValue={serviceSettings.name || ''} required /></label>
+            <label>서비스 유형 <select name="type" defaultValue={String(serviceSettings.type || 'web').toLowerCase()}><option value="web">웹</option><option value="private">비공개 서비스</option><option value="worker">워커</option><option value="cron">예약 작업</option><option value="job">일회성 작업</option></select></label>
+            <label>소스 유형 <select name="sourceType" defaultValue={String(serviceSettings.sourceType || 'github').toLowerCase()}><option value="github">GitHub</option><option value="gitlab">GitLab</option><option value="zip">ZIP</option><option value="image">빌드된 이미지</option><option value="local">로컬 Dockerfile</option></select></label>
+            <label>빌드 방식 <select name="buildMode" defaultValue={String(serviceSettings.buildMode || 'auto').toLowerCase().replaceAll('_', '-')}><option value="auto">자동</option><option value="dockerfile">Dockerfile</option><option value="buildpack">Buildpack</option><option value="framework">프레임워크</option><option value="custom">직접 설정</option><option value="prebuilt-image">빌드된 이미지</option><option value="generated">자동 생성</option></select></label>
+            <label>저장소 URL <input name="repoUrl" type="url" defaultValue={serviceSettings.repoUrl || ''} placeholder="https://github.com/org/repo.git" /></label>
+            <label>브랜치 <input name="branch" defaultValue={serviceSettings.branch || ''} placeholder="main" /></label>
+            <label>루트 경로 <input name="rootDirectory" defaultValue={serviceSettings.rootDirectory || ''} placeholder="." /></label>
+            <label>빌드 컨텍스트 <input name="buildContext" defaultValue={serviceSettings.buildContext || ''} placeholder="." /></label>
+            <label>Dockerfile 경로 <input name="dockerfilePath" defaultValue={serviceSettings.dockerfilePath || ''} placeholder="Dockerfile" title="폴더가 아닌 Dockerfile을 입력하세요." /></label>
+            <label>이미지 <input name="imageUrl" defaultValue={serviceSettings.imageUrl || serviceSettings.image || ''} placeholder="registry.example.com/team/web:tag" /></label>
+            <label>설치 명령 <input name="installCommand" defaultValue={serviceSettings.installCommand || ''} placeholder="npm ci" /></label>
+            <label>빌드 명령 <input name="buildCommand" defaultValue={serviceSettings.buildCommand || ''} placeholder="npm run build" /></label>
+            <label>시작 명령 <input name="startCommand" defaultValue={serviceSettings.startCommand || ''} placeholder="npm start" /></label>
+            <label>출력 경로 <input name="outputDirectory" defaultValue={serviceSettings.outputDirectory || ''} placeholder="dist" /></label>
+            <label>포트 <input name="port" type="number" min="1" max="65535" defaultValue={serviceSettings.port || ''} placeholder="3000" /></label>
+          </div>
+          <div className="workflow-actions"><a className="btn btn-ghost" href={`${base}?view=services`}>취소</a><button className="btn btn-primary" type="submit">설정 저장</button></div>
+        </form> : <div className="empty-state single-activity"><strong>서비스를 찾을 수 없습니다.</strong><a className="btn" href={`${base}?view=services`}>서비스로 이동</a></div> : null}
 
         {view === 'deployments' ? <section className="console-surface single-activity activity-card"><div className="card-title"><h2>배포 내역</h2><span className="badge info">로그와 이벤트</span></div>{state.deployments.length ? <table className="table"><thead><tr><th>서비스</th><th>유형</th><th>상태</th><th>이미지</th><th>상세</th></tr></thead><tbody>{state.deployments.map((deployment: any) => <tr key={deployment.id}><td>{deployment.serviceName}</td><td>{deployment.deploymentType}</td><td><StatusBadge status={deployment.status} /></td><td className="mono">{deployment.imageDigest || deployment.imageUrl || '이미지 대기 중'}</td><td><a className="subtle-link" href={`${base}/deployments/${deployment.id}`}>배포 상세</a></td></tr>)}</tbody></table> : <p className="muted">아직 배포가 없습니다.</p>}</section> : null}
 
@@ -75,7 +113,15 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
 
         {view === 'logs' ? <section className="console-surface single-activity activity-card"><div className="card-title"><h2>런타임 로그</h2><span className="badge info">{logService?.name || '서비스'}</span></div>{logService ? <LogViewer rows={runtimeLogs?.body?.logs || []} field="line" empty="표시할 런타임 로그가 없습니다." /> : <p className="muted">서비스 없음</p>}</section> : null}
 
-        {view === 'settings' ? <section className="form-surface danger-zone single-activity activity-card"><div className="card-title"><h2>프로젝트 설정</h2><span className="badge danger">주의</span></div><p className="muted">위험 작업은 확인 후 실행</p></section> : null}
+        {view === 'settings' ? <section className="form-surface danger-zone single-activity activity-card">
+          <div><h2>프로젝트 삭제</h2><p className="muted">서비스와 리소스도 삭제됩니다.</p></div>
+          {deletionPending ? <div className="empty-state"><StatusBadge status={state.project.status} /><strong>삭제 요청됨</strong></div> : <form method="post" action={apiAction(`/projects/${projectId}`, state.context)} className="stack">
+            <input type="hidden" name="_method" value="DELETE" />
+            <input type="hidden" name="_returnTo" value={`/org/${orgSlug}/projects`} />
+            <label>확인을 위해 <strong>{projectName}</strong> 입력 <input name="_confirmProject" autoComplete="off" pattern={exactPattern(String(projectName))} required /></label>
+            <button className="btn btn-danger" type="submit">프로젝트 삭제</button>
+          </form>}
+        </section> : null}
       </section>
     </ConsoleShell>
   );

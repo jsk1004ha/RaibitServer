@@ -150,6 +150,15 @@ export function projectCreatePayloadFromForm(body = {}) {
   };
 }
 
+export function formMutationMethod(requestMethod, body = {}) {
+	const method = String(requestMethod || '').toUpperCase();
+	if (method !== 'POST') return method;
+	const override = typeof body._method === 'string' ? body._method.trim().toUpperCase() : '';
+	if (!override) return method;
+	if (!['PATCH', 'DELETE'].includes(override)) throw boundaryError('invalid_form_method');
+	return override;
+}
+
 export function withFlashMessage(requestUrl, returnPath, kind, value) {
 	const safePath = safeReturnPath(requestUrl, returnPath, null);
 	const request = new URL(requestUrl);

@@ -603,6 +603,11 @@ func (b *Builder) prepareBuildPlan(ctx context.Context, state *buildContext) err
 	if err != nil {
 		return err
 	}
+	if info, statErr := os.Stat(resolvedDockerfile); statErr == nil && info.IsDir() {
+		return fmt.Errorf("dockerfilePath must point to a file, got directory: %s", dockerfilePath)
+	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
 	state.Dockerfile = resolvedDockerfile
 	if mode == "dockerfile" || fileExists(state.Dockerfile) {
 		state.Plan.Mode = "dockerfile"

@@ -855,7 +855,10 @@ export class PrismaControlPlaneRepository {
       assertMutable(current, 'service');
       assertPrismaGitHubBindingImmutable(current, updates);
       await requireMutableProject(tx, current.projectId);
-      return tx.service.update({ where: { id: serviceId }, data: serviceUpdateData(updates, options) });
+      return tx.service.update({
+        where: { id: serviceId },
+        data: serviceUpdateData(updates, { ...options, currentDesiredState: current.desiredState }),
+      });
     }, { isolationLevel: 'Serializable' });
   }
 
@@ -2079,10 +2082,15 @@ function serviceUpdateData(input: Record<string, any> = {}, options: Record<stri
     data[key] = key === 'port' && value !== null && value !== undefined ? Number(value) : value;
   }
   if (inputSafe.slug !== undefined) data.slug = slugInput(inputSafe.slug);
-  if (inputSafe.image && !inputSafe.imageUrl) data.imageUrl = inputSafe.image;
-  if (inputSafe.imageUrl && !inputSafe.image) data.image = inputSafe.imageUrl;
+  if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'image') && !Object.prototype.hasOwnProperty.call(inputSafe || {}, 'imageUrl')) data.imageUrl = data.image;
+  if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'imageUrl') && !Object.prototype.hasOwnProperty.call(inputSafe || {}, 'image')) data.image = data.imageUrl;
   if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'desiredSpec')) data.desiredSpec = sanitizeJson(inputSafe.desiredSpec || {});
-  if (Object.keys(inputSafe || {}).length && !data.desiredState) data.desiredState = sanitizeJson(inputSafe);
+  if (Object.keys(inputSafe || {}).length && !data.desiredState) {
+    const currentDesiredState = options.currentDesiredState && typeof options.currentDesiredState === 'object' && !Array.isArray(options.currentDesiredState)
+      ? options.currentDesiredState
+      : {};
+    data.desiredState = sanitizeJson({ ...currentDesiredState, ...inputSafe });
+  }
   return data;
 }
 

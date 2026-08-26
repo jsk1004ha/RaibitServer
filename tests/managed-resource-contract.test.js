@@ -181,6 +181,39 @@ test('Prisma project updates persist only tenant-editable fields', async () => {
   assert.equal(updated.unknown, undefined);
 });
 
+test('Prisma service updates preserve desired-state metadata and keep image aliases aligned', async () => {
+  let updateData = null;
+  let current = {
+    id: 'service-1',
+    projectId: 'project-1',
+    name: 'web',
+    status: 'CREATED',
+    image: 'registry.example.test/web:old',
+    imageUrl: 'registry.example.test/web:old',
+    desiredState: { providerMetadata: { owner: 'builder' }, branch: 'old' },
+  };
+  const prisma = {
+    $transaction: async (callback) => callback(prisma),
+    project: { findUnique: async () => ({ id: 'project-1', status: 'ACTIVE', deletionRequestedAt: null }) },
+    service: {
+      findUnique: async () => current,
+      update: async ({ data }) => {
+        updateData = data;
+        current = { ...current, ...data };
+        return current;
+      },
+    },
+  };
+  const repository = new PrismaControlPlaneRepository(prisma);
+
+  const updated = await repository.updateService('service-1', { branch: 'main', imageUrl: '' });
+
+  assert.deepEqual(updateData.desiredState.providerMetadata, { owner: 'builder' });
+  assert.equal(updateData.desiredState.branch, 'main');
+  assert.equal(updated.image, null);
+  assert.equal(updated.imageUrl, null);
+});
+
 function resourcePrisma(status) {
   const systemState = {
     providerIdentity: { namespace: 'org-1--demo', name: 'resource-1', secretName: 'resource-1-credentials', pvcName: 'resource-1-data' },

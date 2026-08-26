@@ -10,6 +10,7 @@ import {
 	dashboardSecurityHeaders,
 	extractSessionToken,
 	fetchWithInitialResponseTimeout,
+  formMutationMethod,
   isSameOriginMutation,
 	projectCreatePayloadFromForm,
 	publicHostnameForConsole,
@@ -155,6 +156,17 @@ test('project creation form becomes one atomic desired-state payload', () => {
 		}],
 		resources: [],
 	});
+});
+
+test('HTML forms can safely request only supported mutation methods', () => {
+	assert.equal(formMutationMethod('POST', {}), 'POST');
+	assert.equal(formMutationMethod('POST', { _method: 'patch' }), 'PATCH');
+	assert.equal(formMutationMethod('POST', { _method: 'DELETE' }), 'DELETE');
+	assert.equal(formMutationMethod('PATCH', { _method: 'DELETE' }), 'PATCH');
+	assert.throws(
+		() => formMutationMethod('POST', { _method: 'PUT' }),
+		(error) => error?.code === 'invalid_form_method',
+	);
 });
 
 test('auth credentials are extracted for HttpOnly storage and removed from browser JSON', () => {

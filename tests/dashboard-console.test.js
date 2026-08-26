@@ -30,7 +30,7 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
   for (const marker of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend']) {
     assert.ok(login.includes(marker), `${marker} missing from login screen`);
   }
-  for (const marker of ['PUBLIC_POST_PATHS', '/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend', 'SESSION_COOKIE_NAME', 'projectCreatePayloadFromForm']) {
+  for (const marker of ['PUBLIC_POST_PATHS', '/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend', 'SESSION_COOKIE_NAME', 'projectCreatePayloadFromForm', 'formMutationMethod']) {
     assert.ok(controlRoute.includes(marker), `${marker} missing from same-origin control route`);
   }
   assert.ok(requestSecurity.includes("SESSION_COOKIE_NAME = 'raibitserver_session'"));

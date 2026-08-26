@@ -261,7 +261,7 @@ test('project workflows keep their operational contracts behind a Korean console
   for (const marker of [
     '현황', '서비스', '배포', '리소스', '로그', '설정',
     '서비스 만들기', '운영 배포', '미리보기', '배포 내역',
-    '리소스 추가', '관리형 리소스', '프로젝트 설정',
+    '리소스 추가', '관리형 리소스', '프로젝트 삭제',
     '런타임 로그', 'SectionNav', "view === 'services'", "view === 'deployments'", "view === 'resources'",
   ]) {
     assert.ok(projectDetail.includes(marker), `${marker} project-detail marker missing`);
@@ -277,9 +277,16 @@ test('project workflows keep their operational contracts behind a Korean console
     'apiAction(`/projects/${projectId}/services`, state.context)',
     'apiAction(`/projects/${projectId}/resources`, state.context)',
     'apiAction(`/projects/${projectId}/services/${service.id}/deployments`, state.context)',
+    'apiAction(`/services/${serviceSettings.id}`, state.context)',
+    'apiAction(`/projects/${projectId}`, state.context)',
   ]) {
     assert.ok(projectDetail.includes(action), `${action} project form action missing`);
   }
+  assert.ok(projectDetail.includes('<input type="hidden" name="_method" value="PATCH" />'));
+  assert.ok(projectDetail.includes('<input type="hidden" name="_method" value="DELETE" />'));
+  assert.ok(projectDetail.includes('name="_confirmProject"'));
+  assert.ok(projectDetail.includes('설정 저장'));
+  assert.ok(projectDetail.includes('프로젝트 삭제'));
   assert.ok(projectDetail.includes('<input type="hidden" name="deploymentType" value="production" />'));
   assert.ok(projectDetail.includes('<input type="hidden" name="deploymentType" value="preview" />'));
   assert.ok(projectDetail.includes('href={`${base}/deployments/${deployment.id}`}'));
@@ -345,7 +352,7 @@ test('project workflow controls derive tenant scope server-side and expose acces
   assert.ok(wizard.includes('hidden={step !== 3}'));
   assert.ok(wizard.includes('disabled={index > step}'));
 
-  assert.ok(projectDetail.includes('<SectionNav items={navItems} current={view}'));
+  assert.ok(projectDetail.includes("<SectionNav items={navItems} current={view === 'edit-service' ? 'services' : view}"));
   for (const field of [
     '<label>서비스 이름 <input name="name"',
     '<label>서비스 유형 <select name="type"',

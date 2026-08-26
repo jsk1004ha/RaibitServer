@@ -129,7 +129,7 @@ test('dashboard has route-level loading, error, not-found, accessible controls a
 	assert.match(error, /role="alert"/);
 	assert.match(notFound, /찾을 수 없습니다/);
 	for (const target of ['overview', 'services', 'deployments', 'resources']) assert.match(project, new RegExp(`\\?view=${target}`));
-	assert.match(project, /<SectionNav items=\{navItems\} current=\{view\}/);
+	assert.match(project, /<SectionNav items=\{navItems\} current=\{view === 'edit-service' \? 'services' : view\}/);
 	assert.doesNotMatch(project, /href=\{apiAction\(`\/services\/\$\{state\.services\[0\]\.id\}\/logs`\)\}/);
 	assert.match(css, /min-height:\s*44px/);
 	assert.match(css, /-webkit-overflow-scrolling:\s*touch/);

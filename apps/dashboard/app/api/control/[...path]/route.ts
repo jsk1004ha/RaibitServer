@@ -7,6 +7,7 @@ import {
   dashboardRequestUrl,
   extractSessionToken,
   fetchWithInitialResponseTimeout,
+  formMutationMethod,
   isSameOriginMutation,
   projectCreatePayloadFromForm,
   readBoundedBody,
@@ -70,14 +71,18 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
     return NextResponse.json({ error: 'authentication_required' }, { status: 401 });
   }
 
+  let upstreamMethod = method;
   let body: Record<string, unknown> | undefined;
   if (isMutation) {
     try {
       body = await readMutationBody(request);
+      upstreamMethod = isFormSubmission ? formMutationMethod(method, body) : method;
       const requestedReturn = typeof body._returnTo === 'string' ? body._returnTo : null;
       delete body._returnTo;
+      delete body._method;
+      delete body._confirmProject;
       returnPath = safeReturnPath(browserRequestUrl, requestedReturn, request.headers.get('referer'));
-      if (isFormSubmission && path === '/projects') body = projectCreatePayloadFromForm(body);
+      if (isFormSubmission && upstreamMethod === 'POST' && path === '/projects') body = projectCreatePayloadFromForm(body);
     } catch (error) {
       const code = requestBodyErrorCode(error);
       if (isFormSubmission) return formErrorRedirect(browserRequestUrl, returnPath, code);
@@ -85,7 +90,7 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
     }
   }
 
-  const query = method === 'GET' ? request.nextUrl.search : '';
+  const query = upstreamMethod === 'GET' ? request.nextUrl.search : '';
   const requestedAccept = request.headers.get('accept') || '';
   let upstream: Response;
   try {
@@ -93,7 +98,7 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
       fetch,
       `${context.baseUrl}${path}${query}`,
       {
-        method,
+        method: upstreamMethod,
         headers: {
           ...context.headers,
           accept: requestedAccept.includes('text/event-stream') ? 'text/event-stream' : 'application/json',
@@ -114,7 +119,7 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
   }
 
   const upstreamContentType = upstream.headers.get('content-type') || 'application/json';
-  if (method === 'GET' && upstream.ok && upstreamContentType.toLowerCase().includes('text/event-stream')) {
+  if (upstreamMethod === 'GET' && upstream.ok && upstreamContentType.toLowerCase().includes('text/event-stream')) {
     if (declaredLengthExceeds(upstream.headers.get('content-length'), MAX_STREAM_BYTES)) {
       void upstream.body?.cancel('response_too_large').catch(() => {});
       return NextResponse.json({ error: 'control_plane_response_too_large' }, { status: 502 });
