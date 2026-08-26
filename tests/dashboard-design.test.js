@@ -782,3 +782,15 @@ test('disabled Task 8 controls look inactive and reset only disabled card fields
   }
   assert.doesNotMatch(css, /^fieldset\s*(?=\{)/m, 'general fieldsets must remain unchanged');
 });
+
+
+test('global loading boundary stays session-neutral for public routes', async () => {
+  const loading = await read('../apps/dashboard/app/loading.tsx');
+
+  assert.doesNotMatch(loading, /ConsoleShell/);
+  assert.doesNotMatch(
+    loading,
+    /redirect\(|dashboardApiContext|getJson|SESSION_COOKIE/,
+  );
+  assert.match(loading, /aria-busy="true"/);
+});
