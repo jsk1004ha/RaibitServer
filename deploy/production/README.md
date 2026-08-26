@@ -88,7 +88,7 @@ Cloudflare Tunnel을 production ingress 앞단으로 사용할 수 있지만, Tu
 - 플랫폼 주소는 공개 apex, `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`을 유지합니다.
 - tenant 서비스는 `apps--<org>--<project>[--<service>].<BASE_DOMAIN>` 형태를 사용합니다.
 - preview는 `preview--pr-<number>--<org>--<project>[--<service>].<BASE_DOMAIN>` 형태를 사용합니다.
-- service/resource console은 각각 `console--...<BASE_DOMAIN>`, `resources--*.<BASE_DOMAIN>` 형태를 사용합니다.
+- service/resource console은 각각 `console--...<BASE_DOMAIN>`, `resources--...<BASE_DOMAIN>` 형태를 사용합니다.
 - Cloudflare Tunnel에는 공개 apex, `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`, `*.<BASE_DOMAIN>`만 두고 최종 tenant Host match는 Kubernetes Ingress가 처리합니다.
 - `test.*.<BASE_DOMAIN>` 같은 중간 wildcard나 `*.apps.<BASE_DOMAIN>` 같은 multi-level wildcard route는 사용하지 않습니다.
 - 로그인은 중앙 `console.<BASE_DOMAIN>`에서 host-only HttpOnly 세션으로 처리합니다. 부모 도메인 쿠키는 tenant workload에 bearer token을 노출하므로 사용하지 않습니다. `console`, `console--*`, `resources--*`에는 Cloudflare Access와 앱 내부 RBAC를 유지하고, 필요하면 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`를 추가 방어선으로 설정합니다.
