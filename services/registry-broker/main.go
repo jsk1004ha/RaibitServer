@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -16,10 +17,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,6 +36,7 @@ const (
 	credentialV1    = "rb1"
 	defaultPort     = "8080"
 	defaultTokenTTL = 5 * time.Minute
+	defaultTLSMin   = uint16(tls.VersionTLS12)
 )
 
 type config struct {
@@ -42,6 +49,29 @@ type config struct {
 	SessionHMACKey      []byte
 	TokenPrivateKey     *rsa.PrivateKey
 	TokenCertificateX5C string
+	InternalTLS         tlsGatewayConfig
+}
+
+type tlsGatewayConfig struct {
+	Enabled          bool
+	Port             string
+	BrokerHost       string
+	CertificateFile  string
+	PrivateKeyFile   string
+	RegistryUpstream *url.URL
+}
+
+type certificateFileState struct {
+	certificate os.FileInfo
+	privateKey  os.FileInfo
+}
+
+type certificateReloader struct {
+	mu              sync.Mutex
+	certificateFile string
+	privateKeyFile  string
+	certificate     tls.Certificate
+	state           certificateFileState
 }
 
 type server struct {
@@ -112,12 +142,29 @@ func main() {
 	mux.HandleFunc("POST /broker", s.broker)
 	mux.HandleFunc("GET /token", s.token)
 
-	h := securityHeaders(mux)
-	addr := ":" + cfg.Port
-	log.Printf("registry broker listening on %s for %s/%s", addr, cfg.RegistryHost, cfg.RegistryPrefix)
-	if err := http.ListenAndServe(addr, h); err != nil {
-		log.Fatal(err)
+	publicServer := hardenedHTTPServer(":"+cfg.Port, securityHeaders(mux))
+	var internalServer *http.Server
+	if cfg.InternalTLS.Enabled {
+		internalServer, err = newInternalTLSServer(cfg, mux)
+		if err != nil {
+			log.Fatalf("internal TLS gateway: %v", err)
+		}
 	}
+
+	errCh := make(chan error, 2)
+	go func() {
+		log.Printf("registry broker listening on %s for %s/%s", publicServer.Addr, cfg.RegistryHost, cfg.RegistryPrefix)
+		errCh <- publicServer.ListenAndServe()
+	}()
+
+	if internalServer != nil {
+		go func() {
+			log.Printf("internal registry TLS gateway listening on %s", internalServer.Addr)
+			errCh <- internalServer.ListenAndServeTLS("", "")
+		}()
+	}
+
+	log.Fatal(<-errCh)
 }
 
 func loadConfig() (config, error) {
@@ -128,7 +175,7 @@ func loadConfig() (config, error) {
 		RegistryService: strings.TrimSpace(os.Getenv("REGISTRY_SERVICE")),
 		RegistryIssuer:  strings.TrimSpace(os.Getenv("REGISTRY_ISSUER")),
 	}
-	if cfg.RegistryHost == "" || strings.ContainsAny(cfg.RegistryHost, "/:@ ") {
+	if !validBareHostname(cfg.RegistryHost) {
 		return config{}, errors.New("REGISTRY_HOST must be a bare registry hostname")
 	}
 	if cfg.RegistryPrefix == "" || strings.ContainsAny(cfg.RegistryPrefix, ":@ ") {
@@ -139,6 +186,11 @@ func loadConfig() (config, error) {
 	}
 
 	var err error
+	cfg.InternalTLS, err = loadTLSGatewayConfig(os.Getenv, cfg.RegistryHost)
+	if err != nil {
+		return config{}, err
+	}
+
 	cfg.BrokerToken, err = readSecretFile(os.Getenv("BROKER_TOKEN_FILE"))
 	if err != nil {
 		return config{}, fmt.Errorf("broker token: %w", err)
@@ -161,6 +213,271 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("token certificate: %w", err)
 	}
 	return cfg, nil
+}
+
+func loadTLSGatewayConfig(getenv func(string) string, registryHost string) (tlsGatewayConfig, error) {
+	raw := map[string]string{
+		"BROKER_HOST":            strings.TrimSpace(getenv("BROKER_HOST")),
+		"INTERNAL_TLS_PORT":      strings.TrimSpace(getenv("INTERNAL_TLS_PORT")),
+		"INTERNAL_TLS_CERT_FILE": strings.TrimSpace(getenv("INTERNAL_TLS_CERT_FILE")),
+		"INTERNAL_TLS_KEY_FILE":  strings.TrimSpace(getenv("INTERNAL_TLS_KEY_FILE")),
+		"REGISTRY_UPSTREAM_URL":  strings.TrimSpace(getenv("REGISTRY_UPSTREAM_URL")),
+	}
+	enabled := false
+	for _, value := range raw {
+		enabled = enabled || value != ""
+	}
+	if !enabled {
+		return tlsGatewayConfig{}, nil
+	}
+	for name, value := range raw {
+		if value == "" {
+			return tlsGatewayConfig{}, fmt.Errorf("%s is required when the internal TLS gateway is enabled", name)
+		}
+	}
+
+	brokerHost := strings.ToLower(raw["BROKER_HOST"])
+	if !validBareHostname(brokerHost) {
+		return tlsGatewayConfig{}, errors.New("BROKER_HOST must be a bare hostname")
+	}
+	if brokerHost == registryHost {
+		return tlsGatewayConfig{}, errors.New("BROKER_HOST and REGISTRY_HOST must be different")
+	}
+	port, err := strconv.Atoi(raw["INTERNAL_TLS_PORT"])
+	if err != nil || port < 1 || port > 65535 {
+		return tlsGatewayConfig{}, errors.New("INTERNAL_TLS_PORT must be an integer between 1 and 65535")
+	}
+	upstream, err := url.Parse(raw["REGISTRY_UPSTREAM_URL"])
+	if err != nil || upstream.Scheme != "http" || upstream.Host == "" || upstream.User != nil || upstream.RawQuery != "" || upstream.Fragment != "" || (upstream.Path != "" && upstream.Path != "/") {
+		return tlsGatewayConfig{}, errors.New("REGISTRY_UPSTREAM_URL must be a fixed HTTP origin without credentials, path, query, or fragment")
+	}
+	if upstream.Hostname() == "" || strings.ContainsAny(upstream.Hostname(), "/@ ") {
+		return tlsGatewayConfig{}, errors.New("REGISTRY_UPSTREAM_URL contains an invalid host")
+	}
+	upstreamHost := strings.ToLower(upstream.Hostname())
+	if upstreamHost != "raibit-registry" {
+		return tlsGatewayConfig{}, errors.New("REGISTRY_UPSTREAM_URL must target the exact raibit-registry service")
+	}
+	if upstream.Port() != "5000" {
+		return tlsGatewayConfig{}, errors.New("REGISTRY_UPSTREAM_URL must target registry port 5000")
+	}
+
+	return tlsGatewayConfig{
+		Enabled:          true,
+		Port:             strconv.Itoa(port),
+		BrokerHost:       brokerHost,
+		CertificateFile:  raw["INTERNAL_TLS_CERT_FILE"],
+		PrivateKeyFile:   raw["INTERNAL_TLS_KEY_FILE"],
+		RegistryUpstream: upstream,
+	}, nil
+}
+
+func validBareHostname(host string) bool {
+	if host == "" || len(host) > 253 || strings.ContainsAny(host, "/:@ ") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') && ch != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func hardenedHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+}
+
+func hardenedRegistryGatewayServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Minute,
+		WriteTimeout:      30 * time.Minute,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+}
+
+func newCertificateReloader(certificateFile, privateKeyFile string) (*certificateReloader, error) {
+	certificate, state, err := loadStableCertificatePair(certificateFile, privateKeyFile)
+	if err != nil {
+		return nil, err
+	}
+	return &certificateReloader{
+		certificateFile: certificateFile,
+		privateKeyFile:  privateKeyFile,
+		certificate:     certificate,
+		state:           state,
+	}, nil
+}
+
+func (r *certificateReloader) current() (*tls.Certificate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	state, err := statCertificatePair(r.certificateFile, r.privateKeyFile)
+	if err != nil {
+		return nil, err
+	}
+	if certificateFileStatesEqual(r.state, state) {
+		certificate := r.certificate
+		return &certificate, nil
+	}
+
+	certificate, state, err := loadStableCertificatePair(r.certificateFile, r.privateKeyFile)
+	if err != nil {
+		return nil, err
+	}
+	r.certificate = certificate
+	r.state = state
+	copy := r.certificate
+	return &copy, nil
+}
+
+func loadStableCertificatePair(certificateFile, privateKeyFile string) (tls.Certificate, certificateFileState, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		before, err := statCertificatePair(certificateFile, privateKeyFile)
+		if err != nil {
+			return tls.Certificate{}, certificateFileState{}, err
+		}
+		certificate, err := tls.LoadX509KeyPair(certificateFile, privateKeyFile)
+		if err != nil {
+			return tls.Certificate{}, certificateFileState{}, errors.New("certificate or private key could not be loaded")
+		}
+		after, err := statCertificatePair(certificateFile, privateKeyFile)
+		if err != nil {
+			return tls.Certificate{}, certificateFileState{}, err
+		}
+		if certificateFileStatesEqual(before, after) {
+			return certificate, after, nil
+		}
+	}
+	return tls.Certificate{}, certificateFileState{}, errors.New("certificate or private key changed during reload")
+}
+
+func statCertificatePair(certificateFile, privateKeyFile string) (certificateFileState, error) {
+	certificateInfo, err := os.Stat(certificateFile)
+	if err != nil || !certificateInfo.Mode().IsRegular() {
+		return certificateFileState{}, errors.New("certificate file is unavailable")
+	}
+	privateKeyInfo, err := os.Stat(privateKeyFile)
+	if err != nil || !privateKeyInfo.Mode().IsRegular() {
+		return certificateFileState{}, errors.New("private key file is unavailable")
+	}
+	return certificateFileState{certificate: certificateInfo, privateKey: privateKeyInfo}, nil
+}
+
+func certificateFileStatesEqual(left, right certificateFileState) bool {
+	return fileInfoEqual(left.certificate, right.certificate) && fileInfoEqual(left.privateKey, right.privateKey)
+}
+
+func fileInfoEqual(left, right os.FileInfo) bool {
+	return left != nil && right != nil && os.SameFile(left, right) && left.Size() == right.Size() && left.ModTime().Equal(right.ModTime())
+}
+
+func newInternalTLSServer(cfg config, brokerHandler http.Handler) (*http.Server, error) {
+	certificateReloader, err := newCertificateReloader(cfg.InternalTLS.CertificateFile, cfg.InternalTLS.PrivateKeyFile)
+	if err != nil {
+		return nil, errors.New("certificate or private key could not be loaded")
+	}
+	server := hardenedRegistryGatewayServer(":"+cfg.InternalTLS.Port, securityHeaders(newTLSGatewayHandler(cfg, brokerHandler)))
+	server.TLSConfig = &tls.Config{
+		MinVersion: defaultTLSMin,
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if !allowedTLSHost(strings.ToLower(strings.TrimSuffix(hello.ServerName, ".")), cfg) {
+				return nil, errors.New("unrecognized TLS server name")
+			}
+			return certificateReloader.current()
+		},
+	}
+	return server, nil
+}
+
+func newTLSGatewayHandler(cfg config, brokerHandler http.Handler) http.Handler {
+	proxy := httputil.NewSingleHostReverseProxy(cfg.InternalTLS.RegistryUpstream)
+	director := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		director(r)
+		r.Host = cfg.InternalTLS.RegistryUpstream.Host
+		r.Header.Del("Forwarded")
+		r.Header.Del("X-Forwarded-For")
+		r.Header.Del("X-Forwarded-Host")
+		r.Header.Del("X-Forwarded-Proto")
+	}
+	proxy.Transport = &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          32,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       60 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		log.Print("internal registry upstream request failed")
+		http.Error(w, "registry upstream unavailable", http.StatusBadGateway)
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, ok := requestHostname(r.Host)
+		if !ok || r.TLS == nil {
+			http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+			return
+		}
+		sni := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(r.TLS.ServerName), "."))
+		if sni == "" || host != sni || !allowedTLSHost(host, cfg) {
+			http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+			return
+		}
+		switch host {
+		case cfg.InternalTLS.BrokerHost:
+			brokerHandler.ServeHTTP(w, r)
+		case cfg.RegistryHost:
+			proxy.ServeHTTP(w, r)
+		default:
+			http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+		}
+	})
+}
+
+func requestHostname(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	host := value
+	if strings.Contains(value, ":") {
+		var err error
+		var port string
+		host, port, err = net.SplitHostPort(value)
+		if err != nil {
+			return "", false
+		}
+		parsedPort, err := strconv.Atoi(port)
+		if err != nil || parsedPort < 1 || parsedPort > 65535 {
+			return "", false
+		}
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return host, validBareHostname(host)
+}
+
+func allowedTLSHost(host string, cfg config) bool {
+	return host == cfg.InternalTLS.BrokerHost || host == cfg.RegistryHost
 }
 
 func (s *server) health(w http.ResponseWriter, _ *http.Request) {

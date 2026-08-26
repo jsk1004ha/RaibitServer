@@ -98,6 +98,49 @@ Cloudflare Tunnel을 production ingress 앞단으로 사용할 수 있지만, Tu
 
 예시 config는 [`cloudflare-tunnel.example.yml`](cloudflare-tunnel.example.yml), 세부 guardrail은 [Cloudflare Tunnel 운영 가이드](../../docs/cloudflare-tunnel.md)를 확인하세요.
 
+## Workload registry와 credential broker 연결
+
+`bootstrap-workload-registry.sh`는 registry와 credential broker를 배포한 뒤, cluster 안에서 두 공개 hostname을 전용 `raibit-registry-auth` Service의 ClusterIP로 해석하도록 split DNS를 구성합니다. 이 Pod는 8443에서 TLS를 직접 종료하고 요청의 SNI와 `Host`가 정확히 `registry.<domain>` 또는 `registry-auth.<domain>`인지 검사합니다. broker hostname은 기존 broker handler로 보내고 registry hostname은 고정된 내부 `raibit-registry:5000` Service로만 전달합니다. Registry의 upload `Location`은 상대 URL로 고정해 내부 Service 주소가 client에 노출되거나 다음 push 요청이 gateway를 이탈하지 않게 합니다.
+
+빌드 executor의 NetworkPolicy에는 공유 Traefik IP나 사설 CIDR 예외를 넣지 않습니다. 대신 `raibitserver-infra` namespace의 `app.kubernetes.io/name=raibit-registry-auth` Pod만 선택하고, Service 포트 443과 실제 TLS listener 포트 8443만 허용합니다. 두 포트를 함께 적는 이유는 Service DNAT과 NetworkPolicy 처리 순서가 네트워크 플러그인마다 다를 수 있기 때문입니다. 대상 Pod 경계는 그대로이므로 사용자 Dockerfile이 같은 노드의 다른 HTTPS virtual host나 metadata/private network로 우회할 수 없습니다. broker token 값도 Helm values에 기록하지 않고 기존 Kubernetes Secret 이름만 참조합니다.
+
+서버 사용자로 저장소 checkout에서 실행합니다. 스크립트 안에서 필요한 K3s 작업만 `sudo`를 사용하므로 스크립트 자체를 `sudo bash`로 실행하지 않습니다.
+
+```sh
+bash deploy/production/bootstrap-workload-registry.sh
+```
+
+성공하면 다음 두 파일이 mode `0600`으로 생성됩니다.
+
+```txt
+~/.config/raibitserver/workload-registry.env
+~/.config/raibitserver/workload-registry-values.yaml
+```
+
+첫 파일은 확인용 non-secret 설정이고, 두 번째 파일은 `builder.registry`, broker URL, 기존 Kubernetes Secret 이름, 전용 게이트웨이 namespace·Pod label·port만 담는 Helm overlay입니다. 자동 updater는 overlay와 모든 상위 디렉터리의 종류·소유자·쓰기 권한을 검사하고, symlink를 따라가지 않는 file descriptor에서 최대 1 MiB의 immutable snapshot을 만든 뒤 `helm lint`, `helm template`, `helm upgrade` 세 단계에 같은 snapshot을 적용합니다.
+
+현재 서버에서 `registry credential broker request failed`가 발생한 뒤 이 수정으로 복구할 때는 최신 checkout에서 bootstrap과 updater installer를 한 번 다시 실행하고 서비스를 시작합니다.
+
+```sh
+bash deploy/production/bootstrap-workload-registry.sh
+sudo bash deploy/production/install-auto-update.sh "$USER"
+sudo systemctl start raibitserver-auto-update.service
+journalctl -u raibitserver-auto-update.service -f
+```
+
+수동 Helm 배포를 하는 서버라면 기존 production values 뒤에 overlay를 추가합니다. 아래 예시는 Helm 3용입니다.
+
+```sh
+helm upgrade --install raibitserver infra/helm/raibitserver \
+  --namespace raibitserver-system \
+  --create-namespace \
+  -f ~/production-values.yaml \
+  -f ~/.config/raibitserver/workload-registry-values.yaml \
+  --atomic --timeout 20m
+```
+
+Helm 4에서는 마지막 줄의 `--atomic` 대신 `--rollback-on-failure --wait=watcher --wait-for-jobs`를 사용합니다.
+
 ## main 자동 production 업데이트
 
 `deploy/production/auto-update.sh`와 `install-auto-update.sh`는 GitHub `main`을 production에 자동 반영하는 서버측 updater입니다. GitHub Actions에 production credential을 저장하거나 public repository에 self-hosted runner를 붙이지 않습니다.
@@ -111,7 +154,8 @@ main SHA 변경 감지
 → Helm 관리 platform image 7개 build/push
 → 각 image digest cosign 서명
 → production-values.yaml의 digest pin 갱신 후보 생성
-→ helm lint/template
+→ workload registry overlay의 소유권·권한 검사 및 snapshot 생성
+→ 두 values를 함께 사용해 helm lint/template
 → Helm major 확인(3: --atomic, 4: --rollback-on-failure + watcher wait)
 → helm upgrade --install
 → API/Dashboard rollout 확인
@@ -153,8 +197,11 @@ installer는 이 절대 경로를 systemd의 `RAIBITSERVER_UPDATER_LIBEXEC_PATH`
 
 ```txt
 ~/.local/state/raibitserver-auto-update/deployed-sha
+~/.local/state/raibitserver-auto-update/deployed-input-digest
 ~/.local/state/raibitserver-auto-update/last-success.json
 ```
+
+`deployed-input-digest`는 production values와 실제 적용한 workload registry overlay snapshot의 SHA-256입니다. `main` SHA가 같아도 두 설정 중 하나가 바뀌면 updater는 `already running`으로 종료하지 않고 같은 승인 commit을 다시 검증·배포합니다. 이 state가 없는 구버전 updater에서 처음 전환할 때도 한 번 재조정되므로, 새 overlay가 기존 commit에 누락되는 상황을 막습니다.
 
 서버별 non-secret 설정은 설치 시 다음 파일에 생성되며 필요하면 수정할 수 있습니다.
 
@@ -162,7 +209,7 @@ installer는 이 절대 경로를 systemd의 `RAIBITSERVER_UPDATER_LIBEXEC_PATH`
 ~/.config/raibitserver/auto-update.env
 ```
 
-기본값은 `jsk1004ha/RaibitServer`, `main`, `~/production-values.yaml`, `raibit-prod-builder`, `raibitserver-system`, `ghcr.io/jsk1004ha/raibitserver`입니다. updater는 기존 Kubernetes Secret, registry login, cosign key를 그대로 사용하며 secret 값을 GitHub나 updater config에 복사하지 않습니다.
+기본값은 `jsk1004ha/RaibitServer`, `main`, `~/production-values.yaml`, `~/.config/raibitserver/workload-registry-values.yaml`, `raibit-prod-builder`, `raibitserver-system`, `ghcr.io/jsk1004ha/raibitserver`입니다. registry overlay가 없는 설치에서는 기존 단일 values 동작을 유지합니다. updater는 기존 Kubernetes Secret, registry login, cosign key를 그대로 사용하며 secret 값을 GitHub나 updater config에 복사하지 않습니다.
 
 자동 업데이트를 일시 중지/재개하려면 timer만 제어합니다.
 

@@ -31,6 +31,8 @@ builder:
   registryCredentials:
     brokerURL: https://registry-credential-broker.security.example/v1/credentials
     existingSecret: ci-registry-credential-broker
+    privateGateway:
+      enabled: false
   anonymousGit:
     enabled: false
   signing:

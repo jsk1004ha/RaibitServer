@@ -56,7 +56,7 @@ test('production builder chart fails closed around registry and supply-chain set
   assert.match(values, /scan:\s*[\s\S]*enabled:\s*true/);
   assert.match(values, /signing:\s*[\s\S]*enabled:\s*true/);
   assert.doesNotMatch(values, /gitCredentials:/, 'shared cross-tenant Git credentials must not be configured');
-  assert.match(values, /registryCredentials:\s*[\s\S]*brokerURL:[\s\S]*existingSecret:[\s\S]*tokenKey:/);
+  assert.match(values, /registryCredentials:\s*[\s\S]*brokerURL:[\s\S]*existingSecret:[\s\S]*tokenKey:[\s\S]*privateGateway:[\s\S]*enabled:\s*false[\s\S]*namespace:[\s\S]*podName:[\s\S]*servicePort:\s*443[\s\S]*port:\s*8443/);
   assert.match(values, /buildTimeoutSeconds:\s*600/);
   assert.match(values, /registryCredentials:\s*[\s\S]*minTTLSeconds:\s*840[\s\S]*maxTTLSeconds:\s*900/);
   assert.match(values, /runtimeClassName:/);
@@ -86,6 +86,10 @@ test('production builder chart fails closed around registry and supply-chain set
   assert.ok((builder.match(/ephemeral-storage/g) || []).length >= 4, 'builder and buildkit must have ephemeral-storage requests and limits');
   assert.match(builder, /production registry credential broker URL must use https/i);
   assert.match(builder, /production registry credential broker token secret is required/i);
+  assert.match(builder, /private gateway namespace must be a valid exact Kubernetes namespace/i);
+  assert.match(builder, /private gateway pod name must be a valid exact label value/i);
+  assert.match(builder, /private gateway service port must be between 1 and 65535/i);
+  assert.match(builder, /private gateway port must be between 1 and 65535/i);
   assert.match(builder, /credential minimum TTL.*job deadline/i);
   assert.match(builder, /generated Dockerfile frontend.*sha256 digest/i);
   assert.match(builder, /generated Dockerfile node image.*sha256 digest/i);
@@ -207,6 +211,10 @@ test('production Helm uses a chart-managed live verification hook with least-pri
     'missing-registry-credential-broker',
     'insecure-registry-credential-broker',
     'missing-registry-credential-broker-token',
+    'invalid-registry-gateway-namespace',
+    'invalid-registry-gateway-pod-name',
+    'invalid-registry-gateway-service-port',
+    'invalid-registry-gateway-port',
     'missing-builder-dispatch-mtls',
     'missing-builder-dispatcher',
     'build-timeout-exceeds-job-deadline',
@@ -219,6 +227,7 @@ test('production Helm uses a chart-managed live verification hook with least-pri
   }
   assert.match(verifier, /helm\s+lint|"\$HELM"\s+lint/);
   assert.match(verifier, /helm\s+template|"\$HELM"\s+template/);
+  assert.match(verifier, /invalid-default-registry-gateway/);
   assert.doesNotMatch(ci, /if command -v helm/);
   assert.match(ci, /setup-helm/);
   assert.match(ci, /scripts\/verify-helm\.sh/);
@@ -245,6 +254,8 @@ test('builder NetworkPolicies give database egress only to the trusted dispatche
   assert.match(dispatcherPolicy, /databaseEgress|\.port/);
   assert.doesNotMatch(executorPolicy, /\.Values\.builder\.databaseEgress|port:\s*5432/, 'tenant Dockerfile traffic must not have a database egress rule');
   assert.match(executorPolicy, /builder-dispatcher[\s\S]*port:/, 'executor may reach only the authenticated dispatcher control endpoint in-cluster');
+  assert.match(executorPolicy, /privateGateway\.enabled[\s\S]*namespaceSelector:[\s\S]*podSelector:[\s\S]*privateGateway\.servicePort[\s\S]*privateGateway\.port/, 'executor may reach only the dedicated split-DNS registry gateway identity on its service and target ports');
+  assert.doesNotMatch(executorPolicy, /registryCredentials\.egressCIDRs/, 'registry access must never use a private CIDR exception');
   assert.match(executorPolicy, /except:[\s\S]*range \$cidr := \$databaseEgress\.cidrs/, 'public database CIDRs must also be excluded from executor internet egress');
   assert.match(fixture, /databaseEgress:[\s\S]*port:\s*5432[\s\S]*selectorPeers:\s*\[\][\s\S]*cidrs:[\s\S]*10\./);
   assert.match(verifier, /missing-db-egress/);

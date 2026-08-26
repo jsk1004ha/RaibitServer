@@ -1325,6 +1325,20 @@ spec:
               app.kubernetes.io/instance: {{ .Release.Name }}
       ports:
         - { protocol: TCP, port: {{ .Values.builder.dispatch.port }} }
+{{- if .Values.builder.registryCredentials.privateGateway.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.builder.registryCredentials.privateGateway.namespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Values.builder.registryCredentials.privateGateway.podName | quote }}
+      ports:
+        - { protocol: TCP, port: {{ .Values.builder.registryCredentials.privateGateway.servicePort }} }
+{{- if ne (int .Values.builder.registryCredentials.privateGateway.servicePort) (int .Values.builder.registryCredentials.privateGateway.port) }}
+        - { protocol: TCP, port: {{ .Values.builder.registryCredentials.privateGateway.port }} }
+{{- end }}
+{{- end }}
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

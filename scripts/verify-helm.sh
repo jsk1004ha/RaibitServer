@@ -29,6 +29,12 @@ trap 'rm -rf "$OUTPUT_DIR"' EXIT HUP INT TERM
 "$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" \
   --set-json 'builder.databaseEgress.selectorPeers=[{"namespaceSelector":{"kubernetes.io/metadata.name":"database-system"},"podSelector":{"app.kubernetes.io/name":"postgres"}}]' \
   --set-json 'builder.databaseEgress.cidrs=[]' >"$OUTPUT_DIR/production-with-selector-db-egress.yaml"
+"$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" \
+  --set builder.registryCredentials.privateGateway.enabled=true \
+  --set-string builder.registryCredentials.privateGateway.namespace=raibitserver-infra \
+  --set-string builder.registryCredentials.privateGateway.podName=raibit-registry-auth \
+  --set builder.registryCredentials.privateGateway.servicePort=443 \
+  --set builder.registryCredentials.privateGateway.port=8443 >"$OUTPUT_DIR/production-with-private-registry-gateway.yaml"
 
 grep -q 'helm.sh/hook: pre-install,pre-upgrade' "$OUTPUT_DIR/production.yaml"
 grep -q 'kind: ValidatingAdmissionPolicy' "$OUTPUT_DIR/production.yaml"
@@ -57,6 +63,10 @@ grep -q 'RAIBITSERVER_GENERATED_DOCKERFILE_FRONTEND' "$OUTPUT_DIR/production.yam
 grep -q 'RAIBITSERVER_GENERATED_NODE_IMAGE' "$OUTPUT_DIR/production.yaml"
 grep -q 'RAIBITSERVER_REGISTRY_CREDENTIAL_BROKER_URL' "$OUTPUT_DIR/production.yaml"
 grep -q 'RAIBITSERVER_REGISTRY_CREDENTIAL_BROKER_TOKEN_FILE' "$OUTPUT_DIR/production.yaml"
+grep -q 'kubernetes.io/metadata.name: "raibitserver-infra"' "$OUTPUT_DIR/production-with-private-registry-gateway.yaml"
+grep -q 'app.kubernetes.io/name: "raibit-registry-auth"' "$OUTPUT_DIR/production-with-private-registry-gateway.yaml"
+grep -q 'port: 443' "$OUTPUT_DIR/production-with-private-registry-gateway.yaml"
+grep -q 'port: 8443' "$OUTPUT_DIR/production-with-private-registry-gateway.yaml"
 if grep -q 'name: DOCKER_CONFIG' "$OUTPUT_DIR/production.yaml"; then
   echo "production builder must not mount a shared Docker config" >&2
   exit 1
@@ -193,6 +203,15 @@ expect_render_failure() {
   fi
 }
 
+if "$HELM" template raibitserver "$CHART" --namespace raibitserver-system \
+  --set builder.registryCredentials.privateGateway.enabled=true \
+  --set-string builder.registryCredentials.privateGateway.namespace=INVALID/namespace \
+  --set-string builder.registryCredentials.privateGateway.podName=raibit-registry-auth \
+  >"$OUTPUT_DIR/invalid-default-registry-gateway.out" 2>"$OUTPUT_DIR/invalid-default-registry-gateway.err"; then
+  echo "expected non-production registry gateway validation to fail" >&2
+  exit 1
+fi
+
 expect_render_failure unsupported-kubernetes-version --kube-version 1.29.9
 expect_render_failure missing-verifier --set-string security.imageVerification.admissionController.existingWebhookConfiguration=
 expect_render_failure missing-webhook-identity --set-string security.imageVerification.admissionController.webhookName=
@@ -266,6 +285,24 @@ expect_render_failure missing-checker-digest --set-string security.imageVerifica
 expect_render_failure missing-registry-credential-broker --set-string builder.registryCredentials.brokerURL=
 expect_render_failure insecure-registry-credential-broker --set-string builder.registryCredentials.brokerURL=http://credential-broker.example/token
 expect_render_failure missing-registry-credential-broker-token --set-string builder.registryCredentials.existingSecret=
+expect_render_failure invalid-registry-gateway-namespace \
+  --set builder.registryCredentials.privateGateway.enabled=true \
+  --set-string builder.registryCredentials.privateGateway.namespace=INVALID/namespace \
+  --set-string builder.registryCredentials.privateGateway.podName=raibit-registry-auth
+expect_render_failure invalid-registry-gateway-pod-name \
+  --set builder.registryCredentials.privateGateway.enabled=true \
+  --set-string builder.registryCredentials.privateGateway.namespace=raibitserver-infra \
+  --set-string builder.registryCredentials.privateGateway.podName=INVALID/name
+expect_render_failure invalid-registry-gateway-service-port \
+  --set builder.registryCredentials.privateGateway.enabled=true \
+  --set-string builder.registryCredentials.privateGateway.namespace=raibitserver-infra \
+  --set-string builder.registryCredentials.privateGateway.podName=raibit-registry-auth \
+  --set builder.registryCredentials.privateGateway.servicePort=0
+expect_render_failure invalid-registry-gateway-port \
+  --set builder.registryCredentials.privateGateway.enabled=true \
+  --set-string builder.registryCredentials.privateGateway.namespace=raibitserver-infra \
+  --set-string builder.registryCredentials.privateGateway.podName=raibit-registry-auth \
+  --set builder.registryCredentials.privateGateway.port=0
 expect_render_failure missing-builder-dispatch-mtls --set-string builder.dispatch.existingSecret=
 expect_render_failure missing-builder-dispatcher --set builder.replicas=0
 expect_render_failure build-timeout-exceeds-job-deadline --set builder.buildTimeoutSeconds=781

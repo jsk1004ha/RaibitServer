@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
+
+: "${HOME:?HOME is required}"
 
 BASE_DOMAIN="${BASE_DOMAIN:-raibit.kr}"
 REGISTRY_HOST="${REGISTRY_HOST:-registry.${BASE_DOMAIN}}"
@@ -14,6 +17,9 @@ TLS_SECRET="${TLS_SECRET:-raibit-registry-tls}"
 BROKER_TOKEN_SECRET="${BROKER_TOKEN_SECRET:-raibitserver-registry-broker-token}"
 REGISTRY_VERSION="${REGISTRY_VERSION:-3.1.1}"
 REGISTRY_STORAGE="${REGISTRY_STORAGE:-100Gi}"
+CONFIG_DIR="${HOME}/.config/raibitserver"
+REGISTRY_ENV_FILE="${CONFIG_DIR}/workload-registry.env"
+REGISTRY_VALUES_FILE="${CONFIG_DIR}/workload-registry-values.yaml"
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
@@ -23,10 +29,38 @@ BROKER_IMAGE="docker.io/library/raibit-registry-broker:${VERSION}"
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "ERROR: required command missing: $1" >&2; exit 1; }
 }
-for cmd in kubectl docker openssl jq curl awk sed grep base64 sha256sum; do need "$cmd"; done
+for cmd in kubectl docker openssl jq curl awk sed grep base64 sha256sum python3 mktemp chmod mv mkdir; do need "$cmd"; done
+
+python3 - "$REGISTRY_HOST" "$AUTH_HOST" "$REGISTRY_PREFIX" <<'PY'
+import re
+import sys
+
+host_pattern = re.compile(r'^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$', re.IGNORECASE)
+prefix_pattern = re.compile(r'^[a-z0-9]+(?:[._/-][a-z0-9]+)*$', re.IGNORECASE)
+
+for label, value in [('registry host', sys.argv[1]), ('broker host', sys.argv[2])]:
+    if not host_pattern.fullmatch(value):
+        raise SystemExit(f'ERROR: invalid {label}: {value}')
+if not prefix_pattern.fullmatch(sys.argv[3]):
+    raise SystemExit(f'ERROR: invalid registry prefix: {sys.argv[3]}')
+PY
 
 NODE_IP="$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
 [ -n "$NODE_IP" ] || { echo "ERROR: unable to resolve Kubernetes node InternalIP" >&2; exit 1; }
+NODE_IP="$(python3 - "$NODE_IP" <<'PY'
+import ipaddress
+import sys
+
+try:
+    address = ipaddress.ip_address(sys.argv[1])
+except ValueError as error:
+    raise SystemExit(f'ERROR: invalid Kubernetes node InternalIP: {error}') from error
+
+if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast:
+    raise SystemExit(f'ERROR: unsafe Kubernetes node InternalIP: {address}')
+print(address)
+PY
+)"
 
 echo "=== RaibitServer workload registry bootstrap ==="
 echo "registry:     ${REGISTRY_HOST}/${REGISTRY_PREFIX}"
@@ -138,6 +172,7 @@ storage:
       dryrun: false
 http:
   addr: :5000
+  relativeurls: true
   headers:
     X-Content-Type-Options: [nosniff]
 auth:
@@ -273,6 +308,9 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
+    - name: internal-tls
+      port: 443
+      targetPort: 8443
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -288,6 +326,7 @@ spec:
     metadata:
       labels:
         app: raibit-registry-auth
+        app.kubernetes.io/name: raibit-registry-auth
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -304,9 +343,14 @@ spec:
           env:
             - { name: PORT, value: "8080" }
             - { name: REGISTRY_HOST, value: "${REGISTRY_HOST}" }
+            - { name: BROKER_HOST, value: "${AUTH_HOST}" }
             - { name: REGISTRY_PREFIX, value: "${REGISTRY_PREFIX}" }
             - { name: REGISTRY_SERVICE, value: "${REGISTRY_SERVICE}" }
             - { name: REGISTRY_ISSUER, value: "${REGISTRY_ISSUER}" }
+            - { name: INTERNAL_TLS_PORT, value: "8443" }
+            - { name: INTERNAL_TLS_CERT_FILE, value: "/var/run/secrets/raibit/tls/tls.crt" }
+            - { name: INTERNAL_TLS_KEY_FILE, value: "/var/run/secrets/raibit/tls/tls.key" }
+            - { name: REGISTRY_UPSTREAM_URL, value: "http://raibit-registry:5000" }
             - { name: BROKER_TOKEN_FILE, value: "/var/run/secrets/raibit/broker-token" }
             - { name: SESSION_HMAC_KEY_FILE, value: "/var/run/secrets/raibit/session-hmac-key" }
             - { name: TOKEN_PRIVATE_KEY_FILE, value: "/var/run/secrets/raibit/signer/token.key" }
@@ -314,8 +358,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            - name: internal-tls
+              containerPort: 8443
           readinessProbe:
-            httpGet: { path: /healthz, port: http }
+            tcpSocket: { port: internal-tls }
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 6
@@ -345,6 +391,9 @@ spec:
             - name: signer
               mountPath: /var/run/secrets/raibit/signer
               readOnly: true
+            - name: tls
+              mountPath: /var/run/secrets/raibit/tls
+              readOnly: true
       volumes:
         - name: broker-runtime
           secret:
@@ -352,6 +401,9 @@ spec:
         - name: signer
           secret:
             secretName: raibit-registry-token-signer
+        - name: tls
+          secret:
+            secretName: ${TLS_SECRET}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -418,6 +470,12 @@ spec:
               kubernetes.io/metadata.name: ${EDGE_NS}
       ports:
         - { protocol: TCP, port: 5000 }
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: raibit-registry-auth
+      ports:
+        - { protocol: TCP, port: 5000 }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -428,7 +486,7 @@ spec:
   podSelector:
     matchLabels:
       app: raibit-registry-auth
-  policyTypes: [Ingress]
+  policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - namespaceSelector:
@@ -436,12 +494,57 @@ spec:
               kubernetes.io/metadata.name: ${EDGE_NS}
       ports:
         - { protocol: TCP, port: 8080 }
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${APP_NS}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: raibitserver-builder-executor
+      ports:
+        - { protocol: TCP, port: 8443 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app: raibit-registry
+      ports:
+        - { protocol: TCP, port: 5000 }
 EOF
 kubectl apply -f /tmp/raibit-registry-stack.yaml
 rm -f /tmp/raibit-registry-stack.yaml
 
 kubectl -n "$INFRA_NS" rollout status statefulset/raibit-registry --timeout=240s
 kubectl -n "$INFRA_NS" rollout status deployment/raibit-registry-auth --timeout=180s
+GATEWAY_CLUSTER_IP="$(kubectl -n "$INFRA_NS" get service raibit-registry-auth -o jsonpath='{.spec.clusterIP}')"
+GATEWAY_CLUSTER_IP="$(python3 - "$GATEWAY_CLUSTER_IP" <<'PY'
+import ipaddress
+import sys
+
+try:
+    address = ipaddress.ip_address(sys.argv[1])
+except ValueError as error:
+    raise SystemExit(f'ERROR: invalid registry gateway ClusterIP: {error}') from error
+if address.is_unspecified or address.is_loopback or address.is_link_local or address.is_multicast:
+    raise SystemExit(f'ERROR: unsafe registry gateway ClusterIP: {address}')
+print(address)
+PY
+)"
+if [[ "$GATEWAY_CLUSTER_IP" == *:* ]]; then
+  GATEWAY_CURL_IP="[${GATEWAY_CLUSTER_IP}]"
+else
+  GATEWAY_CURL_IP="$GATEWAY_CLUSTER_IP"
+fi
 
 echo
 echo "=== 7. Internal split DNS ==="
@@ -449,7 +552,7 @@ echo "=== 7. Internal split DNS ==="
 # that existing file rather than loading a second hosts plugin.
 NODEHOSTS="$(kubectl -n kube-system get configmap coredns -o jsonpath='{.data.NodeHosts}')"
 NODEHOSTS_FILTERED="$(printf '%s\n' "$NODEHOSTS" | grep -Ev "[[:space:]](${REGISTRY_HOST//./\\.}|${AUTH_HOST//./\\.})([[:space:]]|$)" || true)"
-NODEHOSTS_NEW="${NODEHOSTS_FILTERED}"$'\n'"${NODE_IP} ${REGISTRY_HOST} ${AUTH_HOST}"$'\n'
+NODEHOSTS_NEW="${NODEHOSTS_FILTERED}"$'\n'"${GATEWAY_CLUSTER_IP} ${REGISTRY_HOST} ${AUTH_HOST}"$'\n'
 NODEHOSTS_JSON="$(printf '%s' "$NODEHOSTS_NEW" | jq -Rs .)"
 kubectl -n kube-system patch configmap coredns --type=merge \
   -p "{\"data\":{\"NodeHosts\":${NODEHOSTS_JSON}}}" >/dev/null
@@ -462,6 +565,18 @@ printf '%s %s %s\n' "$NODE_IP" "$REGISTRY_HOST" "$AUTH_HOST" | sudo tee -a /etc/
 
 getent hosts "$REGISTRY_HOST"
 getent hosts "$AUTH_HOST"
+
+curl --fail --silent --show-error \
+  --resolve "${AUTH_HOST}:443:${GATEWAY_CURL_IP}" \
+  "https://${AUTH_HOST}/healthz" >/dev/null
+GATEWAY_REGISTRY_STATUS="$(curl --silent --show-error \
+  --resolve "${REGISTRY_HOST}:443:${GATEWAY_CURL_IP}" \
+  --output /dev/null \
+  --write-out '%{http_code}' \
+  "https://${REGISTRY_HOST}/v2/")"
+[[ "$GATEWAY_REGISTRY_STATUS" == 200 || "$GATEWAY_REGISTRY_STATUS" == 401 ]] \
+  || { echo "ERROR: internal registry gateway returned HTTP ${GATEWAY_REGISTRY_STATUS}" >&2; exit 1; }
+echo "dedicated in-cluster TLS gateway VERIFIED: ${GATEWAY_CLUSTER_IP}"
 
 echo
 echo "=== 8. HTTPS/token/broker smoke tests ==="
@@ -504,8 +619,11 @@ docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true
 docker pull "$SMOKE_IMAGE" >/dev/null
 echo "registry authenticated PUSH + anonymous PULL VERIFIED"
 
-mkdir -p "$HOME/.config/raibitserver"
-cat > "$HOME/.config/raibitserver/workload-registry.env" <<EOF
+mkdir -p "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+
+REGISTRY_ENV_TMP="$(mktemp "${CONFIG_DIR}/.workload-registry.env.XXXXXX")"
+cat > "$REGISTRY_ENV_TMP" <<EOF
 REGISTRY_HOST=${REGISTRY_HOST}
 REGISTRY_PREFIX=${REGISTRY_PREFIX}
 BUILDER_REGISTRY=${REGISTRY_HOST}/${REGISTRY_PREFIX}
@@ -513,8 +631,29 @@ REGISTRY_BROKER_URL=https://${AUTH_HOST}/broker
 REGISTRY_BROKER_SECRET=${BROKER_TOKEN_SECRET}
 REGISTRY_IMAGE=${REGISTRY_IMAGE}
 BROKER_BOOTSTRAP_IMAGE=${BROKER_IMAGE}
+REGISTRY_GATEWAY_SERVICE=${INFRA_NS}/raibit-registry-auth
+REGISTRY_GATEWAY_CLUSTER_IP=${GATEWAY_CLUSTER_IP}
+REGISTRY_VALUES_FILE=${REGISTRY_VALUES_FILE}
 EOF
-chmod 600 "$HOME/.config/raibitserver/workload-registry.env"
+chmod 600 "$REGISTRY_ENV_TMP"
+mv -f -- "$REGISTRY_ENV_TMP" "$REGISTRY_ENV_FILE"
+
+REGISTRY_VALUES_TMP="$(mktemp "${CONFIG_DIR}/.workload-registry-values.yaml.XXXXXX")"
+cat > "$REGISTRY_VALUES_TMP" <<EOF
+builder:
+  registry: "${REGISTRY_HOST}/${REGISTRY_PREFIX}"
+  registryCredentials:
+    brokerURL: "https://${AUTH_HOST}/broker"
+    existingSecret: "${BROKER_TOKEN_SECRET}"
+    privateGateway:
+      enabled: true
+      namespace: "${INFRA_NS}"
+      podName: "raibit-registry-auth"
+      servicePort: 443
+      port: 8443
+EOF
+chmod 600 "$REGISTRY_VALUES_TMP"
+mv -f -- "$REGISTRY_VALUES_TMP" "$REGISTRY_VALUES_FILE"
 
 unset BROKER_TOKEN BROKER_USERNAME BROKER_PASSWORD BROKER_RESPONSE
 
@@ -523,5 +662,6 @@ echo "=== COMPLETE ==="
 echo "builder.registry: ${REGISTRY_HOST}/${REGISTRY_PREFIX}"
 echo "broker URL:       https://${AUTH_HOST}/broker"
 echo "broker Secret:    ${BROKER_TOKEN_SECRET}"
-echo "saved:            $HOME/.config/raibitserver/workload-registry.env"
+echo "saved env:        ${REGISTRY_ENV_FILE}"
+echo "saved Helm values: ${REGISTRY_VALUES_FILE}"
 kubectl -n "$INFRA_NS" get pod,pvc,svc,ingress | grep -E 'NAME|raibit-registry'

@@ -23,6 +23,30 @@ valid_digest() {
   [[ "$1" =~ ^sha256:[0-9a-f]{64}$ ]]
 }
 
+valid_input_digest() {
+  [[ "$1" =~ ^[0-9a-f]{64}$ ]]
+}
+
+deployment_input_digest() {
+  python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import hashlib
+import sys
+
+base_values = Path(sys.argv[1])
+overlay_path = sys.argv[2]
+digest = hashlib.sha256()
+digest.update(b'production-values\0')
+digest.update(base_values.read_bytes())
+digest.update(b'workload-registry-values\0')
+if overlay_path:
+    digest.update(Path(overlay_path).read_bytes())
+else:
+    digest.update(b'absent')
+print(digest.hexdigest())
+PY
+}
+
 : "${HOME:?HOME is required}"
 
 REPOSITORY="${RAIBITSERVER_GITHUB_REPOSITORY:-jsk1004ha/RaibitServer}"
@@ -32,6 +56,7 @@ DEPLOY_ROOT="${RAIBITSERVER_DEPLOY_ROOT:-${HOME}/.local/share/raibitserver-produ
 WORKTREE="${RAIBITSERVER_DEPLOY_WORKTREE:-${DEPLOY_ROOT}/repository}"
 STATE_DIR="${RAIBITSERVER_AUTO_UPDATE_STATE_DIR:-${HOME}/.local/state/raibitserver-auto-update}"
 VALUES_FILE="${RAIBITSERVER_VALUES_FILE:-${HOME}/production-values.yaml}"
+REGISTRY_VALUES_FILE="${RAIBITSERVER_REGISTRY_VALUES_FILE:-${HOME}/.config/raibitserver/workload-registry-values.yaml}"
 KUBECONFIG="${KUBECONFIG:-${RAIBITSERVER_KUBECONFIG:-${HOME}/.kube/config}}"
 HELM_RELEASE="${RAIBITSERVER_HELM_RELEASE:-raibitserver}"
 NAMESPACE="${RAIBITSERVER_NAMESPACE:-raibitserver-system}"
@@ -99,6 +124,106 @@ if ! flock -n 9; then
   exit 0
 fi
 
+RUN_DIR="$(mktemp -d "${STATE_DIR}/run.XXXXXX")"
+cleanup() {
+  if [[ -n "${UPDATER_TMP:-}" ]]; then
+    rm -f -- "$UPDATER_TMP"
+  fi
+  rm -rf "$RUN_DIR"
+}
+trap cleanup EXIT
+
+REGISTRY_VALUES_SOURCE=""
+REGISTRY_VALUES_SNAPSHOT=""
+if [[ -e "$REGISTRY_VALUES_FILE" || -L "$REGISTRY_VALUES_FILE" ]]; then
+  [[ "$REGISTRY_VALUES_FILE" == /* ]] \
+    || fail "workload registry values path must be absolute: $REGISTRY_VALUES_FILE"
+  REGISTRY_VALUES_SNAPSHOT="${RUN_DIR}/workload-registry-values.yaml"
+  python3 - "$HOME" "$REGISTRY_VALUES_FILE" "$REGISTRY_VALUES_SNAPSHOT" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+home = Path(sys.argv[1])
+source = Path(sys.argv[2])
+destination = Path(sys.argv[3])
+euid = os.geteuid()
+
+home_stat = home.lstat()
+if not stat.S_ISDIR(home_stat.st_mode) or home.is_symlink():
+    raise SystemExit(f'updater home must be a real directory: {home}')
+if home_stat.st_uid != euid:
+    raise SystemExit(f'updater home is not owned by the updater user: {home}')
+if home_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+    raise SystemExit(f'updater home must not be group/world writable: {home}')
+
+if not source.is_absolute():
+    raise SystemExit(f'workload registry values path must be absolute: {source}')
+try:
+    relative = source.relative_to(home)
+except ValueError:
+    raise SystemExit(f'workload registry values must stay below the updater home: {source}') from None
+if not relative.parts or any(part in {'', '.', '..'} for part in relative.parts):
+    raise SystemExit(f'workload registry values path must be canonical: {source}')
+
+current = home
+for part in relative.parts[:-1]:
+    current /= part
+    current_stat = current.lstat()
+    if not stat.S_ISDIR(current_stat.st_mode) or current.is_symlink():
+        raise SystemExit(f'workload registry values parent must be a real directory: {current}')
+    if current_stat.st_uid != euid:
+        raise SystemExit(f'workload registry values parent is not owned by the updater user: {current}')
+    if current_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise SystemExit(f'workload registry values parent must not be group/world writable: {current}')
+
+open_flags = os.O_RDONLY | os.O_CLOEXEC
+if hasattr(os, 'O_NOFOLLOW'):
+    open_flags |= os.O_NOFOLLOW
+
+source_fd = os.open(source, open_flags)
+try:
+    source_stat = os.fstat(source_fd)
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise SystemExit(f'workload registry values must be a regular non-symlink file: {source}')
+    if source_stat.st_uid != euid:
+        raise SystemExit(f'workload registry values are not owned by the updater user: {source}')
+    if source_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise SystemExit(f'workload registry values must not be group/world writable: {source}')
+
+    destination_fd = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        copied = 0
+        while True:
+            chunk = os.read(source_fd, 64 * 1024)
+            if not chunk:
+                break
+            copied += len(chunk)
+            if copied > 1024 * 1024:
+                raise SystemExit('workload registry values exceed the 1 MiB limit')
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_fd, view)
+                view = view[written:]
+        os.fsync(destination_fd)
+    finally:
+        os.close(destination_fd)
+finally:
+    os.close(source_fd)
+PY
+  REGISTRY_VALUES_SOURCE="$REGISTRY_VALUES_SNAPSHOT"
+  log "using verified workload registry Helm overlay snapshot"
+fi
+
+CURRENT_INPUT_DIGEST="$(deployment_input_digest "$VALUES_FILE" "$REGISTRY_VALUES_SOURCE")"
+valid_input_digest "$CURRENT_INPUT_DIGEST" \
+  || fail "could not calculate a valid deployment input digest"
+
 if [[ ! -d "$WORKTREE/.git" ]]; then
   [[ ! -e "$WORKTREE" ]] || fail "deploy worktree exists but is not a Git repository: $WORKTREE"
   log "creating dedicated production checkout"
@@ -113,9 +238,13 @@ TARGET_SHA="$(git ls-remote "$REPO_URL" "refs/heads/${BRANCH}" | awk 'NR == 1 { 
 valid_sha "$TARGET_SHA" || fail "could not resolve a valid ${BRANCH} SHA"
 
 DEPLOYED_SHA="$(cat "${STATE_DIR}/deployed-sha" 2>/dev/null || true)"
-if [[ "$TARGET_SHA" == "$DEPLOYED_SHA" ]]; then
+DEPLOYED_INPUT_DIGEST="$(cat "${STATE_DIR}/deployed-input-digest" 2>/dev/null || true)"
+if [[ "$TARGET_SHA" == "$DEPLOYED_SHA" && "$CURRENT_INPUT_DIGEST" == "$DEPLOYED_INPUT_DIGEST" ]]; then
   log "already running ${TARGET_SHA}"
   exit 0
+fi
+if [[ "$TARGET_SHA" == "$DEPLOYED_SHA" ]]; then
+  log "deployment inputs changed for ${TARGET_SHA}; reconciling the existing commit"
 fi
 
 REJECTED_SHA="$(cat "${STATE_DIR}/rejected-sha" 2>/dev/null || true)"
@@ -182,15 +311,6 @@ git -C "$WORKTREE" clean -ffdqx >/dev/null
 
 CHART_DIR="${WORKTREE}/infra/helm/raibitserver"
 [[ -f "$CHART_DIR/Chart.yaml" ]] || fail "Helm chart is missing from approved checkout"
-
-RUN_DIR="$(mktemp -d "${STATE_DIR}/run.XXXXXX")"
-cleanup() {
-  if [[ -n "${UPDATER_TMP:-}" ]]; then
-    rm -f -- "$UPDATER_TMP"
-  fi
-  rm -rf "$RUN_DIR"
-}
-trap cleanup EXIT
 
 # key|Dockerfile|GHCR repository suffix. All Dockerfiles use the repository root
 # as their build context, which keeps workspace/package COPY contracts intact.
@@ -339,11 +459,16 @@ if expected_prefix != image_prefix:
 destination.write_text('\n'.join(lines) + '\n')
 PY
 
+HELM_VALUES_ARGS=(-f "$CANDIDATE_VALUES")
+if [[ -n "$REGISTRY_VALUES_SNAPSHOT" ]]; then
+  HELM_VALUES_ARGS+=(-f "$REGISTRY_VALUES_SNAPSHOT")
+fi
+
 log "validating Helm release candidate"
-helm lint "$CHART_DIR" -f "$CANDIDATE_VALUES"
+helm lint "$CHART_DIR" "${HELM_VALUES_ARGS[@]}"
 helm template "$HELM_RELEASE" "$CHART_DIR" \
   --namespace "$NAMESPACE" \
-  -f "$CANDIDATE_VALUES" >/dev/null
+  "${HELM_VALUES_ARGS[@]}" >/dev/null
 
 HELM_VERSION="$(helm version --template '{{.Version}}')"
 if [[ "$HELM_VERSION" =~ ^v?([0-9]+)(\.|$) ]]; then
@@ -368,7 +493,7 @@ log "deploying ${TARGET_SHA} with Helm ${HELM_MAJOR} rollback protection"
 helm upgrade --install "$HELM_RELEASE" "$CHART_DIR" \
   --namespace "$NAMESPACE" \
   --create-namespace \
-  -f "$CANDIDATE_VALUES" \
+  "${HELM_VALUES_ARGS[@]}" \
   "${HELM_SAFETY_FLAGS[@]}" \
   --timeout "$HELM_TIMEOUT"
 
@@ -383,6 +508,10 @@ if [[ -e "$VALUES_FILE" ]]; then
   chmod --reference="$VALUES_FILE" "$VALUES_TMP" 2>/dev/null || chmod 600 "$VALUES_TMP"
 fi
 mv "$VALUES_TMP" "$VALUES_FILE"
+
+APPLIED_INPUT_DIGEST="$(deployment_input_digest "$VALUES_FILE" "$REGISTRY_VALUES_SNAPSHOT")"
+valid_input_digest "$APPLIED_INPUT_DIGEST" \
+  || fail "could not calculate the applied deployment input digest"
 
 UPDATER_SOURCE="${WORKTREE}/deploy/production/auto-update.sh"
 [[ -f "$UPDATER_SOURCE" && ! -L "$UPDATER_SOURCE" ]] \
@@ -400,9 +529,11 @@ log "refreshed production updater from ${TARGET_SHA}"
 
 printf '%s\n' "$TARGET_SHA" >"${STATE_DIR}/deployed-sha.tmp"
 mv "${STATE_DIR}/deployed-sha.tmp" "${STATE_DIR}/deployed-sha"
+printf '%s\n' "$APPLIED_INPUT_DIGEST" >"${STATE_DIR}/deployed-input-digest.tmp"
+mv "${STATE_DIR}/deployed-input-digest.tmp" "${STATE_DIR}/deployed-input-digest"
 
 cat >"${STATE_DIR}/last-success.json.tmp" <<EOF
-{"sha":"${TARGET_SHA}","ciRunId":"${CI_RUN_ID}","deployedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+{"sha":"${TARGET_SHA}","inputDigest":"${APPLIED_INPUT_DIGEST}","ciRunId":"${CI_RUN_ID}","deployedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 EOF
 mv "${STATE_DIR}/last-success.json.tmp" "${STATE_DIR}/last-success.json"
 

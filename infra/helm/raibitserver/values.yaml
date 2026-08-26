@@ -123,6 +123,15 @@ builder:
     tokenKey: token
     minTTLSeconds: 840
     maxTTLSeconds: 900
+    # Split-DNS registry endpoints terminate TLS on a dedicated broker gateway
+    # Pod. The executor may reach only this namespace/pod identity and port;
+    # shared ingress-controller or private-CIDR exceptions are forbidden.
+    privateGateway:
+      enabled: false
+      namespace: ""
+      podName: ""
+      servicePort: 443
+      port: 8443
   # Anonymous clones are limited to uncredentialed HTTPS github.com URLs.
   # Private repositories remain fail-closed until per-build exact-repository
   # Git credentials are available; executor Pod isolation is already required.

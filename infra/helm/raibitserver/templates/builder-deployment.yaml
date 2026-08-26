@@ -1,3 +1,18 @@
+{{- $registryGateway := .Values.builder.registryCredentials.privateGateway }}
+{{- if $registryGateway.enabled }}
+{{- if or (gt (len (default "" $registryGateway.namespace)) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" (default "" $registryGateway.namespace))) }}
+{{- fail "registry credential private gateway namespace must be a valid exact Kubernetes namespace" }}
+{{- end }}
+{{- if or (gt (len (default "" $registryGateway.podName)) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" (default "" $registryGateway.podName))) }}
+{{- fail "registry credential private gateway pod name must be a valid exact label value" }}
+{{- end }}
+{{- if or (lt (int $registryGateway.servicePort) 1) (gt (int $registryGateway.servicePort) 65535) }}
+{{- fail "registry credential private gateway service port must be between 1 and 65535" }}
+{{- end }}
+{{- if or (lt (int $registryGateway.port) 1) (gt (int $registryGateway.port) 65535) }}
+{{- fail "registry credential private gateway port must be between 1 and 65535" }}
+{{- end }}
+{{- end }}
 {{- if .Values.production }}
 {{- if or (not .Values.builder.registry) (regexMatch "^(localhost|127\\.|10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|[^/]+\\.local(:[0-9]+)?(/|$))" (lower .Values.builder.registry)) }}
 {{- fail "production builder.registry must be explicit and must not use a localhost or private registry" }}

@@ -3,16 +3,20 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -44,6 +48,8 @@ type registryCredentialResponse struct {
 	Password   string `json:"password"`
 	ExpiresAt  string `json:"expiresAt"`
 }
+
+var errRegistryCredentialBrokerRedirect = errors.New("registry credential broker redirects are not allowed")
 
 func (b *Builder) issuePerBuildRegistryCredential(ctx context.Context, state *buildContext) (map[string]string, error) {
 	if err := validateRegistryCredentialBrokerURL(b.Config.RegistryCredentialBrokerURL); err != nil {
@@ -98,11 +104,11 @@ func (b *Builder) issuePerBuildRegistryCredential(ctx context.Context, state *bu
 	}
 	clientCopy := *client
 	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-		return errors.New("registry credential broker redirects are not allowed")
+		return errRegistryCredentialBrokerRedirect
 	}
 	response, err := clientCopy.Do(request)
 	if err != nil {
-		return nil, errors.New("registry credential broker request failed")
+		return nil, classifyRegistryCredentialBrokerTransportError(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -151,6 +157,46 @@ func (b *Builder) issuePerBuildRegistryCredential(ctx context.Context, state *bu
 		return nil, err
 	}
 	return map[string]string{"DOCKER_CONFIG": credentialDir}, nil
+}
+
+func classifyRegistryCredentialBrokerTransportError(err error) error {
+	if errors.Is(err, errRegistryCredentialBrokerRedirect) {
+		return errRegistryCredentialBrokerRedirect
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("registry credential broker request timed out")
+	}
+	if errors.Is(err, context.Canceled) {
+		return errors.New("registry credential broker request was canceled")
+	}
+
+	var dnsError *net.DNSError
+	if errors.As(err, &dnsError) {
+		return errors.New("registry credential broker DNS lookup failed")
+	}
+
+	var certificateVerificationError *tls.CertificateVerificationError
+	var unknownAuthorityError x509.UnknownAuthorityError
+	var hostnameError x509.HostnameError
+	var certificateInvalidError x509.CertificateInvalidError
+	if errors.As(err, &certificateVerificationError) ||
+		errors.As(err, &unknownAuthorityError) ||
+		errors.As(err, &hostnameError) ||
+		errors.As(err, &certificateInvalidError) {
+		return errors.New("registry credential broker TLS certificate validation failed")
+	}
+
+	var recordHeaderError tls.RecordHeaderError
+	if errors.As(err, &recordHeaderError) {
+		return errors.New("registry credential broker TLS handshake failed")
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return errors.New("registry credential broker connection was refused")
+	}
+	if errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) {
+		return errors.New("registry credential broker network is unreachable")
+	}
+	return errors.New("registry credential broker transport failed")
 }
 
 func validateRegistryCredentialLifetimeConfig(config Config) error {

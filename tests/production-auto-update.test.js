@@ -5,8 +5,10 @@ import test from 'node:test';
 
 const updaterPath = new URL('../deploy/production/auto-update.sh', import.meta.url);
 const installerPath = new URL('../deploy/production/install-auto-update.sh', import.meta.url);
+const registryBootstrapPath = new URL('../deploy/production/bootstrap-workload-registry.sh', import.meta.url);
 const updater = readFileSync(updaterPath, 'utf8');
 const installer = readFileSync(installerPath, 'utf8');
+const registryBootstrap = readFileSync(registryBootstrapPath, 'utf8');
 
 function bashSyntax(path) {
   // Git stores these scripts with LF. Normalize a Windows checkout before
@@ -23,6 +25,7 @@ function bashSyntax(path) {
 test('production auto-update shell scripts have valid bash syntax', () => {
   bashSyntax(updaterPath);
   bashSyntax(installerPath);
+  bashSyntax(registryBootstrapPath);
 });
 
 test('production updater only deploys the exact main SHA after successful CI', () => {
@@ -75,6 +78,51 @@ test('production updater preserves signing and version-appropriate Helm rollback
   assert.match(updater, /rollout status deployment\/raibitserver-dashboard/);
   assert.doesNotMatch(updater, /docker login/);
   assert.doesNotMatch(updater, /GITHUB_TOKEN/);
+});
+
+test('production updater applies the generated workload registry overlay through every Helm gate', () => {
+  assert.match(updater, /REGISTRY_VALUES_FILE=.*workload-registry-values\.yaml/);
+  assert.match(updater, /workload registry values must be a regular non-symlink file/);
+  assert.match(updater, /workload registry values are not owned by the updater user/);
+  assert.match(updater, /workload registry values must not be group\/world writable/);
+  assert.match(updater, /workload registry values parent must not be group\/world writable/);
+  assert.match(updater, /O_NOFOLLOW/);
+  assert.match(updater, /os\.open\(source, open_flags\)/);
+  assert.match(updater, /workload registry values exceed the 1 MiB limit/);
+  assert.match(updater, /REGISTRY_VALUES_SNAPSHOT=.*RUN_DIR/);
+  assert.match(updater, /HELM_VALUES_ARGS=\(-f "\$CANDIDATE_VALUES"\)/);
+  assert.match(updater, /HELM_VALUES_ARGS\+=\(-f "\$REGISTRY_VALUES_SNAPSHOT"\)/);
+  assert.equal((updater.match(/"\$\{HELM_VALUES_ARGS\[@\]\}"/g) || []).length, 3, 'lint, template, and upgrade must consume the same values list');
+  assert.match(installer, /REGISTRY_VALUES_FILE=.*workload-registry-values\.yaml/);
+  assert.doesNotMatch(installer, /REGISTRY_VALUES_FILE="\$\{RAIBITSERVER_REGISTRY_VALUES_FILE:-/);
+  assert.match(installer, /RAIBITSERVER_REGISTRY_VALUES_FILE=\$\{REGISTRY_VALUES_FILE\}/);
+});
+
+test('production updater reconciles values changes even when the main SHA is unchanged', () => {
+  assert.match(updater, /deployment_input_digest\(\)/);
+  assert.match(updater, /CURRENT_INPUT_DIGEST=.*deployment_input_digest/);
+  assert.match(updater, /DEPLOYED_INPUT_DIGEST=.*deployed-input-digest/);
+  assert.match(updater, /TARGET_SHA.*DEPLOYED_SHA.*CURRENT_INPUT_DIGEST.*DEPLOYED_INPUT_DIGEST/);
+  assert.match(updater, /deployment inputs changed.*reconciling the existing commit/);
+  assert.match(updater, /APPLIED_INPUT_DIGEST=.*deployment_input_digest/);
+  assert.match(updater, /deployed-input-digest\.tmp/);
+  assert.match(updater, /"inputDigest":"\$\{APPLIED_INPUT_DIGEST\}"/);
+});
+
+test('workload registry bootstrap emits a dedicated TLS gateway and a secure Helm overlay', () => {
+  assert.match(registryBootstrap, /name: internal-tls[\s\S]*port: 443[\s\S]*targetPort: 8443/);
+  assert.match(registryBootstrap, /BROKER_HOST[\s\S]*INTERNAL_TLS_PORT[\s\S]*INTERNAL_TLS_CERT_FILE[\s\S]*INTERNAL_TLS_KEY_FILE[\s\S]*REGISTRY_UPSTREAM_URL/);
+  assert.match(registryBootstrap, /http:[\s\S]*addr: :5000[\s\S]*relativeurls: true/);
+  assert.match(registryBootstrap, /app\.kubernetes\.io\/name: raibit-registry-auth/);
+  assert.match(registryBootstrap, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*port: 8443/);
+  assert.match(registryBootstrap, /GATEWAY_CLUSTER_IP=.*service raibit-registry-auth/);
+  assert.match(registryBootstrap, /GATEWAY_CLUSTER_IP\} \$\{REGISTRY_HOST\} \$\{AUTH_HOST\}/);
+  assert.match(registryBootstrap, /workload-registry-values\.yaml/);
+  assert.doesNotMatch(registryBootstrap, /REGISTRY_VALUES_FILE="\$\{RAIBITSERVER_REGISTRY_VALUES_FILE:-/);
+  assert.match(registryBootstrap, /privateGateway:[\s\S]*enabled: true[\s\S]*namespace: "\$\{INFRA_NS\}"[\s\S]*podName: "raibit-registry-auth"[\s\S]*servicePort: 443[\s\S]*port: 8443/);
+  assert.doesNotMatch(registryBootstrap, /egressCIDRs|NODE_CIDR|\/32/);
+  assert.match(registryBootstrap, /chmod 600 "\$REGISTRY_VALUES_TMP"[\s\S]*mv -f -- "\$REGISTRY_VALUES_TMP"/);
+  assert.match(registryBootstrap, /REGISTRY_VALUES_FILE=\$\{REGISTRY_VALUES_FILE\}/);
 });
 
 test('production updater self-refreshes atomically only after rollout succeeds', () => {

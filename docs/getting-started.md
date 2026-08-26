@@ -198,6 +198,12 @@ PR이 닫히면 해당 preview를 정리하는 workflow가 생성됩니다. GitH
 
 production 서버에는 `deploy/production/auto-update.sh`와 `install-auto-update.sh`를 한 번 설치할 수 있습니다. updater는 약 5분마다 GitHub `main`의 새 SHA를 확인하지만, 새 commit이 있다는 이유만으로 바로 배포하지 않습니다. 그 정확한 SHA의 push CI가 완료되고 성공한 경우에만 별도 checkout에서 이미지를 빌드합니다.
 
+자체 workload registry를 사용한다면 installer보다 먼저 서버 사용자로 registry bootstrap을 실행합니다. 이 단계는 registry와 broker를 만들고, cluster 내부 split DNS가 공개 registry hostname을 전용 TLS gateway Service로 보내도록 설정합니다. 함께 생성되는 `~/.config/raibitserver/workload-registry-values.yaml`은 executor가 `raibitserver-infra`의 정확한 broker Pod와 Service 443/target 8443에만 연결하도록 합니다. 공유 Ingress나 사설 IP 대역 전체는 열지 않습니다.
+
+```sh
+bash deploy/production/bootstrap-workload-registry.sh
+```
+
 설치 전에 서버에 Docker/buildx, Git, GitHub CLI, Cosign, Helm, kubectl, Python 3, production kubeconfig와 values 파일을 준비합니다. registry login과 Cosign signing key도 서버에 있어야 합니다. 준비가 끝난 뒤 저장소 checkout에서 서버 사용자 이름을 넣어 실행합니다.
 
 ```sh
@@ -212,7 +218,7 @@ systemctl status raibitserver-auto-update.service
 journalctl -u raibitserver-auto-update.service -f
 ```
 
-updater는 platform 이미지 7개를 build/push하고 digest를 확인한 뒤 Cosign으로 서명합니다. Helm 3에서는 `--atomic`, Helm 4에서는 `--rollback-on-failure`와 watcher wait를 사용합니다. API와 Dashboard rollout이 모두 성공해야 배포 SHA를 기록하며, 실패하면 현재 정상 release와 이전 성공 SHA를 유지합니다. updater 자체도 성공한 checkout의 파일로 원자적으로 교체됩니다.
+updater는 platform 이미지 7개를 build/push하고 digest를 확인한 뒤 Cosign으로 서명합니다. workload registry overlay가 있으면 파일 소유권과 쓰기 권한을 검사하고 immutable snapshot으로 복사한 뒤 lint, template, upgrade에 동일하게 넣습니다. Helm 3에서는 `--atomic`, Helm 4에서는 `--rollback-on-failure`와 watcher wait를 사용합니다. API와 Dashboard rollout이 모두 성공해야 배포 SHA를 기록하며, 실패하면 현재 정상 release와 이전 성공 SHA를 유지합니다. updater 자체도 성공한 checkout의 파일로 원자적으로 교체됩니다.
 
 자동 업데이트를 잠시 멈추거나 다시 시작할 때는 timer만 제어합니다.
 
