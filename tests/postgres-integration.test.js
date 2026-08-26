@@ -29,7 +29,7 @@ test('Prisma repository matches migrated PostgreSQL schema and preserves product
 
     const projects = [];
     for (let index = 0; index < 3; index += 1) {
-      projects.push(await repository.createProject({ organizationId: organization.id, name: `Project ${index}`, slug: `project-${suffix}-${index}` }));
+      projects.push(await repository.createProject({ organizationId: organization.id, name: `Project ${index}`, slug: `project-${suffix}-${index}`, actorUserId: user.id }));
     }
     const service = await repository.createService({
       projectId: projects[0].id,

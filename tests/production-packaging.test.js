@@ -48,6 +48,11 @@ test('runtime images contain only the executables their production entrypoints r
   assert.match(api, /pkg\.exports=[\s\S]*dist\/index\.js/);
   assert.match(api, /node["',\s]+dist\/main\.js/);
   assert.match(dashboard, /\.next\/standalone/);
+  assert.match(
+    dashboard,
+    /COPY --from=build --chown=node:node \/workspace\/apps\/dashboard\/public \.\/apps\/dashboard\/public/,
+    'dashboard runtime image must contain public assets such as raibit-logo.jpg',
+  );
   assert.match(dashboard, /server\.js/);
   assert.match(cli, /exec tsc --ignoreConfig \.\.\/\.\.\/packages\/api-client\/src\/index\.ts[\s\S]*api-client-runtime/);
   assert.match(cli, /dist\/index\.js/);

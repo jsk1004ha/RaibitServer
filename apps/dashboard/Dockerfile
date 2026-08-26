@@ -25,6 +25,7 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 COPY --from=build --chown=node:node /workspace/apps/dashboard/.next/standalone ./
 COPY --from=build --chown=node:node /workspace/apps/dashboard/.next/static ./apps/dashboard/.next/static
+COPY --from=build --chown=node:node /workspace/apps/dashboard/public ./apps/dashboard/public
 USER node
 EXPOSE 3000
 CMD ["node", "apps/dashboard/server.js"]

@@ -2452,7 +2452,7 @@ async function enforcePrismaQuotaRequirements(db: any, actorUserId: any, action:
   const combined = combineQuotaRequirements(requirements);
   if (!userId || combined.length === 0) return true;
   if (typeof db.$queryRawUnsafe === 'function') {
-    await db.$queryRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', `raibitserver:quota:${userId}`);
+    await db.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtext($1))', `raibitserver:quota:${userId}`);
   }
   const user = await db.user.findUnique({ where: { id: userId } });
   if (!user || user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER') return true;
@@ -2634,7 +2634,7 @@ async function prismaGitHubWebhookQuotaBlocks(prisma: any, services: any[], acti
   }
   for (const [userId, ownedServices] of servicesByUser) {
     if (typeof prisma.$queryRawUnsafe === 'function') {
-      await prisma.$queryRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', `raibitserver:quota:${userId}`);
+      await prisma.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtext($1))', `raibitserver:quota:${userId}`);
     }
     const user = await prisma.user.findUnique({ where: { id: userId } });
     let permitted = Boolean(user && (user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER' || user.approvalStatus === 'APPROVED'));

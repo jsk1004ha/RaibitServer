@@ -108,6 +108,7 @@ test('Prisma project mutations serialize quota reads with the write', async () =
   assert.match(String(results.find((result) => result.status === 'rejected')?.reason?.message), /quota exceeded: maxProjects/);
   assert.equal(prisma.rows.projects.length, 1);
   assert.ok(prisma.transactionOptions.every((options) => options?.isolationLevel === 'Serializable'));
+  assert.ok(prisma.rows.rawQueries.some((query) => /SELECT 1::int AS "locked"\s+FROM pg_advisory_xact_lock/i.test(query)));
   assert.equal(prisma.rows.auditLogs.filter((entry) => entry.action === 'quota:block' && entry.targetId === 'maxProjects').length, 1);
 });
 
@@ -216,7 +217,7 @@ test('cancellation rejects deployments once runtime reconciliation has started',
 });
 
 function projectQuotaPrismaHarness() {
-  const rows = { projects: [], auditLogs: [] };
+  const rows = { projects: [], auditLogs: [], rawQueries: [] };
   let transactionTail = Promise.resolve();
   const prisma = {
     rows,
@@ -226,6 +227,25 @@ function projectQuotaPrismaHarness() {
       const result = transactionTail.then(() => work(this));
       transactionTail = result.catch(() => undefined);
       return result;
+    },
+    async $queryRawUnsafe(query) {
+      rows.rawQueries.push(query);
+      if (/^\s*SELECT\s+pg_advisory_xact_lock/i.test(query)) {
+        const error = new Error("Failed to deserialize column of type 'void'");
+        error.code = 'P2010';
+        throw error;
+      }
+      if (/pg_advisory_xact_lock/i.test(query)) return [{ locked: 1 }];
+      return [{
+        maxProjects: rows.projects.length,
+        maxServices: 0,
+        maxDeploymentsPerDay: 0,
+        maxPreviewDeployments: 0,
+        services: [],
+        resources: [],
+        deployments: [],
+        usageRecords: [],
+      }];
     },
     user: {
       findUnique: async ({ where }) => where.id === 'user-1'
