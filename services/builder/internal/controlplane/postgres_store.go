@@ -403,6 +403,22 @@ func (s *PostgresStore) updateDeploymentForLease(ctx context.Context, lease Work
 	if err := assertWorkflowLeaseLocked(ctx, tx, lease); err != nil {
 		return nil, err
 	}
+	if _, requested, validationErr := normalizedDeploymentCommitUpdate(updates); requested {
+		if validationErr != nil {
+			return nil, validationErr
+		}
+		current, currentErr := scanDeployment(tx.QueryRowContext(ctx, deploymentSelectSQL()+` WHERE id = $1 FOR UPDATE`, deploymentID))
+		if errors.Is(currentErr, sql.ErrNoRows) {
+			return nil, notFound("deployment", deploymentID)
+		}
+		if currentErr != nil {
+			return nil, currentErr
+		}
+		updates, validationErr = leaseFencedDeploymentUpdates(current, updates)
+		if validationErr != nil {
+			return nil, validationErr
+		}
+	}
 	deployment, err := updateDeploymentRow(ctx, tx, deploymentID, updates)
 	if err != nil {
 		return nil, err
@@ -887,6 +903,8 @@ FROM "Deployment"`
 
 var deploymentUpdateColumns = map[string]updateColumn{
 	"status":          {Name: "status"},
+	"commitSha":       {Name: `"commitSha"`},
+	"commitHash":      {Name: `"commitHash"`},
 	"imageUrl":        {Name: `"imageUrl"`},
 	"imageDigest":     {Name: `"imageDigest"`},
 	"buildStartedAt":  {Name: `"buildStartedAt"`, Timestamp: true},

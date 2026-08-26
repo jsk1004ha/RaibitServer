@@ -292,12 +292,13 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     if (String(service.projectId) !== String(projectId)) throw new ForbiddenException('service does not belong to project');
     const deploymentType = input.deploymentType || input.type || 'production';
+    const branch = input.branch || service.branch || 'main';
     const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
     if (!security.ok) throw new ForbiddenException(`deployment blocked by security policy: ${security.findings.filter((finding: any) => finding.level === 'block').map((finding: any) => finding.code).join(', ')}`);
     const { deployment, workflowJob } = await repositoryMutation(() => repository.createDeploymentWorkflow({
       actorUserId: subject.id,
-      deployment: { ...sanitizeTenantDeploymentCreate(input), serviceId, projectId, status: 'queued', deploymentType },
-      workflow: { type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', payload: { projectId, serviceId, branch: input.branch || 'main', commitSha: input.commitSha || input.commitHash || null } },
+      deployment: { ...sanitizeTenantDeploymentCreate(input), serviceId, projectId, status: 'queued', deploymentType, branch },
+      workflow: { type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', payload: { projectId, serviceId, branch, commitSha: input.commitSha || input.commitHash || null } },
     }));
     return {
       ...deployment,

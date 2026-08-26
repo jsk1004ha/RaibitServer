@@ -135,6 +135,46 @@ func TestFileStoreFencesReclaimedWorkflowLease(t *testing.T) {
 	}
 }
 
+func TestFileStorePinsFullDeploymentCommitOnceDuringBuild(t *testing.T) {
+	store := NewFileStore(writeWorkflowState(t))
+	job, err := store.ClaimNextWorkflowJob(context.Background(), ClaimOptions{WorkerID: "worker-a"})
+	if err != nil || job == nil {
+		t.Fatalf("claim build job: job=%#v err=%v", job, err)
+	}
+	if err := store.StartBuild(context.Background(), BuildStartInput{
+		Lease: job.Lease(), DeploymentID: "deployment-1", ServiceID: "service-1", ProjectID: "project-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateDeploymentForLease(context.Background(), job.Lease(), "deployment-1", map[string]any{
+		"commitSha": "abc123", "commitHash": "abc123",
+	}); err == nil || !strings.Contains(err.Error(), "full 40 or 64") {
+		t.Fatalf("short commit must not be accepted as an authoritative revision: %v", err)
+	}
+
+	commit := strings.Repeat("A", 40)
+	deployment, err := store.UpdateDeploymentForLease(context.Background(), job.Lease(), "deployment-1", map[string]any{
+		"commitSha": commit, "commitHash": commit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalizedCommit := strings.ToLower(commit)
+	if deployment.CommitSHA != normalizedCommit || deployment.CommitHash != normalizedCommit {
+		t.Fatalf("deployment commit pin was not normalized and persisted: %#v", deployment)
+	}
+	if _, err := store.UpdateDeploymentForLease(context.Background(), job.Lease(), "deployment-1", map[string]any{
+		"commitSha": strings.Repeat("b", 40), "commitHash": strings.Repeat("b", 40),
+	}); err == nil || !strings.Contains(err.Error(), "already pinned") {
+		t.Fatalf("an existing deployment commit pin must be immutable: %v", err)
+	}
+	if _, err := store.UpdateDeploymentForLease(context.Background(), job.Lease(), "deployment-1", map[string]any{
+		"commitSha": normalizedCommit,
+	}); err == nil || !strings.Contains(err.Error(), "together") {
+		t.Fatalf("partial deployment commit pin must fail closed: %v", err)
+	}
+}
+
 func TestFileStoreImagePublicationAtomicallyCompletesJobAndRecordsEvent(t *testing.T) {
 	store := NewFileStore(writeWorkflowState(t))
 	job, err := store.ClaimNextWorkflowJob(context.Background(), ClaimOptions{WorkerID: "worker-a"})

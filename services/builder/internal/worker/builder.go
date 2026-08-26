@@ -564,6 +564,30 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 		if err != nil {
 			return err
 		}
+	} else {
+		revision := Command{Name: "git", Args: []string{"rev-parse", "HEAD"}, Dir: destination, Env: gitEnv, CleanGitEnv: true}
+		revisionResult, err := b.Runner.Run(ctx, revision, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+		state.Steps = append(state.Steps, StepResult{Type: "git-revision", Command: revisionResult.Command, DryRun: revisionResult.DryRun})
+		_ = b.writeCommandLogs(ctx, state, "clone", revisionResult)
+		if err != nil {
+			return err
+		}
+		resolvedCommit := strings.TrimSpace(revisionResult.Stdout)
+		if revisionResult.DryRun && resolvedCommit == "" {
+			resolvedCommit = buildIdentityHash(state)[:40]
+		}
+		resolvedCommit, err = controlplane.NormalizeGitCommitSHA(resolvedCommit)
+		if err != nil {
+			return err
+		}
+		deployment, err := b.Store.UpdateDeploymentForLease(ctx, state.Job.Lease(), state.Deployment.ID, map[string]any{"commitSha": resolvedCommit, "commitHash": resolvedCommit})
+		if err != nil {
+			return err
+		}
+		state.Deployment = deployment
+		if err := b.writeLog(ctx, state, "source", "pinned checked-out source commit "+resolvedCommit, "info"); err != nil {
+			return err
+		}
 	}
 	state.SourceDir = destination
 	return nil

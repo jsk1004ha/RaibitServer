@@ -419,6 +419,12 @@ func (s *FileStore) updateDeployment(ctx context.Context, lease *WorkflowLease, 
 	if idx < 0 {
 		return nil, notFound("deployment", deploymentID)
 	}
+	if lease != nil {
+		updates, err = leaseFencedDeploymentUpdates(deploymentFromRecord(rows[idx]), updates)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for key, value := range updates {
 		rows[idx][key] = MaskSecrets(value)
 	}
@@ -428,6 +434,65 @@ func (s *FileStore) updateDeployment(ctx context.Context, lease *WorkflowLease, 
 		return nil, err
 	}
 	return deploymentFromRecord(rows[idx]), nil
+}
+
+var fullGitCommitPattern = regexp.MustCompile(`(?i)^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+func NormalizeGitCommitSHA(value string) (string, error) {
+	commit := strings.ToLower(strings.TrimSpace(value))
+	if !fullGitCommitPattern.MatchString(commit) {
+		return "", errors.New("checked-out Git commit must be a full 40 or 64 character hexadecimal object ID")
+	}
+	return commit, nil
+}
+
+func normalizedDeploymentCommitUpdate(updates map[string]any) (string, bool, error) {
+	commitSHA, hasCommitSHA := updates["commitSha"]
+	commitHash, hasCommitHash := updates["commitHash"]
+	if !hasCommitSHA && !hasCommitHash {
+		return "", false, nil
+	}
+	if len(updates) != 2 || !hasCommitSHA || !hasCommitHash {
+		return "", true, errors.New("deployment commit pin must set commitSha and commitHash together")
+	}
+	sha, shaOK := commitSHA.(string)
+	hash, hashOK := commitHash.(string)
+	if !shaOK || !hashOK {
+		return "", true, errors.New("deployment commit pin values must be strings")
+	}
+	normalizedSHA, err := NormalizeGitCommitSHA(sha)
+	if err != nil {
+		return "", true, err
+	}
+	normalizedHash, err := NormalizeGitCommitSHA(hash)
+	if err != nil {
+		return "", true, err
+	}
+	if normalizedSHA != normalizedHash {
+		return "", true, errors.New("deployment commitSha and commitHash must match")
+	}
+	return normalizedSHA, true, nil
+}
+
+func leaseFencedDeploymentUpdates(deployment *Deployment, updates map[string]any) (map[string]any, error) {
+	commit, requested, err := normalizedDeploymentCommitUpdate(updates)
+	if err != nil || !requested {
+		return updates, err
+	}
+	if deployment == nil {
+		return nil, errors.New("deployment commit pin target is missing")
+	}
+	if !strings.EqualFold(strings.TrimSpace(deployment.Status), "BUILDING") {
+		return nil, errors.New("deployment commit can only be pinned while BUILDING")
+	}
+	current := strings.TrimSpace(deployment.CommitSHA)
+	if current == "" {
+		current = strings.TrimSpace(deployment.CommitHash)
+	}
+	if current != "" && !strings.EqualFold(current, commit) {
+		return nil, errors.New("deployment commit is already pinned to a different revision")
+	}
+	return map[string]any{"commitSha": commit, "commitHash": commit}, nil
 }
 
 func (s *FileStore) UpdateService(ctx context.Context, serviceID string, updates map[string]any) (*Service, error) {

@@ -364,15 +364,19 @@ func (h *dispatchHandler) handleScoped(response http.ResponseWriter, request *ht
 			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "dispatcher session is not authorized for that deployment")
 			return
 		}
-		if !isAllowedBuildFailureUpdate(rpcRequest.Updates) {
-			writeDispatchError(response, http.StatusForbidden, "mutation_not_allowed", "dispatcher sessions may only record a terminal build failure")
+		updates := map[string]any(nil)
+		if isAllowedBuildFailureUpdate(rpcRequest.Updates) {
+			updates = map[string]any{
+				"status":          ErrorCodeBuildFailed,
+				"buildFinishedAt": time.Now().UTC().Format(time.RFC3339Nano),
+				"errorCode":       ErrorCodeBuildFailed,
+				"errorMessage":    rpcRequest.Updates["errorMessage"],
+			}
+		} else if commit, requested, commitErr := normalizedDeploymentCommitUpdate(rpcRequest.Updates); requested && commitErr == nil {
+			updates = map[string]any{"commitSha": commit, "commitHash": commit}
+		} else {
+			writeDispatchError(response, http.StatusForbidden, "mutation_not_allowed", "dispatcher sessions may only record a terminal build failure or checked-out source commit")
 			return
-		}
-		updates := map[string]any{
-			"status":          ErrorCodeBuildFailed,
-			"buildFinishedAt": time.Now().UTC().Format(time.RFC3339Nano),
-			"errorCode":       ErrorCodeBuildFailed,
-			"errorMessage":    rpcRequest.Updates["errorMessage"],
 		}
 		mutationStore, ok := h.store.(leaseFencedMutationStore)
 		if !ok {

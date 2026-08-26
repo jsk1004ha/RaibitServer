@@ -37,6 +37,7 @@ test('beta project/service/deployment contract queues supported services and exp
       sourceType: 'github',
       buildMode: 'dockerfile',
       repoUrl: 'https://github.com/example/dockerfile-app.git',
+      branch: 'release',
       dockerfilePath: 'Dockerfile',
     });
     const generated = await createService(port, project.body.id, {
@@ -73,6 +74,8 @@ test('beta project/service/deployment contract queues supported services and exp
       assert.equal(deployment.workflowJob.payload.deploymentId, deployment.id);
       assert.equal(deployment.workflowJob.payload.projectId, project.body.id);
     }
+    assert.equal(queuedDeployments[0].branch, 'release');
+    assert.equal(queuedDeployments[0].workflowJob.payload.branch, 'release');
 
     const deployment = queuedDeployments[0];
     controlPlane.store.appendBuildLog({ deploymentId: deployment.id, step: 'clone', line: 'git clone completed' });

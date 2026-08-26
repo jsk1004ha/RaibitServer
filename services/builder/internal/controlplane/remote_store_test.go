@@ -298,6 +298,22 @@ func TestDispatchHandlerRejectsPrivilegeEscalatingRawUpdates(t *testing.T) {
 	if deploymentEscalation.Code != http.StatusForbidden {
 		t.Fatalf("raw deployment updates must not bypass the scan/sign publication transition, got %d: %s", deploymentEscalation.Code, deploymentEscalation.Body.String())
 	}
+	partialCommitPin := sendDispatchRPCRequest(t, handler, claimed.Token, map[string]any{
+		"operation":    "updateDeployment",
+		"deploymentId": "deployment-1",
+		"updates":      map[string]any{"commitSha": strings.Repeat("a", 40)},
+	})
+	if partialCommitPin.Code != http.StatusForbidden {
+		t.Fatalf("partial deployment commit pin must fail closed, got %d: %s", partialCommitPin.Code, partialCommitPin.Body.String())
+	}
+	malformedCommitPin := sendDispatchRPCRequest(t, handler, claimed.Token, map[string]any{
+		"operation":    "updateDeployment",
+		"deploymentId": "deployment-1",
+		"updates":      map[string]any{"commitSha": "abc123", "commitHash": "abc123"},
+	})
+	if malformedCommitPin.Code != http.StatusForbidden {
+		t.Fatalf("malformed deployment commit pin must fail closed, got %d: %s", malformedCommitPin.Code, malformedCommitPin.Body.String())
+	}
 
 	serviceEscalation := sendDispatchRPCRequest(t, handler, claimed.Token, map[string]any{
 		"operation": "updateService",
@@ -533,6 +549,18 @@ func TestDispatchHandlerOwnsBuildTransitionTimestamps(t *testing.T) {
 	if fixture.startedAt.After(time.Now().UTC().Add(time.Minute)) {
 		t.Fatalf("dispatcher must ignore client build start time, got %s", fixture.startedAt)
 	}
+	commit := strings.Repeat("A", 40)
+	pin := sendDispatchRPCRequest(t, handler, claimed.Token, map[string]any{
+		"operation":    "updateDeployment",
+		"deploymentId": "deployment-1",
+		"updates":      map[string]any{"commitSha": commit, "commitHash": commit},
+	})
+	if pin.Code != http.StatusOK {
+		t.Fatalf("checked-out deployment commit pin failed with %d: %s", pin.Code, pin.Body.String())
+	}
+	if fixture.deploymentUpdates["commitSha"] != strings.ToLower(commit) || fixture.deploymentUpdates["commitHash"] != strings.ToLower(commit) {
+		t.Fatalf("dispatcher did not normalize the checked-out commit pin: %#v", fixture.deploymentUpdates)
+	}
 	failure := sendDispatchRPCRequest(t, handler, claimed.Token, map[string]any{
 		"operation":    "updateDeployment",
 		"deploymentId": "deployment-1",
@@ -678,6 +706,15 @@ func TestRemoteStoreRequiresMutualTLSAndServesScopedClaim(t *testing.T) {
 	lease := job.Lease()
 	if err := store.StartBuild(context.Background(), BuildStartInput{Lease: lease, DeploymentID: "deployment-1", ServiceID: "service-1", ProjectID: "project-1"}); err != nil {
 		t.Fatal(err)
+	}
+	commit := strings.Repeat("A", 40)
+	if _, err := store.UpdateDeploymentForLease(context.Background(), lease, "deployment-1", map[string]any{
+		"commitSha": commit, "commitHash": commit,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.deploymentUpdates["commitSha"] != strings.ToLower(commit) || fixture.deploymentUpdates["commitHash"] != strings.ToLower(commit) {
+		t.Fatalf("remote store did not preserve the checked-out commit mutation: %#v", fixture.deploymentUpdates)
 	}
 	if _, err := store.UpdateDeployment(context.Background(), "deployment-1", map[string]any{
 		"status":          ErrorCodeBuildFailed,

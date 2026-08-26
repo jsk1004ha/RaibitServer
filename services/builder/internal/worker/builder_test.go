@@ -505,6 +505,48 @@ func TestBuilderUsesAuthoritativePublicRepositoryBinding(t *testing.T) {
 	}
 }
 
+func TestBuilderPinsCheckedOutRevisionForProductionManualDeployment(t *testing.T) {
+	stateFile := writeBoundGitBuildState(t, false, nil)
+	state := readState(t, stateFile)
+	deployment := firstByID(t, state, "deployments", "dep_1")
+	delete(deployment, "commitSha")
+	delete(deployment, "commitHash")
+	writeStateAtPath(t, stateFile, state)
+
+	revision := strings.Repeat("A", 40)
+	runner := &recordingRunner{revision: revision}
+	config := worker.Config{
+		WorkspaceDir: t.TempDir(),
+		Registry:     "registry.example.test/team",
+		DryRun:       true,
+		Production:   true,
+	}
+	builder := worker.New(controlplane.NewFileStore(stateFile), runner, config)
+
+	result, err := builder.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("production manual deployment without an initial commit failed: %v", err)
+	}
+	normalizedRevision := strings.ToLower(revision)
+	if !strings.HasSuffix(result.Image, ":"+normalizedRevision) {
+		t.Fatalf("build image was not tagged with the checked-out revision: %s", result.Image)
+	}
+	persisted := firstByID(t, readState(t, stateFile), "deployments", "dep_1")
+	if persisted["commitSha"] != normalizedRevision || persisted["commitHash"] != normalizedRevision {
+		t.Fatalf("checked-out revision was not pinned to the deployment: %#v", persisted)
+	}
+	foundRevisionLookup := false
+	for _, command := range runner.commands {
+		if command.Name == "git" && len(command.Args) == 2 && command.Args[0] == "rev-parse" && command.Args[1] == "HEAD" {
+			foundRevisionLookup = true
+			break
+		}
+	}
+	if !foundRevisionLookup {
+		t.Fatalf("builder did not resolve the cloned repository HEAD: %#v", runner.commands)
+	}
+}
+
 func TestBuilderProductionAnonymousGitRequiresExplicitPolicy(t *testing.T) {
 	stateFile := writeGitBuildState(t, "https://github.com/acme/public.git")
 	runner := &recordingRunner{}
@@ -910,6 +952,7 @@ func marshalString(t *testing.T, value any) string {
 type recordingRunner struct {
 	commands       []worker.Command
 	metadataDigest string
+	revision       string
 	failCommand    string
 	afterCommand   func(worker.Command)
 }
@@ -963,12 +1006,15 @@ func (s *tombstoneBeforeStartStore) StartBuild(ctx context.Context, input contro
 	return s.Store.StartBuild(ctx, input)
 }
 
-func (r *recordingRunner) Run(_ context.Context, command worker.Command, _ worker.CommandOptions) (worker.CommandResult, error) {
+func (r *recordingRunner) Run(_ context.Context, command worker.Command, options worker.CommandOptions) (worker.CommandResult, error) {
 	r.commands = append(r.commands, command)
-	result := worker.CommandResult{Command: command.Name + " " + strings.Join(command.Args, " "), ExitCode: 0}
+	result := worker.CommandResult{Command: command.Name + " " + strings.Join(command.Args, " "), ExitCode: 0, DryRun: options.DryRun}
 	if command.Name == r.failCommand {
 		result.ExitCode = 1
 		return result, errors.New("simulated " + command.Name + " failure")
+	}
+	if command.Name == "git" && len(command.Args) == 2 && command.Args[0] == "rev-parse" && command.Args[1] == "HEAD" {
+		result.Stdout = r.revision + "\n"
 	}
 	if r.metadataDigest != "" && (command.Name == "buildctl" || command.Name == "docker") {
 		if metadataFile := commandArgValue(command.Args, "--metadata-file"); metadataFile != "" {

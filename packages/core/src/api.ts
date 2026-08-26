@@ -387,8 +387,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (deploymentType === 'preview') controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
         const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
         if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
-        const deployment = controlPlane.store.createDeployment({ ...sanitizeTenantDeploymentCreate(body), serviceId, deploymentType, status: 'queued' });
-        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId: service.projectId, deploymentId: deployment.id, branch: body.branch || 'main', commitSha: body.commitSha || body.commitHash || null } });
+        const branch = body.branch || service.branch || 'main';
+        const deployment = controlPlane.store.createDeployment({ ...sanitizeTenantDeploymentCreate(body), serviceId, deploymentType, status: 'queued', branch });
+        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId: service.projectId, deploymentId: deployment.id, branch, commitSha: body.commitSha || body.commitHash || null } });
         return send(res, 202, { ...deployment, workflowJob });
       }
       const projectServiceDeploymentsMatch = url.pathname.match(/^\/projects\/([^/]+)\/services\/([^/]+)\/deployments$/);
@@ -410,8 +411,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const service = controlPlane.store.services.get(serviceId);
         const security = validateServiceSecurity(service?.desiredState || service?.desiredSpec || service || {});
         if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
-        const deployment = controlPlane.store.createDeployment({ ...sanitizeTenantDeploymentCreate(body), serviceId, deploymentType, status: 'queued' });
-        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId, deploymentId: deployment.id, branch: body.branch || 'main', commitSha: body.commitSha || body.commitHash || null } });
+        const branch = body.branch || service?.branch || 'main';
+        const deployment = controlPlane.store.createDeployment({ ...sanitizeTenantDeploymentCreate(body), serviceId, deploymentType, status: 'queued', branch });
+        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId, deploymentId: deployment.id, branch, commitSha: body.commitSha || body.commitHash || null } });
         return send(res, 202, { ...deployment, workflowJob });
       }
       const deploymentMatch = url.pathname.match(/^\/deployments\/([^/]+)$/);
