@@ -25,11 +25,19 @@ export type DashboardLoadIssue = {
   status: number;
 };
 
+function dashboardApiBaseUrl() {
+  return (process.env.RAIBITSERVER_API_URL || 'http://localhost:3000/api').replace(/\/$/, '');
+}
+
 export async function dashboardApiContext(): Promise<DashboardApiContext> {
-  const baseUrl = (process.env.RAIBITSERVER_API_URL || 'http://localhost:3000/api').replace(/\/$/, '');
+  const baseUrl = dashboardApiBaseUrl();
   const sessionToken = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
   const token = sessionToken;
   return { baseUrl, token, headers: token ? { authorization: `Bearer ${token}` } : {} };
+}
+
+export function publicDashboardApiContext(): DashboardApiContext {
+  return { baseUrl: dashboardApiBaseUrl(), headers: {} };
 }
 
 // Browser navigation and mutations stay on the dashboard origin. The Route Handler

@@ -154,14 +154,18 @@ test('project cards render compact Korean console rows', async () => {
   assert.match(card, /<h2>/);
 });
 
-test('public landing keeps the introduction focused and shows the five newest live sites', async () => {
-  const [home, status, contributors, support, privacy, footer] = await Promise.all([
+test('public landing keeps the introduction focused and exposes an auto-refreshing system status', async () => {
+  const [home, status, statusPanel, statusRoute, statusModel, contributors, support, privacy, footer, css] = await Promise.all([
     read('../apps/dashboard/app/page.tsx'),
     read('../apps/dashboard/app/status/page.tsx'),
+    read('../apps/dashboard/components/system-status-panel.tsx'),
+    read('../apps/dashboard/app/api/status/route.ts'),
+    read('../apps/dashboard/lib/status-model.js'),
     read('../apps/dashboard/app/contributors/page.tsx'),
     read('../apps/dashboard/app/support/page.tsx'),
     read('../apps/dashboard/app/privacy/page.tsx'),
     read('../apps/dashboard/components/public-footer.tsx'),
+    read('../apps/dashboard/app/globals.css'),
   ]);
 
   assert.ok(home.includes("String(query.variant || 'editorial')"));
@@ -172,9 +176,20 @@ test('public landing keeps the introduction focused and shows the five newest li
   assert.ok(home.includes('운영 중인 사이트'));
   assert.ok(home.includes('<span className="public-site-status"><i />LIVE</span>'));
   assert.ok(home.includes('href="/status"'));
-  assert.ok(status.includes('loadPublicSites(5)'));
-  assert.ok(status.includes('운영 중인 사이트'));
-  assert.ok(status.includes('<span className="public-site-status"><i />LIVE</span>'));
+  assert.ok(home.includes('상태 보기 →'));
+  assert.ok(status.includes('loadSystemStatus()'));
+  assert.ok(status.includes('RAIBIT SERVER 상태'));
+  assert.ok(status.includes('<SystemStatusPanel initialStatus={status} />'));
+  assert.doesNotMatch(status, /loadPublicSites|public-site-list/);
+  for (const marker of ["'use client'", "fetch('/api/status'", 'window.setInterval', 'visibilitychange', '초 자동 갱신', "aria-label={refreshing ? '상태 확인 중' : '상태 새로고침'}", '<svg', 'status-refresh-icon']) {
+    assert.ok(statusPanel.includes(marker), `${marker} status UI contract missing`);
+  }
+  for (const marker of ['웹 콘솔', '제어 서버', '데이터 저장소']) assert.ok(statusModel.includes(marker), `${marker} status model missing`);
+  assert.ok(statusRoute.includes('loadSystemStatus()'));
+  assert.ok(statusRoute.includes("'cache-control': 'no-store, max-age=0'"));
+  assert.match(css, /\.system-status-row\s*\{[^}]*border-top:\s*1px solid var\(--color-border\)/s);
+  assert.match(css, /\.system-status-meta\s*\{[^}]*font-family:\s*var\(--font-mono\)/s);
+  assert.match(css, /\.status-refresh-button\s*\{[^}]*width:\s*44px[^}]*min-width:\s*44px/s);
   assert.ok(home.includes('콘솔 시작하기'));
   assert.ok(home.includes('/login?mode=signup'));
   assert.ok(home.includes('<PublicFooter />'));

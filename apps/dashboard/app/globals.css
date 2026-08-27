@@ -2158,23 +2158,185 @@ a:hover > .project-row-card,
 
 .status-hero {
   display: grid;
-  gap: 12px;
-  padding: 90px 0 54px;
+  gap: 10px;
+  padding: 82px 0 46px;
   border-bottom: 1px solid var(--color-border);
 }
 
 .status-hero h1 {
-  font-size: clamp(46px, 7vw, 78px);
+  max-width: 12ch;
+  font-size: clamp(44px, 6.5vw, 74px);
+  line-height: 1.02;
   letter-spacing: -0.06em;
 }
 
 .status-hero > p:last-child {
   color: var(--color-text-muted);
-  font-size: 17px;
+  font-size: 15px;
 }
 
-.status-sites {
-  padding-top: 54px;
+.system-status {
+  align-self: start;
+  padding: 0 0 92px;
+}
+
+.system-status-summary {
+  min-height: 154px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.system-status-summary-copy {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.system-status-summary h2 {
+  font-size: clamp(25px, 3vw, 36px);
+  letter-spacing: -0.04em;
+}
+
+.system-status-summary p {
+  margin-top: 7px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.system-status-signal {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.system-status-signal i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 7px color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.status-operational {
+  color: var(--color-primary);
+}
+
+.status-degraded {
+  color: var(--color-warning);
+}
+
+.status-outage {
+  color: var(--color-danger);
+}
+
+.status-refresh-button {
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+}
+
+.status-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.status-refresh-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.status-refresh-icon.is-spinning {
+  animation: status-refresh-spin 700ms linear infinite;
+}
+
+@keyframes status-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.system-status-list {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.system-status-row {
+  min-height: 84px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  border-top: 1px solid var(--color-border);
+}
+
+.system-status-row:first-child {
+  border-top: 0;
+}
+
+.system-status-row strong,
+.system-status-row small {
+  display: block;
+}
+
+.system-status-row strong {
+  font-size: 15px;
+}
+
+.system-status-row small {
+  margin-top: 5px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.system-status-badge {
+  min-width: 66px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.system-status-badge i,
+.system-status-meta i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.system-status-meta {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.system-status-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-primary);
+}
+
+.system-status-meta.is-stale > span {
+  color: var(--color-warning);
 }
 
 .public-sites > header {
@@ -3185,6 +3347,51 @@ a:hover > .project-row-card,
 
   .landing-nav-actions .btn-ghost {
     display: none;
+  }
+
+  .status-page .landing-nav-actions .btn-ghost {
+    display: inline-flex;
+  }
+
+  .status-hero {
+    padding: 64px 0 38px;
+  }
+
+  .status-hero h1 {
+    font-size: clamp(40px, 12vw, 58px);
+  }
+
+  .system-status-summary {
+    min-height: 0;
+    align-items: stretch;
+    flex-direction: column;
+    padding: 28px 0;
+  }
+
+  .system-status-summary-copy {
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .system-status-signal {
+    width: 40px;
+    height: 40px;
+  }
+
+  .status-refresh-button {
+    align-self: flex-start;
+  }
+
+  .system-status-row {
+    min-height: 76px;
+  }
+
+  .system-status-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    padding: 15px 0;
   }
 
   .landing-hero {

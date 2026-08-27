@@ -32,7 +32,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
       </section>
 
       <section className="public-sites landing-public-sites" aria-labelledby="landing-sites-title">
-        <header><div><p className="eyebrow">LIVE ON RAIBIT</p><h2 id="landing-sites-title">운영 중인 사이트</h2></div><a href="/status">전체 보기 →</a></header>
+        <header><div><p className="eyebrow">LIVE ON RAIBIT</p><h2 id="landing-sites-title">운영 중인 사이트</h2></div><a href="/status">상태 보기 →</a></header>
         <div className="public-site-list">
           {sites.length ? sites.map((site: any) => <a className="public-site" href={site.url} key={site.id || site.name} target="_blank" rel="noreferrer"><span><strong>{site.name}</strong><small>{site.owner}</small></span><span className="public-site-status"><i />LIVE</span><span aria-hidden="true">↗</span></a>) : <div className="public-sites-empty"><strong>운영 사이트 준비 중</strong><p>공개되면 표시됩니다.</p></div>}
         </div>
