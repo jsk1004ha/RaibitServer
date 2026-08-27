@@ -571,11 +571,18 @@ getent hosts "$AUTH_HOST"
 curl --fail --silent --show-error \
   --resolve "${AUTH_HOST}:443:${GATEWAY_CURL_IP}" \
   "https://${AUTH_HOST}/healthz" >/dev/null
-GATEWAY_REGISTRY_STATUS="$(curl --silent --show-error \
-  --resolve "${REGISTRY_HOST}:443:${GATEWAY_CURL_IP}" \
-  --output /dev/null \
-  --write-out '%{http_code}' \
-  "https://${REGISTRY_HOST}/v2/")"
+GATEWAY_REGISTRY_STATUS=""
+for attempt in $(seq 1 15); do
+  GATEWAY_REGISTRY_STATUS="$(curl --silent --show-error \
+    --resolve "${REGISTRY_HOST}:443:${GATEWAY_CURL_IP}" \
+    --output /dev/null \
+    --write-out '%{http_code}' \
+    "https://${REGISTRY_HOST}/v2/" || true)"
+  if [[ "$GATEWAY_REGISTRY_STATUS" == 200 || "$GATEWAY_REGISTRY_STATUS" == 401 ]]; then
+    break
+  fi
+  [[ "$attempt" == 15 ]] || sleep 2
+done
 [[ "$GATEWAY_REGISTRY_STATUS" == 200 || "$GATEWAY_REGISTRY_STATUS" == 401 ]] \
   || { echo "ERROR: internal registry gateway returned HTTP ${GATEWAY_REGISTRY_STATUS}" >&2; exit 1; }
 echo "dedicated in-cluster TLS gateway VERIFIED: ${GATEWAY_CLUSTER_IP}"

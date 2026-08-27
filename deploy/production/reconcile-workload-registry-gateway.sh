@@ -917,19 +917,28 @@ if ! kubectl -n "$INFRA_NS" rollout status statefulset/raibit-registry --timeout
 fi
 
 REGISTRY_HEADERS="${RUN_DIR}/registry-response-headers"
-if ! REGISTRY_STATUS="$(
-  curl --silent --show-error --connect-timeout 5 --max-time 15 \
-    --resolve "${REGISTRY_HOST}:443:${GATEWAY_CURL_IP}" \
-    --dump-header "$REGISTRY_HEADERS" --output /dev/null --write-out '%{http_code}' \
-    "https://${REGISTRY_HOST}/v2/"
-)"; then
-  rollback_registry_and_gateway \
-    || fail "registry TLS check failed and exact registry rollback also failed"
-  fail "internal registry gateway request failed"
-fi
+REGISTRY_STATUS=""
+REGISTRY_REQUEST_OK=0
+for attempt in $(seq 1 15); do
+  if REGISTRY_STATUS="$(
+    curl --silent --show-error --connect-timeout 5 --max-time 15 \
+      --resolve "${REGISTRY_HOST}:443:${GATEWAY_CURL_IP}" \
+      --dump-header "$REGISTRY_HEADERS" --output /dev/null --write-out '%{http_code}' \
+      "https://${REGISTRY_HOST}/v2/"
+  )"; then
+    REGISTRY_REQUEST_OK=1
+    [[ "$REGISTRY_STATUS" == 401 ]] && break
+  else
+    REGISTRY_REQUEST_OK=0
+  fi
+  [[ "$attempt" == 15 ]] || sleep 2
+done
 if [[ "$REGISTRY_STATUS" != 401 ]]; then
   rollback_registry_and_gateway \
     || fail "registry authentication check failed and exact registry rollback also failed"
+  if [[ "$REGISTRY_REQUEST_OK" != 1 ]]; then
+    fail "internal registry gateway request failed"
+  fi
   fail "internal registry gateway must enforce token authentication"
 fi
 if ! python3 - "$REGISTRY_HEADERS" "$AUTH_HOST" "$REGISTRY_SERVICE" <<'PY'
