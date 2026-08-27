@@ -666,9 +666,17 @@ else
   GATEWAY_CURL_IP="$GATEWAY_CLUSTER_IP"
 fi
 
-if ! curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
-  --resolve "${AUTH_HOST}:443:${GATEWAY_CURL_IP}" \
-  "https://${AUTH_HOST}/healthz" >/dev/null; then
+BROKER_HEALTHY=0
+for attempt in $(seq 1 15); do
+  if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+    --resolve "${AUTH_HOST}:443:${GATEWAY_CURL_IP}" \
+    "https://${AUTH_HOST}/healthz" >/dev/null; then
+    BROKER_HEALTHY=1
+    break
+  fi
+  [[ "$attempt" == 15 ]] || sleep 2
+done
+if [[ "$BROKER_HEALTHY" != 1 ]]; then
   rollback_gateway_resources \
     || fail "broker health check failed and exact gateway rollback also failed"
   fail "registry credential broker health check failed"

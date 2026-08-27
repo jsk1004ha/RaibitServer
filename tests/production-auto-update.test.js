@@ -149,6 +149,7 @@ test('registry gateway reconciler uses exact TLS identities without a shared ing
   assert.match(registryGatewayReconciler, /relativeurls: true/);
   assert.match(registryGatewayReconciler, /name: raibit-registry-ingress[\s\S]*podSelector:[\s\S]*app: raibit-registry-auth[\s\S]*port: 5000/);
   assert.match(registryGatewayReconciler, /for attempt in \$\(seq 1 15\)[\s\S]*REGISTRY_STATUS[\s\S]*REGISTRY_REQUEST_OK[\s\S]*sleep 2/);
+  assert.match(registryGatewayReconciler, /for attempt in \$\(seq 1 15\)[\s\S]*BROKER_HEALTHY[\s\S]*sleep 2/);
   assert.match(registryGatewayReconciler, /name: internal-tls[\s\S]*port: 443[\s\S]*targetPort: 8443/);
   assert.match(registryGatewayReconciler, /BROKER_HOST[\s\S]*INTERNAL_TLS_PORT[\s\S]*REGISTRY_UPSTREAM_URL/);
   assert.match(registryGatewayReconciler, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*port: 8443/);
@@ -252,6 +253,8 @@ test('workload registry bootstrap emits a dedicated TLS gateway and a secure Hel
   assert.match(registryBootstrap, /SESSION_HMAC_KEY=""[\s\S]*session-hmac-key[\s\S]*\^\[0-9a-f\]\{64\}\$[\s\S]*openssl rand -hex 32/);
   assert.match(registryBootstrap, /name: raibit-registry-ingress[\s\S]*podSelector:[\s\S]*app: raibit-registry-auth[\s\S]*port: 5000/);
   assert.match(registryBootstrap, /for attempt in \$\(seq 1 15\)[\s\S]*GATEWAY_REGISTRY_STATUS[\s\S]*sleep 2/);
+  assert.match(registryBootstrap, /for attempt in \$\(seq 1 15\)[\s\S]*GATEWAY_BROKER_READY[\s\S]*sleep 2/);
+  assert.match(registryBootstrap, /for attempt in \$\(seq 1 15\)[\s\S]*PUBLIC_BROKER_READY[\s\S]*sleep 2/);
   assert.match(registryBootstrap, /name: internal-tls[\s\S]*port: 443[\s\S]*targetPort: 8443/);
   assert.match(registryBootstrap, /BROKER_HOST[\s\S]*INTERNAL_TLS_PORT[\s\S]*INTERNAL_TLS_CERT_FILE[\s\S]*INTERNAL_TLS_KEY_FILE[\s\S]*REGISTRY_UPSTREAM_URL/);
   assert.match(registryBootstrap, /http:[\s\S]*addr: :5000[\s\S]*relativeurls: true/);

@@ -568,9 +568,18 @@ printf '%s %s %s\n' "$NODE_IP" "$REGISTRY_HOST" "$AUTH_HOST" | sudo tee -a /etc/
 getent hosts "$REGISTRY_HOST"
 getent hosts "$AUTH_HOST"
 
-curl --fail --silent --show-error \
-  --resolve "${AUTH_HOST}:443:${GATEWAY_CURL_IP}" \
-  "https://${AUTH_HOST}/healthz" >/dev/null
+GATEWAY_BROKER_READY=0
+for attempt in $(seq 1 15); do
+  if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+    --resolve "${AUTH_HOST}:443:${GATEWAY_CURL_IP}" \
+    "https://${AUTH_HOST}/healthz" >/dev/null; then
+    GATEWAY_BROKER_READY=1
+    break
+  fi
+  [[ "$attempt" == 15 ]] || sleep 2
+done
+[[ "$GATEWAY_BROKER_READY" == 1 ]] \
+  || { echo "ERROR: internal registry credential broker health check failed" >&2; exit 1; }
 GATEWAY_REGISTRY_STATUS=""
 for attempt in $(seq 1 15); do
   GATEWAY_REGISTRY_STATUS="$(curl --silent --show-error \
@@ -589,7 +598,17 @@ echo "dedicated in-cluster TLS gateway VERIFIED: ${GATEWAY_CLUSTER_IP}"
 
 echo
 echo "=== 8. HTTPS/token/broker smoke tests ==="
-curl -fsS "https://${AUTH_HOST}/healthz" >/dev/null
+PUBLIC_BROKER_READY=0
+for attempt in $(seq 1 15); do
+  if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+    "https://${AUTH_HOST}/healthz" >/dev/null; then
+    PUBLIC_BROKER_READY=1
+    break
+  fi
+  [[ "$attempt" == 15 ]] || sleep 2
+done
+[[ "$PUBLIC_BROKER_READY" == 1 ]] \
+  || { echo "ERROR: registry credential broker HTTPS health check failed" >&2; exit 1; }
 CHALLENGE="$(curl -sSI "https://${REGISTRY_HOST}/v2/" | tr -d '\r' | grep -i '^www-authenticate:' || true)"
 grep -Fq "https://${AUTH_HOST}/token" <<<"$CHALLENGE" || { echo "ERROR: registry auth challenge is missing expected token realm" >&2; echo "$CHALLENGE" >&2; exit 1; }
 
