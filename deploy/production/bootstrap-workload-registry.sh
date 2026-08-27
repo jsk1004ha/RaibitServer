@@ -95,7 +95,7 @@ echo "broker image imported: $BROKER_IMAGE"
 
 echo
 echo "=== 2. Resolve immutable Distribution image ==="
-REGISTRY_DIGEST="$(docker buildx imagetools inspect "registry:${REGISTRY_VERSION}" | awk '$1=="Digest:" {print $2; exit}')"
+REGISTRY_DIGEST="$(docker buildx imagetools inspect "registry:${REGISTRY_VERSION}" | awk '$1=="Digest:" && !digest {digest=$2} END {print digest}')"
 [[ "$REGISTRY_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "ERROR: failed to resolve registry:${REGISTRY_VERSION} digest" >&2; exit 1; }
 REGISTRY_IMAGE="docker.io/library/registry@${REGISTRY_DIGEST}"
 echo "registry image: $REGISTRY_IMAGE"
