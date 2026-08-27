@@ -115,6 +115,9 @@ builder:
     # Compatibility key: bounds the per-Pod BuildKit mTLS volumes.
     socketSizeLimit: 64Mi
     workSizeLimit: 1Gi
+    # Trivy downloads and expands its vulnerability database under HOME=/tmp.
+    # Keep scanner scratch space separate from BuildKit's smaller tmp volume.
+    builderTmpSizeLimit: 4Gi
     metadataSizeLimit: 256Mi
   # The broker token only authorizes minting one short-lived credential for the
   # server-derived output repository. A registry-wide Docker config is forbidden.

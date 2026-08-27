@@ -62,6 +62,7 @@ test('production builder chart fails closed around registry and supply-chain set
   assert.match(values, /runtimeClassName:/);
   assert.match(values, /imageVerification:\s*[\s\S]*enabled:\s*true[\s\S]*admissionController:[\s\S]*name:[\s\S]*trustRoot:[\s\S]*existingSecret:/, 'production admission verification contract must name an external controller and trust root');
   assert.match(values, /ephemeralStorage:\s*[\s\S]*builderRequest:[\s\S]*builderLimit:[\s\S]*buildkitRequest:[\s\S]*buildkitLimit:/);
+  assert.match(values, /builderTmpSizeLimit:\s*4Gi/, 'Trivy cache and scanner scratch space must exceed the observed 1Gi eviction boundary');
   assert.match(values, /generatedDockerfile:\s*[\s\S]*frontend:\s*["']?[\s\S]*nodeImage:/, 'generated Dockerfile inputs must be configurable');
   assert.match(values, /isolation:\s*[\s\S]*mode:\s*single-job-pod[\s\S]*schedule:[\s\S]*parallelism:\s*4[\s\S]*completions:\s*4/, 'builder must schedule an explicit bounded batch of disposable executors');
   assert.match(values, /dispatch:\s*[\s\S]*existingSecret:[\s\S]*caKey:[\s\S]*clientCertificateKey:[\s\S]*clientKeyKey:/, 'executor-to-dispatcher mTLS must be secret-backed');
@@ -83,6 +84,7 @@ test('production builder chart fails closed around registry and supply-chain set
   for (const volume of ['buildkit-cert-work', 'buildkit-server-tls', 'buildkit-client-tls', 'buildkit-state', 'buildkit-tmp', 'builder-tmp', 'workspace', 'metadata']) {
     assert.match(builder, new RegExp(`name: ${volume}[\\s\\S]{0,120}sizeLimit:`), `${volume} must have an explicit sizeLimit`);
   }
+  assert.match(builder, /name: builder-tmp[\s\S]{0,120}sizeLimit: \{\{ \.Values\.builder\.ephemeralStorage\.builderTmpSizeLimit \| quote \}\}/);
   assert.ok((builder.match(/ephemeral-storage/g) || []).length >= 4, 'builder and buildkit must have ephemeral-storage requests and limits');
   assert.match(builder, /production registry credential broker URL must use https/i);
   assert.match(builder, /production registry credential broker token secret is required/i);

@@ -73,7 +73,7 @@
 {{- if not .Values.security.imageVerification.policy.enabled }}
 {{- fail "production digest and signature annotation admission policy must be enabled" }}
 {{- end }}
-{{- range $name, $quantity := dict "builderRequest" .Values.builder.ephemeralStorage.builderRequest "builderLimit" .Values.builder.ephemeralStorage.builderLimit "buildkitRequest" .Values.builder.ephemeralStorage.buildkitRequest "buildkitLimit" .Values.builder.ephemeralStorage.buildkitLimit "socketSizeLimit" .Values.builder.ephemeralStorage.socketSizeLimit "workSizeLimit" .Values.builder.ephemeralStorage.workSizeLimit "metadataSizeLimit" .Values.builder.ephemeralStorage.metadataSizeLimit "workspaceSizeLimit" .Values.builder.workspaceSizeLimit "buildkitStateSizeLimit" .Values.builder.buildkitStateSizeLimit }}
+{{- range $name, $quantity := dict "builderRequest" .Values.builder.ephemeralStorage.builderRequest "builderLimit" .Values.builder.ephemeralStorage.builderLimit "buildkitRequest" .Values.builder.ephemeralStorage.buildkitRequest "buildkitLimit" .Values.builder.ephemeralStorage.buildkitLimit "socketSizeLimit" .Values.builder.ephemeralStorage.socketSizeLimit "workSizeLimit" .Values.builder.ephemeralStorage.workSizeLimit "builderTmpSizeLimit" .Values.builder.ephemeralStorage.builderTmpSizeLimit "metadataSizeLimit" .Values.builder.ephemeralStorage.metadataSizeLimit "workspaceSizeLimit" .Values.builder.workspaceSizeLimit "buildkitStateSizeLimit" .Values.builder.buildkitStateSizeLimit }}
 {{- if not (regexMatch "^[1-9][0-9]*(m|Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$" (default "" $quantity)) }}
 {{- fail (printf "production builder ephemeral storage %s must be a positive valid Kubernetes quantity" $name) }}
 {{- end }}
@@ -500,7 +500,7 @@ spec:
                 sizeLimit: {{ .Values.builder.ephemeralStorage.workSizeLimit | quote }}
             - name: builder-tmp
               emptyDir:
-                sizeLimit: {{ .Values.builder.ephemeralStorage.workSizeLimit | quote }}
+                sizeLimit: {{ .Values.builder.ephemeralStorage.builderTmpSizeLimit | quote }}
             - name: workspace
               emptyDir:
                 sizeLimit: {{ .Values.builder.workspaceSizeLimit | quote }}

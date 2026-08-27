@@ -170,6 +170,7 @@ grep -q 'kind: Ingress' "$OUTPUT_DIR/production.yaml"
 grep -q 'secretName: "ci-raibitserver-ingress-tls"' "$OUTPUT_DIR/production.yaml"
 grep -q 'app.kubernetes.io/component: database-migration' "$OUTPUT_DIR/production.yaml"
 grep -q 'kind: PodDisruptionBudget' "$OUTPUT_DIR/production.yaml"
+grep -A2 'name: builder-tmp' "$OUTPUT_DIR/production.yaml" | grep -q 'sizeLimit: "4Gi"'
 grep -q 'kind: ValidatingWebhookConfiguration' "$OUTPUT_DIR/production.yaml" || grep -q 'validatingwebhookconfigurations' "$OUTPUT_DIR/production.yaml"
 grep -q 'cidr: "10.20.0.0/24"' "$OUTPUT_DIR/production.yaml"
 grep -q 'port: 5432' "$OUTPUT_DIR/production.yaml"
