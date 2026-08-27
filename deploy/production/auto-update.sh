@@ -265,6 +265,68 @@ registry_runtime_healthy() {
     bash "$REGISTRY_CHECKER"
 }
 
+control_plane_database_reachable() {
+  local pods_json="${RUN_DIR}/database-preflight-pods.json"
+  local api_pod
+
+  if ! kubectl -n "$NAMESPACE" get pods \
+    -l app.kubernetes.io/component=api \
+    -o json >"$pods_json"; then
+    log "could not inspect API Pods for the control-plane database preflight"
+    return 1
+  fi
+
+  api_pod="$(python3 - "$pods_json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+pods = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8')).get('items', [])
+for pod in pods:
+    ready = any(
+        condition.get('type') == 'Ready' and condition.get('status') == 'True'
+        for condition in pod.get('status', {}).get('conditions', [])
+    )
+    if pod.get('status', {}).get('phase') == 'Running' and ready:
+        print(pod.get('metadata', {}).get('name', ''))
+        break
+PY
+)"
+
+  if [[ -z "$api_pod" ]]; then
+    log "no ready API Pod exists; deferring the database check to the Helm migration hook"
+    return 0
+  fi
+
+  if ! kubectl -n "$NAMESPACE" exec "$api_pod" -c api -- node -e '
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is missing");
+const { PrismaClient } = require("@prisma/client");
+const client = new PrismaClient();
+const deadline = setTimeout(() => {
+  console.error("DB_QUERY_FAILED timeout");
+  process.exit(2);
+}, 15000);
+(async () => {
+  try {
+    await client.$queryRawUnsafe("SELECT 1");
+    console.log("DB_QUERY_OK");
+  } catch (error) {
+    console.error(`DB_QUERY_FAILED ${error.code || error.name}`);
+    process.exitCode = 1;
+  } finally {
+    await client.$disconnect();
+    clearTimeout(deadline);
+  }
+})();
+'; then
+    log "control-plane database is not reachable from a ready API Pod"
+    log "repair host PostgreSQL safely with: bash deploy/production/configure-host-postgres-access.sh"
+    return 1
+  fi
+
+  log "control-plane database preflight passed"
+}
+
 : "${HOME:?HOME is required}"
 
 REPOSITORY="${RAIBITSERVER_GITHUB_REPOSITORY:-jsk1004ha/RaibitServer}"
@@ -509,6 +571,10 @@ git -C "$WORKTREE" clean -ffdqx >/dev/null
 
 CHART_DIR="${WORKTREE}/infra/helm/raibitserver"
 [[ -f "$CHART_DIR/Chart.yaml" ]] || fail "Helm chart is missing from approved checkout"
+
+if [[ "$PLATFORM_RECONCILE_REQUIRED" == 1 ]]; then
+  control_plane_database_reachable || fail "control-plane database preflight failed before image builds"
+fi
 
 # key|Dockerfile|GHCR repository suffix. All Dockerfiles use the repository root
 # as their build context, which keeps workspace/package COPY contracts intact.

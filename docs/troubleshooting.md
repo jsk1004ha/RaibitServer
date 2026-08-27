@@ -41,6 +41,36 @@ JWT_SECRET 또는 RAIBITSERVER_AUTH_JWT_SECRET
 
 Production persistence는 Prisma/PostgreSQL을 기본으로 사용합니다. In-memory repository는 dev/test fallback 전용이며, production에서는 명시적 opt-in 없이 사용하지 않습니다.
 
+## Helm migration이 `P1001` 또는 `ECONNREFUSED`로 실패함
+
+### 증상
+
+Prisma가 `Datasource "db"`까지 출력한 뒤 node private IP의 `5432`에 연결하지 못합니다. Helm은 pre-upgrade migration Job을 실패 처리하고 이전 release로 rollback합니다.
+
+### 확인
+
+```sh
+kubectl -n raibitserver-system get pods -l app.kubernetes.io/name=raibitserver-api -o wide
+sudo ss -ltnp 'sport = :5432'
+sudo ufw status numbered
+```
+
+API/migration Pod가 `10.42.x.x` 같은 Pod IP를 사용하지만 PostgreSQL listener가 `127.0.0.1:5432`에만 있으면 NetworkPolicy나 UFW를 완화해도 연결할 수 없습니다. `ECONNREFUSED`는 목적지 사설 IP에서 listener가 없다는 뜻입니다.
+
+### 해결
+
+반복 image build를 먼저 중지하고 최신 checkout의 제한형 구성 스크립트를 실행합니다.
+
+```sh
+sudo systemctl stop raibitserver-auto-update.timer
+sudo systemctl stop raibitserver-auto-update.service
+bash deploy/production/configure-host-postgres-access.sh
+sudo systemctl reset-failed raibitserver-auto-update.service
+sudo systemctl start raibitserver-auto-update.service
+```
+
+스크립트는 DB 비밀번호나 URL 전체를 출력하지 않습니다. node private `InternalIP`, Kubernetes private Pod CIDR, URL에 지정된 DB/user, `scram-sha-256` 조합만 허용하고 wildcard/public listener는 거부합니다. 변경 전 `pg_hba.conf`를 백업하며 restart 또는 API Pod `SELECT 1` 확인이 실패하면 자동 rollback합니다.
+
 ## Dry E2E는 성공하지만 Live E2E가 즉시 실패
 
 ### 증상

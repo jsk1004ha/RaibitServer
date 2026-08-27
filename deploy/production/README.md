@@ -145,6 +145,25 @@ helm upgrade --install raibitserver infra/helm/raibitserver \
 
 Helm 4에서는 마지막 줄의 `--atomic` 대신 `--rollback-on-failure --wait=watcher --wait-for-jobs`를 사용합니다.
 
+## 같은 서버의 PostgreSQL을 K3s에서 사용할 때
+
+단일 서버 설치에서 control-plane PostgreSQL을 호스트 OS에 두고 `DATABASE_URL`의 host를 노드 사설 IP로 지정했다면, PostgreSQL도 그 사설 IP에서 연결을 받아야 합니다. `ss -ltnp 'sport = :5432'` 결과가 `127.0.0.1:5432`만 보이는 상태에서는 API Pod와 Helm migration Job이 `P1001` 또는 `ECONNREFUSED`로 실패합니다.
+
+최신 checkout에서 다음 스크립트를 **서버 사용자로** 실행합니다. 스크립트 전체를 `sudo bash`로 실행하지 않습니다. 필요한 PostgreSQL 파일 변경과 service restart에만 내부적으로 `sudo`를 요청합니다.
+
+```sh
+bash deploy/production/configure-host-postgres-access.sh
+```
+
+스크립트는 Kubernetes Secret에서 비밀번호를 출력하지 않고 DB host·port·user·database만 파싱합니다. DB host가 정확히 한 Kubernetes node의 private `InternalIP`와 일치하는지 확인하고, 모든 node의 검증된 private `podCIDR`/`podCIDRs`만 DB/user별 `scram-sha-256` 규칙으로 추가합니다. PostgreSQL listener에는 기존 private/loopback 주소와 그 node IP만 남기며 `*`, public IP, `0.0.0.0/0`은 허용하지 않습니다. `pg_hba.conf` 백업, parse 검증, PostgreSQL restart, 호스트 TCP 확인, 기존 API Pod의 실제 `SELECT 1` 인증 확인 중 하나라도 실패하면 이전 listener와 HBA 파일로 rollback합니다.
+
+성공 후 중지했던 updater를 다시 시작합니다.
+
+```sh
+sudo systemctl reset-failed raibitserver-auto-update.service
+sudo systemctl start raibitserver-auto-update.service
+```
+
 ## main 자동 production 업데이트
 
 `deploy/production/auto-update.sh`와 `install-auto-update.sh`는 GitHub `main`을 production에 자동 반영하는 서버측 updater입니다. GitHub Actions에 production credential을 저장하거나 public repository에 self-hosted runner를 붙이지 않습니다.
@@ -156,6 +175,7 @@ main SHA 변경 감지
 → 저장된 registry 상태 digest와 실제 broker 발급·토큰 일치 상태 확인
 → 새 SHA 또는 drift가 있으면 그 정확한 SHA의 push CI 확인
 → CI completed/success일 때만 전용 checkout으로 fetch
+→ 기존 Ready API Pod에서 control-plane DB `SELECT 1` 사전 확인
 → platform 변경 시 Helm 관리 image 7개 build/push
 → registry 변경·drift 시 registry-broker image build/push
 → 각 image digest cosign 서명

@@ -8,11 +8,13 @@ const installerPath = new URL('../deploy/production/install-auto-update.sh', imp
 const registryBootstrapPath = new URL('../deploy/production/bootstrap-workload-registry.sh', import.meta.url);
 const registryGatewayReconcilerPath = new URL('../deploy/production/reconcile-workload-registry-gateway.sh', import.meta.url);
 const registryGatewayCheckerPath = new URL('../deploy/production/check-workload-registry-gateway.sh', import.meta.url);
+const hostPostgresConfiguratorPath = new URL('../deploy/production/configure-host-postgres-access.sh', import.meta.url);
 const updater = readFileSync(updaterPath, 'utf8');
 const installer = readFileSync(installerPath, 'utf8');
 const registryBootstrap = readFileSync(registryBootstrapPath, 'utf8');
 const registryGatewayReconciler = readFileSync(registryGatewayReconcilerPath, 'utf8');
 const registryGatewayChecker = readFileSync(registryGatewayCheckerPath, 'utf8');
+const hostPostgresConfigurator = readFileSync(hostPostgresConfiguratorPath, 'utf8');
 
 function bashSyntax(path) {
   // Git stores these scripts with LF. Normalize a Windows checkout before
@@ -32,6 +34,41 @@ test('production auto-update shell scripts have valid bash syntax', () => {
   bashSyntax(registryBootstrapPath);
   bashSyntax(registryGatewayReconcilerPath);
   bashSyntax(registryGatewayCheckerPath);
+  bashSyntax(hostPostgresConfiguratorPath);
+});
+
+test('production updater checks control-plane DB reachability before expensive image builds', () => {
+  assert.match(updater, /control_plane_database_reachable\(\)/);
+  assert.match(updater, /app\.kubernetes\.io\/component=api/);
+  assert.match(updater, /process\.env\.DATABASE_URL/);
+  assert.match(updater, /control-plane database is not reachable from a ready API Pod/);
+  assert.match(updater, /configure-host-postgres-access\.sh/);
+  assert.doesNotMatch(updater, /console\.log\(process\.env\.DATABASE_URL\)/);
+
+  const preflight = updater.indexOf('control_plane_database_reachable ||');
+  const firstBuild = updater.indexOf('log "building ${digest_key}');
+  assert.ok(preflight >= 0 && firstBuild > preflight, 'DB connectivity must be checked before the first image build');
+});
+
+test('host PostgreSQL configurator exposes only the private node endpoint to validated Pod CIDRs', () => {
+  assert.match(hostPostgresConfigurator, /run this script as the server user, without sudo bash/);
+  assert.match(hostPostgresConfigurator, /raibitserver-control-plane-database/);
+  assert.match(hostPostgresConfigurator, /postgresql|postgres/);
+  assert.match(hostPostgresConfigurator, /InternalIP/);
+  assert.match(hostPostgresConfigurator, /podCIDRs|podCIDR/);
+  assert.match(hostPostgresConfigurator, /is_private/);
+  assert.match(hostPostgresConfigurator, /scram-sha-256/);
+  assert.match(hostPostgresConfigurator, /BEGIN RAIBITSERVER MANAGED K3S POD ACCESS/);
+  assert.match(hostPostgresConfigurator, /pg_hba_file_rules/);
+  assert.match(hostPostgresConfigurator, /contains a wildcard host rule; refusing to open the private listener/);
+  assert.match(hostPostgresConfigurator, /listxattr/);
+  assert.match(hostPostgresConfigurator, /ALTER SYSTEM SET listen_addresses/);
+  assert.match(hostPostgresConfigurator, /systemctl restart/);
+  assert.match(hostPostgresConfigurator, /rolling back PostgreSQL network configuration/);
+  assert.match(hostPostgresConfigurator, /TCP_OK/);
+  assert.doesNotMatch(hostPostgresConfigurator, /echo\s+"?\$\{?DATABASE_URL/);
+  assert.doesNotMatch(hostPostgresConfigurator, /listen_addresses\s*=\s*['"]\*/);
+  assert.doesNotMatch(hostPostgresConfigurator, /0\.0\.0\.0\/0/);
 });
 
 test('production updater only deploys the exact main SHA after successful CI', () => {
