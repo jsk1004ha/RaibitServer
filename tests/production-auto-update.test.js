@@ -247,6 +247,7 @@ test('production updater reconciles values changes even when the main SHA is unc
 test('workload registry bootstrap emits a dedicated TLS gateway and a secure Helm overlay', () => {
   assert.match(registryBootstrap, /imagetools inspect[\s\S]*awk '\$1=="Digest:" && !digest \{digest=\$2\} END \{print digest\}'/);
   assert.doesNotMatch(registryBootstrap, /Digest:[^'\n]*exit/);
+  assert.match(registryBootstrap, /SESSION_HMAC_KEY=""[\s\S]*session-hmac-key[\s\S]*\^\[0-9a-f\]\{64\}\$[\s\S]*openssl rand -hex 32/);
   assert.match(registryBootstrap, /name: internal-tls[\s\S]*port: 443[\s\S]*targetPort: 8443/);
   assert.match(registryBootstrap, /BROKER_HOST[\s\S]*INTERNAL_TLS_PORT[\s\S]*INTERNAL_TLS_CERT_FILE[\s\S]*INTERNAL_TLS_KEY_FILE[\s\S]*REGISTRY_UPSTREAM_URL/);
   assert.match(registryBootstrap, /http:[\s\S]*addr: :5000[\s\S]*relativeurls: true/);

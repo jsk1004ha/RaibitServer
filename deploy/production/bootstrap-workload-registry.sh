@@ -131,9 +131,11 @@ kubectl -n "$INFRA_NS" create secret generic raibit-registry-token-signer \
   --from-file=token.crt="$SIGN_DIR/token.crt" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
+SESSION_HMAC_KEY=""
 if kubectl -n "$INFRA_NS" get secret raibit-registry-broker-runtime >/dev/null 2>&1; then
-  SESSION_HMAC_KEY="$(kubectl -n "$INFRA_NS" get secret raibit-registry-broker-runtime -o jsonpath='{.data.session-hmac-key}' | base64 -d)"
-else
+  SESSION_HMAC_KEY="$(kubectl -n "$INFRA_NS" get secret raibit-registry-broker-runtime -o jsonpath='{.data.session-hmac-key}' | base64 -d 2>/dev/null || true)"
+fi
+if ! [[ "$SESSION_HMAC_KEY" =~ ^[0-9a-f]{64}$ ]]; then
   SESSION_HMAC_KEY="$(openssl rand -hex 32)"
 fi
 
