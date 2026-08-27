@@ -1142,7 +1142,7 @@ export class PrismaControlPlaneRepository {
       if (!service) throw notFoundError(`service not found: ${input.serviceId}`);
       assertMutable(service, 'service');
       await requireMutableProject(tx, input.projectId || service.projectId);
-      return upsertServiceEnvironmentWithDb(tx, { ...input, projectId: service.projectId });
+      return upsertServiceEnvironmentWithDb(tx, { ...input, projectId: service.projectId, desiredSpec: service.desiredSpec });
     }, { isolationLevel: 'Serializable' });
   }
 
@@ -1994,8 +1994,15 @@ async function cancelDeletionWork(tx: any, scope: Record<string, any>) {
 
 async function upsertServiceEnvironmentWithDb(db: any, input: Record<string, any>) {
   const { normalizeEnvEntries } = await import('./env-file.ts');
+  const normalizedEntries = normalizeEnvEntries(input.entries || [], { source: input.source || 'api' });
+  const desiredSpec = input.desiredSpec && typeof input.desiredSpec === 'object' && !Array.isArray(input.desiredSpec)
+    ? { ...input.desiredSpec }
+    : {};
+  const runtimeEnv = desiredSpec.env && typeof desiredSpec.env === 'object' && !Array.isArray(desiredSpec.env)
+    ? { ...desiredSpec.env }
+    : {};
   const rows = [];
-  for (const entry of normalizeEnvEntries(input.entries || [], { source: input.source || 'api' })) {
+  for (const entry of normalizedEntries) {
     let secretRef = (entry as any).secretId || null;
     if (entry.isSecret) {
       const secret = await db.secretValue.upsert({
@@ -2011,8 +2018,13 @@ async function upsertServiceEnvironmentWithDb(db: any, input: Record<string, any
       update: data,
       create: data,
     });
+    if (entry.isSecret) delete runtimeEnv[entry.key];
+    else runtimeEnv[entry.key] = entry.value;
     rows.push(row);
   }
+  if (Object.keys(runtimeEnv).length) desiredSpec.env = runtimeEnv;
+  else delete desiredSpec.env;
+  await db.service.update({ where: { id: input.serviceId }, data: { desiredSpec: sanitizeJson(desiredSpec) } });
   await db.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'service.env:upsert', targetType: 'service', targetId: input.serviceId, metadata: maskSecrets({ keys: rows.map((row) => row.key) }) } });
   return { serviceId: input.serviceId, entries: rows.map(maskEnvRow), plainCount: rows.filter((row) => !row.isSecret).length, secretCount: rows.filter((row) => row.isSecret).length };
 }

@@ -893,6 +893,66 @@ func TestSpecFromStateEmitsManagedResourceSecretKeyRefsWithoutPlaintext(t *testi
 	}
 }
 
+func TestSpecFromStateInjectsPlainEnvironmentAndAuthoritativeReleaseMetadata(t *testing.T) {
+	commitSHA := strings.Repeat("a", 40)
+	service := &store.Service{
+		ID: "service-1", ProjectID: "project-1", Name: "web", Slug: "web", Type: "web", Port: 3000,
+		DesiredSpec: map[string]any{"env": map[string]any{
+			"PUBLIC_URL":                   "https://example.test",
+			"RAIBITSERVER_GIT_SHA":         "spoofed",
+			"RAIBITSERVER_DEPLOYMENT_ID":   "spoofed",
+			"RAIBITSERVER_DEPLOYMENT_TYPE": "spoofed",
+		}},
+	}
+	deployment := &store.Deployment{
+		ID: "deployment-1", ServiceID: "service-1", ProjectID: "project-1", DeploymentType: "production", CommitSHA: commitSHA,
+		ImageURL: "registry.example/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	spec := SpecFromState(
+		&store.Project{ID: "project-1", OrganizationID: "org-1", Name: "demo", Slug: "demo"},
+		service,
+		deployment,
+		"raibitserver.test",
+	)
+	if spec.InvalidReason != "" {
+		t.Fatalf("expected valid runtime environment, got %s", spec.InvalidReason)
+	}
+	for key, want := range map[string]string{
+		"PUBLIC_URL":                   "https://example.test",
+		"RAIBITSERVER_GIT_SHA":         commitSHA,
+		"RAIBITSERVER_DEPLOYMENT_ID":   "deployment-1",
+		"RAIBITSERVER_SERVICE_ID":      "service-1",
+		"RAIBITSERVER_PROJECT_ID":      "project-1",
+		"RAIBITSERVER_DEPLOYMENT_TYPE": "production",
+	} {
+		if got := spec.Env[key]; got != want {
+			t.Fatalf("expected %s=%q, got %q", key, want, got)
+		}
+	}
+	payload, err := json.Marshal(NewDeploymentPlan(spec).Manifests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	if !strings.Contains(text, `"name":"RAIBITSERVER_GIT_SHA","value":"`+commitSHA+`"`) {
+		t.Fatalf("runtime manifest missing authoritative commit metadata: %s", text)
+	}
+}
+
+func TestRuntimeEnvironmentRejectsCombinedPlainAndSecretValuesAboveAdmissionLimit(t *testing.T) {
+	plain := make(map[string]string, 65)
+	for index := 0; index < 65; index++ {
+		plain[fmt.Sprintf("PLAIN_%d", index)] = "value"
+	}
+	secret := make([]map[string]any, 64)
+	for index := range secret {
+		secret[index] = map[string]any{"name": fmt.Sprintf("SECRET_%d", index)}
+	}
+	if err := runtimeEnvironmentConflict(plain, secret); err == nil || !strings.Contains(err.Error(), "at most 128") {
+		t.Fatalf("expected combined environment limit error, got %v", err)
+	}
+}
+
 func workloadSpec(serviceType, deploymentID string, desiredSpec, desiredState map[string]any) AppServiceSpec {
 	return SpecFromState(
 		&store.Project{ID: "project-1", OrganizationID: "org-1", Name: "Project", Slug: "project"},

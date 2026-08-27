@@ -23,9 +23,10 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
-COPY --from=build --chown=node:node /workspace/apps/dashboard/.next/standalone ./
-COPY --from=build --chown=node:node /workspace/apps/dashboard/.next/static ./apps/dashboard/.next/static
-COPY --from=build --chown=node:node /workspace/apps/dashboard/public ./apps/dashboard/public
-USER node
+COPY --from=build --chown=10001:10001 /workspace/apps/dashboard/.next/standalone ./
+COPY --from=build --chown=10001:10001 /workspace/apps/dashboard/.next/static ./apps/dashboard/.next/static
+COPY --from=build --chown=10001:10001 /workspace/apps/dashboard/public ./apps/dashboard/public
+RUN chmod -R a+rX /app/apps/dashboard/public
+USER 10001:10001
 EXPOSE 3000
 CMD ["node", "apps/dashboard/server.js"]

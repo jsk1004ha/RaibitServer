@@ -330,12 +330,14 @@ spec:
     - expression: >-
         !variables.isPodWorkload || !has(variables.container.env) ||
         (variables.container.env.size() <= 128 && variables.container.env.all(env,
-        env.name.matches('^[A-Z_][A-Z0-9_]{0,127}$') && !has(env.value) && has(env.valueFrom) &&
-        has(env.valueFrom.secretKeyRef) && !has(env.valueFrom.configMapKeyRef) && !has(env.valueFrom.fieldRef) && !has(env.valueFrom.resourceFieldRef) &&
+        env.name.matches('^[A-Z_][A-Z0-9_]{0,127}$') &&
+        ((has(env.value) && !has(env.valueFrom) && env.value.size() <= 4096) ||
+        (!has(env.value) && has(env.valueFrom) && has(env.valueFrom.secretKeyRef) &&
+        !has(env.valueFrom.configMapKeyRef) && !has(env.valueFrom.fieldRef) && !has(env.valueFrom.resourceFieldRef) &&
         env.valueFrom.secretKeyRef.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') &&
         env.valueFrom.secretKeyRef.key.matches('^[A-Z_][A-Z0-9_]{0,127}$') &&
-        (!has(env.valueFrom.secretKeyRef.optional) || env.valueFrom.secretKeyRef.optional == false)))
-      message: "orchestrator environment variables may reference only explicit same-namespace Secret keys"
+        (!has(env.valueFrom.secretKeyRef.optional) || env.valueFrom.secretKeyRef.optional == false)))))
+      message: "orchestrator environment variables must be bounded literals or explicit same-namespace Secret keys"
     - expression: >-
         variables.target.kind != 'Deployment' ||
         (variables.target.spec.replicas >= 0 && variables.target.spec.replicas <= 100 &&

@@ -56,9 +56,11 @@ test('runtime images contain only the executables their production entrypoints r
   assert.match(dashboard, /\.next\/standalone/);
   assert.match(
     dashboard,
-    /COPY --from=build --chown=node:node \/workspace\/apps\/dashboard\/public \.\/apps\/dashboard\/public/,
-    'dashboard runtime image must contain public assets such as raibit-logo.jpg',
+    /COPY --from=build --chown=10001:10001 \/workspace\/apps\/dashboard\/public \.\/apps\/dashboard\/public/,
+    'dashboard public assets must be owned by the same UID used by the Helm workload',
   );
+  assert.match(dashboard, /chmod -R a\+rX \/app\/apps\/dashboard\/public/, 'dashboard public assets must remain readable under a restrictive checkout umask');
+  assert.match(dashboard, /^USER 10001:10001$/m, 'dashboard image default user must match the Helm workload UID');
   assert.match(dashboard, /server\.js/);
   assert.match(cli, /exec tsc --ignoreConfig \.\.\/\.\.\/packages\/api-client\/src\/index\.ts[\s\S]*api-client-runtime/);
   assert.match(cli, /dist\/index\.js/);
@@ -92,6 +94,7 @@ test('API and dashboard builds emit runnable production artifacts and health end
   assert.match(apiBuildConfig, /"outDir"\s*:\s*"\.\/dist"/);
   assert.match(dashboardConfig, /output:\s*['"]standalone['"]/);
   assert.match(dashboardConfig, /outputFileTracingRoot/);
+  assert.match(dashboardConfig, /images:\s*\{\s*unoptimized:\s*true\s*\}/, 'read-only dashboard workloads must not depend on the writable Next image cache');
   assert.match(dashboardHealth, /status:\s*['"]ok['"]/);
 });
 
@@ -380,6 +383,8 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
   assert.match(workerSecurity, /resources\.requests\.size\(\) == 3[\s\S]*requests\['ephemeral-storage'\] == '64Mi'/);
   assert.match(workerSecurity, /resources\.limits\.size\(\) == 3[\s\S]*limits\['ephemeral-storage'\] == '256Mi'/);
   assert.match(workerSecurity, /emptyDir\.sizeLimit == '128Mi'[\s\S]*!has\(variables\.podSpec\.volumes\[0\]\.emptyDir\.medium\)/);
+  assert.match(workloadPolicy, /has\(env\.value\)[\s\S]*!has\(env\.valueFrom\)[\s\S]*env\.value\.size\(\) <= 4096/, 'plain runtime environment values must be bounded');
+  assert.match(workloadPolicy, /!has\(env\.value\)[\s\S]*has\(env\.valueFrom\.secretKeyRef\)/, 'secret runtime environment values must remain explicit Secret references');
   assert.match(workerSecurity, /@sha256:\[a-f0-9\]\{64\}/);
   assert.match(workerSecurity, /variables\.target\.kind != 'Ingress'[\s\S]*!variables\.ingressHost\.startsWith\('\*\.'\)/);
   assert.match(workerSecurity, /variables\.target\.spec\.ingressClassName == \{\{ \$ingressClassName \| squote \}\}/);

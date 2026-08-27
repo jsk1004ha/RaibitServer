@@ -38,6 +38,18 @@ test('Prisma repository matches migrated PostgreSQL schema and preserves product
       image: 'registry.example.test/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       desiredSpec: { resources: { requests: { cpu: '250m', memory: '256Mi' } } },
     });
+    await repository.upsertServiceEnvironment({
+      projectId: projects[0].id,
+      serviceId: service.id,
+      actorUserId: user.id,
+      entries: [
+        { key: 'PUBLIC_URL', value: 'https://integration.example.test', isSecret: false },
+        { key: 'API_TOKEN', value: 'must-remain-sealed', isSecret: true },
+      ],
+    });
+    const serviceWithEnvironment = await repository.getService(service.id);
+    assert.equal(serviceWithEnvironment.desiredSpec.env.PUBLIC_URL, 'https://integration.example.test');
+    assert.equal(serviceWithEnvironment.desiredSpec.env.API_TOKEN, undefined);
 
     const month = utcMonthBounds();
     const buildStartedAt = new Date(month.start + 2 * 86_400_000);

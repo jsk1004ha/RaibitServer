@@ -397,6 +397,8 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(envList.statusCode, 200);
     assert.equal(envList.body.entries.some((entry) => entry.key === 'PUBLIC_URL' && entry.value === 'https://alice.example'), true);
     assert.equal(JSON.stringify(envList.body).includes('postgresql://alice:secret'), false);
+    assert.equal(controlPlane.store.services.get(aliceService.body.id).desiredSpec.env.PUBLIC_URL, 'https://alice.example');
+    assert.equal(controlPlane.store.services.get(aliceService.body.id).desiredSpec.env.DATABASE_URL, undefined);
 
     const github = await request(port, 'POST', '/integrations/github', { organizationId: aliceVerified.body.organization.id, accountLogin: 'alice', token: 'ghp_private_token' }, aliceLogin.body.token);
     assert.equal(github.statusCode, 201);

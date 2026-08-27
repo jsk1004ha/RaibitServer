@@ -817,6 +817,10 @@ export class ControlPlaneStore {
     if (String(service.projectId) !== String(projectId)) throw forbidden('service does not belong to project');
     const normalizedEntries = normalizeEnvEntries(entries, { source });
     const environment = { ...(service.environment || {}) };
+    const desiredSpec = { ...(service.desiredSpec || {}) };
+    const runtimeEnv = desiredSpec.env && typeof desiredSpec.env === 'object' && !Array.isArray(desiredSpec.env)
+      ? { ...desiredSpec.env }
+      : {};
     const publicRows = [];
     for (const entry of normalizedEntries) {
       let secretId = null;
@@ -825,12 +829,16 @@ export class ControlPlaneStore {
         secretId = secret.id;
       }
       environment[entry.key] = entry.isSecret ? `secret:${secretId}` : entry.value;
+      if (entry.isSecret) delete runtimeEnv[entry.key];
+      else runtimeEnv[entry.key] = entry.value;
       const id = stableId('env', serviceId, entry.key);
       const row = { id, projectId, serviceId, key: entry.key, value: entry.isSecret ? null : entry.value, isSecret: entry.isSecret, secretId, valueMasked: entry.valueMasked, source: entry.source || source, updatedAt: nowIso() };
       this.environmentVariables.set(id, row);
       publicRows.push(row);
     }
-    this.updateService(serviceId, { environment });
+    if (Object.keys(runtimeEnv).length) desiredSpec.env = runtimeEnv;
+    else delete desiredSpec.env;
+    this.services.set(serviceId, { ...service, environment, desiredSpec, updatedAt: nowIso() });
     this.audit(actorUserId, 'service.env:upsert', 'service', serviceId, { keys: normalizedEntries.map((entry) => entry.key), source });
     return { serviceId, entries: maskEnvEntries(publicRows), plainCount: publicRows.filter((row) => !row.isSecret).length, secretCount: publicRows.filter((row) => row.isSecret).length };
   }

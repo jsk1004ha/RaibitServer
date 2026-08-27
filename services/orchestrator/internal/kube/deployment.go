@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -19,6 +20,7 @@ const (
 
 	maxRuntimeArrayEntries         = 64
 	maxRuntimeEntryBytes           = 4096
+	maxRuntimeEnvironmentEntries   = 128
 	maxCronScheduleBytes           = 128
 	maxPreviewRouteIdentityLength  = 39
 	tenantQuotaName                = "tenant-resource-budget"
@@ -188,12 +190,14 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	command, commandErr := runtimeStringArray(service, "command")
 	args, argsErr := runtimeStringArray(service, "args")
 	schedule, scheduleErr := runtimeSchedule(service)
+	environment, environmentErr := runtimeEnvironment(service, deployment)
 	secretEnv, secretEnvErr := runtimeSecretEnv(service)
-	invalidReason := firstError(commandErr, argsErr, scheduleErr, secretEnvErr)
+	environmentConflictErr := runtimeEnvironmentConflict(environment, secretEnv)
+	invalidReason := firstError(commandErr, argsErr, scheduleErr, environmentErr, secretEnvErr, environmentConflictErr)
 	return AppServiceSpec{
 		Name: serviceName, Namespace: tenantLabel, Image: image, Port: service.Port, Replicas: service.Replicas, Host: host,
 		ProjectID: project.ID, ServiceID: service.ID, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug,
-		ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Command: command, Args: args, Schedule: schedule, SecretEnv: secretEnv,
+		ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Command: command, Args: args, Schedule: schedule, Env: environment, SecretEnv: secretEnv,
 		Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName,
 		PublicEgress: servicePublicEgress(service), AllowTenantIngress: serviceTenantIngress(service), InvalidReason: invalidReason,
 	}
@@ -468,10 +472,18 @@ func runtimeContainer(spec AppServiceSpec) map[string]any {
 	if len(spec.Args) > 0 {
 		container["args"] = spec.Args
 	}
-	if len(spec.SecretEnv) > 0 {
-		env := make([]any, len(spec.SecretEnv))
+	if len(spec.Env) > 0 || len(spec.SecretEnv) > 0 {
+		env := make([]any, 0, len(spec.Env)+len(spec.SecretEnv))
+		names := make([]string, 0, len(spec.Env))
+		for name := range spec.Env {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			env = append(env, map[string]any{"name": name, "value": spec.Env[name]})
+		}
 		for index := range spec.SecretEnv {
-			env[index] = spec.SecretEnv[index]
+			env = append(env, spec.SecretEnv[index])
 		}
 		container["env"] = env
 	}
@@ -623,8 +635,8 @@ func runtimeSecretEnv(service *store.Service) ([]map[string]any, error) {
 		return nil, nil
 	}
 	values, ok := value.([]any)
-	if !ok || len(values) == 0 || len(values) > 128 {
-		return nil, fmt.Errorf("secretEnv must contain between 1 and 128 Kubernetes Secret references")
+	if !ok || len(values) == 0 || len(values) > maxRuntimeEnvironmentEntries {
+		return nil, fmt.Errorf("secretEnv must contain between 1 and %d Kubernetes Secret references", maxRuntimeEnvironmentEntries)
 	}
 	result := make([]map[string]any, 0, len(values))
 	seen := map[string]bool{}
@@ -648,6 +660,65 @@ func runtimeSecretEnv(service *store.Service) ([]map[string]any, error) {
 		result = append(result, map[string]any{"name": name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": secretName, "key": key}}})
 	}
 	return result, nil
+}
+
+func runtimeEnvironment(service *store.Service, deployment *store.Deployment) (map[string]string, error) {
+	result := map[string]string{}
+	if value, found := desiredValue(service, "env"); found {
+		switch entries := value.(type) {
+		case map[string]any:
+			for name, raw := range entries {
+				text, ok := raw.(string)
+				if !ok {
+					return nil, fmt.Errorf("env[%s] must be a string", name)
+				}
+				result[name] = text
+			}
+		case map[string]string:
+			for name, text := range entries {
+				result[name] = text
+			}
+		default:
+			return nil, fmt.Errorf("env must be an object")
+		}
+	}
+
+	// These values describe the exact release selected by the control plane.
+	// They intentionally override tenant-supplied values so applications can
+	// rely on them as authoritative deployment evidence.
+	result["RAIBITSERVER_DEPLOYMENT_ID"] = deployment.ID
+	result["RAIBITSERVER_SERVICE_ID"] = deployment.ServiceID
+	result["RAIBITSERVER_PROJECT_ID"] = deployment.ProjectID
+	result["RAIBITSERVER_DEPLOYMENT_TYPE"] = firstNonEmpty(deployment.DeploymentType, "production")
+	if commitSHA := strings.TrimSpace(deployment.CommitSHA); commitSHA != "" {
+		result["RAIBITSERVER_GIT_SHA"] = commitSHA
+	}
+
+	if len(result) > maxRuntimeEnvironmentEntries {
+		return nil, fmt.Errorf("env must contain at most %d values", maxRuntimeEnvironmentEntries)
+	}
+	for name, value := range result {
+		if !environmentNamePattern.MatchString(name) {
+			return nil, fmt.Errorf("env contains an invalid environment name %q", name)
+		}
+		if len([]byte(value)) > maxRuntimeEntryBytes || containsControl(value) {
+			return nil, fmt.Errorf("env[%s] contains an invalid value", name)
+		}
+	}
+	return result, nil
+}
+
+func runtimeEnvironmentConflict(environment map[string]string, secretEnv []map[string]any) error {
+	if len(environment)+len(secretEnv) > maxRuntimeEnvironmentEntries {
+		return fmt.Errorf("environment must contain at most %d plain values and Secret references in total", maxRuntimeEnvironmentEntries)
+	}
+	for _, entry := range secretEnv {
+		name, _ := entry["name"].(string)
+		if _, exists := environment[name]; exists {
+			return fmt.Errorf("environment name %s is configured as both a plain value and a Secret reference", name)
+		}
+	}
+	return nil
 }
 
 func desiredValue(service *store.Service, key string) (any, bool) {

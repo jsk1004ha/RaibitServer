@@ -7,6 +7,7 @@ const dashboardDirectory = path.dirname(fileURLToPath(import.meta.url));
 const nextConfig = {
   output: 'standalone',
   outputFileTracingRoot: path.resolve(dashboardDirectory, '../..'),
+  images: { unoptimized: true },
 };
 
 export default nextConfig;
