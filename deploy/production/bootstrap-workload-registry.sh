@@ -475,7 +475,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: raibit-registry-auth
+              app: raibit-registry-auth
       ports:
         - { protocol: TCP, port: 5000 }
 ---
