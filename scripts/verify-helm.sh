@@ -166,6 +166,9 @@ if ! awk '
 fi
 grep -q 'registry.example.com/raibitserver/providers/postgresql@sha256:0101010101010101010101010101010101010101010101010101010101010101' "$OUTPUT_DIR/production.yaml"
 grep -q 'name: raibitserver-observability-ingesters' "$OUTPUT_DIR/production.yaml"
+grep -q 'cidr: "10.96.0.1/32"' "$OUTPUT_DIR/production.yaml"
+grep -q 'cidr: "172.18.0.2/32"' "$OUTPUT_DIR/production.yaml"
+grep -q 'port: 6443' "$OUTPUT_DIR/production.yaml"
 grep -q 'kind: Ingress' "$OUTPUT_DIR/production.yaml"
 grep -q 'secretName: "ci-raibitserver-ingress-tls"' "$OUTPUT_DIR/production.yaml"
 grep -q 'app.kubernetes.io/component: database-migration' "$OUTPUT_DIR/production.yaml"
@@ -325,6 +328,8 @@ expect_render_failure credential-ttl-shorter-than-job-deadline --set builder.reg
 expect_render_failure dispatch-session-shorter-than-job-deadline --set builder.dispatch.sessionTTLSeconds=839
 expect_render_failure missing-db-egress --set-json 'builder.databaseEgress.selectorPeers=[]' --set-json 'builder.databaseEgress.cidrs=[]'
 expect_render_failure missing-observability-kubernetes-egress --set-json 'observability.networkPolicy.kubernetesApiEgress.cidrs=[]'
+expect_render_failure missing-observability-kubernetes-endpoint-egress --set-json 'observability.networkPolicy.kubernetesApiEgress.endpointCidrs=[]'
+expect_render_failure invalid-observability-kubernetes-endpoint-port --set observability.networkPolicy.kubernetesApiEgress.endpointPort=0
 expect_render_failure missing-observability-database-egress --set-json 'observability.networkPolicy.databaseEgress.selectorPeers=[]' --set-json 'observability.networkPolicy.databaseEgress.cidrs=[]'
 expect_render_failure missing-storage-bound --set-string builder.ephemeralStorage.builderLimit=
 expect_render_failure invalid-storage-bound --set-string builder.ephemeralStorage.builderLimit=0Gi

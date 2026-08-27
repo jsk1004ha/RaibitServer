@@ -66,6 +66,8 @@ observability:
     kubernetesApiEgress:
       cidrs:
         - 10.96.0.1/32
+      endpointCidrs:
+        - 172.18.0.2/32
     databaseEgress:
       selectorPeers: []
       cidrs:

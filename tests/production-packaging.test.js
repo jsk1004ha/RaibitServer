@@ -563,11 +563,13 @@ test('production observability ingesters use bounded config, least privilege, an
   assert.match(values, /metricsIngester:[\s\S]*enabled:\s*false/);
   assert.match(values, /logIngester:[\s\S]*resources:[\s\S]*requests:[\s\S]*limits:/);
   assert.match(values, /metricsIngester:[\s\S]*resources:[\s\S]*requests:[\s\S]*limits:/);
-  assert.match(values, /kubernetesApiEgress:[\s\S]*cidrs:\s*\[\]/);
+  assert.match(values, /kubernetesApiEgress:[\s\S]*cidrs:\s*\[\][\s\S]*endpointPort:\s*6443[\s\S]*endpointCidrs:\s*\[\]/);
   assert.match(fixture, /logIngester:[\s\S]*enabled:\s*true/);
   assert.match(fixture, /metricsIngester:[\s\S]*enabled:\s*true/);
   assert.match(fixture, /logIngester:\s*sha256:[a-f0-9]{64}/);
   assert.match(fixture, /metricsIngester:\s*sha256:[a-f0-9]{64}/);
+  assert.match(fixture, /kubernetesApiEgress:[\s\S]*10\.96\.0\.1\/32[\s\S]*endpointCidrs:[\s\S]*172\.18\.0\.2\/32/);
+  assert.match(security, /kubernetesApiEgress\.endpointCidrs[\s\S]*port:\s*\{\{ \$network\.kubernetesApiEgress\.endpointPort \}\}/);
 });
 
 test('production Helm verification exercises packaging fail-closed boundaries', async () => {
@@ -591,6 +593,8 @@ test('production Helm verification exercises packaging fail-closed boundaries', 
     'missing-log-ingester-digest',
     'missing-metrics-ingester-digest',
     'missing-observability-kubernetes-egress',
+    'missing-observability-kubernetes-endpoint-egress',
+    'invalid-observability-kubernetes-endpoint-port',
     'missing-observability-database-egress',
     'missing-postgresql-provider-image',
     'mutable-redis-provider-image',

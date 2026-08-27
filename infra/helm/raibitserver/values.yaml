@@ -216,6 +216,8 @@ observability:
     kubernetesApiEgress:
       port: 443
       cidrs: []
+      endpointPort: 6443
+      endpointCidrs: []
     databaseEgress:
       port: 5432
       selectorPeers: []

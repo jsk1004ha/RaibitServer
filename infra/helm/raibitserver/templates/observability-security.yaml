@@ -59,6 +59,17 @@
 {{- fail "production observability Kubernetes API egress CIDRs must be non-empty" -}}
 {{- end -}}
 {{- end -}}
+{{- if or (lt (int $network.kubernetesApiEgress.endpointPort) 1) (gt (int $network.kubernetesApiEgress.endpointPort) 65535) -}}
+{{- fail "production observability Kubernetes API endpoint egress port must be between 1 and 65535" -}}
+{{- end -}}
+{{- if empty $network.kubernetesApiEgress.endpointCidrs -}}
+{{- fail "production observability Kubernetes API endpoint egress requires at least one CIDR" -}}
+{{- end -}}
+{{- range $cidr := $network.kubernetesApiEgress.endpointCidrs -}}
+{{- if empty $cidr -}}
+{{- fail "production observability Kubernetes API endpoint egress CIDRs must be non-empty" -}}
+{{- end -}}
+{{- end -}}
 {{- if or (lt (int $network.databaseEgress.port) 1) (gt (int $network.databaseEgress.port) 65535) -}}
 {{- fail "production observability database egress port must be between 1 and 65535" -}}
 {{- end -}}
@@ -195,6 +206,14 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $network.kubernetesApiEgress.port }}
+    - to:
+{{- range $cidr := $network.kubernetesApiEgress.endpointCidrs }}
+        - ipBlock:
+            cidr: {{ $cidr | quote }}
+{{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $network.kubernetesApiEgress.endpointPort }}
     - to:
 {{- range $peer := $network.databaseEgress.selectorPeers }}
 {{- if $peer.namespaceSelector }}
