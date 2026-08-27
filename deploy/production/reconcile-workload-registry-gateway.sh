@@ -253,6 +253,9 @@ COREDNS_JSON="${RUN_DIR}/coredns.json"
 kubectl -n kube-system get configmap coredns -o json >"$COREDNS_JSON"
 jq -e '.data | has("NodeHosts")' "$COREDNS_JSON" >/dev/null \
   || fail "CoreDNS ConfigMap does not expose the managed NodeHosts key"
+COREDNS_CUSTOM_JSON="${RUN_DIR}/coredns-custom.json"
+kubectl -n kube-system get configmap coredns-custom --ignore-not-found -o json >"$COREDNS_CUSTOM_JSON" \
+  || fail "optional CoreDNS custom ConfigMap could not be read"
 kubectl -n kube-system get deployment coredns >/dev/null \
   || fail "CoreDNS Deployment is missing"
 [[ -n "$(kubectl -n kube-system get pods -l k8s-app=kube-dns -o name)" ]] \
@@ -1052,6 +1055,46 @@ then
   fail "CoreDNS split-DNS candidate could not be generated"
 fi
 
+LEGACY_OVERRIDE_CURRENT_FILE="${RUN_DIR}/legacy-registry-override.current"
+LEGACY_OVERRIDE_NEW_FILE="${RUN_DIR}/legacy-registry-override.new"
+if ! python3 - "$COREDNS_CUSTOM_JSON" \
+  "$LEGACY_OVERRIDE_CURRENT_FILE" "$LEGACY_OVERRIDE_NEW_FILE" \
+  "$BASE_DOMAIN" "$GATEWAY_CLUSTER_IP" "$REGISTRY_HOST" "$AUTH_HOST" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1])
+current = Path(sys.argv[2])
+replacement = Path(sys.argv[3])
+base_domain, gateway_ip, registry_host, auth_host = sys.argv[4:]
+text = source.read_text().strip()
+if not text:
+    raise SystemExit(0)
+data = json.loads(text)
+legacy = data.get('data', {}).get('raibit-registry.server')
+if legacy is None:
+    raise SystemExit(0)
+if not isinstance(legacy, str):
+    raise SystemExit('ERROR: legacy CoreDNS registry override must be a string')
+current.write_text(legacy)
+replacement.write_text(
+    f'{base_domain}:53 {{\n'
+    '  hosts {\n'
+    f'    {gateway_ip} {registry_host} {auth_host}\n'
+    '    fallthrough\n'
+    '  }\n'
+    '  forward . /etc/resolv.conf\n'
+    '  cache 30\n'
+    '}'
+)
+PY
+then
+  rollback_registry_and_gateway \
+    || fail "legacy CoreDNS input validation failed and exact registry rollback also failed"
+  fail "legacy CoreDNS registry override could not be read safely"
+fi
+
 rollback_coredns_nodehosts() {
   local patch
   patch="$(
@@ -1062,34 +1105,73 @@ rollback_coredns_nodehosts() {
     log "ERROR: CoreDNS NodeHosts changed concurrently; exact rollback was refused" >&2
     return 1
   fi
-  if ! kubectl -n kube-system rollout restart deployment/coredns >/dev/null; then
-    log "ERROR: restored CoreDNS data but could not restart CoreDNS" >&2
+}
+
+rollback_coredns_legacy_override() {
+  local patch
+  patch="$(
+    jq -cn --rawfile expected "$LEGACY_OVERRIDE_NEW_FILE" --rawfile previous "$LEGACY_OVERRIDE_CURRENT_FILE" \
+      '[{"op":"test","path":"/data/raibit-registry.server","value":$expected},{"op":"replace","path":"/data/raibit-registry.server","value":$previous}]'
+  )"
+  if ! kubectl -n kube-system patch configmap coredns-custom --type=json -p "$patch" >/dev/null; then
+    log "ERROR: legacy CoreDNS registry override changed concurrently; exact rollback was refused" >&2
     return 1
   fi
-  kubectl -n kube-system rollout status deployment/coredns --timeout=120s
+}
+
+rollback_coredns_configuration() {
+  local rollback_failed=0
+  local restart_required=0
+  if [[ "$COREDNS_CHANGED" == 1 ]]; then
+    rollback_coredns_nodehosts || rollback_failed=1
+    restart_required=1
+  fi
+  if [[ "$COREDNS_LEGACY_CHANGED" == 1 ]]; then
+    rollback_coredns_legacy_override || rollback_failed=1
+    restart_required=1
+  fi
+  if [[ "$restart_required" == 1 ]]; then
+    kubectl -n kube-system rollout restart deployment/coredns >/dev/null || rollback_failed=1
+    kubectl -n kube-system rollout status deployment/coredns --timeout=120s || rollback_failed=1
+  fi
+  [[ "$rollback_failed" == 0 ]]
 }
 
 rollback_coredns_registry_and_gateway() {
   local rollback_failed=0
-  if [[ "$COREDNS_CHANGED" == 1 ]]; then
-    rollback_coredns_nodehosts || rollback_failed=1
-  fi
+  rollback_coredns_configuration || rollback_failed=1
   rollback_registry_and_gateway || rollback_failed=1
   [[ "$rollback_failed" == 0 ]]
 }
 
 COREDNS_CHANGED=0
+COREDNS_LEGACY_CHANGED=0
+if [[ -f "$LEGACY_OVERRIDE_CURRENT_FILE" ]] \
+  && ! cmp -s "$LEGACY_OVERRIDE_NEW_FILE" "$LEGACY_OVERRIDE_CURRENT_FILE"; then
+  LEGACY_OVERRIDE_PATCH="$(
+    jq -cn --rawfile old "$LEGACY_OVERRIDE_CURRENT_FILE" --rawfile new "$LEGACY_OVERRIDE_NEW_FILE" \
+      '[{"op":"test","path":"/data/raibit-registry.server","value":$old},{"op":"replace","path":"/data/raibit-registry.server","value":$new}]'
+  )"
+  if ! kubectl -n kube-system patch configmap coredns-custom --type=json -p "$LEGACY_OVERRIDE_PATCH" >/dev/null; then
+    rollback_registry_and_gateway \
+      || fail "legacy CoreDNS conflict occurred and exact registry rollback also failed"
+    fail "legacy CoreDNS registry override changed concurrently; refusing to overwrite it"
+  fi
+  COREDNS_LEGACY_CHANGED=1
+fi
 if ! cmp -s "$NODEHOSTS_NEW_FILE" "$NODEHOSTS_CURRENT_FILE"; then
   COREDNS_PATCH="$(
     jq -cn --rawfile old "$NODEHOSTS_CURRENT_FILE" --rawfile new "$NODEHOSTS_NEW_FILE" \
       '[{"op":"test","path":"/data/NodeHosts","value":$old},{"op":"replace","path":"/data/NodeHosts","value":$new}]'
   )"
   if ! kubectl -n kube-system patch configmap coredns --type=json -p "$COREDNS_PATCH" >/dev/null; then
-    rollback_registry_and_gateway \
+    rollback_coredns_registry_and_gateway \
       || fail "CoreDNS conflict occurred and exact registry rollback also failed"
     fail "CoreDNS NodeHosts changed concurrently; refusing to overwrite it"
   fi
   COREDNS_CHANGED=1
+fi
+if [[ "$COREDNS_CHANGED" == 1 || "$COREDNS_LEGACY_CHANGED" == 1 ]]; then
   if ! kubectl -n kube-system rollout restart deployment/coredns >/dev/null; then
     rollback_coredns_registry_and_gateway \
       || fail "CoreDNS restart failed and exact full rollback also failed"
@@ -1131,6 +1213,42 @@ then
   rollback_coredns_registry_and_gateway \
     || fail "CoreDNS identity verification failed and exact full rollback also failed"
   fail "CoreDNS registry host identity verification failed"
+fi
+
+COREDNS_CUSTOM_APPLIED="${RUN_DIR}/coredns-custom.applied.json"
+if ! kubectl -n kube-system get configmap coredns-custom --ignore-not-found -o json >"$COREDNS_CUSTOM_APPLIED"; then
+  rollback_coredns_registry_and_gateway \
+    || fail "legacy CoreDNS readback failed and exact full rollback also failed"
+  fail "optional CoreDNS custom ConfigMap could not be read back"
+fi
+if ! python3 - "$COREDNS_CUSTOM_APPLIED" \
+  "$GATEWAY_CLUSTER_IP" "$REGISTRY_HOST" "$AUTH_HOST" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text().strip()
+if not text:
+    raise SystemExit(0)
+data = json.loads(text)
+gateway_ip, registry_host, auth_host = sys.argv[2:]
+legacy = data.get('data', {}).get('raibit-registry.server')
+if legacy is None:
+    raise SystemExit(0)
+if not isinstance(legacy, str):
+    raise SystemExit('ERROR: legacy CoreDNS registry override must be a string')
+matches = []
+for line in legacy.splitlines():
+    parts = line.split()
+    if len(parts) >= 2 and ({registry_host, auth_host} & set(parts[1:])):
+        matches.append(parts)
+if matches != [[gateway_ip, registry_host, auth_host]]:
+    raise SystemExit('ERROR: legacy CoreDNS registry override bypasses the private gateway')
+PY
+then
+  rollback_coredns_registry_and_gateway \
+    || fail "legacy CoreDNS verification failed and exact full rollback also failed"
+  fail "legacy CoreDNS registry override verification failed"
 fi
 
 VALUES_TMP=""

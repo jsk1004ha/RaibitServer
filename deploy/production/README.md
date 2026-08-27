@@ -100,7 +100,7 @@ Cloudflare Tunnel을 production ingress 앞단으로 사용할 수 있지만, Tu
 
 ## Workload registry와 credential broker 연결
 
-`bootstrap-workload-registry.sh`는 registry와 credential broker를 배포한 뒤, cluster 안에서 두 공개 hostname을 전용 `raibit-registry-auth` Service의 ClusterIP로 해석하도록 split DNS를 구성합니다. 이 Pod는 8443에서 TLS를 직접 종료하고 요청의 SNI와 `Host`가 정확히 `registry.<domain>` 또는 `registry-auth.<domain>`인지 검사합니다. broker hostname은 기존 broker handler로 보내고 registry hostname은 고정된 내부 `raibit-registry:5000` Service로만 전달합니다. Registry의 upload `Location`은 상대 URL로 고정해 내부 Service 주소가 client에 노출되거나 다음 push 요청이 gateway를 이탈하지 않게 합니다.
+`bootstrap-workload-registry.sh`는 registry와 credential broker를 배포한 뒤, cluster 안에서 두 공개 hostname을 전용 `raibit-registry-auth` Service의 ClusterIP로 해석하도록 split DNS를 구성합니다. 이전 설치의 `coredns-custom/raibit-registry.server`가 남아 있으면 같은 ClusterIP로 교정해 더 구체적인 DNS zone이 새 경로를 덮어쓰지 못하게 합니다. 이 Pod는 8443에서 TLS를 직접 종료하고 요청의 SNI와 `Host`가 정확히 `registry.<domain>` 또는 `registry-auth.<domain>`인지 검사합니다. broker hostname은 기존 broker handler로 보내고 registry hostname은 고정된 내부 `raibit-registry:5000` Service로만 전달합니다. Registry의 upload `Location`은 상대 URL로 고정해 내부 Service 주소가 client에 노출되거나 다음 push 요청이 gateway를 이탈하지 않게 합니다.
 
 빌드 executor의 NetworkPolicy에는 공유 Traefik IP나 사설 CIDR 예외를 넣지 않습니다. 대신 `raibitserver-infra` namespace의 `app.kubernetes.io/name=raibit-registry-auth` Pod만 선택하고, Service 포트 443과 실제 TLS listener 포트 8443만 허용합니다. 두 포트를 함께 적는 이유는 Service DNAT과 NetworkPolicy 처리 순서가 네트워크 플러그인마다 다를 수 있기 때문입니다. 대상 Pod 경계는 그대로이므로 사용자 Dockerfile이 같은 노드의 다른 HTTPS virtual host나 metadata/private network로 우회할 수 없습니다. broker token 값도 Helm values에 기록하지 않고 기존 Kubernetes Secret 이름만 참조합니다.
 

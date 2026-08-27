@@ -166,6 +166,9 @@ test('registry gateway reconciler uses exact TLS identities without a shared ing
   assert.match(registryGatewayReconciler, /www-authenticate:/i);
   assert.match(registryGatewayReconciler, /--rawfile old "\$NODEHOSTS_CURRENT_FILE" --rawfile new "\$NODEHOSTS_NEW_FILE"/);
   assert.match(registryGatewayReconciler, /rollback_coredns_nodehosts/);
+  assert.match(registryGatewayReconciler, /configmap coredns-custom --ignore-not-found/);
+  assert.match(registryGatewayReconciler, /rollback_coredns_legacy_override/);
+  assert.match(registryGatewayReconciler, /legacy CoreDNS registry override bypasses the private gateway/);
   assert.match(registryGatewayReconciler, /rollback_registry_state/);
   assert.match(registryGatewayReconciler, /rollback_gateway_resources/);
   assert.match(registryGatewayReconciler, /capture_gateway_applied_state/);
@@ -210,6 +213,8 @@ test('production updater detects live registry gateway drift before its early ex
   assert.match(registryGatewayChecker, /REGISTRY_STATUS.*== 401/s);
   assert.match(registryGatewayChecker, /exactly one authentication challenge/);
   assert.match(registryGatewayChecker, /CoreDNS registry split DNS is not exact/);
+  assert.match(registryGatewayChecker, /configmap coredns-custom --ignore-not-found/);
+  assert.match(registryGatewayChecker, /legacy CoreDNS registry override bypasses the private gateway/);
 
   const observedState = updater.indexOf('REGISTRY_OBSERVED_STATE_DIGEST="$(registry_state_digest)"');
   const liveProbe = updater.indexOf('&& registry_runtime_healthy', observedState);
@@ -262,6 +267,8 @@ test('workload registry bootstrap emits a dedicated TLS gateway and a secure Hel
   assert.match(registryBootstrap, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*port: 8443/);
   assert.match(registryBootstrap, /GATEWAY_CLUSTER_IP=.*service raibit-registry-auth/);
   assert.match(registryBootstrap, /GATEWAY_CLUSTER_IP\} \$\{REGISTRY_HOST\} \$\{AUTH_HOST\}/);
+  assert.match(registryBootstrap, /configmap coredns-custom --ignore-not-found/);
+  assert.match(registryBootstrap, /raibit-registry\.server/);
   assert.match(registryBootstrap, /workload-registry-values\.yaml/);
   assert.doesNotMatch(registryBootstrap, /REGISTRY_VALUES_FILE="\$\{RAIBITSERVER_REGISTRY_VALUES_FILE:-/);
   assert.match(registryBootstrap, /privateGateway:[\s\S]*enabled: true[\s\S]*namespace: "\$\{INFRA_NS\}"[\s\S]*podName: "raibit-registry-auth"[\s\S]*servicePort: 443[\s\S]*port: 8443/);

@@ -558,6 +558,30 @@ NODEHOSTS_NEW="${NODEHOSTS_FILTERED}"$'\n'"${GATEWAY_CLUSTER_IP} ${REGISTRY_HOST
 NODEHOSTS_JSON="$(printf '%s' "$NODEHOSTS_NEW" | jq -Rs .)"
 kubectl -n kube-system patch configmap coredns --type=merge \
   -p "{\"data\":{\"NodeHosts\":${NODEHOSTS_JSON}}}" >/dev/null
+
+# Older installations used a more-specific base-domain server block. Keep the
+# optional legacy key, but move its two registry records onto the same private
+# gateway so it cannot override NodeHosts with the node address.
+COREDNS_CUSTOM_JSON="$(kubectl -n kube-system get configmap coredns-custom --ignore-not-found -o json)"
+if [[ -n "$COREDNS_CUSTOM_JSON" ]] \
+  && jq -e '.data? | type == "object" and has("raibit-registry.server")' \
+    <<<"$COREDNS_CUSTOM_JSON" >/dev/null; then
+  LEGACY_OVERRIDE_CURRENT="$(jq -r '.data["raibit-registry.server"]' <<<"$COREDNS_CUSTOM_JSON")"
+  LEGACY_OVERRIDE_NEW="${BASE_DOMAIN}:53 {
+  hosts {
+    ${GATEWAY_CLUSTER_IP} ${REGISTRY_HOST} ${AUTH_HOST}
+    fallthrough
+  }
+  forward . /etc/resolv.conf
+  cache 30
+}"
+  LEGACY_OVERRIDE_PATCH="$(jq -cn \
+    --arg old "$LEGACY_OVERRIDE_CURRENT" \
+    --arg new "$LEGACY_OVERRIDE_NEW" \
+    '[{"op":"test","path":"/data/raibit-registry.server","value":$old},{"op":"replace","path":"/data/raibit-registry.server","value":$new}]')"
+  kubectl -n kube-system patch configmap coredns-custom --type=json \
+    -p "$LEGACY_OVERRIDE_PATCH" >/dev/null
+fi
 kubectl -n kube-system rollout restart deployment/coredns >/dev/null
 kubectl -n kube-system rollout status deployment/coredns --timeout=120s
 

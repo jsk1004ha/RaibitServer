@@ -140,7 +140,7 @@ cat ~/.config/raibitserver/workload-registry-values.yaml
 kubectl -n raibitserver-system get networkpolicy raibitserver-builder-executor -o yaml
 ```
 
-CoreDNS의 `NodeHosts`에서 두 registry hostname은 `raibit-registry-auth` Service의 ClusterIP와 같아야 합니다. overlay에는 `privateGateway.enabled: true`, namespace `raibitserver-infra`, Pod 이름 `raibit-registry-auth`, `servicePort: 443`, `port: 8443`이 있어야 합니다. NetworkPolicy에도 같은 namespaceSelector와 podSelector 아래 TCP 443/8443 조합이 렌더되어야 합니다. 서버 자체의 `/etc/hosts`는 Docker smoke test를 위해 노드 IP를 사용할 수 있으므로, 서버에서 실행한 `getent hosts` 결과만으로 Pod의 split DNS를 판단하지 않습니다.
+CoreDNS의 `NodeHosts`에서 두 registry hostname은 `raibit-registry-auth` Service의 ClusterIP와 같아야 합니다. `coredns-custom`에 예전 `raibit-registry.server` key가 남아 있다면 그 안의 두 hostname도 같은 ClusterIP여야 합니다. overlay에는 `privateGateway.enabled: true`, namespace `raibitserver-infra`, Pod 이름 `raibit-registry-auth`, `servicePort: 443`, `port: 8443`이 있어야 합니다. NetworkPolicy에도 같은 namespaceSelector와 podSelector 아래 TCP 443/8443 조합이 렌더되어야 합니다. 서버 자체의 `/etc/hosts`는 Docker smoke test를 위해 노드 IP를 사용할 수 있으므로, 서버에서 실행한 `getent hosts` 결과만으로 Pod의 split DNS를 판단하지 않습니다.
 
 ### 해결
 

@@ -86,6 +86,7 @@ GATEWAY_DEPLOYMENT="${RUN_DIR}/gateway-deployment.json"
 GATEWAY_SERVICE="${RUN_DIR}/gateway-service.json"
 REGISTRY_STATEFULSET="${RUN_DIR}/registry-statefulset.json"
 COREDNS="${RUN_DIR}/coredns.json"
+COREDNS_CUSTOM="${RUN_DIR}/coredns-custom.json"
 
 kubectl -n "$INFRA_NS" get deployment raibit-registry-auth -o json >"$GATEWAY_DEPLOYMENT" \
   || fail "registry gateway Deployment could not be read"
@@ -95,10 +96,12 @@ kubectl -n "$INFRA_NS" get statefulset raibit-registry -o json >"$REGISTRY_STATE
   || fail "workload registry StatefulSet could not be read"
 kubectl -n kube-system get configmap coredns -o json >"$COREDNS" \
   || fail "CoreDNS ConfigMap could not be read"
+kubectl -n kube-system get configmap coredns-custom --ignore-not-found -o json >"$COREDNS_CUSTOM" \
+  || fail "optional CoreDNS custom ConfigMap could not be read"
 
 if ! GATEWAY_CLUSTER_IP="$(python3 - \
   "$GATEWAY_DEPLOYMENT" "$GATEWAY_SERVICE" "$REGISTRY_STATEFULSET" \
-  "$COREDNS" "$IMAGE_PREFIX" "$REGISTRY_HOST" "$AUTH_HOST" <<'PY'
+  "$COREDNS" "$COREDNS_CUSTOM" "$IMAGE_PREFIX" "$REGISTRY_HOST" "$AUTH_HOST" <<'PY'
 from pathlib import Path
 import ipaddress
 import json
@@ -110,6 +113,7 @@ import sys
     service_path,
     statefulset_path,
     coredns_path,
+    coredns_custom_path,
     image_prefix,
     registry_host,
     auth_host,
@@ -119,6 +123,8 @@ deployment = json.loads(Path(deployment_path).read_text())
 service = json.loads(Path(service_path).read_text())
 statefulset = json.loads(Path(statefulset_path).read_text())
 coredns = json.loads(Path(coredns_path).read_text())
+coredns_custom_text = Path(coredns_custom_path).read_text().strip()
+coredns_custom = json.loads(coredns_custom_text) if coredns_custom_text else {}
 
 if int(deployment.get('status', {}).get('availableReplicas', 0)) < 1:
     raise SystemExit('ERROR: registry gateway has no available replica')
@@ -159,6 +165,18 @@ for line in node_hosts.splitlines():
         matches.append(parts)
 if matches != [[gateway_ip, registry_host, auth_host]]:
     raise SystemExit('ERROR: CoreDNS registry split DNS is not exact')
+
+legacy_override = coredns_custom.get('data', {}).get('raibit-registry.server')
+if legacy_override is not None:
+    if not isinstance(legacy_override, str):
+        raise SystemExit('ERROR: legacy CoreDNS registry override must be a string')
+    legacy_matches = []
+    for line in legacy_override.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and ({registry_host, auth_host} & set(parts[1:])):
+            legacy_matches.append(parts)
+    if legacy_matches != [[gateway_ip, registry_host, auth_host]]:
+        raise SystemExit('ERROR: legacy CoreDNS registry override bypasses the private gateway')
 
 print(address)
 PY
