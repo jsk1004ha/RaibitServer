@@ -493,6 +493,28 @@ func TestInvalidIngressGatewayNamespaceFailsClosed(t *testing.T) {
 	}
 }
 
+func TestIngressUsesTrustedConfiguredClass(t *testing.T) {
+	plan := NewDeploymentPlan(
+		workloadSpec("web", "dep-ingress-class", map[string]any{"ingressClassName": "attacker-controlled"}, nil),
+		DeploymentOptions{IngressClassName: "internal.ingress.example.com"},
+	)
+	if !plan.Safe {
+		t.Fatalf("configured ingress class plan should be safe: %s", plan.Error)
+	}
+	ingress := findManifest(t, plan.Manifests, "Ingress", plan.Service.Name)
+	spec := ingress["spec"].(map[string]any)
+	if spec["ingressClassName"] != "internal.ingress.example.com" {
+		t.Fatalf("ingress class must come only from trusted options: %#v", spec["ingressClassName"])
+	}
+}
+
+func TestInvalidIngressClassNameFailsClosed(t *testing.T) {
+	plan := NewDeploymentPlan(workloadSpec("web", "dep-ingress-class", nil, nil), DeploymentOptions{IngressClassName: "INVALID/class"})
+	if plan.Safe || plan.Error == "" || len(plan.Manifests) != 0 {
+		t.Fatalf("invalid ingress class configuration must reject compilation: %#v", plan)
+	}
+}
+
 func TestNetworkPolicyIngressIsWorkloadTypeAware(t *testing.T) {
 	tests := []struct {
 		serviceType string

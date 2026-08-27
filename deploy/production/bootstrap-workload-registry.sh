@@ -13,6 +13,9 @@ REGISTRY_ISSUER="${REGISTRY_ISSUER:-raibit-registry-auth}"
 INFRA_NS="${INFRA_NS:-raibitserver-infra}"
 APP_NS="${APP_NS:-raibitserver-system}"
 EDGE_NS="${EDGE_NS:-edge-gateway-system}"
+IMAGE_VERIFIER_NS="${IMAGE_VERIFIER_NS:-cosign-system}"
+IMAGE_VERIFIER_APP_NAME="${IMAGE_VERIFIER_APP_NAME:-policy-controller}"
+IMAGE_VERIFIER_CONTROL_PLANE="${IMAGE_VERIFIER_CONTROL_PLANE:-policy-controller-webhook}"
 TLS_SECRET="${TLS_SECRET:-raibit-registry-tls}"
 BROKER_TOKEN_SECRET="${BROKER_TOKEN_SECRET:-raibitserver-registry-broker-token}"
 REGISTRY_VERSION="${REGISTRY_VERSION:-3.1.1}"
@@ -31,18 +34,44 @@ need() {
 }
 for cmd in kubectl docker openssl jq curl awk sed grep base64 sha256sum python3 mktemp chmod mv mkdir; do need "$cmd"; done
 
-python3 - "$REGISTRY_HOST" "$AUTH_HOST" "$REGISTRY_PREFIX" <<'PY'
+python3 - \
+  "$REGISTRY_HOST" "$AUTH_HOST" "$REGISTRY_PREFIX" \
+  "$INFRA_NS" "$APP_NS" "$EDGE_NS" \
+  "$IMAGE_VERIFIER_NS" "$IMAGE_VERIFIER_APP_NAME" "$IMAGE_VERIFIER_CONTROL_PLANE" <<'PY'
 import re
 import sys
 
+(
+    registry_host,
+    auth_host,
+    registry_prefix,
+    infra_namespace,
+    app_namespace,
+    edge_namespace,
+    image_verifier_namespace,
+    image_verifier_app_name,
+    image_verifier_control_plane,
+) = sys.argv[1:]
+
 host_pattern = re.compile(r'^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$', re.IGNORECASE)
 prefix_pattern = re.compile(r'^[a-z0-9]+(?:[._/-][a-z0-9]+)*$', re.IGNORECASE)
+dns_label = re.compile(r'^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$')
 
-for label, value in [('registry host', sys.argv[1]), ('broker host', sys.argv[2])]:
+for label, value in [('registry host', registry_host), ('broker host', auth_host)]:
     if not host_pattern.fullmatch(value):
         raise SystemExit(f'ERROR: invalid {label}: {value}')
-if not prefix_pattern.fullmatch(sys.argv[3]):
-    raise SystemExit(f'ERROR: invalid registry prefix: {sys.argv[3]}')
+for label, value in [
+    ('infrastructure namespace', infra_namespace),
+    ('application namespace', app_namespace),
+    ('edge namespace', edge_namespace),
+    ('image verifier namespace', image_verifier_namespace),
+    ('image verifier app name', image_verifier_app_name),
+    ('image verifier control plane', image_verifier_control_plane),
+]:
+    if not dns_label.fullmatch(value):
+        raise SystemExit(f'ERROR: invalid {label}: {value}')
+if not prefix_pattern.fullmatch(registry_prefix):
+    raise SystemExit(f'ERROR: invalid registry prefix: {registry_prefix}')
 PY
 
 NODE_IP="$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
@@ -503,6 +532,17 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: raibitserver-builder-executor
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 8443 }
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${IMAGE_VERIFIER_NS}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ${IMAGE_VERIFIER_APP_NAME}
+              control-plane: ${IMAGE_VERIFIER_CONTROL_PLANE}
       ports:
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 8443 }

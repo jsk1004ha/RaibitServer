@@ -307,7 +307,9 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
   assert.match(workerSecurity, /!\('raibitserver\.io\/namespace-kind' in oldObject\.metadata\.labels\)[\s\S]*application/);
   assert.doesNotMatch(workerSecurity.match(/orchestrator-namespace-boundary[\s\S]*?(?=kind: ValidatingAdmissionPolicyBinding)/)?.[0] ?? '', /raibitserver\.io\/ingress-gateway/);
   assert.match(values, /gatewayNamespace:\s*ingress-nginx/);
+  assert.match(values, /className:\s*nginx/);
   assert.match(orchestratorDeployment, /name: RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE[\s\S]*\.Values\.ingress\.gatewayNamespace/);
+  assert.match(orchestratorDeployment, /name: RAIBITSERVER_INGRESS_CLASS_NAME[\s\S]*\.Values\.ingress\.className/);
   assert.match(apiDeployment, /name: RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE[\s\S]*\.Values\.ingress\.gatewayNamespace/);
   assert.match(workerSecurity, /peer\.namespaceSelector\.matchLabels\['kubernetes\.io\/metadata\.name'\] == \{\{ \.Values\.ingress\.gatewayNamespace \| squote \}\}/);
   assert.doesNotMatch(workerSecurity, /peer\.namespaceSelector\.matchLabels\['raibitserver\.io\/ingress-gateway'\]/);
@@ -333,7 +335,8 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
   assert.match(quotaPolicy, /variables\.target\.metadata\.labels\.size\(\) == 6/);
   assert.match(quotaPolicy, /variables\.target\.metadata\.labels\['raibitserver\.io\/project-id'\] == namespaceObject\.metadata\.labels\['raibitserver\.io\/project-id'\]/);
   assert.match(quotaPolicy, /variables\.target\.spec\.hard\.size\(\) == 21/);
-  assert.match(quotaPolicy, /variables\.expectedHard\.all\(key,[\s\S]*compareTo\(variables\.expectedHard\[key\]\) == 0/);
+  assert.match(quotaPolicy, /variables\.expectedHard\.all\(key,[\s\S]*quantity\(variables\.target\.spec\.hard\[key\]\)\.compareTo\(variables\.expectedHard\[key\]\) == 0/);
+  assert.doesNotMatch(quotaPolicy, /variables\.target\.spec\.hard\[key\]\.compareTo/);
   assert.match(quotaPolicy, /!has\(variables\.target\.spec\.scopes\)[\s\S]*!has\(variables\.target\.spec\.scopeSelector\)/);
   for (const [resource, quantity] of Object.entries({
     resourcequotas: '1',
@@ -372,6 +375,7 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
   assert.match(workerSecurity, /emptyDir\.sizeLimit == '128Mi'[\s\S]*!has\(variables\.podSpec\.volumes\[0\]\.emptyDir\.medium\)/);
   assert.match(workerSecurity, /@sha256:\[a-f0-9\]\{64\}/);
   assert.match(workerSecurity, /variables\.target\.kind != 'Ingress'[\s\S]*!variables\.ingressHost\.startsWith\('\*\.'\)/);
+  assert.match(workerSecurity, /variables\.target\.spec\.ingressClassName == \{\{ \$ingressClassName \| squote \}\}/);
   assert.match(workerSecurity, /variables\.target\.kind != 'NetworkPolicy'[\s\S]*podSelector\.matchLabels\['app\.kubernetes\.io\/name'\]/);
   assert.match(workerSecurity, /has\(rule\.from\)[\s\S]*has\(peer\.namespaceSelector\)[\s\S]*!has\(peer\.ipBlock\)/);
   assert.match(workerSecurity, /has\(rule\.to\)[\s\S]*has\(peer\.ipBlock\)[\s\S]*0\.0\.0\.0\/0[\s\S]*10\.0\.0\.0\/8/);

@@ -26,6 +26,7 @@ type Config struct {
 	OutputDir               string
 	BaseDomain              string
 	IngressGatewayNamespace string
+	IngressClassName        string
 	Timeout                 time.Duration
 	WorkerID                string
 	ClaimLease              time.Duration
@@ -70,6 +71,9 @@ func NewServiceReconcilerWithStore(config Config, state store.ReconcileStore, ru
 	}
 	if config.IngressGatewayNamespace == "" {
 		config.IngressGatewayNamespace = "ingress-nginx"
+	}
+	if config.IngressClassName == "" {
+		config.IngressClassName = "nginx"
 	}
 	if config.Timeout <= 0 {
 		config.Timeout = 10 * time.Minute
@@ -617,7 +621,10 @@ func (r *ServiceReconciler) cleanupPreview(ctx context.Context, project *store.P
 }
 
 func (r *ServiceReconciler) newDeploymentPlan(spec kube.AppServiceSpec) kube.DeploymentPlan {
-	return kube.NewDeploymentPlan(spec, kube.DeploymentOptions{IngressGatewayNamespace: r.config.IngressGatewayNamespace})
+	return kube.NewDeploymentPlan(spec, kube.DeploymentOptions{
+		IngressGatewayNamespace: r.config.IngressGatewayNamespace,
+		IngressClassName:        r.config.IngressClassName,
+	})
 }
 
 func (r *ServiceReconciler) collectDiagnostics(ctx context.Context, service *store.Service, deployment *store.Deployment, plan kube.DeploymentPlan) error {

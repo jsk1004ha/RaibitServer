@@ -1,4 +1,8 @@
 {{- $databaseEgress := .Values.builder.databaseEgress -}}
+{{- $ingressClassName := .Values.ingress.className | trim -}}
+{{- if or (empty $ingressClassName) (gt (len $ingressClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$" $ingressClassName)) -}}
+{{- fail "ingress className must be a Kubernetes DNS subdomain" -}}
+{{- end -}}
 {{- if .Values.production -}}
 {{- if or (lt (int $databaseEgress.port) 1) (gt (int $databaseEgress.port) 65535) -}}
 {{- fail "production builder database egress port must be between 1 and 65535" -}}
@@ -205,7 +209,7 @@ spec:
         has(variables.target.spec.hard) && variables.target.spec.hard.size() == 21 &&
         variables.expectedHard.size() == 21 &&
         variables.expectedHard.all(key, key in variables.target.spec.hard &&
-          variables.target.spec.hard[key].compareTo(variables.expectedHard[key]) == 0)
+          quantity(variables.target.spec.hard[key]).compareTo(variables.expectedHard[key]) == 0)
       message: "tenant ResourceQuota must retain the complete compiler-owned hard budget"
     - expression: >-
         !has(variables.target.spec.scopes) && !has(variables.target.spec.scopeSelector)
@@ -364,7 +368,7 @@ spec:
         variables.target.kind != 'Ingress' ||
         (variables.target.metadata.name == variables.appName && variables.target.metadata.annotations.size() == 1 &&
         variables.ingressHost.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$') && !variables.ingressHost.startsWith('*.') &&
-        !has(variables.target.spec.defaultBackend) && !has(variables.target.spec.ingressClassName) &&
+        !has(variables.target.spec.defaultBackend) && variables.target.spec.ingressClassName == {{ $ingressClassName | squote }} &&
         (!has(variables.target.spec.tls) || variables.target.spec.tls.size() == 0) && variables.target.spec.rules.size() == 1 &&
         variables.target.spec.rules[0].host == variables.ingressHost && variables.target.spec.rules[0].http.paths.size() == 1 &&
         variables.target.spec.rules[0].http.paths[0].path == '/' && variables.target.spec.rules[0].http.paths[0].pathType == 'Prefix' &&

@@ -19,7 +19,8 @@ trap 'rm -rf "$OUTPUT_DIR"' EXIT HUP INT TERM
 "$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" --include-crds >"$OUTPUT_DIR/production.yaml"
 "$HELM" template secondary "$CHART" --namespace raibitserver-secondary --values "$PRODUCTION_VALUES" >"$OUTPUT_DIR/secondary-release.yaml"
 "$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" \
-  --set-string ingress.gatewayNamespace=edge-gateway-system >"$OUTPUT_DIR/configured-ingress-gateway.yaml"
+  --set-string ingress.gatewayNamespace=edge-gateway-system \
+  --set-string ingress.className=internal.ingress.example.com >"$OUTPUT_DIR/configured-ingress-gateway.yaml"
 "$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" \
   --set-string security.imageVerification.admissionController.clientConfig.service.namespace= \
   --set-string security.imageVerification.admissionController.clientConfig.service.name= \
@@ -180,9 +181,16 @@ grep -q 'name: secondary-raibitserver-metrics-ingester' "$OUTPUT_DIR/secondary-r
 grep -q 'name: secondary-raibitserver-image-verification-contract' "$OUTPUT_DIR/secondary-release.yaml"
 grep -q 'namespace: raibitserver-secondary' "$OUTPUT_DIR/secondary-release.yaml"
 grep -Fq "peer.namespaceSelector.matchLabels['kubernetes.io/metadata.name'] == 'edge-gateway-system'" "$OUTPUT_DIR/configured-ingress-gateway.yaml"
+grep -Fq "variables.target.spec.ingressClassName == 'internal.ingress.example.com'" "$OUTPUT_DIR/configured-ingress-gateway.yaml"
+grep -Fq 'quantity(variables.target.spec.hard[key]).compareTo(variables.expectedHard[key]) == 0' "$OUTPUT_DIR/production.yaml"
 if [ "$(grep -c 'name: RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE' "$OUTPUT_DIR/configured-ingress-gateway.yaml")" -ne 2 ] || \
    [ "$(grep -c 'value: \"edge-gateway-system\"' "$OUTPUT_DIR/configured-ingress-gateway.yaml")" -lt 2 ]; then
   echo "configured ingress gateway namespace must reach both API and orchestrator" >&2
+  exit 1
+fi
+if [ "$(grep -c 'name: RAIBITSERVER_INGRESS_CLASS_NAME' "$OUTPUT_DIR/configured-ingress-gateway.yaml")" -ne 1 ] || \
+   ! grep -A1 'name: RAIBITSERVER_INGRESS_CLASS_NAME' "$OUTPUT_DIR/configured-ingress-gateway.yaml" | grep -q 'value: "internal.ingress.example.com"'; then
+  echo "configured ingress class must reach the orchestrator and its admission policy" >&2
   exit 1
 fi
 if grep -q 'raibitserver.io/ingress-gateway' "$OUTPUT_DIR/production.yaml"; then
@@ -213,6 +221,7 @@ if "$HELM" template raibitserver "$CHART" --namespace raibitserver-system \
 fi
 
 expect_render_failure unsupported-kubernetes-version --kube-version 1.29.9
+expect_render_failure invalid-ingress-class --set-string ingress.className=INVALID/class
 expect_render_failure missing-verifier --set-string security.imageVerification.admissionController.existingWebhookConfiguration=
 expect_render_failure missing-webhook-identity --set-string security.imageVerification.admissionController.webhookName=
 expect_render_failure missing-controller-deployment --set-string security.imageVerification.admissionController.deploymentName=

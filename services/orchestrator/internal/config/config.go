@@ -14,6 +14,7 @@ type Config struct {
 	OutputDir               string
 	BaseDomain              string
 	IngressGatewayNamespace string
+	IngressClassName        string
 	DryRun                  bool
 	Timeout                 time.Duration
 	PollInterval            time.Duration
@@ -39,6 +40,7 @@ func FromEnv() Config {
 		OutputDir:               firstNonEmpty(os.Getenv("RAIBITSERVER_ORCHESTRATOR_OUTPUT_DIR"), ".raibitserver-work/orchestrator"),
 		BaseDomain:              firstNonEmpty(os.Getenv("BASE_DOMAIN"), os.Getenv("RAIBITSERVER_BASE_DOMAIN"), "raibitserver.local"),
 		IngressGatewayNamespace: firstNonEmpty(os.Getenv("RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE"), "ingress-nginx"),
+		IngressClassName:        firstNonEmpty(os.Getenv("RAIBITSERVER_INGRESS_CLASS_NAME"), "nginx"),
 		DryRun:                  os.Getenv("RAIBITSERVER_DRY_RUN") != "0" && os.Getenv("RAIBITSERVER_EXECUTE") != "1",
 		Timeout:                 timeout,
 		PollInterval:            pollInterval,

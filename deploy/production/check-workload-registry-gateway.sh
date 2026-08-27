@@ -25,6 +25,9 @@ REGISTRY_SERVICE="${REGISTRY_SERVICE:-raibit-registry}"
 INFRA_NS="${INFRA_NS:-raibitserver-infra}"
 APP_NS="${APP_NS:-raibitserver-system}"
 EDGE_NS="${EDGE_NS:-edge-gateway-system}"
+IMAGE_VERIFIER_NS="${IMAGE_VERIFIER_NS:-cosign-system}"
+IMAGE_VERIFIER_APP_NAME="${IMAGE_VERIFIER_APP_NAME:-policy-controller}"
+IMAGE_VERIFIER_CONTROL_PLANE="${IMAGE_VERIFIER_CONTROL_PLANE:-policy-controller-webhook}"
 BROKER_TOKEN_SECRET="${BROKER_TOKEN_SECRET:-raibitserver-registry-broker-token}"
 IMAGE_PREFIX="${RAIBITSERVER_IMAGE_PREFIX:-ghcr.io/jsk1004ha/raibitserver}"
 
@@ -34,7 +37,9 @@ done
 
 python3 - \
   "$REGISTRY_HOST" "$AUTH_HOST" "$REGISTRY_PREFIX" "$REGISTRY_SERVICE" \
-  "$INFRA_NS" "$APP_NS" "$EDGE_NS" "$BROKER_TOKEN_SECRET" "$IMAGE_PREFIX" <<'PY'
+  "$INFRA_NS" "$APP_NS" "$EDGE_NS" \
+  "$IMAGE_VERIFIER_NS" "$IMAGE_VERIFIER_APP_NAME" "$IMAGE_VERIFIER_CONTROL_PLANE" \
+  "$BROKER_TOKEN_SECRET" "$IMAGE_PREFIX" <<'PY'
 import re
 import sys
 
@@ -46,6 +51,9 @@ import sys
     infra_namespace,
     app_namespace,
     edge_namespace,
+    image_verifier_namespace,
+    image_verifier_app_name,
+    image_verifier_control_plane,
     broker_token_secret,
     image_prefix,
 ) = sys.argv[1:]
@@ -67,6 +75,9 @@ for label, value in [
     ('infrastructure namespace', infra_namespace),
     ('application namespace', app_namespace),
     ('edge namespace', edge_namespace),
+    ('image verifier namespace', image_verifier_namespace),
+    ('image verifier app name', image_verifier_app_name),
+    ('image verifier control plane', image_verifier_control_plane),
     ('broker token Secret', broker_token_secret),
 ]:
     if not dns_label.fullmatch(value):
@@ -107,7 +118,9 @@ kubectl -n kube-system get configmap coredns-custom --ignore-not-found -o json >
 
 if ! GATEWAY_CLUSTER_IP="$(python3 - \
   "$GATEWAY_DEPLOYMENT" "$GATEWAY_SERVICE" "$GATEWAY_NETWORK_POLICY" "$REGISTRY_STATEFULSET" \
-  "$COREDNS" "$COREDNS_CUSTOM" "$APP_NS" "$EDGE_NS" "$IMAGE_PREFIX" "$REGISTRY_HOST" "$AUTH_HOST" <<'PY'
+  "$COREDNS" "$COREDNS_CUSTOM" "$APP_NS" "$EDGE_NS" \
+  "$IMAGE_VERIFIER_NS" "$IMAGE_VERIFIER_APP_NAME" "$IMAGE_VERIFIER_CONTROL_PLANE" \
+  "$IMAGE_PREFIX" "$REGISTRY_HOST" "$AUTH_HOST" <<'PY'
 from pathlib import Path
 import ipaddress
 import json
@@ -123,6 +136,9 @@ import sys
     coredns_custom_path,
     app_namespace,
     edge_namespace,
+    image_verifier_namespace,
+    image_verifier_app_name,
+    image_verifier_control_plane,
     image_prefix,
     registry_host,
     auth_host,
@@ -187,6 +203,25 @@ expected_network_policy_spec = {
                     },
                     'podSelector': {
                         'matchLabels': {'app.kubernetes.io/name': 'raibitserver-builder-executor'},
+                    },
+                },
+            ],
+            'ports': [
+                {'protocol': 'TCP', 'port': 443},
+                {'protocol': 'TCP', 'port': 8443},
+            ],
+        },
+        {
+            'from': [
+                {
+                    'namespaceSelector': {
+                        'matchLabels': {'kubernetes.io/metadata.name': image_verifier_namespace},
+                    },
+                    'podSelector': {
+                        'matchLabels': {
+                            'app.kubernetes.io/name': image_verifier_app_name,
+                            'control-plane': image_verifier_control_plane,
+                        },
                     },
                 },
             ],

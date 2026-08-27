@@ -17,6 +17,7 @@ POSTGRES_PASSWORD="raibitserver-live-e2e"
 POSTGRES_DATABASE="raibitserver"
 TENANT_NAMESPACE="live-org--live-project"
 PROVIDER_TENANT_NAMESPACE="live-provider-org--live-provider-project"
+ADMISSION_TENANT_NAMESPACE="live-admission-org--live-admission-project"
 WORK_DIR="$(mktemp -d)"
 CLUSTER_CREATED=0
 PORT_FORWARD_PID=""
@@ -207,6 +208,104 @@ kubectl --context "${KUBE_CONTEXT}" --namespace "${CONTROL_PLANE_NAMESPACE}" rol
   "deployment/${API_DEPLOYMENT}" --timeout=180s
 kubectl --context "${KUBE_CONTEXT}" --namespace "${CONTROL_PLANE_NAMESPACE}" rollout status \
   "deployment/${PROVISIONER_DEPLOYMENT}" --timeout=180s
+
+echo "[live-e2e] verifying orchestrator ResourceQuota and Ingress admission contracts"
+ORCHESTRATOR_USER="system:serviceaccount:${CONTROL_PLANE_NAMESPACE}:${RELEASE_NAME}-raibitserver-orchestrator"
+kubectl --context "${KUBE_CONTEXT}" --as "${ORCHESTRATOR_USER}" create -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${ADMISSION_TENANT_NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: raibitserver
+    raibitserver.io/managed: "true"
+    raibitserver.io/namespace-kind: application
+    raibitserver.io/project: live-admission-project
+    raibitserver.io/project-id: live-admission-project
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+EOF
+kubectl --context "${KUBE_CONTEXT}" --as "${ORCHESTRATOR_USER}" create -f - <<EOF
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-resource-budget
+  namespace: ${ADMISSION_TENANT_NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: raibitserver
+    raibitserver.io/managed: "true"
+    raibitserver.io/namespace-kind: application
+    raibitserver.io/project: live-admission-project
+    raibitserver.io/project-id: live-admission-project
+    raibitserver.io/resource-kind: tenant-resource-quota
+spec:
+  hard:
+    resourcequotas: "1"
+    pods: "100"
+    count/pods: "200"
+    count/deployments.apps: "50"
+    count/replicasets.apps: "200"
+    count/statefulsets.apps: "50"
+    count/jobs.batch: "100"
+    count/cronjobs.batch: "50"
+    services: "100"
+    persistentvolumeclaims: "50"
+    secrets: "200"
+    configmaps: "100"
+    count/ingresses.networking.k8s.io: "100"
+    count/networkpolicies.networking.k8s.io: "200"
+    requests.cpu: "50"
+    requests.memory: 100Gi
+    requests.ephemeral-storage: 100Gi
+    limits.cpu: "100"
+    limits.memory: 200Gi
+    limits.ephemeral-storage: 200Gi
+    requests.storage: 1Ti
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: ${ADMISSION_TENANT_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/managed-by: raibitserver
+    raibitserver.io/managed: "true"
+    raibitserver.io/project: live-admission-project
+    raibitserver.io/service: web
+    raibitserver.io/deployment: live-admission-deployment
+    raibitserver.io/project-id: live-admission-project
+    raibitserver.io/service-id: live-admission-service
+    raibitserver.io/deployment-id: live-admission-deployment
+  annotations:
+    raibitserver.io/hostname: apps--live-admission--project.example.test
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: apps--live-admission--project.example.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 8080
+EOF
+if kubectl --context "${KUBE_CONTEXT}" --as "${ORCHESTRATOR_USER}" \
+  --namespace "${ADMISSION_TENANT_NAMESPACE}" patch resourcequota tenant-resource-budget \
+  --type merge --patch '{"spec":{"hard":{"pods":"101"}}}' --dry-run=server >/dev/null 2>&1; then
+  echo "orchestrator ResourceQuota admission accepted a modified hard budget" >&2
+  exit 1
+fi
+if kubectl --context "${KUBE_CONTEXT}" --as "${ORCHESTRATOR_USER}" \
+  --namespace "${ADMISSION_TENANT_NAMESPACE}" patch ingress web \
+  --type merge --patch '{"spec":{"ingressClassName":"attacker"}}' --dry-run=server >/dev/null 2>&1; then
+  echo "orchestrator Ingress admission accepted an untrusted class" >&2
+  exit 1
+fi
 
 psql_value() {
   kubectl --context "${KUBE_CONTEXT}" --namespace "${CONTROL_PLANE_NAMESPACE}" exec deployment/postgres -- \
@@ -573,4 +672,4 @@ if [[ "${worker_log_verified}" -ne 1 ]]; then
   exit 1
 fi
 
-echo "[live-e2e] PASS: kind/Helm reconciliation verified API migration/health, managed PostgreSQL, builder exhausted-lease recovery, and orchestrator deletion; tenant BuildKit/registry lifecycle not covered"
+echo "[live-e2e] PASS: kind/Helm reconciliation verified API migration/health, orchestrator admission, managed PostgreSQL, builder exhausted-lease recovery, and orchestrator deletion; tenant BuildKit/registry lifecycle not covered"

@@ -155,6 +155,7 @@ test('registry gateway reconciler uses exact TLS identities without a shared ing
   assert.match(registryGatewayReconciler, /name: internal-tls[\s\S]*port: 443[\s\S]*targetPort: 8443/);
   assert.match(registryGatewayReconciler, /BROKER_HOST[\s\S]*INTERNAL_TLS_PORT[\s\S]*REGISTRY_UPSTREAM_URL/);
   assert.match(registryGatewayReconciler, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*ports:[\s\S]*port: 443[\s\S]*port: 8443/);
+  assert.match(registryGatewayReconciler, /kubernetes\.io\/metadata\.name: \$\{IMAGE_VERIFIER_NS\}[\s\S]*app\.kubernetes\.io\/name: \$\{IMAGE_VERIFIER_APP_NAME\}[\s\S]*control-plane: \$\{IMAGE_VERIFIER_CONTROL_PLANE\}[\s\S]*ports:[\s\S]*port: 443[\s\S]*port: 8443/);
   assert.match(registryGatewayReconciler, /GATEWAY_CLUSTER_IP_RAW=.*service raibit-registry-auth/);
   assert.ok(registryGatewayReconciler.includes(
     "output.append(f'{gateway_ip} {registry_host} {auth_host}')",
@@ -275,6 +276,16 @@ test('registry gateway checker rejects ineffective or overbroad NetworkPolicy fi
           }],
           ports: [{ protocol: 'TCP', port: 443 }, { protocol: 'TCP', port: 8443 }],
         },
+        {
+          from: [{
+            namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'cosign-system' } },
+            podSelector: { matchLabels: {
+              'app.kubernetes.io/name': 'policy-controller',
+              'control-plane': 'policy-controller-webhook',
+            } },
+          }],
+          ports: [{ protocol: 'TCP', port: 443 }, { protocol: 'TCP', port: 8443 }],
+        },
       ],
       egress: [
         {
@@ -297,6 +308,7 @@ test('registry gateway checker rejects ineffective or overbroad NetworkPolicy fi
     return spawnSync('python3', [
       '-', paths.deployment, paths.service, policyPath, paths.statefulset,
       paths.coredns, paths.corednsCustom, 'raibitserver-system', 'edge-gateway-system',
+      'cosign-system', 'policy-controller', 'policy-controller-webhook',
       'ghcr.io/jsk1004ha/raibitserver', 'registry.raibit.kr', 'registry-auth.raibit.kr',
     ], { input: structuralCheck, encoding: 'utf8' });
   };
@@ -309,12 +321,24 @@ test('registry gateway checker rejects ineffective or overbroad NetworkPolicy fi
   wrongSelector.spec.podSelector.matchLabels.app = 'wrong-gateway';
   const broadPeer = structuredClone(exactPolicy);
   broadPeer.spec.ingress.push({ from: [{}], ports: [{ protocol: 'TCP', port: 443 }] });
+  const missingVerifier = structuredClone(exactPolicy);
+  missingVerifier.spec.ingress.splice(2, 1);
+  const wrongVerifierNamespace = structuredClone(exactPolicy);
+  wrongVerifierNamespace.spec.ingress[2].from[0].namespaceSelector.matchLabels['kubernetes.io/metadata.name'] = 'default';
+  const wrongVerifierApp = structuredClone(exactPolicy);
+  wrongVerifierApp.spec.ingress[2].from[0].podSelector.matchLabels['app.kubernetes.io/name'] = 'wrong-verifier';
+  const wrongVerifierControlPlane = structuredClone(exactPolicy);
+  wrongVerifierControlPlane.spec.ingress[2].from[0].podSelector.matchLabels['control-plane'] = 'wrong-webhook';
   const missingEgressPolicyType = structuredClone(exactPolicy);
   missingEgressPolicyType.spec.policyTypes = ['Ingress'];
 
   for (const [name, fixture] of [
     ['wrong target selector', wrongSelector],
     ['broad peer', broadPeer],
+    ['missing image verifier', missingVerifier],
+    ['wrong image verifier namespace', wrongVerifierNamespace],
+    ['wrong image verifier app', wrongVerifierApp],
+    ['wrong image verifier control plane', wrongVerifierControlPlane],
     ['missing policy type', missingEgressPolicyType],
   ]) {
     const result = runStructuralCheck(fixture);
@@ -363,6 +387,7 @@ test('workload registry bootstrap emits a dedicated TLS gateway and a secure Hel
   assert.match(registryBootstrap, /http:[\s\S]*addr: :5000[\s\S]*relativeurls: true/);
   assert.match(registryBootstrap, /app\.kubernetes\.io\/name: raibit-registry-auth/);
   assert.match(registryBootstrap, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*ports:[\s\S]*port: 443[\s\S]*port: 8443/);
+  assert.match(registryBootstrap, /kubernetes\.io\/metadata\.name: \$\{IMAGE_VERIFIER_NS\}[\s\S]*app\.kubernetes\.io\/name: \$\{IMAGE_VERIFIER_APP_NAME\}[\s\S]*control-plane: \$\{IMAGE_VERIFIER_CONTROL_PLANE\}[\s\S]*ports:[\s\S]*port: 443[\s\S]*port: 8443/);
   assert.match(registryBootstrap, /GATEWAY_CLUSTER_IP=.*service raibit-registry-auth/);
   assert.match(registryBootstrap, /GATEWAY_CLUSTER_IP\} \$\{REGISTRY_HOST\} \$\{AUTH_HOST\}/);
   assert.match(registryBootstrap, /configmap coredns-custom --ignore-not-found/);

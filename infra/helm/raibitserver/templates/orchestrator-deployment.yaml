@@ -38,6 +38,8 @@ spec:
               value: {{ .Values.orchestrator.reconcileIntervalSeconds | quote }}
             - name: RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE
               value: {{ .Values.ingress.gatewayNamespace | quote }}
+            - name: RAIBITSERVER_INGRESS_CLASS_NAME
+              value: {{ .Values.ingress.className | quote }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

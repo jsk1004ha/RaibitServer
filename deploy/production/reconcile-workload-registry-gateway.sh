@@ -36,6 +36,9 @@ REGISTRY_ISSUER="${REGISTRY_ISSUER:-raibit-registry-auth}"
 INFRA_NS="${INFRA_NS:-raibitserver-infra}"
 APP_NS="${APP_NS:-raibitserver-system}"
 EDGE_NS="${EDGE_NS:-edge-gateway-system}"
+IMAGE_VERIFIER_NS="${IMAGE_VERIFIER_NS:-cosign-system}"
+IMAGE_VERIFIER_APP_NAME="${IMAGE_VERIFIER_APP_NAME:-policy-controller}"
+IMAGE_VERIFIER_CONTROL_PLANE="${IMAGE_VERIFIER_CONTROL_PLANE:-policy-controller-webhook}"
 TLS_SECRET="${TLS_SECRET:-raibit-registry-tls}"
 BROKER_TOKEN_SECRET="${BROKER_TOKEN_SECRET:-raibitserver-registry-broker-token}"
 IMAGE_PREFIX="${RAIBITSERVER_IMAGE_PREFIX:-ghcr.io/jsk1004ha/raibitserver}"
@@ -47,7 +50,9 @@ done
 
 python3 - \
   "$REGISTRY_HOST" "$AUTH_HOST" "$REGISTRY_PREFIX" \
-  "$INFRA_NS" "$APP_NS" "$EDGE_NS" "$TLS_SECRET" "$BROKER_TOKEN_SECRET" \
+  "$INFRA_NS" "$APP_NS" "$EDGE_NS" \
+  "$IMAGE_VERIFIER_NS" "$IMAGE_VERIFIER_APP_NAME" "$IMAGE_VERIFIER_CONTROL_PLANE" \
+  "$TLS_SECRET" "$BROKER_TOKEN_SECRET" \
   "$IMAGE_PREFIX" "$REGISTRY_BROKER_IMAGE" <<'PY'
 import re
 import sys
@@ -59,6 +64,9 @@ import sys
     infra_namespace,
     app_namespace,
     edge_namespace,
+    image_verifier_namespace,
+    image_verifier_app_name,
+    image_verifier_control_plane,
     tls_secret,
     broker_token_secret,
     image_prefix,
@@ -81,6 +89,9 @@ for label, value in [
     ('infrastructure namespace', infra_namespace),
     ('application namespace', app_namespace),
     ('edge namespace', edge_namespace),
+    ('image verifier namespace', image_verifier_namespace),
+    ('image verifier app name', image_verifier_app_name),
+    ('image verifier control plane', image_verifier_control_plane),
     ('TLS Secret', tls_secret),
     ('broker token Secret', broker_token_secret),
 ]:
@@ -359,6 +370,17 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: raibitserver-builder-executor
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 8443 }
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${IMAGE_VERIFIER_NS}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ${IMAGE_VERIFIER_APP_NAME}
+              control-plane: ${IMAGE_VERIFIER_CONTROL_PLANE}
       ports:
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 8443 }

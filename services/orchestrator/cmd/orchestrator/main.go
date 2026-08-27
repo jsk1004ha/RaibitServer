@@ -18,7 +18,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	cfg := orchestratorconfig.FromEnv()
-	reconcilerConfig := reconciler.Config{DryRun: cfg.DryRun, Kubeconfig: cfg.Kubeconfig, KubeContext: cfg.KubeContext, OutputDir: cfg.OutputDir, BaseDomain: cfg.BaseDomain, IngressGatewayNamespace: cfg.IngressGatewayNamespace, Timeout: cfg.Timeout, WorkerID: cfg.WorkerID, ClaimLease: cfg.ClaimLease}
+	reconcilerConfig := reconciler.Config{DryRun: cfg.DryRun, Kubeconfig: cfg.Kubeconfig, KubeContext: cfg.KubeContext, OutputDir: cfg.OutputDir, BaseDomain: cfg.BaseDomain, IngressGatewayNamespace: cfg.IngressGatewayNamespace, IngressClassName: cfg.IngressClassName, Timeout: cfg.Timeout, WorkerID: cfg.WorkerID, ClaimLease: cfg.ClaimLease}
 	var r *reconciler.ServiceReconciler
 	var closeStore func() error
 	persistent := false
