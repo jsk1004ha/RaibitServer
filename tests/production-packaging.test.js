@@ -365,6 +365,12 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
     assert.match(quotaPolicy, new RegExp(`'${escapedResource}': quantity\\('${quantity}'\\)`), `quota policy must pin ${resource}`);
   }
   assert.match(workerSecurity, /request\.operation == 'DELETE' \? oldObject : object/);
+  const workloadPolicyStart = workerSecurity.indexOf('kind: ValidatingAdmissionPolicy\nmetadata:\n  name: {{ include "raibitserver.fullname" . }}-orchestrator-workload-boundary');
+  const workloadPolicyEnd = workerSecurity.indexOf('\n---\napiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding', workloadPolicyStart);
+  assert.ok(workloadPolicyStart >= 0 && workloadPolicyEnd > workloadPolicyStart, 'orchestrator workload admission policy must exist');
+  const workloadPolicy = workerSecurity.slice(workloadPolicyStart, workloadPolicyEnd);
+  assert.match(workloadPolicy, /\['app\.kubernetes\.io\/managed-by', 'raibitserver\.io\/managed', 'raibitserver\.io\/project-id', 'raibitserver\.io\/service-id'\]\.all\(key,/);
+  assert.doesNotMatch(workloadPolicy, /\[[^\]\n]*raibitserver\.io\/deployment-id[^\]\n]*\]\.all\(key,/, 'a new rollout must be allowed to replace deployment provenance labels');
   assert.match(workerSecurity, /raibitserver\.io\/verify-image-signatures[\s\S]*required/);
   assert.match(workerSecurity, /automountServiceAccountToken[\s\S]*false/);
   assert.match(workerSecurity, /allowPrivilegeEscalation[\s\S]*false/);

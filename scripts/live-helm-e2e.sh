@@ -294,6 +294,18 @@ spec:
                 port:
                   number: 8080
 EOF
+kubectl --context "${KUBE_CONTEXT}" --as "${ORCHESTRATOR_USER}" \
+  --namespace "${ADMISSION_TENANT_NAMESPACE}" patch ingress web \
+  --type merge \
+  --patch '{"metadata":{"labels":{"raibitserver.io/deployment":"live-admission-deployment-next","raibitserver.io/deployment-id":"live-admission-deployment-next"}}}' \
+  --dry-run=server >/dev/null
+if kubectl --context "${KUBE_CONTEXT}" --as "${ORCHESTRATOR_USER}" \
+  --namespace "${ADMISSION_TENANT_NAMESPACE}" patch ingress web \
+  --type merge --patch '{"metadata":{"labels":{"raibitserver.io/service-id":"attacker"}}}' \
+  --dry-run=server >/dev/null 2>&1; then
+  echo "orchestrator Ingress admission accepted a changed service owner" >&2
+  exit 1
+fi
 if kubectl --context "${KUBE_CONTEXT}" --as "${ORCHESTRATOR_USER}" \
   --namespace "${ADMISSION_TENANT_NAMESPACE}" patch resourcequota tenant-resource-budget \
   --type merge --patch '{"spec":{"hard":{"pods":"101"}}}' --dry-run=server >/dev/null 2>&1; then

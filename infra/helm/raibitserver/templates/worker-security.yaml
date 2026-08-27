@@ -276,7 +276,7 @@ spec:
     - expression: >-
         request.operation != 'UPDATE' ||
         (has(oldObject.metadata.labels) &&
-        ['app.kubernetes.io/managed-by', 'raibitserver.io/managed', 'raibitserver.io/project-id', 'raibitserver.io/service-id', 'raibitserver.io/deployment-id'].all(key,
+        ['app.kubernetes.io/managed-by', 'raibitserver.io/managed', 'raibitserver.io/project-id', 'raibitserver.io/service-id'].all(key,
           key in oldObject.metadata.labels && object.metadata.labels[key] == oldObject.metadata.labels[key]))
       message: "orchestrator workload ownership labels are immutable"
     - expression: >-
