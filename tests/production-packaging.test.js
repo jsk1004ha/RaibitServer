@@ -46,6 +46,12 @@ test('runtime images contain only the executables their production entrypoints r
   assert.ok(deployIndex >= 0 && runtimeClientGenerateIndex > deployIndex, 'Prisma Client must be generated inside the deployed API tree');
   assert.match(api, /packages\/core\/tsconfig\.json[\s\S]*core-runtime/);
   assert.match(api, /pkg\.exports=[\s\S]*dist\/index\.js/);
+  assert.match(
+    api,
+    /COPY --from=build --chown=10001:10001 \/opt\/raibitserver\/api \.\//,
+    'API runtime files must be owned by the same non-root UID used by the API and migration workloads',
+  );
+  assert.match(api, /^USER 10001:10001$/m, 'API image default user must match the Helm workload UID');
   assert.match(api, /node["',\s]+dist\/main\.js/);
   assert.match(dashboard, /\.next\/standalone/);
   assert.match(

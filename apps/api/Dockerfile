@@ -42,7 +42,7 @@ ENV PORT=3000
 RUN apt-get update && \
     apt-get install -y --no-install-recommends openssl && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=build --chown=node:node /opt/raibitserver/api ./
-USER node
+COPY --from=build --chown=10001:10001 /opt/raibitserver/api ./
+USER 10001:10001
 EXPOSE 3000
 CMD ["node", "dist/main.js"]
