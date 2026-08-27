@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +37,9 @@ type Config struct {
 	AllowAnonymousGit                  bool
 	Push                               bool
 	Builder                            string
+	BuildkitAddress                    string
+	BuildkitTLSDirectory               string
+	BuildkitTLSServerName              string
 	IsolationMode                      string
 	RunOnce                            bool
 	GeneratedDockerfileFrontend        string
@@ -126,6 +130,15 @@ func New(store controlplane.Store, runner CommandRunner, config Config) *Builder
 	}
 	if config.Builder == "" {
 		config.Builder = "docker-buildx"
+	}
+	if config.BuildkitAddress == "" {
+		config.BuildkitAddress = firstNonEmpty(os.Getenv("RAIBITSERVER_BUILDKIT_ADDRESS"), os.Getenv("BUILDKIT_HOST"))
+	}
+	if config.BuildkitTLSDirectory == "" {
+		config.BuildkitTLSDirectory = strings.TrimSpace(os.Getenv("RAIBITSERVER_BUILDKIT_TLS_DIRECTORY"))
+	}
+	if config.BuildkitTLSServerName == "" {
+		config.BuildkitTLSServerName = strings.TrimSpace(os.Getenv("RAIBITSERVER_BUILDKIT_TLS_SERVER_NAME"))
 	}
 	if config.IsolationMode == "" {
 		config.IsolationMode = strings.TrimSpace(os.Getenv("RAIBITSERVER_BUILDER_ISOLATION"))
@@ -815,7 +828,17 @@ func (b *Builder) executeBuild(ctx context.Context, state *buildContext) error {
 	sort.Strings(buildArgKeys)
 	var command Command
 	if b.Config.Builder == "buildctl" {
-		args := []string{"build", "--frontend", "dockerfile.v0", "--local", "context=" + state.ContextDir, "--local", "dockerfile=" + filepath.Dir(state.Dockerfile), "--output", fmt.Sprintf("type=image,name=%s,push=%t", state.Image, state.Push), "--metadata-file", state.MetadataFile}
+		args := make([]string, 0, 24+len(buildArgKeys)*2)
+		if address := strings.TrimSpace(b.Config.BuildkitAddress); address != "" {
+			args = append(args, "--addr", address)
+		}
+		if tlsDirectory := strings.TrimSpace(b.Config.BuildkitTLSDirectory); tlsDirectory != "" {
+			args = append(args, "--tlsdir", tlsDirectory)
+		}
+		if serverName := strings.TrimSpace(b.Config.BuildkitTLSServerName); serverName != "" {
+			args = append(args, "--tlsservername", serverName)
+		}
+		args = append(args, "build", "--frontend", "dockerfile.v0", "--local", "context="+state.ContextDir, "--local", "dockerfile="+filepath.Dir(state.Dockerfile), "--output", fmt.Sprintf("type=image,name=%s,push=%t", state.Image, state.Push), "--metadata-file", state.MetadataFile)
 		args = append(args, cacheArgs...)
 		args = append(args, "--opt", "build-arg:BUILDKIT_CACHE_MOUNT_NS="+cacheNamespace)
 		for _, key := range buildArgKeys {
@@ -1160,6 +1183,11 @@ func (b *Builder) validateRuntimeConfig() error {
 		if err := validateRegistryCredentialLifetimeConfig(b.Config); err != nil {
 			return err
 		}
+		if b.Config.Builder == "buildctl" {
+			if err := validateBuildkitConnectionConfig(b.Config); err != nil {
+				return err
+			}
+		}
 	}
 	if strings.TrimSpace(b.Config.Registry) == "" {
 		return errors.New("live builder requires an explicit registry")
@@ -1186,6 +1214,27 @@ func (b *Builder) validateRuntimeConfig() error {
 		if strings.TrimSpace(b.Config.SigningKeyPath) == "" {
 			return errors.New("configured live image signing requires a secret-backed signing key path")
 		}
+	}
+	return nil
+}
+
+func validateBuildkitConnectionConfig(config Config) error {
+	parsed, err := url.Parse(strings.TrimSpace(config.BuildkitAddress))
+	if err != nil || parsed.Scheme != "tcp" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("production buildctl requires an explicit loopback TCP address protected by mTLS")
+	}
+	host := net.ParseIP(parsed.Hostname())
+	port, portError := strconv.Atoi(parsed.Port())
+	if host == nil || !host.IsLoopback() || portError != nil || port < 1 || port > 65535 {
+		return errors.New("production buildctl endpoint must use an explicit loopback IP and port")
+	}
+	tlsDirectory := strings.TrimSpace(config.BuildkitTLSDirectory)
+	if !filepath.IsAbs(tlsDirectory) || filepath.Clean(tlsDirectory) != tlsDirectory {
+		return errors.New("production buildctl requires an absolute clean mTLS directory")
+	}
+	serverName := strings.TrimSpace(config.BuildkitTLSServerName)
+	if serverName == "" || strings.ContainsAny(serverName, " \t\r\n/\\:@") {
+		return errors.New("production buildctl requires an explicit TLS server name")
 	}
 	return nil
 }
@@ -1261,6 +1310,9 @@ func ConfigFromEnv() Config {
 		AllowAnonymousGit:                 boolFromEnv("RAIBITSERVER_ALLOW_ANONYMOUS_GIT"),
 		Push:                              boolFromEnv("RAIBITSERVER_PUSH"),
 		Builder:                           envOr("RAIBITSERVER_BUILDER", "docker-buildx"),
+		BuildkitAddress:                   firstNonEmpty(os.Getenv("RAIBITSERVER_BUILDKIT_ADDRESS"), os.Getenv("BUILDKIT_HOST")),
+		BuildkitTLSDirectory:              strings.TrimSpace(os.Getenv("RAIBITSERVER_BUILDKIT_TLS_DIRECTORY")),
+		BuildkitTLSServerName:             strings.TrimSpace(os.Getenv("RAIBITSERVER_BUILDKIT_TLS_SERVER_NAME")),
 		IsolationMode:                     strings.TrimSpace(os.Getenv("RAIBITSERVER_BUILDER_ISOLATION")),
 		RunOnce:                           boolFromEnv("RAIBITSERVER_RUN_ONCE"),
 		GeneratedDockerfileFrontend:       strings.TrimSpace(os.Getenv("RAIBITSERVER_GENERATED_DOCKERFILE_FRONTEND")),

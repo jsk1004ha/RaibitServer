@@ -360,6 +360,7 @@ spec:
             matchLabels:
               app.kubernetes.io/name: raibitserver-builder-executor
       ports:
+        - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 8443 }
   egress:
     - to:

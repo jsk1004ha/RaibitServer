@@ -112,6 +112,7 @@ builder:
     builderLimit: 10Gi
     buildkitRequest: 2Gi
     buildkitLimit: 20Gi
+    # Compatibility key: bounds the per-Pod BuildKit mTLS volumes.
     socketSizeLimit: 64Mi
     workSizeLimit: 1Gi
     metadataSizeLimit: 256Mi

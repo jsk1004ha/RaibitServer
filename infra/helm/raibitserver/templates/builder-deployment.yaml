@@ -278,6 +278,50 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           initContainers:
+            - name: buildkit-tls
+              image: "{{ .Values.builder.buildkitImage }}{{ if .Values.builder.buildkitDigest }}@{{ .Values.builder.buildkitDigest }}{{ end }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  umask 077
+                  cd /cert-work
+                  openssl genrsa -out ca-key.pem 2048
+                  openssl req -x509 -new -sha256 -days 1 -key ca-key.pem -subj /CN=raibit-buildkit-ca -out ca.pem
+                  openssl genrsa -out /server-certs/key.pem 2048
+                  openssl req -new -sha256 -key /server-certs/key.pem -subj /CN=raibit-buildkit -out server.csr
+                  printf 'subjectAltName=DNS:raibit-buildkit,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > server.ext
+                  openssl x509 -req -sha256 -days 1 -in server.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -extfile server.ext -out /server-certs/cert.pem
+                  openssl genrsa -out /client-certs/key.pem 2048
+                  openssl req -new -sha256 -key /client-certs/key.pem -subj /CN=raibit-buildctl -out client.csr
+                  printf 'extendedKeyUsage=clientAuth\n' > client.ext
+                  openssl x509 -req -sha256 -days 1 -in client.csr -CA ca.pem -CAkey ca-key.pem -CAserial ca.srl -extfile client.ext -out /client-certs/cert.pem
+                  cp ca.pem /server-certs/ca.pem
+                  cp ca.pem /client-certs/ca.pem
+                  chmod 600 /server-certs/key.pem /client-certs/key.pem
+                  chmod 644 /server-certs/ca.pem /server-certs/cert.pem /client-certs/ca.pem /client-certs/cert.pem
+                  rm -f ./*
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                  ephemeral-storage: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+                  ephemeral-storage: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - { name: buildkit-cert-work, mountPath: /cert-work }
+                - { name: buildkit-server-tls, mountPath: /server-certs }
+                - { name: buildkit-client-tls, mountPath: /client-certs }
             - name: buildkitd
               # Kubernetes native sidecar: it starts before the worker and is
               # terminated automatically when the one-shot Job container exits.
@@ -288,11 +332,15 @@ spec:
                 - name: TMPDIR
                   value: /tmp
                 - name: XDG_RUNTIME_DIR
-                  value: /run/buildkit
-              args: ["--addr", "unix:///run/buildkit/buildkitd.sock", "--oci-worker-no-process-sandbox"]
+                  value: /tmp/buildkit-runtime
+              args: ["--addr", "tcp://127.0.0.1:1234", "--tlscacert", "/server-certs/ca.pem", "--tlscert", "/server-certs/cert.pem", "--tlskey", "/server-certs/key.pem", "--oci-worker-no-process-sandbox"]
               startupProbe:
                 exec:
-                  command: ["/bin/sh", "-ec", "test -S /run/buildkit/buildkitd.sock"]
+                  command:
+                    - /bin/sh
+                    - -ec
+                    - >-
+                      awk '$2 == "0100007F:04D2" && $4 == "0A" { found=1 } END { exit !found }' /proc/net/tcp
                 periodSeconds: 1
                 failureThreshold: 60
               resources:
@@ -315,9 +363,9 @@ spec:
                 appArmorProfile:
                   type: Unconfined
               volumeMounts:
-                - { name: buildkit-socket, mountPath: /run/buildkit }
                 - { name: buildkit-state, mountPath: /home/user/.local/share/buildkit }
-                - { name: work, mountPath: /tmp }
+                - { name: buildkit-server-tls, mountPath: /server-certs, readOnly: true }
+                - { name: buildkit-tmp, mountPath: /tmp }
           containers:
             - name: builder
               image: "{{ .Values.image.registry }}/raibitserver/builder{{ if .Values.image.digests.builder }}@{{ .Values.image.digests.builder }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
@@ -394,7 +442,13 @@ spec:
                       optional: true
 {{ end }}
                 - name: BUILDKIT_HOST
-                  value: unix:///run/buildkit/buildkitd.sock
+                  value: tcp://127.0.0.1:1234
+                - name: RAIBITSERVER_BUILDKIT_ADDRESS
+                  value: tcp://127.0.0.1:1234
+                - name: RAIBITSERVER_BUILDKIT_TLS_DIRECTORY
+                  value: /var/run/secrets/raibitserver/buildkit
+                - name: RAIBITSERVER_BUILDKIT_TLS_SERVER_NAME
+                  value: raibit-buildkit
               resources:
                 requests:
                   cpu: 250m
@@ -411,8 +465,8 @@ spec:
                 capabilities:
                   drop: ["ALL"]
               volumeMounts:
-                - { name: buildkit-socket, mountPath: /run/buildkit }
-                - { name: work, mountPath: /tmp }
+                - { name: buildkit-client-tls, mountPath: /var/run/secrets/raibitserver/buildkit, readOnly: true }
+                - { name: builder-tmp, mountPath: /tmp }
                 - { name: workspace, mountPath: /workspace }
                 - { name: metadata, mountPath: /metadata }
 {{ if .Values.builder.dispatch.existingSecret }}
@@ -426,13 +480,25 @@ spec:
 {{ end }}
           restartPolicy: Never
           volumes:
-            - name: buildkit-socket
+            - name: buildkit-cert-work
               emptyDir:
+                medium: Memory
+                sizeLimit: {{ .Values.builder.ephemeralStorage.socketSizeLimit | quote }}
+            - name: buildkit-server-tls
+              emptyDir:
+                medium: Memory
+                sizeLimit: {{ .Values.builder.ephemeralStorage.socketSizeLimit | quote }}
+            - name: buildkit-client-tls
+              emptyDir:
+                medium: Memory
                 sizeLimit: {{ .Values.builder.ephemeralStorage.socketSizeLimit | quote }}
             - name: buildkit-state
               emptyDir:
                 sizeLimit: {{ .Values.builder.buildkitStateSizeLimit | quote }}
-            - name: work
+            - name: buildkit-tmp
+              emptyDir:
+                sizeLimit: {{ .Values.builder.ephemeralStorage.workSizeLimit | quote }}
+            - name: builder-tmp
               emptyDir:
                 sizeLimit: {{ .Values.builder.ephemeralStorage.workSizeLimit | quote }}
             - name: workspace

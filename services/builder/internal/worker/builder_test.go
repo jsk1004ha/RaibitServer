@@ -104,6 +104,15 @@ func TestBuilderLiveBuildRequiresRegistryDigestMetadata(t *testing.T) {
 	if !strings.Contains(command, "--metadata-file") || !strings.Contains(command, "push=true") {
 		t.Fatalf("buildctl must push and write digest metadata: %s", command)
 	}
+	for flag, expected := range map[string]string{
+		"--addr":          "tcp://127.0.0.1:1234",
+		"--tlsdir":        "/var/run/secrets/raibitserver/buildkit",
+		"--tlsservername": "raibit-buildkit",
+	} {
+		if actual := commandArgValue(runner.commands[0].Args, flag); actual != expected {
+			t.Fatalf("buildctl %s mismatch: got %q want %q in %s", flag, actual, expected, command)
+		}
+	}
 	if deployment := firstByID(t, readState(t, stateFile), "deployments", "dep_1"); deployment["status"] == "IMAGE_READY" {
 		t.Fatalf("deployment became image-ready without registry digest: %#v", deployment)
 	}
@@ -114,16 +123,19 @@ func TestBuilderScansAndSignsDigestBeforeImageReady(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("a", 64)
 	runner := &recordingRunner{metadataDigest: digest}
 	builder := worker.New(controlplane.NewFileStore(stateFile), runner, worker.Config{
-		WorkspaceDir:   workspaceDir,
-		Registry:       "registry.example.test",
-		DryRun:         false,
-		Push:           true,
-		Builder:        "buildctl",
-		Scan:           true,
-		Scanner:        "trivy",
-		Sign:           true,
-		Signer:         "cosign",
-		SigningKeyPath: "/var/run/secrets/raibitserver/signing/cosign.key",
+		WorkspaceDir:          workspaceDir,
+		Registry:              "registry.example.test",
+		DryRun:                false,
+		Push:                  true,
+		Builder:               "buildctl",
+		BuildkitAddress:       "tcp://127.0.0.1:1234",
+		BuildkitTLSDirectory:  "/var/run/secrets/raibitserver/buildkit",
+		BuildkitTLSServerName: "raibit-buildkit",
+		Scan:                  true,
+		Scanner:               "trivy",
+		Sign:                  true,
+		Signer:                "cosign",
+		SigningKeyPath:        "/var/run/secrets/raibitserver/signing/cosign.key",
 	})
 
 	result, err := builder.RunOnce(context.Background())
@@ -1073,14 +1085,17 @@ func commandArgValue(args []string, name string) string {
 
 func liveSupplyChainConfig(workspaceDir, registry string) worker.Config {
 	return worker.Config{
-		WorkspaceDir:   workspaceDir,
-		Registry:       registry,
-		DryRun:         false,
-		Push:           true,
-		Builder:        "buildctl",
-		Scan:           true,
-		Sign:           true,
-		SigningKeyPath: "/var/run/secrets/raibitserver/signing/cosign.key",
+		WorkspaceDir:          workspaceDir,
+		Registry:              registry,
+		DryRun:                false,
+		Push:                  true,
+		Builder:               "buildctl",
+		BuildkitAddress:       "tcp://127.0.0.1:1234",
+		BuildkitTLSDirectory:  "/var/run/secrets/raibitserver/buildkit",
+		BuildkitTLSServerName: "raibit-buildkit",
+		Scan:                  true,
+		Sign:                  true,
+		SigningKeyPath:        "/var/run/secrets/raibitserver/signing/cosign.key",
 	}
 }
 

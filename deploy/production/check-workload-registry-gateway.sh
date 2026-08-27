@@ -24,6 +24,7 @@ REGISTRY_PREFIX="${REGISTRY_PREFIX:-raibitserver}"
 REGISTRY_SERVICE="${REGISTRY_SERVICE:-raibit-registry}"
 INFRA_NS="${INFRA_NS:-raibitserver-infra}"
 APP_NS="${APP_NS:-raibitserver-system}"
+EDGE_NS="${EDGE_NS:-edge-gateway-system}"
 BROKER_TOKEN_SECRET="${BROKER_TOKEN_SECRET:-raibitserver-registry-broker-token}"
 IMAGE_PREFIX="${RAIBITSERVER_IMAGE_PREFIX:-ghcr.io/jsk1004ha/raibitserver}"
 
@@ -33,7 +34,7 @@ done
 
 python3 - \
   "$REGISTRY_HOST" "$AUTH_HOST" "$REGISTRY_PREFIX" "$REGISTRY_SERVICE" \
-  "$INFRA_NS" "$APP_NS" "$BROKER_TOKEN_SECRET" "$IMAGE_PREFIX" <<'PY'
+  "$INFRA_NS" "$APP_NS" "$EDGE_NS" "$BROKER_TOKEN_SECRET" "$IMAGE_PREFIX" <<'PY'
 import re
 import sys
 
@@ -44,6 +45,7 @@ import sys
     registry_service,
     infra_namespace,
     app_namespace,
+    edge_namespace,
     broker_token_secret,
     image_prefix,
 ) = sys.argv[1:]
@@ -64,6 +66,7 @@ for label, value in [('registry host', registry_host), ('broker host', auth_host
 for label, value in [
     ('infrastructure namespace', infra_namespace),
     ('application namespace', app_namespace),
+    ('edge namespace', edge_namespace),
     ('broker token Secret', broker_token_secret),
 ]:
     if not dns_label.fullmatch(value):
@@ -84,6 +87,7 @@ trap cleanup EXIT
 
 GATEWAY_DEPLOYMENT="${RUN_DIR}/gateway-deployment.json"
 GATEWAY_SERVICE="${RUN_DIR}/gateway-service.json"
+GATEWAY_NETWORK_POLICY="${RUN_DIR}/gateway-network-policy.json"
 REGISTRY_STATEFULSET="${RUN_DIR}/registry-statefulset.json"
 COREDNS="${RUN_DIR}/coredns.json"
 COREDNS_CUSTOM="${RUN_DIR}/coredns-custom.json"
@@ -92,6 +96,8 @@ kubectl -n "$INFRA_NS" get deployment raibit-registry-auth -o json >"$GATEWAY_DE
   || fail "registry gateway Deployment could not be read"
 kubectl -n "$INFRA_NS" get service raibit-registry-auth -o json >"$GATEWAY_SERVICE" \
   || fail "registry gateway Service could not be read"
+kubectl -n "$INFRA_NS" get networkpolicy raibit-registry-auth-ingress -o json >"$GATEWAY_NETWORK_POLICY" \
+  || fail "registry gateway NetworkPolicy could not be read"
 kubectl -n "$INFRA_NS" get statefulset raibit-registry -o json >"$REGISTRY_STATEFULSET" \
   || fail "workload registry StatefulSet could not be read"
 kubectl -n kube-system get configmap coredns -o json >"$COREDNS" \
@@ -100,8 +106,8 @@ kubectl -n kube-system get configmap coredns-custom --ignore-not-found -o json >
   || fail "optional CoreDNS custom ConfigMap could not be read"
 
 if ! GATEWAY_CLUSTER_IP="$(python3 - \
-  "$GATEWAY_DEPLOYMENT" "$GATEWAY_SERVICE" "$REGISTRY_STATEFULSET" \
-  "$COREDNS" "$COREDNS_CUSTOM" "$IMAGE_PREFIX" "$REGISTRY_HOST" "$AUTH_HOST" <<'PY'
+  "$GATEWAY_DEPLOYMENT" "$GATEWAY_SERVICE" "$GATEWAY_NETWORK_POLICY" "$REGISTRY_STATEFULSET" \
+  "$COREDNS" "$COREDNS_CUSTOM" "$APP_NS" "$EDGE_NS" "$IMAGE_PREFIX" "$REGISTRY_HOST" "$AUTH_HOST" <<'PY'
 from pathlib import Path
 import ipaddress
 import json
@@ -111,9 +117,12 @@ import sys
 (
     deployment_path,
     service_path,
+    network_policy_path,
     statefulset_path,
     coredns_path,
     coredns_custom_path,
+    app_namespace,
+    edge_namespace,
     image_prefix,
     registry_host,
     auth_host,
@@ -121,6 +130,7 @@ import sys
 
 deployment = json.loads(Path(deployment_path).read_text())
 service = json.loads(Path(service_path).read_text())
+network_policy = json.loads(Path(network_policy_path).read_text())
 statefulset = json.loads(Path(statefulset_path).read_text())
 coredns = json.loads(Path(coredns_path).read_text())
 coredns_custom_text = Path(coredns_custom_path).read_text().strip()
@@ -154,6 +164,75 @@ ports = {
 }
 if (443, 8443) not in ports:
     raise SystemExit('ERROR: registry gateway internal TLS service port is missing')
+
+expected_network_policy_spec = {
+    'podSelector': {'matchLabels': {'app': 'raibit-registry-auth'}},
+    'policyTypes': ['Ingress', 'Egress'],
+    'ingress': [
+        {
+            'from': [
+                {
+                    'namespaceSelector': {
+                        'matchLabels': {'kubernetes.io/metadata.name': edge_namespace},
+                    },
+                },
+            ],
+            'ports': [{'protocol': 'TCP', 'port': 8080}],
+        },
+        {
+            'from': [
+                {
+                    'namespaceSelector': {
+                        'matchLabels': {'kubernetes.io/metadata.name': app_namespace},
+                    },
+                    'podSelector': {
+                        'matchLabels': {'app.kubernetes.io/name': 'raibitserver-builder-executor'},
+                    },
+                },
+            ],
+            'ports': [
+                {'protocol': 'TCP', 'port': 443},
+                {'protocol': 'TCP', 'port': 8443},
+            ],
+        },
+    ],
+    'egress': [
+        {
+            'to': [
+                {
+                    'namespaceSelector': {
+                        'matchLabels': {'kubernetes.io/metadata.name': 'kube-system'},
+                    },
+                    'podSelector': {'matchLabels': {'k8s-app': 'kube-dns'}},
+                },
+            ],
+            'ports': [
+                {'protocol': 'UDP', 'port': 53},
+                {'protocol': 'TCP', 'port': 53},
+            ],
+        },
+        {
+            'to': [
+                {'podSelector': {'matchLabels': {'app': 'raibit-registry'}}},
+            ],
+            'ports': [{'protocol': 'TCP', 'port': 5000}],
+        },
+    ],
+}
+
+def canonical(value):
+    if isinstance(value, dict):
+        return {key: canonical(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        normalized = [canonical(item) for item in value]
+        return sorted(
+            normalized,
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(',', ':')),
+        )
+    return value
+
+if canonical(network_policy.get('spec', {})) != canonical(expected_network_policy_spec):
+    raise SystemExit('ERROR: registry gateway NetworkPolicy must match the least-privilege policy exactly')
 
 node_hosts = coredns.get('data', {}).get('NodeHosts')
 if not isinstance(node_hosts, str):

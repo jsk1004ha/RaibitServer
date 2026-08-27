@@ -80,7 +80,7 @@ test('production builder chart fails closed around registry and supply-chain set
   assert.match(builder, /RAIBITSERVER_WORKSPACE/);
   assert.match(builder, /RAIBITSERVER_BUILD_METADATA_DIR/);
   assert.match(builder, /emptyDir:/);
-  for (const volume of ['buildkit-socket', 'buildkit-state', 'work', 'workspace', 'metadata']) {
+  for (const volume of ['buildkit-cert-work', 'buildkit-server-tls', 'buildkit-client-tls', 'buildkit-state', 'buildkit-tmp', 'builder-tmp', 'workspace', 'metadata']) {
     assert.match(builder, new RegExp(`name: ${volume}[\\s\\S]{0,120}sizeLimit:`), `${volume} must have an explicit sizeLimit`);
   }
   assert.ok((builder.match(/ephemeral-storage/g) || []).length >= 4, 'builder and buildkit must have ephemeral-storage requests and limits');
@@ -109,6 +109,10 @@ test('production builder chart fails closed around registry and supply-chain set
   assert.match(builder, /backoffLimit:\s*0/);
   assert.match(builder, /restartPolicy:\s*Never/);
   assert.match(builder, /initContainers:[\s\S]*name:\s*buildkitd[\s\S]*restartPolicy:\s*Always/, 'BuildKit must be a native sidecar scoped to one job pod');
+  assert.match(builder, /name:\s*buildkit-tls[\s\S]*openssl genrsa[\s\S]*extendedKeyUsage=serverAuth[\s\S]*extendedKeyUsage=clientAuth/, 'each build pod must generate an ephemeral mTLS identity');
+  assert.match(builder, /--addr["', ]+tcp:\/\/127\.0\.0\.1:1234[\s\S]*--tlscacert[\s\S]*--tlscert[\s\S]*--tlskey/, 'BuildKit loopback TCP must require mTLS');
+  assert.match(builder, /RAIBITSERVER_BUILDKIT_ADDRESS[\s\S]*tcp:\/\/127\.0\.0\.1:1234[\s\S]*RAIBITSERVER_BUILDKIT_TLS_DIRECTORY[\s\S]*RAIBITSERVER_BUILDKIT_TLS_SERVER_NAME/, 'the executor must use the authenticated loopback endpoint');
+  assert.doesNotMatch(builder, /unix:\/\/\/run\/buildkit\/buildkitd\.sock/, 'gVisor-separated containers cannot share the BuildKit Unix socket');
   assert.match(builder, /RAIBITSERVER_BUILDER_ROLE[\s\S]*dispatcher/);
   assert.match(builder, /RAIBITSERVER_BUILDER_ROLE[\s\S]*executor/);
   const dispatcherDocument = builder.split(/^---$/m).find((document) => /kind:\s*Deployment/.test(document) && /builder-dispatcher/.test(document)) ?? '';
@@ -127,6 +131,25 @@ test('production builder chart fails closed around registry and supply-chain set
   assert.match(admission, /raibitserver\.io\/verify-image-signatures/);
   assert.match(admission, /admissionController[\s\S]*trustRoot|signature-verification-controller[\s\S]*signature-trust-root/i);
   assert.doesNotMatch(admission, /cryptographically verified by (?:CEL|ValidatingAdmissionPolicy)/i);
+});
+
+test('tenant Dockerfile processes cannot reach the BuildKit client identity', async () => {
+  const builder = await fs.readFile('infra/helm/raibitserver/templates/builder-deployment.yaml', 'utf8');
+  const sidecarStart = builder.indexOf('            - name: buildkitd');
+  const executorStart = builder.indexOf('          containers:', sidecarStart);
+  const executorEnd = builder.indexOf('          restartPolicy: Never', executorStart);
+  const buildkitSidecar = builder.slice(sidecarStart, executorStart);
+  const executor = builder.slice(executorStart, executorEnd);
+
+  assert.ok(sidecarStart >= 0 && executorStart > sidecarStart && executorEnd > executorStart);
+  assert.match(buildkitSidecar, /name: buildkit-server-tls/);
+  assert.match(buildkitSidecar, /name: buildkit-tmp/);
+  assert.doesNotMatch(buildkitSidecar, /buildkit-client-tls|builder-tmp|\/var\/run\/secrets\/raibitserver\/buildkit/);
+  assert.match(executor, /name: buildkit-client-tls/);
+  assert.match(executor, /name: builder-tmp/);
+  assert.doesNotMatch(executor, /name: buildkit-server-tls|buildkit-tmp|mountPath: \/server-certs/);
+  assert.match(buildkitSidecar, /awk[^\n]*0100007F:04D2[^\n]*\/proc\/net\/tcp/);
+  assert.doesNotMatch(buildkitSidecar, /startupProbe:[\s\S]*buildctl/);
 });
 
 test('production Helm uses a chart-managed live verification hook with least-privilege access', async () => {

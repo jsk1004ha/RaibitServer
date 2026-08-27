@@ -69,6 +69,79 @@ func TestProductionBuilderRejectsSharedLiveRuntimeBeforeExecutingTenantCode(t *t
 	}
 }
 
+func TestProductionBuilderRejectsUnauthenticatedOrNonLoopbackBuildkit(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*worker.Config)
+		want      string
+	}{
+		{
+			name: "unix socket",
+			configure: func(config *worker.Config) {
+				config.BuildkitAddress = "unix:///run/buildkit/buildkitd.sock"
+			},
+			want: "loopback TCP",
+		},
+		{
+			name: "remote tcp",
+			configure: func(config *worker.Config) {
+				config.BuildkitAddress = "tcp://10.0.0.5:1234"
+			},
+			want: "loopback IP",
+		},
+		{
+			name: "zero tcp port",
+			configure: func(config *worker.Config) {
+				config.BuildkitAddress = "tcp://127.0.0.1:0"
+			},
+			want: "loopback IP and port",
+		},
+		{
+			name: "out of range tcp port",
+			configure: func(config *worker.Config) {
+				config.BuildkitAddress = "tcp://127.0.0.1:65536"
+			},
+			want: "loopback IP and port",
+		},
+		{
+			name: "missing tls directory",
+			configure: func(config *worker.Config) {
+				config.BuildkitTLSDirectory = ""
+			},
+			want: "mTLS directory",
+		},
+		{
+			name: "missing tls server name",
+			configure: func(config *worker.Config) {
+				config.BuildkitTLSServerName = ""
+			},
+			want: "TLS server name",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			workspaceDir, stateFile := writeLocalDockerfileBuildState(t, nil)
+			runner := &recordingRunner{}
+			config := liveSupplyChainConfig(workspaceDir, "registry.example.test/team")
+			config.Production = true
+			config.IsolationMode = "single-job-pod"
+			config.RunOnce = true
+			config.RegistryCredentialBrokerURL = "https://credential-broker.example.test/credentials"
+			config.RegistryCredentialBrokerTokenFile = "/var/run/secrets/raibitserver/registry-broker/token"
+			testCase.configure(&config)
+
+			_, err := worker.New(controlplane.NewFileStore(stateFile), runner, config).RunOnce(context.Background())
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("expected %q validation error, got %v", testCase.want, err)
+			}
+			if len(runner.commands) != 0 {
+				t.Fatalf("tenant code executed before BuildKit validation: %#v", runner.commands)
+			}
+		})
+	}
+}
+
 func TestProductionBuilderUsesOneShortLivedCredentialForExactOutputRepository(t *testing.T) {
 	workspaceDir, stateFile := writeLocalDockerfileBuildState(t, nil)
 	state := readState(t, stateFile)
@@ -230,10 +303,16 @@ func TestConfigFromEnvDefaultsToBoundedBuildAndCredentialWindow(t *testing.T) {
 	t.Setenv("RAIBITSERVER_BUILD_TIMEOUT_SECONDS", "")
 	t.Setenv("RAIBITSERVER_REGISTRY_CREDENTIAL_MIN_TTL_SECONDS", "")
 	t.Setenv("RAIBITSERVER_REGISTRY_CREDENTIAL_MAX_TTL_SECONDS", "")
+	t.Setenv("RAIBITSERVER_BUILDKIT_ADDRESS", "tcp://127.0.0.1:1234")
+	t.Setenv("RAIBITSERVER_BUILDKIT_TLS_DIRECTORY", "/var/run/secrets/raibitserver/buildkit")
+	t.Setenv("RAIBITSERVER_BUILDKIT_TLS_SERVER_NAME", "raibit-buildkit")
 
 	config := worker.ConfigFromEnv()
 	if config.Timeout != 10*time.Minute || config.RegistryCredentialMinTTL != 14*time.Minute || config.RegistryCredentialMaxTTL != 15*time.Minute {
 		t.Fatalf("unexpected production timing defaults: timeout=%s minTTL=%s maxTTL=%s", config.Timeout, config.RegistryCredentialMinTTL, config.RegistryCredentialMaxTTL)
+	}
+	if config.BuildkitAddress != "tcp://127.0.0.1:1234" || config.BuildkitTLSDirectory != "/var/run/secrets/raibitserver/buildkit" || config.BuildkitTLSServerName != "raibit-buildkit" {
+		t.Fatalf("unexpected BuildKit mTLS config: %#v", config)
 	}
 }
 

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 const updaterPath = new URL('../deploy/production/auto-update.sh', import.meta.url);
@@ -152,7 +154,7 @@ test('registry gateway reconciler uses exact TLS identities without a shared ing
   assert.match(registryGatewayReconciler, /for attempt in \$\(seq 1 15\)[\s\S]*BROKER_HEALTHY[\s\S]*sleep 2/);
   assert.match(registryGatewayReconciler, /name: internal-tls[\s\S]*port: 443[\s\S]*targetPort: 8443/);
   assert.match(registryGatewayReconciler, /BROKER_HOST[\s\S]*INTERNAL_TLS_PORT[\s\S]*REGISTRY_UPSTREAM_URL/);
-  assert.match(registryGatewayReconciler, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*port: 8443/);
+  assert.match(registryGatewayReconciler, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*ports:[\s\S]*port: 443[\s\S]*port: 8443/);
   assert.match(registryGatewayReconciler, /GATEWAY_CLUSTER_IP_RAW=.*service raibit-registry-auth/);
   assert.ok(registryGatewayReconciler.includes(
     "output.append(f'{gateway_ip} {registry_host} {auth_host}')",
@@ -210,6 +212,8 @@ test('production updater detects live registry gateway drift before its early ex
   assert.match(registryGatewayChecker, /builder and broker token Secrets do not match/);
   assert.match(registryGatewayChecker, /https:\/\/\$\{AUTH_HOST\}\/broker/);
   assert.match(registryGatewayChecker, /registry credential broker issuance smoke test failed/);
+  assert.match(registryGatewayChecker, /networkpolicy raibit-registry-auth-ingress/);
+  assert.match(registryGatewayChecker, /NetworkPolicy must match the least-privilege policy exactly/);
   assert.match(registryGatewayChecker, /REGISTRY_STATUS.*== 401/s);
   assert.match(registryGatewayChecker, /exactly one authentication challenge/);
   assert.match(registryGatewayChecker, /CoreDNS registry split DNS is not exact/);
@@ -223,6 +227,100 @@ test('production updater detects live registry gateway drift before its early ex
     observedState >= 0 && liveProbe > observedState && earlyExit > liveProbe,
     'the updater must run a live broker probe before its unchanged-release early exit',
   );
+});
+
+test('registry gateway checker rejects ineffective or overbroad NetworkPolicy fixtures', (t) => {
+  const pythonBlocks = [...registryGatewayChecker.matchAll(/<<'PY'\r?\n([\s\S]*?)\r?\nPY/g)];
+  const structuralCheck = pythonBlocks[1]?.[1];
+  assert.ok(structuralCheck, 'structural checker Python block was not found');
+
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'raibit-registry-policy-'));
+  t.after(() => rmSync(fixtureDir, { recursive: true, force: true }));
+  const writeJSON = (name, value) => {
+    const target = join(fixtureDir, `${name}.json`);
+    writeFileSync(target, JSON.stringify(value));
+    return target;
+  };
+
+  const paths = {
+    deployment: writeJSON('deployment', {
+      status: { availableReplicas: 1 },
+      spec: { template: { spec: { containers: [{
+        name: 'broker',
+        image: `ghcr.io/jsk1004ha/raibitserver/registry-broker@sha256:${'a'.repeat(64)}`,
+      }] } } },
+    }),
+    service: writeJSON('service', {
+      spec: { clusterIP: '10.43.121.148', ports: [{ port: 443, targetPort: 8443 }] },
+    }),
+    statefulset: writeJSON('statefulset', { status: { readyReplicas: 1 } }),
+    coredns: writeJSON('coredns', {
+      data: { NodeHosts: '10.43.121.148 registry.raibit.kr registry-auth.raibit.kr\n' },
+    }),
+    corednsCustom: writeJSON('coredns-custom', {}),
+  };
+  const exactPolicy = {
+    spec: {
+      podSelector: { matchLabels: { app: 'raibit-registry-auth' } },
+      policyTypes: ['Ingress', 'Egress'],
+      ingress: [
+        {
+          from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'edge-gateway-system' } } }],
+          ports: [{ protocol: 'TCP', port: 8080 }],
+        },
+        {
+          from: [{
+            namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'raibitserver-system' } },
+            podSelector: { matchLabels: { 'app.kubernetes.io/name': 'raibitserver-builder-executor' } },
+          }],
+          ports: [{ protocol: 'TCP', port: 443 }, { protocol: 'TCP', port: 8443 }],
+        },
+      ],
+      egress: [
+        {
+          to: [{
+            namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } },
+            podSelector: { matchLabels: { 'k8s-app': 'kube-dns' } },
+          }],
+          ports: [{ protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 53 }],
+        },
+        {
+          to: [{ podSelector: { matchLabels: { app: 'raibit-registry' } } }],
+          ports: [{ protocol: 'TCP', port: 5000 }],
+        },
+      ],
+    },
+  };
+
+  const runStructuralCheck = (policy) => {
+    const policyPath = writeJSON('network-policy', policy);
+    return spawnSync('python3', [
+      '-', paths.deployment, paths.service, policyPath, paths.statefulset,
+      paths.coredns, paths.corednsCustom, 'raibitserver-system', 'edge-gateway-system',
+      'ghcr.io/jsk1004ha/raibitserver', 'registry.raibit.kr', 'registry-auth.raibit.kr',
+    ], { input: structuralCheck, encoding: 'utf8' });
+  };
+
+  const healthy = runStructuralCheck(exactPolicy);
+  assert.equal(healthy.status, 0, healthy.stderr);
+  assert.equal(healthy.stdout.trim(), '10.43.121.148');
+
+  const wrongSelector = structuredClone(exactPolicy);
+  wrongSelector.spec.podSelector.matchLabels.app = 'wrong-gateway';
+  const broadPeer = structuredClone(exactPolicy);
+  broadPeer.spec.ingress.push({ from: [{}], ports: [{ protocol: 'TCP', port: 443 }] });
+  const missingEgressPolicyType = structuredClone(exactPolicy);
+  missingEgressPolicyType.spec.policyTypes = ['Ingress'];
+
+  for (const [name, fixture] of [
+    ['wrong target selector', wrongSelector],
+    ['broad peer', broadPeer],
+    ['missing policy type', missingEgressPolicyType],
+  ]) {
+    const result = runStructuralCheck(fixture);
+    assert.notEqual(result.status, 0, `${name} unexpectedly passed`);
+    assert.match(result.stderr, /least-privilege policy exactly/, `${name}: ${result.stderr}`);
+  }
 });
 
 test('production updater applies the generated workload registry overlay through every Helm gate', () => {
@@ -264,7 +362,7 @@ test('workload registry bootstrap emits a dedicated TLS gateway and a secure Hel
   assert.match(registryBootstrap, /BROKER_HOST[\s\S]*INTERNAL_TLS_PORT[\s\S]*INTERNAL_TLS_CERT_FILE[\s\S]*INTERNAL_TLS_KEY_FILE[\s\S]*REGISTRY_UPSTREAM_URL/);
   assert.match(registryBootstrap, /http:[\s\S]*addr: :5000[\s\S]*relativeurls: true/);
   assert.match(registryBootstrap, /app\.kubernetes\.io\/name: raibit-registry-auth/);
-  assert.match(registryBootstrap, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*port: 8443/);
+  assert.match(registryBootstrap, /kubernetes\.io\/metadata\.name: \$\{APP_NS\}[\s\S]*app\.kubernetes\.io\/name: raibitserver-builder-executor[\s\S]*ports:[\s\S]*port: 443[\s\S]*port: 8443/);
   assert.match(registryBootstrap, /GATEWAY_CLUSTER_IP=.*service raibit-registry-auth/);
   assert.match(registryBootstrap, /GATEWAY_CLUSTER_IP\} \$\{REGISTRY_HOST\} \$\{AUTH_HOST\}/);
   assert.match(registryBootstrap, /configmap coredns-custom --ignore-not-found/);

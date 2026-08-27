@@ -22,6 +22,9 @@ import (
 
 const (
 	registryBrokerTimeout            = 10 * time.Second
+	registryBrokerMaxAttempts        = 6
+	registryBrokerRetryBaseDelay     = 250 * time.Millisecond
+	registryBrokerRetryMaxDelay      = 2 * time.Second
 	registryBrokerMaxBodyBytes       = 64 << 10
 	registryBrokerMaxTokenBytes      = 16 << 10
 	defaultBuildCommandTimeout       = 10 * time.Minute
@@ -92,23 +95,13 @@ func (b *Builder) issuePerBuildRegistryCredential(ctx context.Context, state *bu
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, registryBrokerTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, b.Config.RegistryCredentialBrokerURL, bytes.NewReader(payload))
-	if err != nil {
-		return nil, errors.New("create registry credential broker request")
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Content-Type", "application/json")
 	client := http.DefaultClient
 	if b.Config.RegistryCredentialBrokerHTTPClient != nil {
 		client = b.Config.RegistryCredentialBrokerHTTPClient
 	}
-	clientCopy := *client
-	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-		return errRegistryCredentialBrokerRedirect
-	}
-	response, err := clientCopy.Do(request)
+	response, err := requestRegistryCredential(requestCtx, client, b.Config.RegistryCredentialBrokerURL, token, payload)
 	if err != nil {
-		return nil, classifyRegistryCredentialBrokerTransportError(err)
+		return nil, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -157,6 +150,68 @@ func (b *Builder) issuePerBuildRegistryCredential(ctx context.Context, state *bu
 		return nil, err
 	}
 	return map[string]string{"DOCKER_CONFIG": credentialDir}, nil
+}
+
+func requestRegistryCredential(ctx context.Context, client *http.Client, brokerURL, token string, payload []byte) (*http.Response, error) {
+	return requestRegistryCredentialWithRetry(ctx, client, brokerURL, token, payload, registryBrokerRetryBaseDelay, registryBrokerRetryMaxDelay)
+}
+
+func requestRegistryCredentialWithRetry(ctx context.Context, client *http.Client, brokerURL, token string, payload []byte, retryBaseDelay, retryMaxDelay time.Duration) (*http.Response, error) {
+	clientCopy := *client
+	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return errRegistryCredentialBrokerRedirect
+	}
+
+	var lastError error
+	for attempt := 1; attempt <= registryBrokerMaxAttempts; attempt++ {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, brokerURL, bytes.NewReader(payload))
+		if err != nil {
+			return nil, errors.New("create registry credential broker request")
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+
+		response, err := clientCopy.Do(request)
+		if err == nil {
+			return response, nil
+		}
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		lastError = err
+		if !isRetryableRegistryCredentialBrokerTransportError(err) || attempt == registryBrokerMaxAttempts {
+			return nil, classifyRegistryCredentialBrokerTransportError(err)
+		}
+
+		delay := retryBaseDelay << (attempt - 1)
+		if delay > retryMaxDelay {
+			delay = retryMaxDelay
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, classifyRegistryCredentialBrokerTransportError(ctx.Err())
+		case <-timer.C:
+		}
+	}
+	return nil, classifyRegistryCredentialBrokerTransportError(lastError)
+}
+
+func isRetryableRegistryCredentialBrokerTransportError(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EHOSTUNREACH) {
+		return true
+	}
+
+	var dnsError *net.DNSError
+	if errors.As(err, &dnsError) && (dnsError.IsTemporary || dnsError.IsTimeout) {
+		return true
+	}
+
+	var operationError *net.OpError
+	return errors.As(err, &operationError) && operationError.Op == "dial" && (operationError.Temporary() || operationError.Timeout())
 }
 
 func classifyRegistryCredentialBrokerTransportError(err error) error {
