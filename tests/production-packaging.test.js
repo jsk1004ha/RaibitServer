@@ -310,6 +310,7 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
   assert.match(values, /className:\s*nginx/);
   assert.match(orchestratorDeployment, /name: RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE[\s\S]*\.Values\.ingress\.gatewayNamespace/);
   assert.match(orchestratorDeployment, /name: RAIBITSERVER_INGRESS_CLASS_NAME[\s\S]*\.Values\.ingress\.className/);
+  assert.match(orchestratorDeployment, /name: RAIBITSERVER_BASE_DOMAIN[\s\S]*\.Values\.ingress\.hosts\.public/);
   assert.match(apiDeployment, /name: RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE[\s\S]*\.Values\.ingress\.gatewayNamespace/);
   assert.match(workerSecurity, /peer\.namespaceSelector\.matchLabels\['kubernetes\.io\/metadata\.name'\] == \{\{ \.Values\.ingress\.gatewayNamespace \| squote \}\}/);
   assert.doesNotMatch(workerSecurity, /peer\.namespaceSelector\.matchLabels\['raibitserver\.io\/ingress-gateway'\]/);

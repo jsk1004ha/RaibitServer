@@ -40,6 +40,8 @@ spec:
               value: {{ .Values.ingress.gatewayNamespace | quote }}
             - name: RAIBITSERVER_INGRESS_CLASS_NAME
               value: {{ .Values.ingress.className | quote }}
+            - name: RAIBITSERVER_BASE_DOMAIN
+              value: {{ .Values.ingress.hosts.public | quote }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
