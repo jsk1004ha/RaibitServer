@@ -14,6 +14,7 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 - **관리형 리소스**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, SQLite, Object Storage, Qdrant/vector, NATS/queue를 카탈로그 리소스로 다룹니다.
 - **서브도메인 라우팅**: 서비스 실행 URL은 `apps--<user>--<project>.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 flat single-label 규칙을 따릅니다.
 - **공통 오류 화면**: 활성 표준 4xx·5xx 38종을 미리보기·오류 backend에서 제공하고, 호스팅 라우팅 404·upstream 500/502/503/504를 같은 RAIBIT 상태 화면으로 안내하되 사용자 앱의 자체 오류 응답은 유지합니다.
+- **검증 가능한 배포 버전**: 공개 `/status`는 현재 실행 중인 Dashboard 이미지에 기록된 GitHub 커밋 SHA를 표시하고 정확한 커밋 페이지로 연결합니다.
 - **승인·쿼터·감사**: 비동아리 사용자는 관리자 승인 후 쿼터 안에서 사용하고, 주요 작업은 감사 로그와 사용량에 반영됩니다.
 - **AI 배포 관리자**: 서비스별 위협을 먼저 검사하고, 안전한 서비스만 결정적 재검증을 거쳐 순서대로 배포합니다. 외부 AI는 선택 사항이며 secret을 받거나 보안 차단을 해제할 수 없습니다.
 - **환경 변수 보관함**: 서비스별 일반값과 암호화된 비밀값을 관리하고, `.env` 텍스트를 가져오며, API와 화면에는 secret 원문 대신 마스킹된 값을 제공합니다.
