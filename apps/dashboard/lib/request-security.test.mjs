@@ -43,6 +43,7 @@ test('console navigation accepts only credential-free HTTP origins and derives t
   const configured = 'https://console.raibit.kr/console';
   assert.equal(configuredConsoleHref(configured), configured);
   assert.equal(consoleOriginHref(configured, '/login?mode=signup'), 'https://console.raibit.kr/login?mode=signup');
+  assert.equal(consoleOriginHref(configured, '/github'), 'https://console.raibit.kr/github');
   assert.equal(publicHostnameForConsole(configured), 'raibit.kr');
   assert.equal(configuredConsoleHref('javascript:alert(1)'), '/console');
   assert.equal(consoleOriginHref('https://user:secret@console.raibit.kr/console', '/login'), '/login');

@@ -18,12 +18,14 @@ test('dashboard project detail is API-backed instead of hardcoded prototype arra
 });
 
 test('dashboard exposes public, authenticated, admin, GitHub, deployment, and resource routes', async () => {
-  const [login, controlRoute, requestSecurity, admin, github, guide, deployment, resource, contributors, proxy, shell] = await Promise.all([
+  const [login, controlRoute, requestSecurity, admin, github, githubInstall, githubCallback, guide, deployment, resource, contributors, proxy, shell] = await Promise.all([
     fs.readFile(new URL('../apps/dashboard/app/login/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/api/control/[...path]/route.ts', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/lib/request-security.js', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/admin/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/github/page.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/app/github/install/route.ts', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/app/github/callback/route.ts', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/guide/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx', import.meta.url), 'utf8'),
@@ -49,6 +51,12 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
   }
   for (const marker of ['/github/install', '/github/repositories/import', '/projects/${firstService.projectId}/services/${firstService.id}/github', '/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync', '저장소 선택', '연결할 서비스와 저장소가 필요합니다.', '동기화할 저장소가 없습니다.']) {
     assert.ok(github.includes(marker), `${marker} missing from GitHub screen`);
+  }
+  for (const [name, route] of [['install', githubInstall], ['callback', githubCallback]]) {
+    for (const marker of ['consoleOriginHref', 'dashboardRequestUrl', 'RAIBITSERVER_CONSOLE_URL', "request.headers.get('host')", "request.headers.get('x-forwarded-proto')"]) {
+      assert.ok(route.includes(marker), `${name} GitHub route must derive redirects from the public console origin: ${marker}`);
+    }
+    assert.doesNotMatch(route, /new URL\('\/github', request\.url\)/, `${name} GitHub route must not expose the internal Next.js bind origin`);
   }
   assert.ok(guide.includes('사용 안내'));
   for (const marker of ['/deployments/${deploymentId}/cancel', '/deployments/${deploymentId}/rollback', 'imageDigest', 'errorCode', '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소']) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJson } from '../../../lib/api';
+import { consoleOriginHref, dashboardRequestUrl } from '../../../lib/request-security.js';
 
 export async function GET(request: NextRequest) {
   const githubError = request.nextUrl.searchParams.get('error');
@@ -10,7 +11,7 @@ export async function GET(request: NextRequest) {
   if (code) {
     const result = await getJson(`/github/callback?${new URLSearchParams({ code, state: state || '' })}`, {});
     if (!result.ok) return githubPageError(request, result.errorCode);
-    const target = new URL('/github', request.url);
+    const target = githubConsoleTarget(request);
     target.searchParams.set('step', 'import');
     target.searchParams.set('notice', 'github_connected');
     return NextResponse.redirect(target, 303);
@@ -28,10 +29,21 @@ export async function GET(request: NextRequest) {
 }
 
 function githubPageError(request: NextRequest, code = 'github_callback_failed') {
-  const target = new URL('/github', request.url);
+  const target = githubConsoleTarget(request);
   target.searchParams.set('step', 'connect');
   target.searchParams.set('error', code);
   return NextResponse.redirect(target, 303);
+}
+
+function githubConsoleTarget(request: NextRequest) {
+  const browserRequestUrl = dashboardRequestUrl(request.url, {
+    host: request.headers.get('host'),
+    forwardedProto: request.headers.get('x-forwarded-proto'),
+  });
+  return new URL(
+    consoleOriginHref(process.env.RAIBITSERVER_CONSOLE_URL, '/github', '/github'),
+    browserRequestUrl,
+  );
 }
 
 function safeAuthorizationUrl(value: unknown) {
