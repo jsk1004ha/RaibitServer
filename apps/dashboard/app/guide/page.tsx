@@ -156,7 +156,7 @@ export default async function GuidePage({ searchParams }: { searchParams: Promis
             {guide.steps.map((step, index) => <li key={step.title}><span>{index + 1}</span><div><strong>{step.title}</strong><p>{step.detail}</p></div></li>)}
           </ol>
           <aside className="guide-note"><strong>알아두기</strong><p>{guide.note}</p></aside>
-          <div className="workflow-actions"><a className="btn btn-primary" href={guide.next.href}>{guide.next.label}</a><a className="btn" href="https://github.com/jsk1004ha/RaibitServer/blob/main/docs/getting-started.md">전체 사용 설명서</a></div>
+          <div className="workflow-actions"><a className="btn btn-primary" href={guide.next.href}>{guide.next.label}</a><a className="btn" href="https://github.com/jsk1004ha/RaibitServer/blob/main/docs/handbook/README.md">전체 사용 설명서</a></div>
         </article>
       </section>
     </ConsoleShell>

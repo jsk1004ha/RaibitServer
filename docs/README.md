@@ -6,6 +6,7 @@ RAIBITSERVER 문서는 README를 짧은 진입점으로 유지하고, 세부 설
 
 | 상황 | 먼저 볼 문서 |
 | --- | --- |
+| 사람 또는 AI가 전체 사용·배포 기준을 한 번에 보고 싶다 | [사용·배포 총집본](handbook/README.md) |
 | 설치부터 첫 배포까지 천천히 따라 하고 싶다 | [처음 사용 가이드](getting-started.md) |
 | 프로젝트가 무엇인지 알고 싶다 | [README](../README.md), [아키텍처](architecture.md) |
 | 로컬에서 검증하고 싶다 | [로컬 E2E](local-e2e.md), [검증 명령](verification-commands.md) |
@@ -22,6 +23,11 @@ RAIBITSERVER 문서는 README를 짧은 진입점으로 유지하고, 세부 설
 
 | 문서 | 목적 | 주요 독자 |
 | --- | --- | --- |
+| [handbook/README.md](handbook/README.md) | 배포 조건, 사용자·운영자·AI 설명서의 중앙 목차 | 모든 사용자, AI |
+| [handbook/deployment-requirements.md](handbook/deployment-requirements.md) | tenant 앱의 계정·소스·컨테이너·보안·DB 배포 조건 | 앱 개발자, AI |
+| [handbook/user-guide.md](handbook/user-guide.md) | 가입부터 생성·배포·업데이트·삭제까지 웹 콘솔 절차 | 일반 사용자 |
+| [handbook/operator-guide.md](handbook/operator-guide.md) | 승인, 상태, 장애, 리소스, production 운영 절차 | 관리자, 운영자 |
+| [handbook/ai-guide.md](handbook/ai-guide.md) | AI의 신뢰 경계, 안전한 API·배포·검증·보고 계약 | AI, AI 사용자 |
 | [getting-started.md](getting-started.md) | 설치, 4단계 프로젝트 생성, 자동 감지, secret, AI 배포, 밴, 자동 업데이트를 화면 순서대로 설명 | 처음 사용하는 사용자, 운영자 |
 | [architecture.md](architecture.md) | TypeScript 제어 평면과 Go reconcilers 구조 설명 | 개발자, 운영자 |
 | [local-e2e.md](local-e2e.md) | 외부 부작용 없는 dry-run E2E 실행법 | 개발자, CI 관리자 |

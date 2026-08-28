@@ -94,16 +94,16 @@ done
 정식 API 계약은 [`openapi/raibitserver.yaml`](openapi/raibitserver.yaml)에 있고, CLI는 API client와 로컬 planner/executor smoke path를 함께 검증합니다.
 
 ```sh
-RAIBITSERVER_API_URL=http://localhost:3000/api raibit whoami
-raibit projects list
-raibit projects create --name demo --organization-id org_id
-raibit services create --project-id prj_id --name web --image localhost:5000/demo/web:latest
-raibit deploy --service-id svc_id
-raibit deployments logs --deployment-id dep_id
+RAIBITSERVER_API_URL=http://localhost:3000/api raibitserver whoami
+raibitserver projects list
+raibitserver projects create --name demo --organization-id org_id
+raibitserver services create --project-id prj_id --name web --source-type image --image registry.example/demo/web@sha256:DIGEST
+raibitserver deploy --service-id svc_id
+raibitserver deployments logs --deployment-id dep_id
 # API: GET /api/deployments/dep_id/stream 또는 /api/services/svc_id/logs/stream (SSE)
-raibit resources create --project-id prj_id --engine sqlite --name data
-raibit db query --resource-id res_id --query "SELECT 1"
-raibit admin approve --user-id usr_id
+raibitserver resources create --project-id prj_id --engine sqlite --name data
+raibitserver db query --resource-id res_id --query "SELECT 1"
+raibitserver admin approve --user-id usr_id
 ```
 
 CI smoke와 manifest 생성에는 루트 CLI도 사용할 수 있습니다.
@@ -118,6 +118,8 @@ node src/cli.js compose examples/docker-compose.yml
 
 | 필요 | 문서 |
 | --- | --- |
+| 사용자·운영자·AI 종합 설명서 | [docs/handbook/README.md](docs/handbook/README.md) |
+| AI용 빠른 컨텍스트 | [llms.txt](llms.txt) |
 | 처음 설치하고 화면을 따라 사용하기 | [docs/getting-started.md](docs/getting-started.md) |
 | 전체 문서 목록 | [docs/README.md](docs/README.md) |
 | 시스템 구조 | [docs/architecture.md](docs/architecture.md) |

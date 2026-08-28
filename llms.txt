@@ -1,0 +1,100 @@
+# RAIBITSERVER
+
+RAIBITSERVER is a container-first PaaS + DBaaS for clubs, schools, and small teams.
+Production public site: https://raibit.kr/
+Production console: https://console.raibit.kr/
+Repository: https://github.com/jsk1004ha/RaibitServer
+
+## Read first
+
+- Central handbook: docs/handbook/README.md
+- Deployment requirements: docs/handbook/deployment-requirements.md
+- Human user guide: docs/handbook/user-guide.md
+- AI operating guide: docs/handbook/ai-guide.md
+- Platform operator guide: docs/handbook/operator-guide.md
+- Repository instructions: AGENTS.md
+- API contract: openapi/raibitserver.yaml
+- Security: docs/security.md
+- Provisioning limits: docs/provisioning.md
+- Verification matrix: docs/verification-commands.md
+- Troubleshooting: docs/troubleshooting.md
+
+## Architecture
+
+- apps/dashboard: Next.js dashboard
+- apps/api: NestJS control-plane API
+- apps/cli: API client CLI
+- packages/core: deterministic TypeScript product and desired-state logic
+- services/builder: Go build worker
+- services/orchestrator: Go Kubernetes reconciler
+- services/provisioner: Go managed-resource reconciler
+- services/log-ingester and services/metrics-ingester: runtime telemetry ingestion
+- infra: Helm, Kubernetes and Terraform
+
+The API stores desired state. Long-running build, registry, Kubernetes, and provider work belongs to Go workers.
+
+## Hard invariants
+
+- Tenant workloads resolve to container images and Kubernetes desired state.
+- A user Dockerfile takes precedence over framework detection.
+- Production source checkout currently accepts exact https://github.com/owner/repo URLs; private repositories require a verified GitHub App installation.
+- Prebuilt images must use an immutable registry/repository@sha256:<digest> reference. ZIP, GitLab, and Bitbucket are not current live-ingestion paths; local source is development-only.
+- Only a preview deployment carrying a GitHub pull-request number has an isolated preview identity. Do not treat a manual preview without a PR number as isolated from production.
+- Generated tenant routes use flat single-label hostnames under the configured base domain.
+- Managed databases, caches, storage, vectors, and queues are catalog resources, not arbitrary compose containers.
+- Tenant workloads are namespace-isolated and may not use privileged, root, hostPath, host networking, host PID/IPC, added capabilities, or service-account token automount.
+- Secrets use encrypted values or provider-owned Secret references and must never appear in Git, prompts, logs, or API output.
+- AI may recommend order but may not override deterministic security findings, RBAC, quota, scan, signature, or admission policy.
+- Local verification must not require production credentials.
+
+## Tenant application contract
+
+- Bind the service to 0.0.0.0 on the configured port; core default is 8080.
+- Run as non-root and support a read-only root filesystem; use /tmp only for temporary files.
+- Prefer fast liveness and readiness endpoints for post-deploy HTTP checks. They are not currently wired as automatic tenant Kubernetes probes.
+- Handle SIGTERM and stop gracefully.
+- Store persistent data in an attached managed resource, not the container filesystem.
+- Read configuration from environment variables.
+- Never commit a real .env file.
+- Use DATABASE_URL for an attached PostgreSQL resource when available.
+- Treat migrations as an explicit, idempotent application or job responsibility.
+
+## Safe deployment loop
+
+1. Authenticate without printing tokens.
+2. Query actual organization, project, service, and resource IDs.
+3. Verify the remote branch and full expected commit SHA.
+4. Create one deployment request.
+5. Poll the returned deployment ID to READY, BUILD_FAILED, FAILED, or CANCELLED.
+6. Match deployment commit SHA and image digest to the intended release.
+7. Treat READY as a rollout state, then separately verify public HTTP, any app health endpoints, core behavior, and browser console.
+8. For DB apps, perform a unique write/read and verify persistence after redeploy.
+9. Verify runtime log ingestion.
+10. Report evidence and remaining risks; do not infer missing values.
+
+A 202 response means queued, not deployed. Do not update deployment status directly; status writers are trusted system actors.
+
+## Destructive and production actions
+
+Project, service, resource, database-data deletion, rollback, production Helm changes, secret rotation, and security-policy changes require explicit user scope and exact target verification. Do not bypass a 409 or fail-closed check.
+
+## Platform verification
+
+Use the repository package manager pinned in package.json.
+
+pnpm test
+pnpm typecheck
+pnpm lint
+pnpm prisma:validate
+pnpm prisma:generate
+node scripts/check-structure.js
+node src/cli.js validate examples/project.json
+node src/cli.js manifest examples/project.json
+node src/cli.js compose examples/docker-compose.yml
+pnpm e2e:dry
+
+When Go is available, run go test ./... and go build ./... in each changed services/* module.
+
+## Completion evidence
+
+Report changed files, exact source commit, CI result, deployment ID, deployment status, image digest, public URL, HTTP result, DB evidence when applicable, Pod readiness/restarts, runtime-log evidence, tests run, and remaining risks. Redact all credentials and connection strings.
