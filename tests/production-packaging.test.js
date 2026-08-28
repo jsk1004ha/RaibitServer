@@ -56,6 +56,11 @@ test('runtime images contain only the executables their production entrypoints r
   assert.match(dashboard, /\.next\/standalone/);
   assert.match(
     dashboard,
+    /COPY packages\/core\/package\.json packages\/core\/package\.json[\s\S]*RUN pnpm install --frozen-lockfile[\s\S]*COPY packages\/core packages\/core/,
+    'dashboard image must install and copy its core workspace dependency before building',
+  );
+  assert.match(
+    dashboard,
     /COPY --from=build --chown=10001:10001 \/workspace\/apps\/dashboard\/public \.\/apps\/dashboard\/public/,
     'dashboard public assets must be owned by the same UID used by the Helm workload',
   );

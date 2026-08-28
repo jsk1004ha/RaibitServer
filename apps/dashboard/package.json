@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@raibitserver/api-client": "workspace:*",
+    "@raibitserver/core": "workspace:*",
     "@raibitserver/schemas": "workspace:*",
     "@raibitserver/ui": "workspace:*",
     "next": "16.2.6",

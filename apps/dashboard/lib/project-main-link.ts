@@ -1,4 +1,4 @@
-import { serviceHostname } from '../../../packages/core/src/domain-router.ts';
+import { serviceHostname } from '@raibitserver/core/domain-router';
 
 type ProjectRecord = {
   id?: string;

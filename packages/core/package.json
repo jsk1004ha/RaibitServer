@@ -26,6 +26,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./domain-router": "./src/domain-router.ts",
     "./execution": "./src/execution.ts"
   },
   "dependencies": {

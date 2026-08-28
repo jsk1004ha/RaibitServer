@@ -39,6 +39,7 @@ test('live Helm E2E exercises real images, migrations, API health, and an orches
   }
   assert.doesNotMatch(script, /docker build[^\n]+services\/builder\/Dockerfile/);
   assert.match(script, /--set builder\.replicas=0/);
+  assert.match(script, /--set dashboard\.enabled=false[\s\S]{0,100}--set hostedErrors\.enabled=false/);
   assert.match(script, /kind create cluster[^\n]+--image "\$\{KIND_NODE_IMAGE\}"/);
   assert.match(script, /postgres:16\.[0-9]+-alpine[0-9.]+@sha256:[a-f0-9]{64}/);
   assert.doesNotMatch(script, /POSTGRES_RUNTIME_IMAGE|docker tag "\$\{POSTGRES_IMAGE\}"/);

@@ -186,6 +186,7 @@ helm upgrade --install "${RELEASE_NAME}" infra/helm/raibitserver \
   --set api.replicas=1 \
   --set api.pdb.enabled=false \
   --set dashboard.enabled=false \
+  --set hostedErrors.enabled=false \
   --set ingress.enabled=false \
   --set builder.replicas=0 \
   --set orchestrator.replicas=0 \

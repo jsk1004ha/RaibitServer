@@ -7,11 +7,13 @@ RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/dashboard/package.json apps/dashboard/package.json
 COPY packages/api-client/package.json packages/api-client/package.json
+COPY packages/core/package.json packages/core/package.json
 COPY packages/schemas/package.json packages/schemas/package.json
 COPY packages/ui/package.json packages/ui/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/dashboard apps/dashboard
 COPY packages/api-client packages/api-client
+COPY packages/core packages/core
 COPY packages/schemas packages/schemas
 COPY packages/ui packages/ui
 COPY packages/config packages/config

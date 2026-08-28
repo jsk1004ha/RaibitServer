@@ -102,6 +102,9 @@ importers:
       '@raibitserver/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
+      '@raibitserver/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@raibitserver/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas

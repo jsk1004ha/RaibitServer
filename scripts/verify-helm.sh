@@ -203,9 +203,9 @@ if [ "$(grep -c 'name: RAIBITSERVER_INGRESS_CLASS_NAME' "$OUTPUT_DIR/configured-
   echo "configured ingress class must reach the orchestrator and its admission policy" >&2
   exit 1
 fi
-if [ "$(grep -c 'name: RAIBITSERVER_BASE_DOMAIN' "$OUTPUT_DIR/configured-ingress-gateway.yaml")" -ne 1 ] || \
-   ! grep -A1 'name: RAIBITSERVER_BASE_DOMAIN' "$OUTPUT_DIR/configured-ingress-gateway.yaml" | grep -q 'value: "production.example"'; then
-  echo "configured public host must reach the orchestrator as its tenant base domain" >&2
+if [ "$(grep -c 'name: RAIBITSERVER_BASE_DOMAIN' "$OUTPUT_DIR/configured-ingress-gateway.yaml")" -ne 2 ] || \
+   [ "$(grep -A1 'name: RAIBITSERVER_BASE_DOMAIN' "$OUTPUT_DIR/configured-ingress-gateway.yaml" | grep -c 'value: "production.example"')" -ne 2 ]; then
+  echo "configured public host must reach the dashboard and orchestrator as their tenant base domain" >&2
   exit 1
 fi
 if grep -q 'raibitserver.io/ingress-gateway' "$OUTPUT_DIR/production.yaml"; then
