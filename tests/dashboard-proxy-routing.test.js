@@ -157,6 +157,65 @@ test('optional Basic Auth protects dashboard planes without closing the public l
   }
 });
 
+test('tenant workload hosts always rewrite dashboard fallbacks to the branded hosted error backend', { concurrency: false }, () => {
+  const originalBasicAuth = process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH;
+  const originalDashboardOrigin = process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
+  const originalBaseDomain = process.env.RAIBITSERVER_BASE_DOMAIN;
+  delete process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH;
+  delete process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
+  process.env.RAIBITSERVER_BASE_DOMAIN = 'example.test';
+  try {
+    for (const host of ['apps--user--project.example.test', 'preview--pr-12--user--project.example.test']) {
+      const root = proxy(new NextRequest(`https://${host}/`));
+      assert.equal(root.status, 200, host);
+      assert.equal(root.headers.get('x-middleware-rewrite'), `https://${host}/api/hosted-error`);
+      assert.equal(root.headers.get('x-middleware-request-x-code'), '404');
+      assert.equal(root.headers.get('x-middleware-request-x-original-uri'), '/');
+
+      const upstreamError = proxy(new NextRequest(`https://${host}/private/path?token=must-not-forward`, {
+        headers: { 'x-code': '503', 'x-original-uri': '/original/path?token=must-not-forward', authorization: 'Bearer secret', cookie: 'secret=value' },
+      }));
+      assert.equal(upstreamError.headers.get('x-middleware-request-x-code'), '503');
+      assert.equal(upstreamError.headers.get('x-middleware-request-x-original-uri'), '/original/path');
+      assert.equal(upstreamError.headers.get('x-middleware-request-authorization'), null);
+      assert.equal(upstreamError.headers.get('x-middleware-request-cookie'), null);
+
+      const standardizedError = proxy(new NextRequest(`https://${host}/locked`, {
+        headers: { 'x-code': '423' },
+      }));
+      assert.equal(standardizedError.headers.get('x-middleware-request-x-code'), '423');
+
+      const unassignedError = proxy(new NextRequest(`https://${host}/invalid-status`, {
+        headers: { 'x-code': '509' },
+      }));
+      assert.equal(unassignedError.headers.get('x-middleware-request-x-code'), '404');
+    }
+
+    assert.equal(proxy(new NextRequest('https://apps--user--project.example.test/healthz')).headers.get('x-middleware-next'), '1');
+    assert.equal(proxy(new NextRequest('https://apps--user--project.example.test/api/health')).headers.get('x-middleware-next'), '1');
+    assert.equal(proxy(new NextRequest('https://apps--user--project.example.test.attacker.invalid/')).headers.get('x-middleware-next'), '1');
+
+    for (const host of ['raibitserver-hosted-errors', 'raibitserver-hosted-errors.raibitserver-system.svc']) {
+      const backendRoot = proxy(new NextRequest(`http://${host}/`));
+      assert.equal(backendRoot.headers.get('x-middleware-rewrite'), `http://${host}/api/hosted-error`);
+      assert.equal(backendRoot.headers.get('x-middleware-request-x-code'), '404');
+      assert.equal(proxy(new NextRequest(`http://${host}/healthz`)).headers.get('x-middleware-next'), '1');
+
+      const backendApi = proxy(new NextRequest(`http://${host}/api/hosted-error`, {
+        headers: { authorization: 'Bearer secret', cookie: 'session=secret' },
+      }));
+      assert.equal(backendApi.headers.get('x-middleware-next'), '1');
+      assert.equal(backendApi.headers.get('x-middleware-request-authorization'), null);
+      assert.equal(backendApi.headers.get('x-middleware-request-cookie'), null);
+      assert.equal(backendApi.headers.get('content-security-policy'), null);
+    }
+  } finally {
+    restoreEnvironment('RAIBITSERVER_DASHBOARD_BASIC_AUTH', originalBasicAuth);
+    restoreEnvironment('RAIBITSERVER_DASHBOARD_ORIGIN', originalDashboardOrigin);
+    restoreEnvironment('RAIBITSERVER_BASE_DOMAIN', originalBaseDomain);
+  }
+});
+
 test('production login links return to the public raibit.kr landing instead of looping on the console root', async () => {
   const loginPage = await readFile(new URL('../apps/dashboard/app/login/page.tsx', import.meta.url), 'utf8');
   assert.match(loginPage, /process\.env\.NODE_ENV === 'production' \? 'https:\/\/raibit\.kr\/' : '\/'/);

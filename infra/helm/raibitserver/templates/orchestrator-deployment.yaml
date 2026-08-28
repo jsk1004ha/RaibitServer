@@ -42,6 +42,14 @@ spec:
               value: {{ .Values.ingress.className | quote }}
             - name: RAIBITSERVER_BASE_DOMAIN
               value: {{ .Values.ingress.hosts.public | quote }}
+            - name: RAIBITSERVER_INGRESS_CUSTOM_HTTP_ERRORS
+              value: {{ ternary (join "," .Values.hostedErrors.statuses) "disabled" .Values.hostedErrors.enabled | quote }}
+            - name: RAIBITSERVER_INGRESS_ERROR_MIDDLEWARE
+              {{- if and .Values.hostedErrors.enabled .Values.hostedErrors.traefik.enabled }}
+              value: {{ printf "%s-%s-hosted-errors@kubernetescrd" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+              {{- else }}
+              value: ""
+              {{- end }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

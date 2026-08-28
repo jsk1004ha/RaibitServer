@@ -26,11 +26,20 @@ const (
 	tenantQuotaName                = "tenant-resource-budget"
 	defaultIngressGatewayNamespace = "ingress-nginx"
 	defaultIngressClassName        = "nginx"
+	defaultIngressCustomHTTPErrors = "500,502,503,504"
 )
 
 type DeploymentOptions struct {
 	IngressGatewayNamespace string
 	IngressClassName        string
+	IngressCustomHTTPErrors string
+	IngressErrorMiddleware  string
+}
+
+type ingressErrorOptions struct {
+	customHTTPErrors string
+	middleware       string
+	disabled         bool
 }
 
 type AppServiceSpec struct {
@@ -97,12 +106,16 @@ func NewDeploymentPlan(spec AppServiceSpec, options ...DeploymentOptions) Deploy
 	if err != nil {
 		return unsafeDeploymentPlan(spec, err)
 	}
+	ingressErrors, err := trustedIngressErrorOptions(options)
+	if err != nil {
+		return unsafeDeploymentPlan(spec, err)
+	}
 	descriptor, err := describeWorkload(spec)
 	if err != nil {
 		return unsafeDeploymentPlan(spec, err)
 	}
 	spec.ServiceType = descriptor.serviceType
-	manifests := compileServiceManifests(spec, descriptor, ingressGatewayNamespace, ingressClassName)
+	manifests := compileServiceManifests(spec, descriptor, ingressGatewayNamespace, ingressClassName, ingressErrors)
 	return DeploymentPlan{
 		Kind:              descriptor.kind,
 		WorkloadName:      descriptor.name,
@@ -246,7 +259,7 @@ func CompileServiceManifests(spec AppServiceSpec, options ...DeploymentOptions) 
 	return NewDeploymentPlan(spec, options...).Manifests
 }
 
-func compileServiceManifests(spec AppServiceSpec, descriptor workloadDescriptor, ingressGatewayNamespace, ingressClassName string) []map[string]any {
+func compileServiceManifests(spec AppServiceSpec, descriptor workloadDescriptor, ingressGatewayNamespace, ingressClassName string, ingressErrors ingressErrorOptions) []map[string]any {
 	if descriptor.serviceType == "cron" && spec.Schedule == "" {
 		spec.Schedule = "0 * * * *"
 	}
@@ -268,7 +281,7 @@ func compileServiceManifests(spec AppServiceSpec, descriptor workloadDescriptor,
 	}
 	items = append(items, networkPolicyManifest(spec, labels, ingressGatewayNamespace))
 	if descriptor.serviceType == "web" && spec.Host != "" {
-		items = append(items, ingressManifest(spec, labels, ingressClassName))
+		items = append(items, ingressManifest(spec, labels, ingressClassName, ingressErrors))
 	}
 	if spec.PublicEgress {
 		items = append(items, servicePublicEgressPolicy(spec, labels))
@@ -494,8 +507,17 @@ func serviceManifest(spec AppServiceSpec, labels map[string]any) map[string]any 
 	return map[string]any{"apiVersion": "v1", "kind": "Service", "metadata": map[string]any{"name": spec.Name, "namespace": spec.Namespace, "labels": labels}, "spec": map[string]any{"type": "ClusterIP", "selector": map[string]any{"app.kubernetes.io/name": spec.Name}, "ports": []any{map[string]any{"name": "http", "port": spec.Port, "targetPort": "http"}}}}
 }
 
-func ingressManifest(spec AppServiceSpec, labels map[string]any, ingressClassName string) map[string]any {
-	return map[string]any{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": map[string]any{"name": spec.Name, "namespace": spec.Namespace, "labels": labels, "annotations": map[string]any{"raibitserver.io/hostname": spec.Host}}, "spec": map[string]any{"ingressClassName": ingressClassName, "rules": []any{map[string]any{"host": spec.Host, "http": map[string]any{"paths": []any{map[string]any{"path": "/", "pathType": "Prefix", "backend": map[string]any{"service": map[string]any{"name": spec.Name, "port": map[string]any{"number": spec.Port}}}}}}}}}}
+func ingressManifest(spec AppServiceSpec, labels map[string]any, ingressClassName string, ingressErrors ingressErrorOptions) map[string]any {
+	annotations := map[string]any{
+		"raibitserver.io/hostname": spec.Host,
+	}
+	if !ingressErrors.disabled {
+		annotations["nginx.ingress.kubernetes.io/custom-http-errors"] = ingressErrors.customHTTPErrors
+	}
+	if !ingressErrors.disabled && ingressErrors.middleware != "" {
+		annotations["traefik.ingress.kubernetes.io/router.middlewares"] = ingressErrors.middleware
+	}
+	return map[string]any{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": map[string]any{"name": spec.Name, "namespace": spec.Namespace, "labels": labels, "annotations": annotations}, "spec": map[string]any{"ingressClassName": ingressClassName, "rules": []any{map[string]any{"host": spec.Host, "http": map[string]any{"paths": []any{map[string]any{"path": "/", "pathType": "Prefix", "backend": map[string]any{"service": map[string]any{"name": spec.Name, "port": map[string]any{"number": spec.Port}}}}}}}}}}
 }
 
 func networkPolicyManifest(spec AppServiceSpec, labels map[string]any, ingressGatewayNamespace string) map[string]any {
@@ -562,6 +584,41 @@ func trustedIngressClassName(options []DeploymentOptions) (string, error) {
 		return "", fmt.Errorf("invalid ingress class name: expected a Kubernetes DNS subdomain")
 	}
 	return className, nil
+}
+
+func trustedIngressErrorOptions(options []DeploymentOptions) (ingressErrorOptions, error) {
+	rawStatuses := defaultIngressCustomHTTPErrors
+	middleware := ""
+	if len(options) > 0 {
+		if strings.TrimSpace(options[0].IngressCustomHTTPErrors) != "" {
+			rawStatuses = options[0].IngressCustomHTTPErrors
+		}
+		middleware = strings.ToLower(strings.TrimSpace(options[0].IngressErrorMiddleware))
+	}
+	if strings.EqualFold(strings.TrimSpace(rawStatuses), "disabled") {
+		return ingressErrorOptions{disabled: true}, nil
+	}
+	statusSet := map[int]struct{}{}
+	for _, rawStatus := range strings.Split(rawStatuses, ",") {
+		status, err := strconv.Atoi(strings.TrimSpace(rawStatus))
+		if err != nil || status < 400 || status > 599 {
+			return ingressErrorOptions{}, fmt.Errorf("invalid ingress custom HTTP errors: expected comma-separated HTTP status codes from 400 through 599")
+		}
+		statusSet[status] = struct{}{}
+	}
+	statuses := make([]int, 0, len(statusSet))
+	for status := range statusSet {
+		statuses = append(statuses, status)
+	}
+	sort.Ints(statuses)
+	normalizedStatuses := make([]string, len(statuses))
+	for index, status := range statuses {
+		normalizedStatuses[index] = strconv.Itoa(status)
+	}
+	if middleware != "" && !traefikMiddlewareValidationPattern.MatchString(middleware) {
+		return ingressErrorOptions{}, fmt.Errorf("invalid ingress error middleware: expected <namespace>-<name>@kubernetescrd")
+	}
+	return ingressErrorOptions{customHTTPErrors: strings.Join(normalizedStatuses, ","), middleware: middleware}, nil
 }
 
 func servicePublicEgressPolicy(spec AppServiceSpec, labels map[string]any) map[string]any {
@@ -891,6 +948,7 @@ var cronFieldPattern = regexp.MustCompile(`^[0-9A-Za-z*/?,-]+$`)
 var environmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
 var dnsLabelValidationPattern = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`)
 var dnsSubdomainValidationPattern = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$`)
+var traefikMiddlewareValidationPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?@kubernetescrd$`)
 var cronFieldRules = []cronFieldRule{
 	{min: 0, max: 59},
 	{min: 0, max: 23},

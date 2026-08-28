@@ -77,6 +77,11 @@ dashboard:
   enabled: true
   consoleUrl: https://console.production.example/console
 
+hostedErrors:
+  fallbackIngress:
+    tls:
+      existingSecret: ci-raibitserver-hosted-errors-tls
+
 ingress:
   enabled: true
   hosts:

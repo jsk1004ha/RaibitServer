@@ -3,9 +3,9 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-08-25
+- Last refreshed: 2026-08-27
 - Primary product surfaces: 공개 홈페이지, 인증, 프로젝트 콘솔, GitHub 저장소 연결, 배포 상세, 리소스 콘솔, 관리자 승인
-- Evidence reviewed: `apps/dashboard/app/**`, `apps/dashboard/components/**`, `apps/dashboard/app/globals.css`, `output/playwright/review/**`, 사용자 검토 의견, Vercel Projects·Storage 문서, Vercel Geist 디자인 시스템
+- Evidence reviewed: `apps/dashboard/app/**`, `apps/dashboard/components/**`, `apps/dashboard/app/globals.css`, `output/playwright/review/**`, `packages/core/src/manifest-compiler.ts`, `services/orchestrator/internal/kube/deployment.go`, 사용자 검토 의견, Vercel Projects·Storage 문서, Vercel Geist 디자인 시스템
 
 ## Brand
 
@@ -45,14 +45,14 @@
 - Color: 기존 차콜·네이비와 녹색 핵심 행동 조합 유지
 - Typography: 페이지 제목 28px(모바일 24px), 섹션 18px, 본문·목록·버튼 13–14px, 보조 정보 최소 11–12px
 - Spacing/layout rhythm: 4px 단위, 얇은 탭과 행 중심, 생성 흐름은 최대 1120px의 넓은 작업 카드, 현황 화면은 실제 운영 정보로 밀도를 확보
-- Shape/radius/elevation: 기존 입력 8–9px, 패널 12–13px, 얕은 그림자 유지
+- Shape/radius/elevation: 기존 입력 8–9px, 패널 12–13px, 얕은 그림자 유지. 오류 화면은 예외적으로 카드·테두리·그림자 없이 전체 viewport를 하나의 상태 면으로 사용한다.
 - Motion: 단계 전환 120–180ms, `prefers-reduced-motion` 준수
 - Imagery/iconography: 라이빗 로고와 기존 타입 안전 Heroicons 재사용
 
 ## Components
 
 - Existing components to reuse: `ConsoleShell`, `StatusBadge`, `MetricStrip`, `LogViewer`, `JsonCard`, `Icon`
-- New/changed components: 얇은 탭형 `SectionNav`, 단계형 `SectionNav`, 데스크톱에서 최대 1080×760px 작업면을 제공하는 `ConsoleSearch`, 검색·사용 설명서 전용 고정 상단 바, `console-surface`, `form-surface`, 프로젝트 생성 단계, 주제별 사용 안내
+- New/changed components: 얇은 탭형 `SectionNav`, 단계형 `SectionNav`, 데스크톱에서 최대 1080×760px 작업면을 제공하는 `ConsoleSearch`, 검색·사용 설명서 전용 고정 상단 바, `console-surface`, `form-surface`, 프로젝트 생성 단계, 주제별 사용 안내, 공개·호스팅 공용 `ErrorScreen`
 - Variants and states: 활성 단계, 완료 단계, 비활성 단계, 빈 상태, 준비 중, 위험 작업
 - Token/component ownership: 전역 토큰은 `globals.css`, 흐름 컴포넌트는 `apps/dashboard/components`
 
@@ -67,14 +67,14 @@
 ## Responsive behavior
 
 - Supported breakpoints/devices: 1440px 데스크톱, 900px 이하 태블릿·모바일, 390px 모바일 검토
-- Layout adaptations: 단계와 하위 화면 탭은 가로 스크롤, 주 활동 패널은 단일 열, 사이드바는 모바일에서 숨기고 상단 검색 팔레트로 메뉴 이동
+- Layout adaptations: 단계와 하위 화면 탭은 가로 스크롤, 주 활동 패널은 단일 열, 사이드바는 모바일에서 숨기고 상단 검색 팔레트로 메뉴 이동. 오류 화면은 데스크톱에서 큰 상태 코드와 설명을 좌우 분할하고, 모바일에서는 코드 → 설명 → 세부 정보 → 전체 너비 행동 순서의 전용 세로 레이아웃으로 재배치한다.
 - Touch/hover differences: 모바일 버튼 최소 높이 44px, hover 없이도 현재 단계와 상태를 텍스트로 식별
 
 ## Interaction states
 
 - Loading: 패널 크기를 유지하는 스켈레톤
 - Empty: 원인과 다음 행동 하나
-- Error: 한국어 요약과 재시도 또는 이전 단계
+- Error: 상태 코드, 한국어 요약, 가능한 원인, 재시도 또는 안전한 이전 단계, 노출 가능한 기술 식별자
 - Success: 완료 상태와 다음 단계 링크
 - Disabled: 선행 조건과 비활성 이유를 인접 문구로 표시
 - Offline/slow network, if applicable: 마지막 확인 상태와 재시도 행동 표시
@@ -345,6 +345,17 @@ RAIBITSERVER 대시보드는 클럽, 학교, 소규모 팀이 프로젝트·배�
 - 제품 가치 설명은 짧게 유지하고 인증 행동을 우선한다.
 - 오류는 계정 존재 여부 같은 민감 정보를 노출하지 않는다.
 
+### 8.10 오류 화면
+
+- 대시보드 404는 로그인 여부와 무관하게 표시하며 메인·운영 현황으로 안전하게 이동한다.
+- 500 경계는 원본 예외 메시지를 숨기고 재시도와 무작위 기술 식별자만 제공한다.
+- 데스크톱 오류 화면은 카드를 사용하지 않고 화면 전체를 채운다. 큰 상태 코드와 설명 영역을 분할선 하나로 구분하며 주변 여백 자체를 레이아웃으로 사용한다.
+- 모바일 오류 화면은 데스크톱 축소판이나 작은 카드가 아니다. 상태 코드를 상단에 두고 제목의 줄 길이를 제한하며, 세부 정보는 읽기 쉬운 단일 열, 행동은 하단의 전체 너비 버튼으로 제공한다.
+- 오류 인덱스와 호스팅 오류 backend는 IANA에 등록된 활성 4xx·5xx 38종을 같은 레이아웃과 한국어 안내로 제공한다. 4xx는 `400–417`, `421–426`, `428`, `429`, `431`, `451` 중 활성 코드 28종, 5xx는 `500–508`, `511` 중 활성 코드 10종이다.
+- 미사용 `418`, 폐기된 `510`, 미등록 상태는 검증 목록에서 제외하고 안전한 404로 정규화한다.
+- 플랫폼은 미매칭 tenant hostname 404와 upstream `500`, `502`, `503`, `504`를 공통 화면으로 처리한다. 사용자 애플리케이션이 직접 만든 404는 덮어쓰지 않는다.
+- 호스팅 오류 문서는 외부 CSS·JavaScript 없이 렌더되어 사용자 사이트가 응답하지 않아도 독립적으로 표시된다.
+
 ## 9. 한국어 문구 규칙
 
 - 버튼은 명사보다 행동형으로 작성한다: `프로젝트 생성`, `다시 배포`, `리소스 연결`.
@@ -358,7 +369,7 @@ RAIBITSERVER 대시보드는 클럽, 학교, 소규모 팀이 프로젝트·배�
 - 로딩: 레이아웃 크기가 유지되는 스켈레톤을 사용한다.
 - 빈 상태: 이유, 현재 범위, 다음 행동 하나를 제공한다.
 - 성공: 짧은 인라인 메시지 또는 토스트와 갱신된 상태를 함께 보여준다.
-- 오류: 한국어 요약, 가능한 원인, 재시도 행동, 기술 식별자를 제공한다.
+- 오류: 상태 코드를 첫 시선에 식별할 수 있게 하고, 한국어 요약, 가능한 원인, 재시도 행동, 안전한 기술 식별자를 제공한다. 예외 원문·내부 Service/namespace·환경 변수는 표시하지 않는다.
 - 긴 작업: 진행 단계와 마지막 갱신 시간을 표시한다.
 - 파괴적 행동: 붉은색, 영향 범위, 확인 문구, 감사 로그 발생 여부를 표시한다.
 
@@ -414,6 +425,7 @@ Go가 설치되어 있으면 `services/*`의 구문 및 빌드 검사도 실행�
 - KPI가 좁고 긴 세로 카드로 변하지 않는지 확인한다.
 - Heroicons가 축약되거나 깨지지 않고 동일한 선 굵기로 렌더링되는지 확인한다.
 - 긴 한국어 레이블, 긴 프로젝트 이름, 빈 데이터, 오류 상태를 확인한다.
+- `/errors` 전체 인덱스와 4xx·5xx 대표 화면(`/errors/404`, `/errors/422`, `/errors/500`, `/errors/507`) 및 실제 status를 반환하는 `/api/hosted-error?code=...`를 데스크톱·390px에서 확인한다.
 - 각 반복에서 `visual-verdict` 90점 이상을 통과해야 완료로 판단한다.
 
 ## 14. 참고 자료

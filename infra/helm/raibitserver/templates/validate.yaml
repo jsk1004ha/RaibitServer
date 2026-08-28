@@ -4,6 +4,19 @@
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" (default "" .Values.ingress.gatewayNamespace)) -}}
 {{- fail "ingress.gatewayNamespace must be a Kubernetes DNS label" -}}
 {{- end -}}
+{{- if and .Values.hostedErrors.enabled (not .Values.dashboard.enabled) -}}
+{{- fail "hostedErrors requires dashboard.enabled because the dashboard image serves the error backend" -}}
+{{- end -}}
+{{- if and .Values.hostedErrors.enabled (eq (len .Values.hostedErrors.statuses) 0) -}}
+{{- fail "hostedErrors.statuses must include at least one infrastructure status" -}}
+{{- end -}}
+{{- if .Values.hostedErrors.enabled -}}
+{{- range .Values.hostedErrors.statuses -}}
+{{- if not (regexMatch "^(500|502|503|504)$" (toString .)) -}}
+{{- fail "hostedErrors.statuses may contain only 500, 502, 503, and 504" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.production -}}
 {{- if or (not .Values.database.existingSecret) (not .Values.database.urlKey) -}}
 {{- fail "production database.existingSecret and database.urlKey are required" -}}
@@ -37,6 +50,9 @@
 {{- end -}}
 {{- if or (not .Values.ingress.tls.enabled) (not .Values.ingress.tls.existingSecret) -}}
 {{- fail "production ingress TLS must be enabled with an existing secret" -}}
+{{- end -}}
+{{- if and .Values.hostedErrors.enabled .Values.hostedErrors.fallbackIngress.enabled (not .Values.hostedErrors.fallbackIngress.tls.existingSecret) -}}
+{{- fail "production hosted error fallback requires a wildcard TLS existingSecret" -}}
 {{- end -}}
 {{- if not .Values.migration.enabled -}}
 {{- fail "production database migration hook must be enabled" -}}

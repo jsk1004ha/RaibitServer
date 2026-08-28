@@ -515,6 +515,78 @@ func TestInvalidIngressClassNameFailsClosed(t *testing.T) {
 	}
 }
 
+func TestWebIngressUsesTrustedHostedErrorSettings(t *testing.T) {
+	plan := NewDeploymentPlan(
+		workloadSpec("web", "dep-errors", map[string]any{
+			"ingressCustomHttpErrors": "418",
+			"ingressErrorMiddleware":  "attacker@kubernetescrd",
+		}, nil),
+		DeploymentOptions{
+			IngressCustomHTTPErrors: "504, 500,502,500",
+			IngressErrorMiddleware:  " Platform-Errors@KubernetesCRD ",
+		},
+	)
+	if !plan.Safe {
+		t.Fatalf("trusted hosted error settings should compile: %s", plan.Error)
+	}
+	ingress := findManifest(t, plan.Manifests, "Ingress", plan.Service.Name)
+	annotations := ingress["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if annotations["nginx.ingress.kubernetes.io/custom-http-errors"] != "500,502,504" {
+		t.Fatalf("custom HTTP errors were not normalized: %#v", annotations)
+	}
+	if annotations["traefik.ingress.kubernetes.io/router.middlewares"] != "platform-errors@kubernetescrd" {
+		t.Fatalf("Traefik middleware was not normalized: %#v", annotations)
+	}
+	payload, _ := json.Marshal(ingress)
+	if strings.Contains(string(payload), "418") || strings.Contains(string(payload), "attacker") {
+		t.Fatalf("tenant desired state overrode trusted hosted error settings: %s", payload)
+	}
+}
+
+func TestHostedErrorSettingsDefaultAndValidation(t *testing.T) {
+	plan := NewDeploymentPlan(workloadSpec("web", "dep-errors", nil, nil))
+	ingress := findManifest(t, plan.Manifests, "Ingress", plan.Service.Name)
+	annotations := ingress["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if annotations["nginx.ingress.kubernetes.io/custom-http-errors"] != "500,502,503,504" {
+		t.Fatalf("default custom HTTP errors = %#v", annotations)
+	}
+	if _, exists := annotations["traefik.ingress.kubernetes.io/router.middlewares"]; exists {
+		t.Fatalf("empty middleware must not emit an annotation: %#v", annotations)
+	}
+
+	for name, options := range map[string]DeploymentOptions{
+		"status":     {IngressCustomHTTPErrors: "404,700"},
+		"middleware": {IngressErrorMiddleware: "unsafe/value"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := NewDeploymentPlan(workloadSpec("web", "dep-invalid", nil, nil), options)
+			if invalid.Safe || invalid.Error == "" || len(invalid.Manifests) != 0 {
+				t.Fatalf("invalid trusted ingress error settings must reject compilation: %#v", invalid)
+			}
+		})
+	}
+}
+
+func TestHostedErrorDisableSentinelOmitsControllerAnnotations(t *testing.T) {
+	plan := NewDeploymentPlan(workloadSpec("web", "dep-errors-disabled", nil, nil), DeploymentOptions{
+		IngressCustomHTTPErrors: " DISABLED ",
+		IngressErrorMiddleware:  "platform-errors@kubernetescrd",
+	})
+	if !plan.Safe {
+		t.Fatalf("disabled hosted errors should compile safely: %s", plan.Error)
+	}
+	ingress := findManifest(t, plan.Manifests, "Ingress", plan.Service.Name)
+	annotations := ingress["metadata"].(map[string]any)["annotations"].(map[string]any)
+	for _, key := range []string{
+		"nginx.ingress.kubernetes.io/custom-http-errors",
+		"traefik.ingress.kubernetes.io/router.middlewares",
+	} {
+		if _, exists := annotations[key]; exists {
+			t.Fatalf("disabled hosted errors must omit %s: %#v", key, annotations)
+		}
+	}
+}
+
 func TestNetworkPolicyIngressIsWorkloadTypeAware(t *testing.T) {
 	tests := []struct {
 		serviceType string

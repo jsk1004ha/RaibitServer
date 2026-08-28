@@ -1,0 +1,63 @@
+{{- if and .Values.dashboard.enabled .Values.hostedErrors.enabled }}
+{{- if .Values.hostedErrors.traefik.enabled }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-hosted-errors
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-hosted-errors
+    app.kubernetes.io/component: hosted-errors
+spec:
+  errors:
+    status:
+      {{- range .Values.hostedErrors.statuses }}
+      - {{ . | quote }}
+      {{- end }}
+    query: /api/hosted-error?code={status}
+    service:
+      name: {{ include "raibitserver.fullname" . }}-hosted-errors
+      namespace: {{ .Release.Namespace }}
+      port: {{ .Values.dashboard.port }}
+      passHostHeader: false
+    errorRequestHeaders: []
+{{- end }}
+{{- if .Values.hostedErrors.fallbackIngress.enabled }}
+{{- if .Values.hostedErrors.traefik.enabled }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-hosted-errors
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-hosted-errors
+    app.kubernetes.io/component: hosted-errors
+  annotations:
+    raibitserver.io/hosted-error-fallback: "404"
+    {{- with .Values.hostedErrors.fallbackIngress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.hostedErrors.fallbackIngress.tls.existingSecret }}
+  tls:
+    - hosts:
+        - {{ default (printf "*.%s" $.Values.ingress.hosts.public) $.Values.hostedErrors.fallbackIngress.host | quote }}
+      secretName: {{ . | quote }}
+  {{- end }}
+  rules:
+    - host: {{ default (printf "*.%s" .Values.ingress.hosts.public) .Values.hostedErrors.fallbackIngress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "raibitserver.fullname" . }}-hosted-errors
+                port: { name: http }
+{{- end }}
+{{- end }}

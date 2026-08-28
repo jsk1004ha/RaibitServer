@@ -49,6 +49,16 @@ export function proxy(request: NextRequest) {
     https: new URL(publicRequestUrl).protocol === 'https:',
   });
   const pathname = request.nextUrl.pathname;
+  const hostedErrorBackendRequest = isHostedErrorBackendHostname(requestHostname)
+    || isHostedWorkloadHostname(
+      requestHostname,
+      process.env.RAIBITSERVER_CONSOLE_URL,
+      process.env.RAIBITSERVER_BASE_DOMAIN || process.env.BASE_DOMAIN,
+    );
+  if (pathname === '/api/hosted-error') return hostedErrorApiResponse(request, nonce);
+  if (hostedErrorBackendRequest && !isDashboardHealthPath(pathname)) {
+    return hostedErrorResponse(request, nonce);
+  }
   if (isConfiguredPublicHostname(requestHostname, process.env.RAIBITSERVER_CONSOLE_URL)
     && (isLoginPage(pathname) || isProtectedPage(pathname))) {
     const target = consoleOriginHref(
@@ -95,6 +105,46 @@ function redirectResponse(location: URL, headers: Record<string, string>) {
   return response;
 }
 
+function hostedErrorApiResponse(request: NextRequest, nonce: string) {
+  const requestHeaders = sanitizedHostedErrorRequestHeaders(request, nonce);
+  return NextResponse.next({ request: { headers: requestHeaders } });
+}
+
+function hostedErrorResponse(request: NextRequest, nonce: string) {
+  const requestHeaders = sanitizedHostedErrorRequestHeaders(request, nonce);
+  requestHeaders.set('x-code', hostedErrorCode(request.headers.get('x-code')));
+  requestHeaders.set('x-original-uri', safeOriginalPath(
+    request.headers.get('x-original-uri') || request.nextUrl.pathname,
+  ));
+  return NextResponse.rewrite(new URL('/api/hosted-error', request.url), {
+    request: { headers: requestHeaders },
+  });
+}
+
+function sanitizedHostedErrorRequestHeaders(request: NextRequest, nonce: string) {
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.delete('authorization');
+  requestHeaders.delete('cookie');
+  requestHeaders.set('x-nonce', nonce);
+  return requestHeaders;
+}
+
+function hostedErrorCode(value: string | null) {
+  return value && HOSTED_ERROR_STATUS_CODES.has(value) ? value : '404';
+}
+
+const HOSTED_ERROR_STATUS_CODES = new Set([
+  '400', '401', '402', '403', '404', '405', '406', '407', '408', '409', '410', '411', '412', '413',
+  '414', '415', '416', '417', '421', '422', '423', '424', '425', '426', '428', '429', '431', '451',
+  '500', '501', '502', '503', '504', '505', '506', '507', '508', '511',
+]);
+
+function safeOriginalPath(value: string) {
+  const withoutQuery = value.split('#', 1)[0]?.split('?', 1)[0] || '';
+  if (!withoutQuery.startsWith('/') || withoutQuery.startsWith('//') || withoutQuery.includes('\\')) return '/';
+  return withoutQuery.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 240) || '/';
+}
+
 function isConsolePage(pathname: string) {
   if (isLoginPage(pathname)) return false;
   if (pathname.startsWith('/api/')) return false;
@@ -120,6 +170,35 @@ function dashboardPlaneForHostname(hostname: string, configuredConsoleUrl?: stri
     if (isPlaneHostname(normalized, 'resources', baseDomain)) return 'resources';
   }
   return null;
+}
+
+function isHostedWorkloadHostname(hostname: string, configuredConsoleUrl?: string, configuredBaseDomain?: string) {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) return false;
+  const baseDomains = new Set(['raibit.kr', 'raibitserver.app']);
+  const configuredPublicHostname = publicHostnameForConsole(configuredConsoleUrl);
+  if (configuredPublicHostname) baseDomains.add(configuredPublicHostname);
+  const normalizedBaseDomain = normalizeHostname(configuredBaseDomain);
+  if (normalizedBaseDomain) baseDomains.add(normalizedBaseDomain);
+  for (const baseDomain of baseDomains) {
+    const suffix = `.${baseDomain}`;
+    if (!normalized.endsWith(suffix)) continue;
+    const routeLabel = normalized.slice(0, -suffix.length);
+    if (!routeLabel.includes('.')
+      && ((routeLabel.startsWith('apps--') && routeLabel.length > 'apps--'.length)
+        || (routeLabel.startsWith('preview--') && routeLabel.length > 'preview--'.length))) return true;
+  }
+  return false;
+}
+
+function isHostedErrorBackendHostname(hostname: string) {
+  const normalized = normalizeHostname(hostname);
+  const serviceLabel = normalized?.split('.', 1)[0] || '';
+  return serviceLabel === 'hosted-errors' || serviceLabel.endsWith('-hosted-errors');
+}
+
+function isDashboardHealthPath(pathname: string) {
+  return pathname === '/healthz' || pathname === '/api/health';
 }
 
 function isPlaneHostname(hostname: string, plane: 'console' | 'resources', baseDomain: string) {

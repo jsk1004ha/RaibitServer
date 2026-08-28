@@ -27,6 +27,8 @@ type Config struct {
 	BaseDomain              string
 	IngressGatewayNamespace string
 	IngressClassName        string
+	IngressCustomHTTPErrors string
+	IngressErrorMiddleware  string
 	Timeout                 time.Duration
 	WorkerID                string
 	ClaimLease              time.Duration
@@ -74,6 +76,9 @@ func NewServiceReconcilerWithStore(config Config, state store.ReconcileStore, ru
 	}
 	if config.IngressClassName == "" {
 		config.IngressClassName = "nginx"
+	}
+	if config.IngressCustomHTTPErrors == "" {
+		config.IngressCustomHTTPErrors = "500,502,503,504"
 	}
 	if config.Timeout <= 0 {
 		config.Timeout = 10 * time.Minute
@@ -624,6 +629,8 @@ func (r *ServiceReconciler) newDeploymentPlan(spec kube.AppServiceSpec) kube.Dep
 	return kube.NewDeploymentPlan(spec, kube.DeploymentOptions{
 		IngressGatewayNamespace: r.config.IngressGatewayNamespace,
 		IngressClassName:        r.config.IngressClassName,
+		IngressCustomHTTPErrors: r.config.IngressCustomHTTPErrors,
+		IngressErrorMiddleware:  r.config.IngressErrorMiddleware,
 	})
 }
 

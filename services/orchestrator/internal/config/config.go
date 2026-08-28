@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -15,6 +16,8 @@ type Config struct {
 	BaseDomain              string
 	IngressGatewayNamespace string
 	IngressClassName        string
+	IngressCustomHTTPErrors string
+	IngressErrorMiddleware  string
 	DryRun                  bool
 	Timeout                 time.Duration
 	PollInterval            time.Duration
@@ -41,12 +44,25 @@ func FromEnv() Config {
 		BaseDomain:              firstNonEmpty(os.Getenv("BASE_DOMAIN"), os.Getenv("RAIBITSERVER_BASE_DOMAIN"), "raibitserver.local"),
 		IngressGatewayNamespace: firstNonEmpty(os.Getenv("RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE"), "ingress-nginx"),
 		IngressClassName:        firstNonEmpty(os.Getenv("RAIBITSERVER_INGRESS_CLASS_NAME"), "nginx"),
+		IngressCustomHTTPErrors: ingressCustomHTTPErrorsFromEnv(),
+		IngressErrorMiddleware:  os.Getenv("RAIBITSERVER_INGRESS_ERROR_MIDDLEWARE"),
 		DryRun:                  os.Getenv("RAIBITSERVER_DRY_RUN") != "0" && os.Getenv("RAIBITSERVER_EXECUTE") != "1",
 		Timeout:                 timeout,
 		PollInterval:            pollInterval,
 		ClaimLease:              claimLease,
 		WorkerID:                firstNonEmpty(os.Getenv("RAIBITSERVER_WORKER_ID"), hostname, "raibitserver-orchestrator"),
 	}
+}
+
+func ingressCustomHTTPErrorsFromEnv() string {
+	value, configured := os.LookupEnv("RAIBITSERVER_INGRESS_CUSTOM_HTTP_ERRORS")
+	if !configured {
+		return "500,502,503,504"
+	}
+	if strings.TrimSpace(value) == "" {
+		return "disabled"
+	}
+	return value
 }
 
 func secondsEnv(name string, fallback time.Duration) time.Duration {

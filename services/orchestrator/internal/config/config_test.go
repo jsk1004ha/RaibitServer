@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestIngressGatewayNamespaceFromEnvironment(t *testing.T) {
 	t.Setenv("RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE", "")
@@ -23,5 +26,40 @@ func TestIngressClassNameFromEnvironment(t *testing.T) {
 	t.Setenv("RAIBITSERVER_INGRESS_CLASS_NAME", "traefik")
 	if got := FromEnv().IngressClassName; got != "traefik" {
 		t.Fatalf("configured ingress class name = %q, want traefik", got)
+	}
+}
+
+func TestIngressErrorSettingsFromEnvironment(t *testing.T) {
+	original, existed := os.LookupEnv("RAIBITSERVER_INGRESS_CUSTOM_HTTP_ERRORS")
+	if err := os.Unsetenv("RAIBITSERVER_INGRESS_CUSTOM_HTTP_ERRORS"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv("RAIBITSERVER_INGRESS_CUSTOM_HTTP_ERRORS", original)
+		} else {
+			_ = os.Unsetenv("RAIBITSERVER_INGRESS_CUSTOM_HTTP_ERRORS")
+		}
+	})
+	t.Setenv("RAIBITSERVER_INGRESS_ERROR_MIDDLEWARE", "")
+	cfg := FromEnv()
+	if cfg.IngressCustomHTTPErrors != "500,502,503,504" {
+		t.Fatalf("default custom HTTP errors = %q", cfg.IngressCustomHTTPErrors)
+	}
+	if cfg.IngressErrorMiddleware != "" {
+		t.Fatalf("default error middleware = %q, want empty", cfg.IngressErrorMiddleware)
+	}
+
+	t.Setenv("RAIBITSERVER_INGRESS_CUSTOM_HTTP_ERRORS", "")
+	cfg = FromEnv()
+	if cfg.IngressCustomHTTPErrors != "disabled" {
+		t.Fatalf("explicit empty custom HTTP errors = %q, want disabled", cfg.IngressCustomHTTPErrors)
+	}
+
+	t.Setenv("RAIBITSERVER_INGRESS_CUSTOM_HTTP_ERRORS", "404, 500")
+	t.Setenv("RAIBITSERVER_INGRESS_ERROR_MIDDLEWARE", "platform-errors@kubernetescrd")
+	cfg = FromEnv()
+	if cfg.IngressCustomHTTPErrors != "404, 500" || cfg.IngressErrorMiddleware != "platform-errors@kubernetescrd" {
+		t.Fatalf("configured ingress error settings = %#v", cfg)
 	}
 }

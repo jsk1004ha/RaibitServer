@@ -43,6 +43,8 @@ spec:
               value: {{ printf "http://%s-api:%d/api" (include "raibitserver.fullname" .) (int .Values.api.port) | quote }}
             - name: RAIBITSERVER_CONSOLE_URL
               value: {{ .Values.dashboard.consoleUrl | quote }}
+            - name: RAIBITSERVER_BASE_DOMAIN
+              value: {{ .Values.ingress.hosts.public | quote }}
           ports:
             - { name: http, containerPort: {{ .Values.dashboard.port }}, protocol: TCP }
           startupProbe:

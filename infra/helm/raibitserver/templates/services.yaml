@@ -29,3 +29,21 @@ spec:
   ports:
     - { name: http, port: {{ .Values.dashboard.port }}, targetPort: http, protocol: TCP }
 {{- end }}
+{{- if and .Values.dashboard.enabled .Values.hostedErrors.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-hosted-errors
+  labels:
+    {{- include "raibitserver.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/name: raibitserver-hosted-errors
+    app.kubernetes.io/component: hosted-errors
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: raibitserver-dashboard
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - { name: http, port: {{ .Values.dashboard.port }}, targetPort: http, protocol: TCP }
+{{- end }}

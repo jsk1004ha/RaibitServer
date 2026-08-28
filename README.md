@@ -13,6 +13,7 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 - **BuildKit 캐시 경로**: builder는 inline cache와 선택적 registry cache(`cache-from/cache-to`) 및 패키지 매니저 cache mount를 계획해 반복 배포 시간을 줄입니다.
 - **관리형 리소스**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, SQLite, Object Storage, Qdrant/vector, NATS/queue를 카탈로그 리소스로 다룹니다.
 - **서브도메인 라우팅**: 서비스 실행 URL은 `apps--<user>--<project>.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 flat single-label 규칙을 따릅니다.
+- **공통 오류 화면**: 활성 표준 4xx·5xx 38종을 미리보기·오류 backend에서 제공하고, 호스팅 라우팅 404·upstream 500/502/503/504를 같은 RAIBIT 상태 화면으로 안내하되 사용자 앱의 자체 오류 응답은 유지합니다.
 - **승인·쿼터·감사**: 비동아리 사용자는 관리자 승인 후 쿼터 안에서 사용하고, 주요 작업은 감사 로그와 사용량에 반영됩니다.
 - **AI 배포 관리자**: 서비스별 위협을 먼저 검사하고, 안전한 서비스만 결정적 재검증을 거쳐 순서대로 배포합니다. 외부 AI는 선택 사항이며 secret을 받거나 보안 차단을 해제할 수 없습니다.
 - **환경 변수 보관함**: 서비스별 일반값과 암호화된 비밀값을 관리하고, `.env` 텍스트를 가져오며, API와 화면에는 secret 원문 대신 마스킹된 값을 제공합니다.
@@ -126,6 +127,7 @@ node src/cli.js compose examples/docker-compose.yml
 | 로컬 dry-run E2E | [docs/local-e2e.md](docs/local-e2e.md) |
 | live E2E | [docs/live-e2e.md](docs/live-e2e.md) |
 | GitHub App/preview | [docs/github-app.md](docs/github-app.md), [docs/preview-deployments.md](docs/preview-deployments.md) |
+| 대시보드·호스팅 오류 화면 | [docs/hosted-error-pages.md](docs/hosted-error-pages.md) |
 | 보안 정책 | [docs/security.md](docs/security.md) |
 | 승인/쿼터 | [docs/quota.md](docs/quota.md) |
 | DB console | [docs/db-console.md](docs/db-console.md) |
@@ -213,6 +215,8 @@ GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드
 Cloudflare Tunnel을 쓰는 경우 각 tenant hostname을 직접 매핑하지 마세요. 공개 apex와 `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`, `*.<BASE_DOMAIN>`을 **내부 Kubernetes Ingress Controller 하나**로 보내고, 최종 Host 기반 라우팅은 Kubernetes Ingress가 담당해야 합니다. Cloudflare Tunnel hostname wildcard는 `*.example.com` 형태만 쓰고 `test.*.example.com` 같은 중간 wildcard에 의존하지 않습니다. 자세한 예시는 [Cloudflare Tunnel 운영 가이드](docs/cloudflare-tunnel.md)와 [production tunnel 예시](deploy/production/cloudflare-tunnel.example.yml)를 참고하세요.
 
 Tenant NetworkPolicy는 임의의 사용자 라벨이 아니라 Kubernetes 예약 네임스페이스 라벨 `kubernetes.io/metadata.name`으로 ingress controller를 식별합니다. 기본 네임스페이스는 `ingress-nginx`이며, 다른 네임스페이스를 쓰면 Helm `ingress.gatewayNamespace`를 설정하세요. 이 값은 같은 release의 API, Go orchestrator, ValidatingAdmissionPolicy에 함께 렌더되고 tenant 프로젝트 입력으로는 변경할 수 없습니다.
+
+존재하지 않는 tenant hostname과 upstream 5xx는 공통 오류 backend로 전달할 수 있습니다. production에서는 `hostedErrors.fallbackIngress.tls.existingSecret`에 wildcard 인증서를 지정하고, 사용 중인 ingress-nginx 또는 Traefik 연결을 [호스팅 오류 화면 가이드](docs/hosted-error-pages.md)대로 설정하세요.
 
 > 보안 필수: `raibit.kr`의 랜딩과 `/public/sites`만 공개합니다. 로그인·가입·콘솔 경로는 `console.raibit.kr`로 이동하며 세션 쿠키는 host-only로 유지합니다. 부모 도메인 쿠키는 `apps--*.raibit.kr` 사용자 워크로드에도 bearer token을 보내므로 사용하지 않습니다. `/admin`과 관리자 메뉴는 JWT의 `userRole=ADMIN`인 계정만 사용할 수 있으며 Cloudflare Access/MFA를 추가 방어선으로 둘 수 있습니다.
 
@@ -323,7 +327,7 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
    - 배포 전 각 push 결과의 manifest-list digest를 확인하고 Helm의 `image.digests.api`, `dashboard`, `orchestrator`, `builder`, `provisioner`, `logIngester`, `metricsIngester`에 활성화할 component의 `sha256:...` 값을 넣습니다. production 모드는 tag-only 이미지를 허용하지 않습니다.
    - live 관리형 PostgreSQL/MySQL/MariaDB/MongoDB/Redis/Valkey workload 이미지는 `provisioner.providerImages.*`에 `repository@sha256:<digest>` 형식으로 모두 지정합니다. production chart는 이 6개 이미지가 누락되거나 tag-only이면 거부합니다. MinIO/Qdrant/NATS 이미지는 plan-only adapter가 live bootstrap을 구현할 때까지 비워 둘 수 있으며, 값을 넣는 경우에도 digest pin은 필수입니다.
    - certified provider 이미지는 restricted Pod Security의 엔진별 non-root UID/GID 계약(PostgreSQL `70`, MySQL/MariaDB/MongoDB/Redis/Valkey `999`)으로 실행되고 데이터 경로에 쓸 수 있어야 합니다. 또한 `/bin/sh`와 인증 확인 CLI(`psql`, `mysql`/`mariadb`, `mongosh`, `redis-cli`/`valkey-cli`)를 포함해야 합니다. provisioner는 생성한 자격 증명으로 실제 인증 명령이 성공한 뒤에만 READY로 전환합니다.
-   - `runtimeSecrets.existingSecret`, `database.existingSecret`, `ingress.tls.existingSecret`과 builder의 registry/signing/dispatch mTLS secret ref를 미리 생성합니다. `builder.dispatch.existingSecret`에는 release 전용 CA, dispatcher server keypair, executor client keypair가 필요하며 server certificate SAN은 `<release>-builder-dispatcher` Service DNS를 포함해야 합니다. GitHub 자격 증명을 shared builder Secret으로 만들거나 mount하지 않습니다. chart는 application credential Secret을 생성하지 않습니다.
+   - `runtimeSecrets.existingSecret`, `database.existingSecret`, `ingress.tls.existingSecret`, `hostedErrors.fallbackIngress.tls.existingSecret`과 builder의 registry/signing/dispatch mTLS secret ref를 미리 생성합니다. hosted error TLS Secret은 `*.<BASE_DOMAIN>`을 포함해야 합니다. `builder.dispatch.existingSecret`에는 release 전용 CA, dispatcher server keypair, executor client keypair가 필요하며 server certificate SAN은 `<release>-builder-dispatcher` Service DNS를 포함해야 합니다. GitHub 자격 증명을 shared builder Secret으로 만들거나 mount하지 않습니다. chart는 application credential Secret을 생성하지 않습니다.
    - `infra/helm/raibitserver/ci-production-values.yaml`의 platform digest는 정적 chart 검증용 가짜 값이므로 실제 배포에 사용하지 않습니다. production 값은 `sh scripts/verify-helm.sh`로 fail-closed 조건을 먼저 검증합니다.
    - chart의 `crds/`는 최초 설치 시 적용되지만 Helm upgrade에서 CRD schema를 자동 갱신하지 않습니다. CRD 변경은 백업과 호환성 검토 후 별도 승인 절차로 적용합니다.
 5. **API와 Dashboard 기동**

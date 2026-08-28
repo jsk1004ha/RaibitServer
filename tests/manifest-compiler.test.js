@@ -107,6 +107,45 @@ test('private services do not receive public ingress', () => {
   assert.equal(apiService.kind, 'Service');
 });
 
+test('web ingress uses trusted hosted error annotations and ignores tenant overrides', () => {
+  const custom = compileProject({
+    organization: { slug: 'gdg' },
+    project: { name: 'hosted-errors' },
+    ingressCustomHttpErrors: '418',
+    ingressErrorMiddleware: 'attacker@kubernetescrd',
+    services: [
+      { name: 'web', type: 'web', sourceType: 'image', image: 'example/web:1', ingressCustomHttpErrors: '404', ingressErrorMiddleware: 'also-attacker@kubernetescrd' },
+      { name: 'api', type: 'private', sourceType: 'image', image: 'example/api:1' },
+    ],
+  }, {}, {
+    ingressCustomHttpErrors: ['504', 500, '502', '500'],
+    ingressErrorMiddleware: ' Platform-Errors@KubernetesCRD ',
+  });
+  const ingress = custom.manifests.find((manifest) => manifest.kind === 'Ingress');
+  assert.equal(ingress.metadata.annotations['nginx.ingress.kubernetes.io/custom-http-errors'], '500,502,504');
+  assert.equal(ingress.metadata.annotations['traefik.ingress.kubernetes.io/router.middlewares'], 'platform-errors@kubernetescrd');
+  assert.equal(custom.manifests.filter((manifest) => manifest.kind === 'Ingress').length, 1);
+  assert.doesNotMatch(JSON.stringify(ingress), /418|also-attacker/);
+});
+
+test('web ingress defaults hosted errors and rejects invalid trusted settings', () => {
+  const ingress = find('Ingress', 'web');
+  assert.equal(ingress.metadata.annotations['nginx.ingress.kubernetes.io/custom-http-errors'], '500,502,503,504');
+  assert.equal(ingress.metadata.annotations['traefik.ingress.kubernetes.io/router.middlewares'], undefined);
+  assert.throws(() => compileProject(example, example.filesByService, { ingressCustomHttpErrors: '404,700' }), /invalid ingress custom HTTP errors/);
+  assert.throws(() => compileProject(example, example.filesByService, { ingressErrorMiddleware: 'unsafe/value' }), /invalid ingress error middleware/);
+});
+
+test('trusted hosted error disable sentinel omits controller error annotations', () => {
+  const disabled = compileProject(example, example.filesByService, {
+    ingressCustomHttpErrors: ' DISABLED ',
+    ingressErrorMiddleware: 'platform-errors@kubernetescrd',
+  });
+  const ingress = disabled.manifests.find((manifest) => manifest.kind === 'Ingress');
+  assert.equal(ingress.metadata.annotations['nginx.ingress.kubernetes.io/custom-http-errors'], undefined);
+  assert.equal(ingress.metadata.annotations['traefik.ingress.kubernetes.io/router.middlewares'], undefined);
+});
+
 test('resource plans expose catalog lifecycle and env variable names', () => {
   const postgres = plan.resourcePlans.find((resource) => resource.name === 'festival-postgres');
   assert.equal(postgres.operator, 'CloudNativePG');

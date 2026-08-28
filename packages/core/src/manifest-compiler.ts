@@ -8,6 +8,9 @@ import { boundedDnsLabel, domainPlanForProject, serviceHostname, tenantProjectLa
 
 type AnyRecord = Record<string, any>;
 
+const DEFAULT_INGRESS_CUSTOM_HTTP_ERRORS = '500,502,503,504';
+const TRAEFIK_MIDDLEWARE_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?@kubernetescrd$/;
+
 export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord = {}, trustedOptions: AnyRecord = {}) {
   const organization = spec.organization || { slug: spec.organizationSlug || 'default' };
   const project = spec.project || { name: spec.name || 'project', slug: spec.slug || spec.name || 'project' };
@@ -18,6 +21,7 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   const projectSlug = slugify(project.slug || project.name);
   const baseDomain = spec.baseDomain || DEFAULT_DOMAIN;
   const ingressGatewayNamespace = trustedIngressGatewayNamespace(trustedOptions.ingressGatewayNamespace);
+  const ingressErrorOptions = trustedIngressErrorOptions(trustedOptions);
   const namespace = tenantProjectLabel(
     organizationNamespaceIdentity,
     projectRouteSlug,
@@ -41,7 +45,7 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
     };
     const buildPlan = resolveBuildStrategy(fullService, filesByService[service.name] || filesByService[serviceName] || {});
     buildPlans.push(buildPlan);
-    const serviceManifests = compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service: fullService, resources, resourceEnvByName, image: buildPlan.image });
+    const serviceManifests = compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service: fullService, resources, resourceEnvByName, image: buildPlan.image, ingressErrorOptions });
     manifests.push(...serviceManifests);
   }
 
@@ -77,7 +81,7 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   };
 }
 
-function compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service, resources, resourceEnvByName, image }: AnyRecord) {
+function compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service, resources, resourceEnvByName, image, ingressErrorOptions }: AnyRecord) {
   const serviceName = kubernetesServiceName(service);
   const type = service.type || SERVICE_TYPES.WEB;
   const port = Number(service.port || DEFAULT_PORT);
@@ -103,7 +107,7 @@ function compileService({ namespace, projectSlug, organizationRouteSlug, project
     out.push(serviceManifest(namespace, serviceName, labels, port));
   }
   if (type === SERVICE_TYPES.WEB) {
-    out.push(ingressManifest(namespace, service, serviceRouteName, organizationRouteSlug, projectRouteSlug, baseDomain, labels, port));
+    out.push(ingressManifest(namespace, service, serviceRouteName, organizationRouteSlug, projectRouteSlug, baseDomain, labels, port, ingressErrorOptions));
   }
   if (service.scaling?.maxReplicas && Number(service.scaling.maxReplicas) > Number(service.scaling.minReplicas || 1)) {
     out.push(hpaManifest(namespace, service, service.scaling));
@@ -249,7 +253,7 @@ function serviceManifest(namespace: string, serviceName: string, labels: AnyReco
   };
 }
 
-function ingressManifest(namespace: string, service: AnyRecord, serviceRouteName: string, organizationSlug: string, projectSlug: string, baseDomain: string, labels: AnyRecord, port: number): AnyRecord {
+function ingressManifest(namespace: string, service: AnyRecord, serviceRouteName: string, organizationSlug: string, projectSlug: string, baseDomain: string, labels: AnyRecord, port: number, ingressErrorOptions: AnyRecord): AnyRecord {
   const serviceName = kubernetesServiceName(service);
   const host = serviceHostname({
     organizationSlug,
@@ -267,7 +271,9 @@ function ingressManifest(namespace: string, service: AnyRecord, serviceRouteName
       labels,
       annotations: {
         'cert-manager.io/cluster-issuer': service.tlsIssuer || 'letsencrypt',
+        ...(ingressErrorOptions.disabled ? {} : { 'nginx.ingress.kubernetes.io/custom-http-errors': ingressErrorOptions.customHttpErrors }),
         'traefik.ingress.kubernetes.io/router.entrypoints': 'websecure',
+        ...(!ingressErrorOptions.disabled && ingressErrorOptions.middleware ? { 'traefik.ingress.kubernetes.io/router.middlewares': ingressErrorOptions.middleware } : {}),
         'raibitserver.io/hostname': host,
       },
     },
@@ -276,6 +282,36 @@ function ingressManifest(namespace: string, service: AnyRecord, serviceRouteName
       rules: [{ host, http: { paths: [{ path: '/', pathType: 'Prefix', backend: { service: { name: serviceName, port: { number: port } } } }] } }],
     },
   };
+}
+
+function trustedIngressErrorOptions(trustedOptions: AnyRecord): AnyRecord {
+  const configuredStatuses = trustedOptions.ingressCustomHttpErrors;
+  if (typeof configuredStatuses === 'string' && configuredStatuses.trim().toLowerCase() === 'disabled') {
+    return { disabled: true, customHttpErrors: '', middleware: '' };
+  }
+  const rawStatuses = typeof configuredStatuses === 'string' && !configuredStatuses.trim()
+    ? DEFAULT_INGRESS_CUSTOM_HTTP_ERRORS
+    : configuredStatuses;
+  const values = Array.isArray(rawStatuses)
+    ? rawStatuses
+    : String(rawStatuses ?? DEFAULT_INGRESS_CUSTOM_HTTP_ERRORS).split(',');
+  const statuses = [...new Set(values.map((value) => String(value).trim()).filter(Boolean))]
+    .map((value) => {
+      if (!/^\d{3}$/.test(value) || Number(value) < 400 || Number(value) > 599) {
+        throw new Error('invalid ingress custom HTTP errors: expected comma-separated HTTP status codes from 400 through 599');
+      }
+      return Number(value);
+    })
+    .sort((left, right) => left - right);
+  if (!statuses.length) {
+    throw new Error('invalid ingress custom HTTP errors: at least one HTTP status code is required');
+  }
+
+  const middleware = String(trustedOptions.ingressErrorMiddleware ?? '').trim().toLowerCase();
+  if (middleware && !TRAEFIK_MIDDLEWARE_PATTERN.test(middleware)) {
+    throw new Error('invalid ingress error middleware: expected <namespace>-<name>@kubernetescrd');
+  }
+  return { disabled: false, customHttpErrors: statuses.join(','), middleware };
 }
 
 function hpaManifest(namespace: string, service: AnyRecord, scaling: AnyRecord): AnyRecord {

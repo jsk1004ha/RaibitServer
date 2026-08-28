@@ -48,6 +48,25 @@ dashboard:
     minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
+hostedErrors:
+  enabled: true
+  # Application-owned 404 pages stay intact. The platform intercepts only
+  # infrastructure failures; unmatched tenant hostnames use fallbackIngress.
+  statuses:
+    - "500"
+    - "502"
+    - "503"
+    - "504"
+  fallbackIngress:
+    enabled: true
+    host: ""
+    annotations:
+      traefik.ingress.kubernetes.io/router.priority: "1"
+    tls:
+      existingSecret: ""
+  traefik:
+    # Requires Traefik v3.7.8+ CRDs and cross-namespace middleware access.
+    enabled: false
 orchestrator:
   replicas: 1
   execute: false
