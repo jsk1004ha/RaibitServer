@@ -52,7 +52,11 @@ test('git clone adapter can execute a real local clone when git is available', a
   await runCommand({ executable: 'git', args: ['init', '--initial-branch', 'main'], cwd: repo });
   await fs.writeFile(path.join(repo, 'README.md'), 'hello raibitserver\n');
   await runCommand({ executable: 'git', args: ['add', 'README.md'], cwd: repo });
-  await runCommand({ executable: 'git', args: ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-m', 'init'], cwd: repo });
+  await runCommand({
+    executable: 'git',
+    args: ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', '-c', 'commit.gpgsign=false', 'commit', '-m', 'init'],
+    cwd: repo,
+  });
 
   const result = await cloneRepository({ repoUrl: repo, branch: 'main', destination: dest, dryRun: false });
   assert.equal(result.dryRun, false);

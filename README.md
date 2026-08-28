@@ -150,7 +150,7 @@ node src/cli.js compose examples/docker-compose.yml
 | Build/Runtime | `REGISTRY_URL`, `RAIBITSERVER_REGISTRY`, `RAIBITSERVER_REGISTRY_USERNAME`, `RAIBITSERVER_REGISTRY_PASSWORD`, `RAIBITSERVER_BUILDKIT_CACHE`, `RAIBITSERVER_BUILDKIT_CACHE_REF`, `KUBECONFIG`, `RAIBITSERVER_KUBE_CONTEXT`, `BASE_DOMAIN`, `RAIBITSERVER_BASE_DOMAIN`, `RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE`, `RAIBITSERVER_EXECUTE`, `RAIBITSERVER_PUSH` |
 | Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
 | Provider | `RAIBITSERVER_POSTGRES_PROVIDER_URL`, `POSTGRES_PROVIDER_URL`, `RAIBITSERVER_PROVIDER_POSTGRESQL_IMAGE`, `RAIBITSERVER_PROVIDER_MYSQL_IMAGE`, `RAIBITSERVER_PROVIDER_MARIADB_IMAGE`, `RAIBITSERVER_PROVIDER_MONGODB_IMAGE`, `RAIBITSERVER_PROVIDER_REDIS_IMAGE`, `RAIBITSERVER_PROVIDER_VALKEY_IMAGE`, `RAIBITSERVER_PROVIDER_MINIO_IMAGE`, `RAIBITSERVER_PROVIDER_QDRANT_IMAGE`, `RAIBITSERVER_PROVIDER_NATS_IMAGE` |
-| GitHub App/OAuth | `RAIBITSERVER_GITHUB_CLIENT_ID`, `RAIBITSERVER_GITHUB_CLIENT_SECRET`, `RAIBITSERVER_GITHUB_REDIRECT_URI`, `RAIBITSERVER_GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` |
+| GitHub App/OAuth | `RAIBITSERVER_GITHUB_APP_SLUG`, `RAIBITSERVER_GITHUB_CLIENT_ID`, `RAIBITSERVER_GITHUB_CLIENT_SECRET`, `RAIBITSERVER_GITHUB_CALLBACK_URL`, `RAIBITSERVER_GITHUB_STATE_SECRET`, `RAIBITSERVER_GITHUB_WEBHOOK_SECRET` |
 | AI 배포 조언(선택) | `RAIBITSERVER_AI_AGENT_URL`, `RAIBITSERVER_AI_AGENT_TOKEN`, `RAIBITSERVER_AI_AGENT_MODEL` |
 
 Production 실행 전 필수 설정은 [production 배포 문서](deploy/production/README.md)를 확인하세요.
@@ -283,13 +283,15 @@ S3_ACCESS_KEY=<access-key>
 S3_SECRET_KEY=<secret-key>
 
 # GitHub OAuth/App
+RAIBITSERVER_GITHUB_APP_SLUG=<github-app-slug>
 RAIBITSERVER_GITHUB_CLIENT_ID=<github-oauth-client-id>
 RAIBITSERVER_GITHUB_CLIENT_SECRET=<github-oauth-client-secret>
-RAIBITSERVER_GITHUB_REDIRECT_URI=https://api.raibitserver.app/api/auth/github/callback
+RAIBITSERVER_GITHUB_CALLBACK_URL=https://console.raibitserver.app/github/callback
+RAIBITSERVER_GITHUB_STATE_SECRET=<32-plus-character-state-secret>
 RAIBITSERVER_GITHUB_WEBHOOK_SECRET=<webhook-secret>
-GITHUB_APP_ID=<github-app-id>
-GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 ```
+
+private 저장소 빌드용 App ID와 RSA private key는 API 환경변수에 넣지 않고 dispatcher 전용 Kubernetes Secret으로 분리합니다. 설정 예시는 [GitHub App 가이드](docs/github-app.md)에 있습니다.
 
 운영에서 사용하면 안 되는 개발 편의 변수도 있습니다.
 
@@ -328,7 +330,7 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
    - 배포 전 각 push 결과의 manifest-list digest를 확인하고 Helm의 `image.digests.api`, `dashboard`, `orchestrator`, `builder`, `provisioner`, `logIngester`, `metricsIngester`에 활성화할 component의 `sha256:...` 값을 넣습니다. production 모드는 tag-only 이미지를 허용하지 않습니다.
    - live 관리형 PostgreSQL/MySQL/MariaDB/MongoDB/Redis/Valkey workload 이미지는 `provisioner.providerImages.*`에 `repository@sha256:<digest>` 형식으로 모두 지정합니다. production chart는 이 6개 이미지가 누락되거나 tag-only이면 거부합니다. MinIO/Qdrant/NATS 이미지는 plan-only adapter가 live bootstrap을 구현할 때까지 비워 둘 수 있으며, 값을 넣는 경우에도 digest pin은 필수입니다.
    - certified provider 이미지는 restricted Pod Security의 엔진별 non-root UID/GID 계약(PostgreSQL `70`, MySQL/MariaDB/MongoDB/Redis/Valkey `999`)으로 실행되고 데이터 경로에 쓸 수 있어야 합니다. 또한 `/bin/sh`와 인증 확인 CLI(`psql`, `mysql`/`mariadb`, `mongosh`, `redis-cli`/`valkey-cli`)를 포함해야 합니다. provisioner는 생성한 자격 증명으로 실제 인증 명령이 성공한 뒤에만 READY로 전환합니다.
-   - `runtimeSecrets.existingSecret`, `database.existingSecret`, `ingress.tls.existingSecret`과 builder의 registry/signing/dispatch mTLS secret ref를 미리 생성합니다. hosted error 전용 Secret이 필요하면 `hostedErrors.fallbackIngress.tls.existingSecret`을 별도로 지정하고, 비우면 ingress TLS Secret을 재사용합니다. 선택된 Secret은 `*.<BASE_DOMAIN>`을 포함해야 합니다. `builder.dispatch.existingSecret`에는 release 전용 CA, dispatcher server keypair, executor client keypair가 필요하며 server certificate SAN은 `<release>-builder-dispatcher` Service DNS를 포함해야 합니다. GitHub 자격 증명을 shared builder Secret으로 만들거나 mount하지 않습니다. chart는 application credential Secret을 생성하지 않습니다.
+   - `runtimeSecrets.existingSecret`, `database.existingSecret`, `ingress.tls.existingSecret`과 builder의 registry/signing/dispatch mTLS secret ref를 미리 생성합니다. hosted error 전용 Secret이 필요하면 `hostedErrors.fallbackIngress.tls.existingSecret`을 별도로 지정하고, 비우면 ingress TLS Secret을 재사용합니다. 선택된 Secret은 `*.<BASE_DOMAIN>`을 포함해야 합니다. `builder.dispatch.existingSecret`에는 release 전용 CA, dispatcher server keypair, executor client keypair가 필요하며 server certificate SAN은 `<release>-builder-dispatcher` Service DNS를 포함해야 합니다. private GitHub build를 켜면 App ID와 private key를 `builder.githubAppCredentials.existingSecret`에 별도로 두며 이 Secret은 dispatcher에만 mount합니다. chart는 application credential Secret을 생성하지 않습니다.
    - `infra/helm/raibitserver/ci-production-values.yaml`의 platform digest는 정적 chart 검증용 가짜 값이므로 실제 배포에 사용하지 않습니다. production 값은 `sh scripts/verify-helm.sh`로 fail-closed 조건을 먼저 검증합니다.
    - chart의 `crds/`는 최초 설치 시 적용되지만 Helm upgrade에서 CRD schema를 자동 갱신하지 않습니다. CRD 변경은 백업과 호환성 검토 후 별도 승인 절차로 적용합니다.
 5. **API와 Dashboard 기동**
@@ -338,7 +340,8 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
    - builder dispatcher/orchestrator/provisioner/log-ingester/metrics-ingester에 PostgreSQL control-plane URL을 주입합니다. disposable builder executor에는 DB URL을 절대 주입하지 않습니다. 기본 chart는 겹치지 않는 CronJob batch마다 executor 4개를 병렬 실행하며 `builder.isolation.parallelism`/`completions`로 경계 내 처리량을 조정합니다.
    - 실제 적용 환경에서는 `RAIBITSERVER_EXECUTE=1`, build push가 필요하면 `RAIBITSERVER_PUSH=1`을 설정합니다.
 7. **GitHub App/OAuth 연결**
-   - OAuth callback: `https://api.<BASE_DOMAIN>/api/auth/github/callback`
+   - App callback과 setup URL: `https://console.<BASE_DOMAIN>/github/callback`
+   - GitHub App의 **Request user authorization during installation**과 **Redirect on update**는 끕니다.
    - Webhook URL: `https://api.<BASE_DOMAIN>/api/github/webhooks`
    - Webhook event는 `push`, `pull_request`, `installation`, `installation_repositories`를 포함합니다.
    - 자세한 권한과 fixture 검증은 [GitHub App 문서](docs/github-app.md)와 [Preview Deployment 문서](docs/preview-deployments.md)를 참고하세요.

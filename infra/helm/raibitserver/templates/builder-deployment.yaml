@@ -1,4 +1,5 @@
 {{- $registryGateway := .Values.builder.registryCredentials.privateGateway }}
+{{- $githubApp := .Values.builder.githubAppCredentials }}
 {{- if $registryGateway.enabled }}
 {{- if or (gt (len (default "" $registryGateway.namespace)) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" (default "" $registryGateway.namespace))) }}
 {{- fail "registry credential private gateway namespace must be a valid exact Kubernetes namespace" }}
@@ -11,6 +12,17 @@
 {{- end }}
 {{- if or (lt (int $registryGateway.port) 1) (gt (int $registryGateway.port) 65535) }}
 {{- fail "registry credential private gateway port must be between 1 and 65535" }}
+{{- end }}
+{{- end }}
+{{- if $githubApp.enabled }}
+{{- if not $githubApp.existingSecret }}
+{{- fail "GitHub App credential broker requires an existing Secret" }}
+{{- end }}
+{{- if or (not $githubApp.appIdKey) (not $githubApp.privateKeyKey) }}
+{{- fail "GitHub App credential broker requires app ID and private key Secret keys" }}
+{{- end }}
+{{- if not (regexMatch "^https://[^[:space:]@/?#]+(:[0-9]+)?(/[^[:space:]?#]*)?$" (default "" $githubApp.apiURL)) }}
+{{- fail "GitHub App API URL must use https and must not contain credentials, query parameters, or fragments" }}
 {{- end }}
 {{- end }}
 {{- if .Values.production }}
@@ -171,6 +183,15 @@ spec:
             - { name: RAIBITSERVER_DISPATCH_CLIENT_CA_FILE, value: /var/run/secrets/raibitserver/dispatch/ca.crt }
             - { name: RAIBITSERVER_DISPATCH_SERVER_CERT_FILE, value: /var/run/secrets/raibitserver/dispatch/server.crt }
             - { name: RAIBITSERVER_DISPATCH_SERVER_KEY_FILE, value: /var/run/secrets/raibitserver/dispatch/server.key }
+{{ if $githubApp.enabled }}
+            - name: RAIBITSERVER_GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $githubApp.existingSecret | quote }}
+                  key: {{ $githubApp.appIdKey | quote }}
+            - { name: RAIBITSERVER_GITHUB_APP_PRIVATE_KEY_FILE, value: /var/run/secrets/raibitserver/github-app/private-key.pem }
+            - { name: RAIBITSERVER_GITHUB_API_URL, value: {{ $githubApp.apiURL | quote }} }
+{{ end }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -199,6 +220,9 @@ spec:
 {{ if .Values.builder.dispatch.existingSecret }}
             - { name: dispatch-mtls, mountPath: /var/run/secrets/raibitserver/dispatch, readOnly: true }
 {{ end }}
+{{ if $githubApp.enabled }}
+            - { name: github-app-private-key, mountPath: /var/run/secrets/raibitserver/github-app, readOnly: true }
+{{ end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -212,6 +236,14 @@ spec:
               - { key: {{ .Values.builder.dispatch.caKey | quote }}, path: ca.crt }
               - { key: {{ .Values.builder.dispatch.serverCertificateKey | quote }}, path: server.crt }
               - { key: {{ .Values.builder.dispatch.serverKeyKey | quote }}, path: server.key }
+{{ end }}
+{{ if $githubApp.enabled }}
+        - name: github-app-private-key
+          secret:
+            secretName: {{ $githubApp.existingSecret | quote }}
+            defaultMode: 0440
+            items:
+              - { key: {{ $githubApp.privateKeyKey | quote }}, path: private-key.pem }
 {{ end }}
 ---
 apiVersion: v1

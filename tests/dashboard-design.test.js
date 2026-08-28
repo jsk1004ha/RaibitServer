@@ -631,38 +631,53 @@ test('primary dashboard pages expose Korean visible headings', async () => {
 });
 
 test('GitHub console keeps integration contracts behind a compact Korean workflow', async () => {
-  const github = await read('../apps/dashboard/app/github/page.tsx');
+  const [github, css] = await Promise.all([
+    read('../apps/dashboard/app/github/page.tsx'),
+    read('../apps/dashboard/app/globals.css'),
+  ]);
 
   assert.ok(github.includes('<ConsoleShell active="github"'));
+  assert.ok(github.includes('form-surface stack activity-card github-connect-card'));
+  assert.match(
+    extractCssBlock(css, /\.github-connect-card(?=\s*\{)/),
+    /padding-inline:\s*clamp\(22px,\s*3vw,\s*28px\)/,
+    'GitHub connection card content must stay clear of its outline',
+  );
+  for (const [selector, border] of [
+    [/\.github-connect-card > div:first-child\s*/, 'border-bottom'],
+    [/\.github-connect-card \.detail-list\s*/, 'border-top'],
+    [/\.github-connect-card \.detail-list > div\s*/, 'border-bottom'],
+    [/\.github-connect-card \.workflow-actions\s*/, 'border-top'],
+  ]) {
+    assert.match(extractCssBlock(css, selector), new RegExp(`${border}:\\s*0`), `${border} divider remains in GitHub connection card`);
+  }
+  assert.match(extractCssBlock(css, /\.github-connect-card \.workflow-actions\s*/), /padding-inline:\s*0/, 'GitHub connection actions must align with card content');
   assert.doesNotMatch(github, /components\/icon/);
   assert.match(github, /<h1\s+className="page-title">GitHub 연결<\/h1>/);
-  for (const heading of ['GitHub 연결', '저장소 가져오기', '서비스에 저장소 연결', '저장소 정보 동기화']) {
+  for (const heading of ['GitHub App 연결', '저장소 선택', '서비스 연결', '저장소 동기화']) {
     assert.ok(github.includes(`<h2>${heading}</h2>`), `${heading} GitHub section missing`);
   }
-  for (const path of ['/github/repositories/import', '`/projects/${firstService.projectId}/services/${firstService.id}/github`', '`/github/repositories/${encodeURIComponent(firstRepository.fullName)}/sync`']) {
+  for (const path of ['/github/install', '/github/repositories/import', '`/projects/${firstService.projectId}/services/${firstService.id}/github`', '`/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync`']) {
     assert.ok(github.includes(path), `${path} GitHub action path missing`);
   }
   for (const field of ['projectId', 'integrationId', 'repositoryId', 'serviceName', 'branch']) {
     assert.ok(github.includes(`name="${field}"`), `${field} GitHub field missing`);
   }
-  for (const identifier of ['firstRepository.fullName', 'encodeURIComponent(firstRepository.fullName)', 'verifiedIntegrationId', 'authoritativeRepositoryId', '웹훅 / 미리보기 계약']) {
+  for (const identifier of ['selectedRepository.fullName', 'encodeURIComponent(selectedRepository.fullName)', 'integrationId', 'repositoryId', 'repository.private']) {
     assert.ok(github.includes(identifier), `${identifier} GitHub evidence missing`);
   }
   assert.ok(github.includes('`/projects/${firstService.projectId}/services/${firstService.id}/github`'), 'attach action must pair a service with its own project');
   assert.ok(!github.includes('`/projects/${firstProject.id}/services/${firstService.id}/github`'), 'attach action must not cross-pair independent project and service rows');
-  assert.ok(github.includes('action={canAttachRepository ? apiAction('));
-  assert.ok(github.includes(': undefined} className="form-surface stack activity-card"'));
-  assert.ok(github.includes('canAttachRepository ? <>'));
-  assert.ok(github.includes('<button className="btn btn-primary" type="submit">서비스에 연결</button>'));
-  assert.ok(github.includes('연결할 서비스가 없습니다.'));
-  assert.ok(github.includes('action={canSyncRepository ? apiAction('));
-  assert.ok(github.includes('<fieldset className="stack" disabled={!canSyncRepository}>'));
-  assert.ok(github.includes('<button className="btn btn-primary" type="submit" disabled={!canSyncRepository}>정보 동기화</button>'));
+  assert.ok(github.includes('canAttachRepository ? ('));
+  assert.ok(github.includes('<button className="btn btn-primary" type="submit">연결</button>'));
+  assert.ok(github.includes('연결할 서비스와 저장소가 필요합니다.'));
+  assert.ok(github.includes('canSyncRepository ? ('));
+  assert.ok(github.includes('<button className="btn btn-primary" type="submit">동기화</button>'));
   assert.ok(github.includes('동기화할 저장소가 없습니다.'));
   assert.ok(!github.includes("'/projects/project-id/services/service-id/github'"));
   assert.ok(!github.includes("'/github/repositories/owner%2Frepo/sync'"));
   assert.doesNotMatch(github, /name="(?:token|installationId|repoUrl)"/);
-  assert.ok(github.includes('GitHub App callback이 조직 소유권을 확인'));
+  assert.ok(github.includes('계정과 저장소를 GitHub에서 선택합니다.'));
   assert.doesNotMatch(github, /(?:minHeight|height):\s*['"]?\d/);
   for (const oldCopy of ['Repository import and preview deployments', 'Connect integration', 'Import repository', 'Attach repository to service', 'Sync repository metadata']) {
     assert.ok(!github.includes(oldCopy), `${oldCopy} old GitHub copy remains`);
@@ -800,7 +815,7 @@ test('focused form grids use a single activity surface without changing the shar
   assert.match(login, /className="form-grid"/);
 });
 
-test('disabled Task 8 controls look inactive and reset only disabled card fieldsets', async () => {
+test('disabled Task 8 controls look inactive and stacked forms reset native fieldset chrome', async () => {
   const css = await read('../apps/dashboard/app/globals.css');
 
   const disabledButton = extractCssBlock(css, /^button:disabled,\s*\ninput\[type="submit"\]:disabled\s*(?=\{)/m);
@@ -819,9 +834,9 @@ test('disabled Task 8 controls look inactive and reset only disabled card fields
   assert.match(disabledHover, /transform:\s*none/);
   assert.match(disabledHover, /background:\s*var\(--color-surface-strong\)/);
 
-  const disabledFieldset = extractCssBlock(css, /^\.card fieldset:disabled,\s*\n\.stack > fieldset:disabled\s*(?=\{)/m);
+  const stackedFieldset = extractCssBlock(css, /^\.card fieldset,\s*\n\.stack > fieldset\s*(?=\{)/m);
   for (const reset of [/margin:\s*0/, /padding:\s*0/, /border:\s*0/, /min-width:\s*0/]) {
-    assert.match(disabledFieldset, reset);
+    assert.match(stackedFieldset, reset);
   }
   assert.doesNotMatch(css, /^fieldset\s*(?=\{)/m, 'general fieldsets must remain unchanged');
 });

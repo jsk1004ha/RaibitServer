@@ -124,6 +124,15 @@ export class RAIBITSERVERClient {
   connectGitHub(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/integrations/github', { method: 'POST', body: input }); }
   listGitHub(organizationId?: string): Promise<Record<string, unknown>> { return this.request(organizationId ? `/integrations/github?organizationId=${encodeURIComponent(organizationId)}` : '/integrations/github'); }
   listGitHubInstallations(organizationId?: string): Promise<Record<string, unknown>> { return this.request(organizationId ? `/github/installations?organizationId=${encodeURIComponent(organizationId)}` : '/github/installations'); }
+  beginGitHubAppInstallation(): Promise<Record<string, unknown>> { return this.request('/github/install'); }
+  beginGitHubAppAuthorization(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const query = new URLSearchParams(Object.entries(input).filter(([, value]) => value !== undefined && value !== null).map(([key, value]) => [key, String(value)])).toString();
+    return this.request(`/github/authorize${query ? `?${query}` : ''}`);
+  }
+  completeGitHubAppInstallation(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const query = new URLSearchParams(Object.entries(input).filter(([, value]) => value !== undefined && value !== null).map(([key, value]) => [key, String(value)])).toString();
+    return this.request(`/github/callback${query ? `?${query}` : ''}`);
+  }
   listGitHubInstallationRepositories(installationId: string): Promise<Record<string, unknown>> { return this.request(`/github/installations/${encodeURIComponent(installationId)}/repositories`); }
   attachGitHub(projectId: string, serviceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}/github`, { method: 'POST', body: input });

@@ -6,6 +6,24 @@ import { GitHubIntegrationService } from './github.service';
 export class GitHubIntegrationController {
   constructor(private readonly githubService: GitHubIntegrationService) {}
 
+  @RequirePermission('team:invite')
+  @Get('github/install')
+  install(@Req() req: any) {
+    return this.githubService.githubAppInstall(req.raibitSubject);
+  }
+
+  @RequirePermission('team:invite')
+  @Get('github/authorize')
+  authorize(@Query() input: Record<string, any>, @Req() req: any) {
+    return this.githubService.githubAppAuthorize(input, req.raibitSubject);
+  }
+
+  @RequirePermission('team:invite')
+  @Get('github/callback')
+  callback(@Query() input: Record<string, any>, @Req() req: any) {
+    return this.githubService.githubAppComplete(input, req.raibitSubject);
+  }
+
   @RequirePermission('project:read')
   @Get('github/installations')
   installations(@Query('organizationId') organizationId: string, @Req() req: any) {

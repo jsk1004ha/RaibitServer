@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -110,6 +111,10 @@ type buildContext struct {
 
 type prebuiltImageAuthorizer interface {
 	AuthorizePrebuiltImage(ctx context.Context, organizationID, projectID, serviceID, image string) error
+}
+
+type gitHubRepositoryCredentialStore interface {
+	IssueGitHubRepositoryCredential(context.Context, controlplane.GitHubRepositoryCredentialRequest) (*controlplane.GitHubRepositoryCredential, error)
 }
 
 func New(store controlplane.Store, runner CommandRunner, config Config) *Builder {
@@ -550,24 +555,38 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 	if _, err := canonicalGitHubRepository(repoURL); err != nil {
 		return err
 	}
-	if bound {
-		if strings.EqualFold(state.Service.GitHubRepositoryVisibility, "private") {
+	privateRepository := bound && strings.EqualFold(state.Service.GitHubRepositoryVisibility, "private")
+	gitEnv := isolatedGitEnvironment(workspace)
+	if privateRepository {
+		credentialStore, ok := b.Store.(gitHubRepositoryCredentialStore)
+		if !ok {
 			return errors.New("private GitHub repository builds require an exact-repository short-lived credential from a per-build credential broker")
 		}
+		credential, credentialErr := credentialStore.IssueGitHubRepositoryCredential(ctx, controlplane.GitHubRepositoryCredentialRequest{
+			ServiceID:      state.Service.ID,
+			InstallationID: state.Service.GitHubInstallationID,
+			RepositoryID:   state.Service.GitHubRepositoryID,
+		})
+		if credentialErr != nil {
+			return credentialErr
+		}
+		gitEnv["GIT_CONFIG_COUNT"] = "1"
+		gitEnv["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
+		gitEnv["GIT_CONFIG_VALUE_0"] = "AUTHORIZATION: basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+credential.Token))
 	} else if b.Config.Production && !b.Config.AllowAnonymousGit {
 		return errors.New("anonymous Git source policy is disabled for production builds")
 	}
 	branch := firstNonEmpty(state.Deployment.Branch, state.Service.Branch, "main")
 	destination := filepath.Join(workspace, "source")
 	args := []string{"clone", "--depth", "1", "--branch", branch, repoURL, destination}
-	gitEnv := isolatedGitEnvironment(workspace)
 	command := Command{Name: "git", Args: args, Env: gitEnv, CleanGitEnv: true, Redacted: "git " + strings.Join(redactArgs(args), " ")}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout, Sensitive: privateRepository})
 	state.Steps = append(state.Steps, StepResult{Type: "git-clone", Command: result.Command, DryRun: result.DryRun})
 	_ = b.writeCommandLogs(ctx, state, "clone", result)
 	if err != nil {
 		return err
 	}
+	gitEnv = isolatedGitEnvironment(workspace)
 	commit := firstNonEmpty(state.Deployment.CommitSHA, state.Deployment.CommitHash)
 	if commit != "" {
 		checkout := Command{Name: "git", Args: []string{"checkout", commit}, Dir: destination, Env: gitEnv, CleanGitEnv: true}

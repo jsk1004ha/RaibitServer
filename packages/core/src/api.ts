@@ -11,6 +11,7 @@ import { assertEnvironmentWriteAllowed } from './env-policy.ts';
 import { quotaUsageGauges, quotaWarnings } from './quota.ts';
 import { assertSystemDeploymentActor, enforceAuthAbuseLimits, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
 import { githubOAuthLoginPlan } from './github-integration.ts';
+import { createGitHubAppAuthorizationPlan, createGitHubAppInstallationPlan, resolveGitHubAppInstallationSelection, verifyGitHubAppInstallationState } from './github-app.ts';
 import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
 import { publicSitesFromSnapshot } from './public-sites.ts';
 
@@ -599,6 +600,59 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         requireScope(subject, { organizationId });
         return send(res, 201, controlPlane.store.createGitHubIntegration({ ...body, organizationId, userId: subject.id }));
       }
+      if (method === 'GET' && url.pathname === '/github/install') {
+        const subject = authorizeAction(req, 'team:invite', auth);
+        const organizationId = requiredSubjectOrganization(subject);
+        requireScope(subject, { organizationId });
+        return send(res, 200, createGitHubAppInstallationPlan({ userId: subject.id, organizationId }, options.githubApp || {}));
+      }
+      if (method === 'GET' && url.pathname === '/github/authorize') {
+        const subject = authorizeAction(req, 'team:invite', auth);
+        const organizationId = requiredSubjectOrganization(subject);
+        requireScope(subject, { organizationId });
+        return send(res, 200, createGitHubAppAuthorizationPlan({
+          ...Object.fromEntries(url.searchParams.entries()),
+          userId: subject.id,
+          organizationId,
+        }, options.githubApp || {}));
+      }
+      if (method === 'GET' && url.pathname === '/github/callback') {
+        const subject = authorizeAction(req, 'team:invite', auth);
+        const organizationId = requiredSubjectOrganization(subject);
+        requireScope(subject, { organizationId });
+        const callbackState = verifyGitHubAppInstallationState(url.searchParams.get('state'), {
+          userId: subject.id,
+          organizationId,
+          purpose: 'github-app-authorize',
+        }, options.githubApp || {});
+        const selection = await resolveGitHubAppInstallationSelection({
+          code: url.searchParams.get('code'),
+          installationId: callbackState.installationId,
+        }, options.githubApp || {});
+        const integration = controlPlane.store.connectVerifiedGitHubInstallation({
+          organizationId,
+          userId: subject.id,
+          installationId: selection.installationId,
+          accountLogin: selection.accountLogin,
+          accountType: selection.accountType,
+          verifiedBy: subject.id,
+        });
+        const catalog = controlPlane.store.replaceGitHubInstallationRepositories({
+          installationId: selection.installationId,
+          repositories: selection.repositories,
+          actorUserId: subject.id,
+        });
+        return send(res, 200, {
+          connected: true,
+          integration: {
+            id: integration.id,
+            installationId: integration.installationId,
+            accountLogin: integration.accountLogin,
+            verifiedAt: integration.verifiedAt,
+          },
+          repositoryCount: catalog.repositoryCount,
+        });
+      }
       if (method === 'GET' && url.pathname === '/integrations/github') {
         const subject = authorizeAction(req, 'project:read', auth);
         const organizationId = url.searchParams.get('organizationId') || subject.organizationId;
@@ -856,6 +910,14 @@ function assertUserApproved(user: Record<string, any>) {
     throw error;
   }
   return true;
+}
+
+function requiredSubjectOrganization(subject: Record<string, any>) {
+  const organizationId = String(subject?.organizationId || '').trim();
+  if (organizationId) return organizationId;
+  const error = new Error('organization_scope_required');
+  (error as any).statusCode = 400;
+  throw error;
 }
 
 function isActiveUserBan(user: Record<string, any>, now = Date.now()) {

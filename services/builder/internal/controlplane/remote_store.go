@@ -44,29 +44,31 @@ type RemoteStore struct {
 }
 
 type dispatchRPCRequest struct {
-	Operation       string                 `json:"operation"`
-	ClaimOptions    *ClaimOptions          `json:"claimOptions,omitempty"`
-	Lease           *WorkflowLease         `json:"lease,omitempty"`
-	ProjectID       string                 `json:"projectId,omitempty"`
-	ServiceID       string                 `json:"serviceId,omitempty"`
-	DeploymentID    string                 `json:"deploymentId,omitempty"`
-	Updates         map[string]any         `json:"updates,omitempty"`
-	Result          map[string]any         `json:"result,omitempty"`
-	Failure         string                 `json:"failure,omitempty"`
-	Now             time.Time              `json:"now,omitempty"`
-	BuildStart      *BuildStartInput       `json:"buildStart,omitempty"`
-	Publication     *ImagePublicationInput `json:"publication,omitempty"`
-	BuildLog        *BuildLogInput         `json:"buildLog,omitempty"`
-	DeploymentEvent *DeploymentEventInput  `json:"deploymentEvent,omitempty"`
+	Operation        string                             `json:"operation"`
+	ClaimOptions     *ClaimOptions                      `json:"claimOptions,omitempty"`
+	Lease            *WorkflowLease                     `json:"lease,omitempty"`
+	ProjectID        string                             `json:"projectId,omitempty"`
+	ServiceID        string                             `json:"serviceId,omitempty"`
+	DeploymentID     string                             `json:"deploymentId,omitempty"`
+	Updates          map[string]any                     `json:"updates,omitempty"`
+	Result           map[string]any                     `json:"result,omitempty"`
+	Failure          string                             `json:"failure,omitempty"`
+	Now              time.Time                          `json:"now,omitempty"`
+	BuildStart       *BuildStartInput                   `json:"buildStart,omitempty"`
+	Publication      *ImagePublicationInput             `json:"publication,omitempty"`
+	BuildLog         *BuildLogInput                     `json:"buildLog,omitempty"`
+	DeploymentEvent  *DeploymentEventInput              `json:"deploymentEvent,omitempty"`
+	GitHubCredential *GitHubRepositoryCredentialRequest `json:"githubCredential,omitempty"`
 }
 
 type dispatchRPCResponse struct {
-	Token      string            `json:"token,omitempty"`
-	Job        *WorkflowJob      `json:"job,omitempty"`
-	Project    *Project          `json:"project,omitempty"`
-	Service    *Service          `json:"service,omitempty"`
-	Deployment *Deployment       `json:"deployment,omitempty"`
-	Error      *dispatchRPCError `json:"error,omitempty"`
+	Token            string                      `json:"token,omitempty"`
+	Job              *WorkflowJob                `json:"job,omitempty"`
+	Project          *Project                    `json:"project,omitempty"`
+	Service          *Service                    `json:"service,omitempty"`
+	Deployment       *Deployment                 `json:"deployment,omitempty"`
+	GitHubCredential *GitHubRepositoryCredential `json:"githubCredential,omitempty"`
+	Error            *dispatchRPCError           `json:"error,omitempty"`
 }
 
 type dispatchRPCError struct {
@@ -83,6 +85,12 @@ type dispatchSession struct {
 	ExpiresAt         time.Time
 }
 
+type GitHubRepositoryCredentialRequest struct {
+	ServiceID      string `json:"serviceId"`
+	InstallationID string `json:"installationId"`
+	RepositoryID   string `json:"repositoryId"`
+}
+
 type leaseFencedMutationStore interface {
 	updateDeploymentForLease(context.Context, WorkflowLease, string, map[string]any) (*Deployment, error)
 	updateServiceForLease(context.Context, WorkflowLease, string, map[string]any) (*Service, error)
@@ -96,10 +104,11 @@ var (
 )
 
 type dispatchHandler struct {
-	store      Store
-	sessionTTL time.Duration
-	mu         sync.Mutex
-	sessions   map[[sha256.Size]byte]dispatchSession
+	store             Store
+	sessionTTL        time.Duration
+	mu                sync.Mutex
+	sessions          map[[sha256.Size]byte]dispatchSession
+	githubCredentials GitHubCredentialIssuer
 }
 
 func NewRemoteStore(config RemoteStoreConfig) (*RemoteStore, error) {
@@ -177,10 +186,14 @@ func NewDispatcherTLSConfig(clientCAFile, serverCertificateFile, serverKeyFile s
 }
 
 func NewDispatchHandler(store Store, sessionTTL time.Duration) http.Handler {
+	return NewDispatchHandlerWithGitHubCredentials(store, sessionTTL, nil)
+}
+
+func NewDispatchHandlerWithGitHubCredentials(store Store, sessionTTL time.Duration, issuer GitHubCredentialIssuer) http.Handler {
 	if sessionTTL <= 0 {
 		sessionTTL = 15 * time.Minute
 	}
-	return &dispatchHandler{store: store, sessionTTL: sessionTTL, sessions: map[[sha256.Size]byte]dispatchSession{}}
+	return &dispatchHandler{store: store, sessionTTL: sessionTTL, sessions: map[[sha256.Size]byte]dispatchSession{}, githubCredentials: issuer}
 }
 
 func (h *dispatchHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -359,6 +372,31 @@ func (h *dispatchHandler) handleScoped(response http.ResponseWriter, request *ht
 			return
 		}
 		result.Deployment, err = h.store.GetDeployment(ctx, rpcRequest.DeploymentID)
+	case "issueGitHubCredential":
+		if rpcRequest.GitHubCredential == nil || rpcRequest.GitHubCredential.ServiceID != session.ServiceID {
+			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "GitHub credential request does not match the claimed service")
+			return
+		}
+		if h.githubCredentials == nil {
+			writeDispatchError(response, http.StatusServiceUnavailable, "credential_broker_unavailable", "private GitHub repository credential broker is not configured")
+			return
+		}
+		service, serviceErr := h.store.GetService(ctx, session.ServiceID)
+		if serviceErr != nil {
+			err = serviceErr
+			break
+		}
+		request := rpcRequest.GitHubCredential
+		if !strings.EqualFold(strings.TrimSpace(service.GitHubRepositoryVisibility), "private") ||
+			strings.TrimSpace(service.GitHubInstallationID) == "" || strings.TrimSpace(service.GitHubRepositoryID) == "" ||
+			request.InstallationID != strings.TrimSpace(service.GitHubInstallationID) || request.RepositoryID != strings.TrimSpace(service.GitHubRepositoryID) {
+			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "GitHub credential request does not match the authoritative private repository binding")
+			return
+		}
+		result.GitHubCredential, err = h.githubCredentials.IssueRepositoryCredential(ctx, service.GitHubInstallationID, service.GitHubRepositoryID)
+		if err == nil {
+			err = validateIssuedGitHubCredential(result.GitHubCredential, service.GitHubInstallationID, service.GitHubRepositoryID, time.Now().UTC())
+		}
 	case "updateDeployment":
 		if rpcRequest.DeploymentID != session.DeploymentID {
 			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "dispatcher session is not authorized for that deployment")
@@ -638,6 +676,30 @@ func (s *RemoteStore) GetDeployment(ctx context.Context, deploymentID string) (*
 		return nil, errors.New("dispatcher returned no deployment")
 	}
 	return response.Deployment, nil
+}
+
+func (s *RemoteStore) IssueGitHubRepositoryCredential(ctx context.Context, request GitHubRepositoryCredentialRequest) (*GitHubRepositoryCredential, error) {
+	var response dispatchRPCResponse
+	if err := s.rpc(ctx, dispatchRPCRequest{Operation: "issueGitHubCredential", GitHubCredential: &request}, true, &response); err != nil {
+		return nil, err
+	}
+	if err := validateIssuedGitHubCredential(response.GitHubCredential, request.InstallationID, request.RepositoryID, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	return response.GitHubCredential, nil
+}
+
+func validateIssuedGitHubCredential(credential *GitHubRepositoryCredential, installationID, repositoryID string, now time.Time) error {
+	if credential == nil || strings.TrimSpace(credential.Token) == "" {
+		return errors.New("GitHub credential broker returned no credential")
+	}
+	if credential.InstallationID != strings.TrimSpace(installationID) || credential.RepositoryID != strings.TrimSpace(repositoryID) {
+		return errors.New("GitHub credential broker returned a credential for a different repository")
+	}
+	if !credential.ExpiresAt.After(now.Add(time.Minute)) || credential.ExpiresAt.After(now.Add(65*time.Minute)) {
+		return errors.New("GitHub credential broker returned an expiry outside the allowed short-lived window")
+	}
+	return nil
 }
 
 func (s *RemoteStore) UpdateDeployment(ctx context.Context, deploymentID string, updates map[string]any) (*Deployment, error) {

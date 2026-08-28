@@ -963,10 +963,66 @@ func marshalString(t *testing.T, value any) string {
 
 type recordingRunner struct {
 	commands       []worker.Command
+	options        []worker.CommandOptions
 	metadataDigest string
 	revision       string
 	failCommand    string
 	afterCommand   func(worker.Command)
+}
+
+func TestBuilderClonesPrivateRepositoryWithTransientSensitiveHeader(t *testing.T) {
+	stateFile := writeBoundGitBuildState(t, true, nil)
+	credential := "ghs_private-clone-secret"
+	store := &githubCredentialFileStore{
+		FileStore: controlplane.NewFileStore(stateFile),
+		credential: &controlplane.GitHubRepositoryCredential{
+			Token: credential, InstallationID: "installation-a", RepositoryID: "101", ExpiresAt: time.Now().UTC().Add(time.Hour),
+		},
+	}
+	runner := &recordingRunner{}
+	builder := worker.New(store, runner, worker.Config{WorkspaceDir: t.TempDir(), Registry: "registry.example.test/team", DryRun: true})
+
+	if _, err := builder.RunOnce(context.Background()); err != nil {
+		t.Fatalf("private repository build with exact credential failed: %v", err)
+	}
+	if len(runner.commands) == 0 || len(runner.options) == 0 {
+		t.Fatal("private clone command did not run")
+	}
+	clone := runner.commands[0]
+	if clone.Name != "git" || len(clone.Args) == 0 || clone.Args[0] != "clone" {
+		t.Fatalf("first command was not private clone: %#v", clone)
+	}
+	if !runner.options[0].Sensitive {
+		t.Fatal("private clone output was not marked sensitive")
+	}
+	if strings.Contains(strings.Join(clone.Args, " "), credential) || strings.Contains(clone.Redacted, credential) {
+		t.Fatalf("credential leaked into clone argv or printable command: %#v", clone)
+	}
+	header := clone.Env["GIT_CONFIG_VALUE_0"]
+	if clone.Env["GIT_CONFIG_COUNT"] != "1" || clone.Env["GIT_CONFIG_KEY_0"] != "http.https://github.com/.extraheader" || !strings.HasPrefix(header, "AUTHORIZATION: basic ") {
+		t.Fatalf("clone did not receive a transient Git config header: %#v", clone.Env)
+	}
+	for _, command := range runner.commands[1:] {
+		if command.Env["GIT_CONFIG_VALUE_0"] != "" {
+			t.Fatalf("private credential escaped the clone subprocess: %#v", command)
+		}
+	}
+	serialized := marshalString(t, readState(t, stateFile))
+	if strings.Contains(serialized, credential) || strings.Contains(serialized, strings.TrimPrefix(header, "AUTHORIZATION: basic ")) {
+		t.Fatalf("private clone credential leaked into persisted state: %s", serialized)
+	}
+}
+
+type githubCredentialFileStore struct {
+	*controlplane.FileStore
+	credential *controlplane.GitHubRepositoryCredential
+}
+
+func (s *githubCredentialFileStore) IssueGitHubRepositoryCredential(_ context.Context, request controlplane.GitHubRepositoryCredentialRequest) (*controlplane.GitHubRepositoryCredential, error) {
+	if request.ServiceID != "svc_1" || request.InstallationID != "installation-a" || request.RepositoryID != "101" {
+		return nil, errors.New("unexpected GitHub credential scope")
+	}
+	return s.credential, nil
 }
 
 type tombstoneBeforeStartStore struct {
@@ -1020,6 +1076,7 @@ func (s *tombstoneBeforeStartStore) StartBuild(ctx context.Context, input contro
 
 func (r *recordingRunner) Run(_ context.Context, command worker.Command, options worker.CommandOptions) (worker.CommandResult, error) {
 	r.commands = append(r.commands, command)
+	r.options = append(r.options, options)
 	result := worker.CommandResult{Command: command.Name + " " + strings.Join(command.Args, " "), ExitCode: 0, DryRun: options.DryRun}
 	if command.Name == r.failCommand {
 		result.ExitCode = 1

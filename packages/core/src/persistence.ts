@@ -1205,6 +1205,30 @@ export class PrismaControlPlaneRepository {
     }, { isolationLevel: 'Serializable' });
   }
 
+  async connectVerifiedGitHubInstallation(input: Record<string, any>) {
+    return this.prisma.$transaction(async (tx: any) => {
+      const organizationId = String(input.organizationId || '').trim();
+      const installationId = String(input.installationId || '').trim();
+      const accountLogin = String(input.accountLogin || '').trim();
+      if (!organizationId) throw badRequestError('organizationId is required for GitHub integration');
+      if (!/^\d+$/.test(installationId)) throw badRequestError('GitHub installationId must be numeric');
+      if (!accountLogin) throw badRequestError('GitHub installation accountLogin is required');
+      const existing = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null } } });
+      if (existing && String(existing.organizationId) !== organizationId) throw forbiddenError('GitHub installation is already verified for another organization');
+      const verifiedAt = existing?.verifiedAt || new Date();
+      const row = existing
+        ? await tx.gitHubIntegration.update({ where: { id: existing.id }, data: { accountLogin, userId: existing.userId || input.userId || null, verifiedAt } })
+        : await tx.gitHubIntegration.create({ data: { organizationId, userId: input.userId || null, accountLogin, installationId, scopes: ['repo:read'], defaultBranch: 'main', verifiedAt } });
+      await tx.gitHubInstallation.upsert({
+        where: { installationId },
+        update: { accountLogin, accountType: String(input.accountType || 'Organization') },
+        create: { installationId, accountLogin, accountType: String(input.accountType || 'Organization') },
+      });
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.verifiedBy || input.userId), action: 'github:verify-installation', targetType: 'github-integration', targetId: row.id, metadata: { organizationId, installationId, accountLogin } } });
+      return row;
+    }, { isolationLevel: 'Serializable' });
+  }
+
   async registerGitHubRepository(input: Record<string, any>) {
     return this.prisma.$transaction(async (tx: any) => {
       const installationId = String(input.installationId || '').trim();
@@ -1219,6 +1243,25 @@ export class PrismaControlPlaneRepository {
         create: { installationId, accountLogin: integration.accountLogin || record.owner, accountType: 'Organization' },
       });
       return tx.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record });
+    }, { isolationLevel: 'Serializable' });
+  }
+
+  async replaceGitHubInstallationRepositories(input: Record<string, any>) {
+    return this.prisma.$transaction(async (tx: any) => {
+      const installationId = String(input.installationId || '').trim();
+      const integration = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null } } });
+      if (!integration) throw forbiddenError('repository catalog updates require a verified GitHub installation');
+      if (!Array.isArray(input.repositories)) throw badRequestError('GitHub repositories must be an array');
+      const records = input.repositories.map((repository: Record<string, any>) => canonicalPrismaGitHubRepositoryRecord({ ...repository, installationId }));
+      const ids = records.map((record: Record<string, any>) => record.githubRepoId);
+      if (new Set(ids).size !== ids.length) throw conflictError('GitHub repository catalog contains duplicate repository IDs');
+      const conflicts = ids.length ? await tx.gitHubRepository.findMany({ where: { githubRepoId: { in: ids }, installationId: { not: installationId } } }) : [];
+      if (conflicts.length) throw conflictError('GitHub repository is already bound to another installation');
+      await tx.gitHubRepository.deleteMany({ where: { installationId, ...(ids.length ? { githubRepoId: { notIn: ids } } : {}) } });
+      const repositories = [];
+      for (const record of records) repositories.push(await tx.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record }));
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:sync-installation-repositories', targetType: 'github-installation', targetId: installationId, metadata: { repositoryCount: repositories.length } } });
+      return { installationId, repositories: repositories.map(publicPrismaGitHubRepository), repositoryCount: repositories.length };
     }, { isolationLevel: 'Serializable' });
   }
 

@@ -118,9 +118,17 @@ func runDispatcher(ctx context.Context, env map[string]string) error {
 		return err
 	}
 	sessionTTL := durationSecondsMap(env, "RAIBITSERVER_DISPATCH_SESSION_TTL_SECONDS", 15*time.Minute)
+	githubCredentials, err := controlplane.NewGitHubAppCredentialIssuer(controlplane.GitHubAppCredentialIssuerConfig{
+		AppID:          env["RAIBITSERVER_GITHUB_APP_ID"],
+		PrivateKeyFile: env["RAIBITSERVER_GITHUB_APP_PRIVATE_KEY_FILE"],
+		APIURL:         env["RAIBITSERVER_GITHUB_API_URL"],
+	})
+	if err != nil {
+		return err
+	}
 	server := &http.Server{
 		Addr:              mapValueOr(env, "RAIBITSERVER_DISPATCH_ADDR", ":8443"),
-		Handler:           controlplane.NewDispatchHandler(store, sessionTTL),
+		Handler:           controlplane.NewDispatchHandlerWithGitHubCredentials(store, sessionTTL, githubCredentials),
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       35 * time.Second,
@@ -184,6 +192,9 @@ func validateRoleEnvironment(env map[string]string) error {
 			if strings.TrimSpace(env[key]) != "" {
 				return errors.New("builder executor must not receive database credentials")
 			}
+		}
+		if strings.TrimSpace(env["RAIBITSERVER_GITHUB_APP_PRIVATE_KEY_FILE"]) != "" {
+			return errors.New("builder executor must not receive the GitHub App private key")
 		}
 		if strings.TrimSpace(env["RAIBITSERVER_CONTROL_PLANE_REMOTE_URL"]) == "" {
 			return errors.New("builder executor requires the remote dispatcher URL")

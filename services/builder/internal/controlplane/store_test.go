@@ -22,6 +22,7 @@ func TestFileStoreRedactsKnownTokenBodiesFromEvidence(t *testing.T) {
 	}{
 		{value: "sk-live-secret-body", bodyMarker: "live-secret"},
 		{value: "ghp_github-secret-body", bodyMarker: "github-secret"},
+		{value: "ghs_installation-secret-body", bodyMarker: "installation-secret"},
 	}
 	for _, token := range tokens {
 		redacted := Redact("credential=" + token.value)

@@ -59,6 +59,9 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
     '/auth/github/callback',
     '/auth/email/verify',
     '/auth/email/resend',
+    '/github/install',
+    '/github/authorize',
+    '/github/callback',
     '/github/installations',
     '/integrations/github',
     '/projects/{projectId}/services/{serviceId}/github',
@@ -140,7 +143,7 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.match(resourcesController, /@Get\(\)/);
   assert.match(resourcesModule, /ResourceConsoleController/);
   for (const marker of ["@Get('schema')", "@Get('tables')", "@Get('tables/:table')", "@Get('collections')", "@Get('keys')", "@Post('query')", "@Post('command')", "@Post('browse')"]) assert.ok(resourceConsoleController.includes(marker), `${marker} missing from ResourceConsoleController`);
-  for (const marker of ["@Get('github/installations')", "@Get('github/installations/:installationId/repositories')", "@Post('github/webhooks')", "@Post('github/repositories/import')", "@Post('github/repositories/:repositoryId/sync')"]) assert.ok(githubController.includes(marker), `${marker} missing from GitHub controller`);
+  for (const marker of ["@Get('github/install')", "@Get('github/authorize')", "@Get('github/callback')", "@Get('github/installations')", "@Get('github/installations/:installationId/repositories')", "@Post('github/webhooks')", "@Post('github/repositories/import')", "@Post('github/repositories/:repositoryId/sync')"]) assert.ok(githubController.includes(marker), `${marker} missing from GitHub controller`);
   assert.ok(apiMain.includes('rawBody: true'), 'Nest bootstrap must keep raw webhook bytes for GitHub HMAC verification');
   assert.ok(githubController.includes('req.rawBody'), 'GitHub webhook controller must verify the original raw payload bytes');
   assert.ok(raibitserverService.includes('user: publicUser(result.user)'), 'Nest email verification response must not expose passwordHash');
@@ -167,7 +170,7 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.ok(authController.includes("@Get('github/callback')"));
   assert.ok(authController.includes("@Post('email/verify')"));
   assert.ok(authController.includes("@Post('email/resend')"));
-  for (const method of ['getProject', 'updateProject', 'deleteProject', 'getService', 'updateService', 'deleteService', 'getDeployment', 'updateDeploymentStatus', 'cancelDeployment', 'rollbackDeployment', 'resourceSchema', 'resourceTables', 'resourceCollections', 'resourceKeys', 'commandResource', 'listGitHubInstallations', 'listGitHubInstallationRepositories', 'importGitHubRepository', 'syncGitHubRepository']) assert.match(apiClient, new RegExp(method));
+  for (const method of ['getProject', 'updateProject', 'deleteProject', 'getService', 'updateService', 'deleteService', 'getDeployment', 'updateDeploymentStatus', 'cancelDeployment', 'rollbackDeployment', 'resourceSchema', 'resourceTables', 'resourceCollections', 'resourceKeys', 'commandResource', 'beginGitHubAppInstallation', 'beginGitHubAppAuthorization', 'completeGitHubAppInstallation', 'listGitHubInstallations', 'listGitHubInstallationRepositories', 'importGitHubRepository', 'syncGitHubRepository']) assert.match(apiClient, new RegExp(method));
 });
 
 test('production persistence defaults to Prisma and rejects unsafe memory/secret gaps', () => {

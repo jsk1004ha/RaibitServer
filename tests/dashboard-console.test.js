@@ -43,7 +43,7 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
   for (const marker of ['/admin/users/', '가입 신청 확인', '클럽 회원 승인', '일반 사용자 승인', '거절 확인']) {
     assert.ok(admin.includes(marker), `${marker} missing from admin screen`);
   }
-  for (const marker of ['/github/repositories/import', '/projects/${firstService.projectId}/services/${firstService.id}/github', '/github/repositories/${encodeURIComponent(firstRepository.fullName)}/sync', '웹훅 / 미리보기 계약', '연결할 서비스가 없습니다.', '동기화할 저장소가 없습니다.']) {
+  for (const marker of ['/github/install', '/github/repositories/import', '/projects/${firstService.projectId}/services/${firstService.id}/github', '/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync', '저장소 선택', '연결할 서비스와 저장소가 필요합니다.', '동기화할 저장소가 없습니다.']) {
     assert.ok(github.includes(marker), `${marker} missing from GitHub screen`);
   }
   assert.ok(guide.includes('사용 안내'));

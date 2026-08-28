@@ -33,6 +33,17 @@ func TestProductionExecutorRejectsDatabaseCredentials(t *testing.T) {
 	}
 }
 
+func TestExecutorRejectsGitHubAppPrivateKey(t *testing.T) {
+	env := map[string]string{
+		"RAIBITSERVER_BUILDER_ROLE":                "executor",
+		"RAIBITSERVER_CONTROL_PLANE_REMOTE_URL":    "https://builder-dispatcher:8443",
+		"RAIBITSERVER_GITHUB_APP_PRIVATE_KEY_FILE": "/run/secrets/github-app.pem",
+	}
+	if err := validateRoleEnvironment(env); err == nil || !strings.Contains(err.Error(), "GitHub App private key") {
+		t.Fatalf("executor must fail closed when a GitHub App private key is present, got %v", err)
+	}
+}
+
 func TestProductionRequiresExplicitSeparatedBuilderRole(t *testing.T) {
 	env := map[string]string{
 		"RAIBITSERVER_PRODUCTION": "1",

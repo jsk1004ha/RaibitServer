@@ -157,9 +157,18 @@ builder:
       podName: ""
       servicePort: 443
       port: 8443
+  # Only the trusted dispatcher receives this GitHub App identity. It mints a
+  # short-lived token scoped to the exact repository requested by one claimed
+  # executor session; the private key is never mounted in executor Pods.
+  githubAppCredentials:
+    enabled: false
+    existingSecret: ""
+    appIdKey: app-id
+    privateKeyKey: private-key.pem
+    apiURL: https://api.github.com
   # Anonymous clones are limited to uncredentialed HTTPS github.com URLs.
-  # Private repositories remain fail-closed until per-build exact-repository
-  # Git credentials are available; executor Pod isolation is already required.
+  # Private repositories use the dispatcher broker above and remain fail-closed
+  # whenever it is disabled or its exact-repository authorization is rejected.
   anonymousGit:
     enabled: false
   scan:

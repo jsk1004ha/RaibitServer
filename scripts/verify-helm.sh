@@ -73,6 +73,10 @@ grep -q 'RAIBITSERVER_GENERATED_DOCKERFILE_FRONTEND' "$OUTPUT_DIR/production.yam
 grep -q 'RAIBITSERVER_GENERATED_NODE_IMAGE' "$OUTPUT_DIR/production.yaml"
 grep -q 'RAIBITSERVER_REGISTRY_CREDENTIAL_BROKER_URL' "$OUTPUT_DIR/production.yaml"
 grep -q 'RAIBITSERVER_REGISTRY_CREDENTIAL_BROKER_TOKEN_FILE' "$OUTPUT_DIR/production.yaml"
+grep -q 'name: RAIBITSERVER_GITHUB_APP_ID' "$OUTPUT_DIR/production.yaml"
+grep -q 'name: RAIBITSERVER_GITHUB_APP_PRIVATE_KEY_FILE' "$OUTPUT_DIR/production.yaml"
+grep -q 'name: github-app-private-key' "$OUTPUT_DIR/production.yaml"
+grep -q 'secretName: "ci-github-app-builder"' "$OUTPUT_DIR/production.yaml"
 grep -q 'kubernetes.io/metadata.name: "raibitserver-infra"' "$OUTPUT_DIR/production-with-private-registry-gateway.yaml"
 grep -q 'app.kubernetes.io/name: "raibit-registry-auth"' "$OUTPUT_DIR/production-with-private-registry-gateway.yaml"
 grep -q 'port: 443' "$OUTPUT_DIR/production-with-private-registry-gateway.yaml"
@@ -332,6 +336,7 @@ expect_render_failure invalid-registry-gateway-port \
   --set-string builder.registryCredentials.privateGateway.podName=raibit-registry-auth \
   --set builder.registryCredentials.privateGateway.port=0
 expect_render_failure missing-builder-dispatch-mtls --set-string builder.dispatch.existingSecret=
+expect_render_failure missing-github-app-secret --set-string builder.githubAppCredentials.existingSecret=
 expect_render_failure missing-builder-dispatcher --set builder.replicas=0
 expect_render_failure build-timeout-exceeds-job-deadline --set builder.buildTimeoutSeconds=781
 expect_render_failure credential-ttl-shorter-than-job-deadline --set builder.registryCredentials.minTTLSeconds=839

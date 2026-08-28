@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createSessionToken, enforceAuthAbuseLimits, githubOAuthLoginPlan, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, githubOAuthLoginPlan, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -594,6 +594,68 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return repository.createGitHubIntegration({ ...input, organizationId, userId: subject.id });
   }
 
+  githubAppInstall(subject: Record<string, any>) {
+    const organizationId = githubOrganizationId(subject);
+    enforceScope(subject, { organizationId });
+    try {
+      return createGitHubAppInstallationPlan({ userId: subject.id, organizationId });
+    } catch (error) {
+      throw nestAuthError(error);
+    }
+  }
+
+  githubAppAuthorize(input: Record<string, any>, subject: Record<string, any>) {
+    const organizationId = githubOrganizationId(subject);
+    enforceScope(subject, { organizationId });
+    try {
+      return createGitHubAppAuthorizationPlan({ ...input, userId: subject.id, organizationId });
+    } catch (error) {
+      throw nestAuthError(error);
+    }
+  }
+
+  async githubAppComplete(input: Record<string, any>, subject: Record<string, any>) {
+    const organizationId = githubOrganizationId(subject);
+    enforceScope(subject, { organizationId });
+    try {
+      const callbackState = verifyGitHubAppInstallationState(input.state, {
+        userId: subject.id,
+        organizationId,
+        purpose: 'github-app-authorize',
+      });
+      const selection = await resolveGitHubAppInstallationSelection({
+        code: input.code,
+        installationId: callbackState.installationId,
+      });
+      const repository: any = await this.repositoryPromise;
+      const integration = await repository.connectVerifiedGitHubInstallation({
+        organizationId,
+        userId: subject.id,
+        installationId: selection.installationId,
+        accountLogin: selection.accountLogin,
+        accountType: selection.accountType,
+        verifiedBy: subject.id,
+      });
+      const catalog = await repository.replaceGitHubInstallationRepositories({
+        installationId: selection.installationId,
+        repositories: selection.repositories,
+        actorUserId: subject.id,
+      });
+      return {
+        connected: true,
+        integration: {
+          id: integration.id,
+          installationId: integration.installationId,
+          accountLogin: integration.accountLogin,
+          verifiedAt: integration.verifiedAt,
+        },
+        repositoryCount: catalog.repositoryCount,
+      };
+    } catch (error) {
+      throw nestAuthError(error);
+    }
+  }
+
   async listGitHub(organizationId: string, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     enforceScope(subject, { organizationId });
@@ -757,6 +819,12 @@ function assertNestUserApproved(user: Record<string, any>) {
   }
 }
 
+function githubOrganizationId(subject: Record<string, any>) {
+  const organizationId = String(subject?.organizationId || '').trim();
+  if (!organizationId) throw new BadRequestException('organization_scope_required');
+  return organizationId;
+}
+
 function isActiveUserBan(user: Record<string, any>, now = Date.now()) {
   if (!user?.bannedAt) return false;
   if (!user.banExpiresAt) return true;
@@ -791,6 +859,7 @@ function nestAuthError(error: any) {
   if (error?.statusCode === 404) return new NotFoundException(message);
   if (error?.statusCode === 401) return new UnauthorizedException(message);
   if (error?.statusCode === 429) return new HttpException(message, 429);
+  if (Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode <= 599) return new HttpException(message, error.statusCode);
   return error;
 }
 

@@ -66,6 +66,8 @@ test('production builder chart fails closed around registry and supply-chain set
   assert.match(values, /generatedDockerfile:\s*[\s\S]*frontend:\s*["']?[\s\S]*nodeImage:/, 'generated Dockerfile inputs must be configurable');
   assert.match(values, /isolation:\s*[\s\S]*mode:\s*single-job-pod[\s\S]*schedule:[\s\S]*parallelism:\s*4[\s\S]*completions:\s*4/, 'builder must schedule an explicit bounded batch of disposable executors');
   assert.match(values, /dispatch:\s*[\s\S]*existingSecret:[\s\S]*caKey:[\s\S]*clientCertificateKey:[\s\S]*clientKeyKey:/, 'executor-to-dispatcher mTLS must be secret-backed');
+  assert.match(values, /githubAppCredentials:\s*[\s\S]*enabled:\s*false[\s\S]*existingSecret:[\s\S]*appIdKey:\s*app-id[\s\S]*privateKeyKey:\s*private-key\.pem[\s\S]*apiURL:\s*https:\/\/api\.github\.com/, 'GitHub App builder credentials must be an explicit opt-in secret');
+  assert.match(fixture, /githubAppCredentials:\s*[\s\S]*enabled:\s*true[\s\S]*existingSecret:\s*ci-github-app-builder/, 'production fixture must exercise private repository credentials');
 
   for (const envName of ['RAIBITSERVER_REGISTRY', 'RAIBITSERVER_PUSH', 'RAIBITSERVER_SCAN', 'RAIBITSERVER_SIGN', 'RAIBITSERVER_GENERATED_DOCKERFILE_FRONTEND', 'RAIBITSERVER_GENERATED_NODE_IMAGE', 'RAIBITSERVER_RUN_ONCE', 'RAIBITSERVER_BUILDER_ISOLATION', 'RAIBITSERVER_BUILD_TIMEOUT_SECONDS', 'RAIBITSERVER_REGISTRY_CREDENTIAL_MIN_TTL_SECONDS']) {
     assert.match(builder, new RegExp(`name: ${envName}`), `${envName} must be wired into the builder`);
@@ -120,8 +122,10 @@ test('production builder chart fails closed around registry and supply-chain set
   const dispatcherDocument = builder.split(/^---$/m).find((document) => /kind:\s*Deployment/.test(document) && /builder-dispatcher/.test(document)) ?? '';
   const executorDocument = builder.split(/^---$/m).find((document) => /kind:\s*CronJob/.test(document)) ?? '';
   assert.match(dispatcherDocument, /DATABASE_URL[\s\S]*secretKeyRef:/, 'only the trusted dispatcher may receive the control-plane DSN');
+  assert.match(dispatcherDocument, /RAIBITSERVER_GITHUB_APP_ID[\s\S]*secretKeyRef:[\s\S]*RAIBITSERVER_GITHUB_APP_PRIVATE_KEY_FILE[\s\S]*github-app-private-key/, 'only the trusted dispatcher may receive the GitHub App identity');
   assert.doesNotMatch(dispatcherDocument, /buildkitd|BUILDKIT_HOST|registry-broker-token|signing-key/, 'dispatcher must not execute tenant builds or receive build credentials');
   assert.doesNotMatch(executorDocument, /DATABASE_URL|CONTROL_PLANE_DATABASE_URL/, 'untrusted executor Pod must not receive any database credential');
+  assert.doesNotMatch(executorDocument, /RAIBITSERVER_GITHUB_APP_ID|RAIBITSERVER_GITHUB_APP_PRIVATE_KEY_FILE|github-app-private-key/, 'untrusted executor Pod must never receive the GitHub App private key');
   assert.match(executorDocument, /RAIBITSERVER_CONTROL_PLANE_REMOTE_URL/);
   assert.match(executorDocument, /dispatch-mtls[\s\S]*readOnly:\s*true/);
 
@@ -277,6 +281,7 @@ test('builder NetworkPolicies give database egress only to the trusted dispatche
   const dispatcherPolicy = networkPolicy.split(/^---$/m).find((document) => /kind:\s*NetworkPolicy/.test(document) && /metadata:\s*\n\s*name:[^\n]*-builder-dispatcher\s*\n/.test(document)) ?? '';
   const executorPolicy = networkPolicy.split(/^---$/m).find((document) => /kind:\s*NetworkPolicy/.test(document) && /metadata:\s*\n\s*name:[^\n]*-builder-executor\s*\n/.test(document)) ?? '';
   assert.match(dispatcherPolicy, /databaseEgress|\.port/);
+  assert.match(dispatcherPolicy, /githubApp\.enabled[\s\S]*cidr:\s*0\.0\.0\.0\/0[\s\S]*port:\s*443/, 'the dispatcher may reach public GitHub HTTPS only when its credential broker is enabled');
   assert.doesNotMatch(executorPolicy, /\.Values\.builder\.databaseEgress|port:\s*5432/, 'tenant Dockerfile traffic must not have a database egress rule');
   assert.match(executorPolicy, /builder-dispatcher[\s\S]*port:/, 'executor may reach only the authenticated dispatcher control endpoint in-cluster');
   assert.match(executorPolicy, /privateGateway\.enabled[\s\S]*namespaceSelector:[\s\S]*podSelector:[\s\S]*privateGateway\.servicePort[\s\S]*privateGateway\.port/, 'executor may reach only the dedicated split-DNS registry gateway identity on its service and target ports');

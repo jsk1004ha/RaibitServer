@@ -1243,7 +1243,7 @@ func failureMessage(err error) string {
 
 var (
 	secretAssignmentPattern = regexp.MustCompile(`(?i)([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)`)
-	knownTokenPattern       = regexp.MustCompile(`(?i)(ghp_|github_pat_|glpat-|sk-|xox[baprs]-)[A-Za-z0-9_\-]+`)
+	knownTokenPattern       = regexp.MustCompile(`(?i)(gh[opusr]_|github_pat_|glpat-|sk-|xox[baprs]-)[A-Za-z0-9_\-]+`)
 	credentialedURLPattern  = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s/@]+(:[^\s/@]+)?@`)
 )
 

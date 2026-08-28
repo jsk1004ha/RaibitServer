@@ -71,7 +71,7 @@
 | 사전 빌드 이미지 | pull 가능한 `registry/repository@sha256:<64자리 digest>` 형식이 필수 |
 | local | 개발·검증 전용. production tenant API에서는 기본 차단 |
 
-현재 production live builder의 checkout 경로는 GitHub HTTPS 저장소만 지원합니다. schema나 planning 계층에 ZIP, GitLab, Bitbucket 값이 있더라도 live ingestion이 구현됐다고 간주하지 않습니다. private 저장소 자격 증명을 URL에 넣지 않습니다. GitHub App 연결 정보는 사용자가 임의의 installation ID나 token으로 대체할 수 없으며, 서버가 검증한 설치와 저장소만 연결합니다.
+현재 production live builder의 checkout 경로는 GitHub HTTPS 저장소만 지원합니다. schema나 planning 계층에 ZIP, GitLab, Bitbucket 값이 있더라도 live ingestion이 구현됐다고 간주하지 않습니다. private 저장소 자격 증명을 URL에 넣지 않습니다. GitHub App 연결 정보는 사용자가 임의의 installation ID나 token으로 대체할 수 없으며, 서버가 검증한 설치와 저장소만 연결합니다. private build는 dispatcher의 exact-repository short-lived credential broker가 켜져 있어야 합니다.
 
 ### 빌드 우선순위
 

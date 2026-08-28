@@ -33,6 +33,9 @@ builder:
     existingSecret: ci-registry-credential-broker
     privateGateway:
       enabled: false
+  githubAppCredentials:
+    enabled: true
+    existingSecret: ci-github-app-builder
   anonymousGit:
     enabled: false
   signing:

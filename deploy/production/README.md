@@ -32,12 +32,14 @@ KUBECONFIG 또는 in-cluster config
 GitHub 연동을 사용하면 다음도 필요합니다.
 
 ```txt
-GITHUB_APP_ID
-GITHUB_CLIENT_ID
-GITHUB_CLIENT_SECRET
-GITHUB_PRIVATE_KEY
-GITHUB_WEBHOOK_SECRET
+RAIBITSERVER_GITHUB_APP_SLUG
+RAIBITSERVER_GITHUB_CLIENT_ID
+RAIBITSERVER_GITHUB_CLIENT_SECRET
+RAIBITSERVER_GITHUB_CALLBACK_URL
+RAIBITSERVER_GITHUB_WEBHOOK_SECRET
 ```
+
+위 값은 API runtime Secret에 둡니다. private 저장소 build용 App ID와 RSA private key는 별도 Kubernetes Secret으로 만들고 `builder.githubAppCredentials.enabled=true`, `builder.githubAppCredentials.existingSecret=<secret>`을 production values에 설정합니다. 정확한 GitHub App 설정과 Secret key 이름은 [GitHub App 가이드](../../docs/github-app.md)를 따릅니다.
 
 ## Go worker store 설정
 

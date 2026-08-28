@@ -110,5 +110,5 @@ export async function commandExists(executable: string) {
 function redactCommandText(value: string) {
   return String(value || '')
     .replace(/([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)/gi, '$1****')
-    .replace(/(ghp_|github_pat_|glpat-|sk-[A-Za-z0-9_-]*|xox[baprs]-)[A-Za-z0-9_\-]+/g, '$1****');
+    .replace(/(gh[opusr]_|github_pat_|glpat-|sk-[A-Za-z0-9_-]*|xox[baprs]-)[A-Za-z0-9_\-]+/g, '$1****');
 }

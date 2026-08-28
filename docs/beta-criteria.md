@@ -667,6 +667,7 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 
 ```txt
 [x] GitHub OAuth login plan
+[x] session/org-scoped GitHub App install + OAuth proof callback
 [x] GitHub App installation list
 [x] installation repository list
 [x] repository import
@@ -674,7 +675,7 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 [x] verified same-organization installation + authoritative repository catalog 강제
 [x] service create/update의 GitHub binding self-assertion 차단
 [x] repository/installation binding immutable
-[ ] private repository per-build short-lived credential broker
+[x] private repository per-build exact-repository short-lived credential broker
 [x] DB-connected dispatcher와 tenant별 disposable builder Pod/BuildKit daemon 및 state의 code/chart 분리
 [ ] 실제 cluster에서 dispatcher mTLS, executor DB egress 차단, gVisor BuildKit build→scan→sign live evidence
 [x] webhook raw body 처리
@@ -725,13 +726,14 @@ Beta에서 GitHub check-run과 PR comment는 권장이나 필수는 아니다.
 
 구현/검증 증거:
 
-- GitHub App/API: `/integrations/github`, `/github/installations`, `/github/installations/:installationId/repositories`, `/github/repositories/import`, `/projects/:projectId/services/:serviceId/github`, `/github/repositories/:repositoryId/sync`.
+- GitHub App/API: `/github/install`, `/github/authorize`, `/github/callback`, `/integrations/github`, `/github/installations`, `/github/installations/:installationId/repositories`, `/github/repositories/import`, `/projects/:projectId/services/:serviceId/github`, `/github/repositories/:repositoryId/sync`.
+- Private clone: dispatcher가 App private key로 exact `repository_ids` installation token을 발급하고, executor는 mTLS claimed session과 transient Git header로만 사용한다. executor에는 private key·DB credential이 없고 token이 있는 clone 출력은 저장하지 않는다.
 - Webhook contract: Nest는 `rawBody: true`로 원문 payload를 유지하고 prototype/Nest handler가 `x-github-event`, `x-github-delivery`, `x-hub-signature-256`를 받아 HMAC 검증, delivery dedupe, `WebhookEvent` 저장을 수행한다.
 - Push deployment: push fixture가 repository-attached service를 찾아 `build-and-deploy` WorkflowJob과 production deployment를 생성한다.
 - PR preview: opened/synchronize/reopened fixture가 `preview-deploy` WorkflowJob, preview deployment, `https://preview--pr-N--user--project.raibitserver.app` URL, `pr-N-service` Kubernetes workload plan을 생성한다.
 - Preview cleanup: closed fixture가 `preview-cleanup` WorkflowJob을 만들고 기존 preview deployment에 `PREVIEW_CLEANUP_REQUESTED`와 `preview.cleanup.requested` event를 남긴다. Go orchestrator는 preview workload 이름을 `pr-N-service`로 격리해 production workload를 덮어쓰거나 삭제하지 않는다.
 - Outbound plan: 실제 GitHub API 호출 없이도 commit status/check-run/PR comment payload를 deterministic plan으로 반환하며, PR comment와 commit status target URL에는 preview URL이 포함된다.
-- Local proof: `tests/api-contract-github-resource-console.test.js`, `tests/api-contract-sync.test.js`, `tests/domain-router.test.js`, `tests/go-orchestrator-reconciler.test.js`, `pnpm e2e:dry`의 `githubWebhookEvidence`.
+- Local proof: `tests/github-app-installation.test.js`, `tests/api-contract-github-resource-console.test.js`, `tests/api-contract-sync.test.js`, `services/builder/internal/controlplane/*_test.go`, `services/builder/internal/worker/builder_test.go`, `tests/domain-router.test.js`, `tests/go-orchestrator-reconciler.test.js`, `pnpm e2e:dry`의 `githubWebhookEvidence`.
 
 ## 6. Logs / Events 기준
 

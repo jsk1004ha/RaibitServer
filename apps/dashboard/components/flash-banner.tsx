@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 
 const NOTICE_MESSAGES: Record<string, string> = {
   saved: '변경 사항을 저장했습니다.',
+  github_connected: 'GitHub 연결을 완료했습니다.',
 };
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -15,6 +16,13 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_request_body: '입력 내용을 확인한 뒤 다시 시도하세요.',
   invalid_request_origin: '보안을 위해 다른 출처에서 보낸 요청을 차단했습니다.',
   request_too_large: '요청 크기가 허용 범위를 초과했습니다.',
+  github_access_denied: 'GitHub 연결이 취소되었습니다.',
+  github_install_state_expired: '연결 시간이 만료되었습니다. 다시 시작하세요.',
+  github_installation_not_accessible: '선택한 GitHub 설치를 확인할 수 없습니다.',
+  github_state_secret_not_configured: 'GitHub 연결 설정이 완료되지 않았습니다.',
+  github_app_slug_not_configured: 'GitHub App 설정이 완료되지 않았습니다.',
+  github_client_id_not_configured: 'GitHub App 설정이 완료되지 않았습니다.',
+  github_client_secret_not_configured: 'GitHub App 설정이 완료되지 않았습니다.',
 };
 
 function errorMessage(code: string | null) {

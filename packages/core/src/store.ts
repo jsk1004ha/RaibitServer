@@ -890,6 +890,43 @@ export class ControlPlaneStore {
     return deepClone(next);
   }
 
+  connectVerifiedGitHubInstallation({ organizationId, userId = null, installationId, accountLogin, accountType = 'Organization', verifiedBy = null }: Record<string, any>) {
+    if (!organizationId) throw badRequest('organizationId is required for GitHub integration');
+    const authoritativeInstallationId = String(installationId || '').trim();
+    if (!/^\d+$/.test(authoritativeInstallationId)) throw badRequest('GitHub installationId must be numeric');
+    const login = String(accountLogin || '').trim();
+    if (!login) throw badRequest('GitHub installation accountLogin is required');
+    const existing = [...this.githubIntegrations.values()].find((candidate) => candidate.verifiedAt && String(candidate.installationId) === authoritativeInstallationId);
+    if (existing && String(existing.organizationId) !== String(organizationId)) throw forbidden('GitHub installation is already verified for another organization');
+    const timestamp = nowIso();
+    const id = existing?.id || stableId('ghi', organizationId, authoritativeInstallationId);
+    const row = {
+      ...(existing || {}),
+      id,
+      organizationId,
+      userId: existing?.userId || userId,
+      provider: 'github',
+      accountLogin: login,
+      installationId: authoritativeInstallationId,
+      tokenPreview: null,
+      tokenFingerprint: null,
+      tokenSecretId: null,
+      scopes: existing?.scopes || ['repo:read'],
+      defaultBranch: existing?.defaultBranch || 'main',
+      verifiedAt: existing?.verifiedAt || timestamp,
+      createdAt: existing?.createdAt || timestamp,
+      updatedAt: timestamp,
+    };
+    this.githubIntegrations.set(id, row);
+    this.audit(verifiedBy || userId || 'github-app-callback', 'github:verify-installation', 'github-integration', id, {
+      organizationId,
+      installationId: authoritativeInstallationId,
+      accountLogin: login,
+      accountType: String(accountType || 'Organization'),
+    });
+    return deepClone(row);
+  }
+
   registerGitHubRepository({ installationId, githubRepoId, repositoryId = null, fullName = null, owner = null, name = null, defaultBranch = 'main', private: privateRepository = false }: Record<string, any>) {
     const normalizedInstallationId = String(installationId || '').trim();
     if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && String(integration.installationId) === normalizedInstallationId)) {
@@ -901,6 +938,33 @@ export class ControlPlaneStore {
     const row = { id: existing?.id || stableId('ghr', repository.githubRepoId), ...repository, createdAt: existing?.createdAt || nowIso(), updatedAt: nowIso() };
     this.githubRepositories.set(row.id, row);
     return deepClone(row);
+  }
+
+  replaceGitHubInstallationRepositories({ installationId, repositories = [], actorUserId = 'github-app-callback' }: Record<string, any>) {
+    const normalizedInstallationId = String(installationId || '').trim();
+    if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && String(integration.installationId) === normalizedInstallationId)) {
+      throw forbidden('repository catalog updates require a verified GitHub installation');
+    }
+    if (!Array.isArray(repositories)) throw badRequest('GitHub repositories must be an array');
+    const records = repositories.map((repository) => canonicalGitHubRepositoryRecord({ ...repository, installationId: normalizedInstallationId }));
+    const ids = new Set<string>();
+    for (const record of records) {
+      if (ids.has(record.githubRepoId)) throw conflict('GitHub repository catalog contains duplicate repository IDs');
+      ids.add(record.githubRepoId);
+      const crossInstallation = [...this.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === record.githubRepoId && String(candidate.installationId) !== normalizedInstallationId);
+      if (crossInstallation) throw conflict('GitHub repository is already bound to another installation');
+    }
+    for (const [id, repository] of this.githubRepositories.entries()) {
+      if (String(repository.installationId) === normalizedInstallationId && !ids.has(String(repository.githubRepoId))) this.githubRepositories.delete(id);
+    }
+    const rows = records.map((record) => {
+      const existing = [...this.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === record.githubRepoId);
+      const row = { id: existing?.id || stableId('ghr', record.githubRepoId), ...record, createdAt: existing?.createdAt || nowIso(), updatedAt: nowIso() };
+      this.githubRepositories.set(row.id, row);
+      return row;
+    });
+    this.audit(actorUserId, 'github:sync-installation-repositories', 'github-installation', normalizedInstallationId, { repositoryCount: rows.length });
+    return { installationId: normalizedInstallationId, repositories: deepClone(rows), repositoryCount: rows.length };
   }
 
   completeSignupEmailVerification(input: Record<string, any>) {

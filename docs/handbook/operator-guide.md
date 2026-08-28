@@ -138,6 +138,7 @@ builder executor가 CronJob 또는 Job이면 label selector로 대상 Pod를 좁
 | 409 | 이름 충돌·상태 충돌 | 기존 객체와 현재 상태 확인 |
 | authoritative commit 오류 | branch와 commit 불일치 | remote commit 존재·CI 확인 |
 | clone 실패 | URL·권한·GitHub App | repository visibility와 설치 확인 |
+| `credential_broker_unavailable` | builder GitHub App Secret 미설정 | dispatcher env·Secret mount와 `builder.githubAppCredentials` 확인 |
 | Dockerfile 오류 | 경로·context·명령 | source root와 build log 확인 |
 | registry credential broker 실패 | DNS·TLS·NetworkPolicy·overlay | 전용 broker Service와 split DNS 확인 |
 | image scan 실패 | HIGH/CRITICAL 취약점 | base image·dependency 업데이트 |
