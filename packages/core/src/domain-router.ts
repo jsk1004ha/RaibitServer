@@ -80,7 +80,7 @@ export function domainPlanForProject(spec: AnyRecord = {}) {
     },
     workspace: workspaceConsoleHostname({ organizationSlug: organizationRouteSlug, baseDomain }),
     project: projectConsoleHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, baseDomain }),
-    services: services.map((service) => ({
+    services: services.map((service: AnyRecord) => ({
       name: slugify(service.name),
       type: service.type || 'web',
       publicHostname: service.type === 'web' || !service.type
@@ -90,7 +90,7 @@ export function domainPlanForProject(spec: AnyRecord = {}) {
       consoleHostname: serviceConsoleHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, serviceName: service.name, baseDomain }),
       internalHostname: internalServiceHostname({ projectSlug, serviceName: service.name }),
     })),
-    resources: (spec.resources || []).map((resource) => ({
+    resources: (spec.resources || []).map((resource: AnyRecord) => ({
       name: slugify(resource.name),
       engine: resource.engine,
       consoleHostname: resourceConsoleHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, resourceName: resource.name, baseDomain }),

@@ -8,7 +8,7 @@ test('dashboard project detail is API-backed instead of hardcoded prototype arra
   const detail = await fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(detail, /const\s+services\s*=\s*\[/);
   assert.doesNotMatch(detail, /const\s+resources\s*=\s*\[/);
-  for (const marker of ['loadProjectConsole', '/deployments', '/console', 'sourceType', 'imageUrl', 'dockerfilePath', '서비스 만들기', '리소스 추가', '운영 배포', '미리보기', '런타임 로그']) {
+  for (const marker of ['loadProjectConsole', 'projectMainLink', 'project-main-link', '/deployments', '/console', 'sourceType', 'imageUrl', 'dockerfilePath', '서비스 만들기', '리소스 추가', '운영 배포', '미리보기', '런타임 로그']) {
     assert.ok(detail.includes(marker), `${marker} missing from project console page`);
   }
 });

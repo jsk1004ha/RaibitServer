@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-08-27
+- Last refreshed: 2026-08-28
 - Primary product surfaces: 공개 홈페이지, 인증, 프로젝트 콘솔, GitHub 저장소 연결, 배포 상세, 리소스 콘솔, 관리자 승인
 - Evidence reviewed: `apps/dashboard/app/**`, `apps/dashboard/components/**`, `apps/dashboard/app/globals.css`, `output/playwright/review/**`, `packages/core/src/manifest-compiler.ts`, `services/orchestrator/internal/kube/deployment.go`, 사용자 검토 의견, Vercel Projects·Storage 문서, Vercel Geist 디자인 시스템
 
@@ -309,6 +309,7 @@ RAIBITSERVER 대시보드는 클럽, 학교, 소규모 팀이 프로젝트·배�
 ### 8.4 프로젝트 상세
 
 - 개요, 서비스, 배포, 리소스, 도메인, 환경 변수, 감사, 설정 탭
+- 프로젝트 이름 옆에는 운영 웹 서비스의 메인 주소를 11–12px 보조 링크로 표시하고, 긴 주소는 말줄임하며 모바일에서는 다음 줄로 배치한다.
 - 상단 KPI 스트립
 - 서비스·리소스 표
 - 배포 행동과 미리보기 링크

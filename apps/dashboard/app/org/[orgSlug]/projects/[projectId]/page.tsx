@@ -1,4 +1,5 @@
 import { apiAction, collectLoadIssues, getJson, loadProjectConsole, postJson } from '../../../../../lib/api';
+import { projectMainLink } from '../../../../../lib/project-main-link';
 import { ConsoleShell, LoadErrorSummary, LogViewer, MetricStrip, SectionNav, StatusBadge } from '../../../../../components/console-ui';
 
 const views = ['overview', 'services', 'new-service', 'edit-service', 'deployments', 'agent', 'resources', 'new-resource', 'environment', 'logs', 'settings'] as const;
@@ -53,6 +54,12 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
     ...(agentPlanResult ? collectLoadIssues([['AI 배포 계획', agentPlanResult]]) : []),
   ];
   const projectName = state.project.name || state.project.slug || projectId;
+  const mainLink = projectMainLink({
+    organizationSlug: state.project.organizationSlug || state.project.organization?.slug || orgSlug,
+    project: state.project,
+    services: state.services,
+    baseDomain: process.env.RAIBITSERVER_BASE_DOMAIN || process.env.BASE_DOMAIN,
+  });
   const deletionPending = ['DELETE_REQUESTED', 'DELETING'].includes(String(state.project.status || '').toUpperCase());
   const base = `/org/${orgSlug}/projects/${projectId}`;
   const navItems = [
@@ -69,7 +76,7 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
   return (
     <ConsoleShell active="projects" orgValue={orgSlug} orgRouteValue={orgSlug} projectValue={projectName} projectId={projectId}>
       <section className="page page-focus" data-od-id="project-overview">
-        <header className="page-header"><div><h1 className="page-title">{projectName}</h1><p className="page-subtitle">서비스 · 배포 · 리소스</p></div><StatusBadge status={state.project.status || 'healthy'} /></header>
+        <header className="page-header"><div><div className="project-title-line"><h1 className="page-title">{projectName}</h1>{mainLink ? <a className="project-main-link" href={mainLink.href} target="_blank" rel="noreferrer" aria-label={`${projectName} 메인 사이트 새 창에서 열기`} title={mainLink.href}><span>{mainLink.label}</span><span aria-hidden="true">↗</span></a> : null}</div><p className="page-subtitle">서비스 · 배포 · 리소스</p></div><StatusBadge status={state.project.status || 'healthy'} /></header>
         <LoadErrorSummary issues={loadErrors} />
         <SectionNav items={navItems} current={view === 'edit-service' ? 'services' : view} label="프로젝트 콘솔 화면" />
 

@@ -1,4 +1,4 @@
-export function slugify(value, fallback = 'item') {
+export function slugify(value: unknown, fallback = 'item') {
   const slug = String(value ?? '')
     .trim()
     .toLowerCase()
@@ -8,7 +8,7 @@ export function slugify(value, fallback = 'item') {
   return slug || fallback;
 }
 
-export function stableId(prefix, ...parts) {
+export function stableId(prefix: string, ...parts: unknown[]) {
   const base = parts.map((part) => slugify(part, 'x')).join('-');
   return slugify(`${prefix}-${base}`, prefix);
 }
@@ -17,6 +17,6 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
-export function deepClone(value) {
+export function deepClone(value: any): any {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }

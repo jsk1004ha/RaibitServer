@@ -528,6 +528,38 @@ kbd {
   line-height: 1.25;
 }
 
+.project-title-line {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 11px;
+}
+
+.project-main-link {
+  min-width: 0;
+  max-width: min(48vw, 520px);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.project-main-link span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-main-link:hover {
+  color: var(--color-primary);
+}
+
 .page-header-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3644,6 +3676,12 @@ a:hover > .project-row-card,
 
   .page-title {
     font-size: 24px;
+  }
+
+  .project-main-link {
+    max-width: 100%;
+    flex-basis: 100%;
+    font-size: 11px;
   }
 
   .grid-2,
