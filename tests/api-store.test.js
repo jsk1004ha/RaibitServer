@@ -4,7 +4,7 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
-import { InMemoryControlPlaneRepository } from '../packages/core/src/persistence.ts';
+import { InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
 
 test('HTTP API serves health, catalog, and manifest planning', async () => {
@@ -110,6 +110,28 @@ test('repository creates deployment and workflow job as one operation', async ()
   const { deployment, workflowJob } = await repository.createDeploymentWorkflow({ deployment: { serviceId: service.id }, workflow: { payload: { serviceId: service.id } } });
   assert.equal(workflowJob.targetId, deployment.id);
   assert.equal((await repository.snapshot()).workflowJobs.length, 1);
+});
+
+test('project lookups expose the public organization slug used by runtime hostnames', async () => {
+  const memory = new InMemoryControlPlaneRepository();
+  const organization = await memory.createOrganization({ name: 'Public Owner', slug: 'public-owner' });
+  const created = await memory.createProject({ organizationId: organization.id, name: 'Demo', slug: 'demo' });
+  const inMemoryProject = await memory.getProject(created.id);
+  assert.equal(inMemoryProject.organizationSlug, 'public-owner');
+  assert.deepEqual(inMemoryProject.organization, { id: organization.id, name: 'Public Owner', slug: 'public-owner' });
+
+  let query;
+  const prisma = new PrismaControlPlaneRepository({
+    project: {
+      findUnique: async (input) => {
+        query = input;
+        return { id: 'project-id', organizationId: 'organization-id', name: 'Demo', slug: 'demo', organization: { id: 'organization-id', name: 'Public Owner', slug: 'public-owner' } };
+      },
+    },
+  });
+  const prismaProject = await prisma.getProject('project-id');
+  assert.deepEqual(query.include.organization.select, { id: true, name: true, slug: true });
+  assert.equal(prismaProject.organizationSlug, 'public-owner');
 });
 
 test('HTTP API exposes deployment detail, status transition, cancel, and rollback lifecycle routes', async () => {

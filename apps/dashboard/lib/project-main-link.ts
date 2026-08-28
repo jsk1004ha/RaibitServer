@@ -2,6 +2,7 @@ import { serviceHostname } from '@raibitserver/core/domain-router';
 
 type ProjectRecord = {
   id?: string;
+  organizationId?: string;
   name?: string;
   slug?: string;
 };
@@ -22,11 +23,16 @@ export function projectMainLink({
   services,
   baseDomain,
 }: {
-  organizationSlug: string;
+  organizationSlug?: string | null;
   project: ProjectRecord;
   services: ServiceRecord[];
   baseDomain?: string;
 }) {
+  const publicOrganizationSlug = String(organizationSlug || '').trim();
+  const internalOrganizationId = String(project.organizationId || '').trim();
+  if (!publicOrganizationSlug
+    || (internalOrganizationId && publicOrganizationSlug.toLowerCase() === internalOrganizationId.toLowerCase())) return null;
+
   const mainService = [...services]
     .filter(isAvailableWebService)
     .sort((left, right) => servicePriority(left) - servicePriority(right)
@@ -34,7 +40,7 @@ export function projectMainLink({
   if (!mainService) return null;
 
   const hostname = serviceHostname({
-    organizationSlug,
+    organizationSlug: publicOrganizationSlug,
     projectSlug: project.slug || project.name || project.id || 'project',
     serviceName: serviceName(mainService),
     baseDomain: normalizedBaseDomain(baseDomain),

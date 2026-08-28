@@ -340,7 +340,8 @@ test('dynamic project routes await Next 16 params before rendering route-bound U
 
   assert.match(projectDetail, /params:\s*Promise<\{\s*orgSlug:\s*string;\s*projectId:\s*string\s*\}>/);
   assert.ok(projectDetail.includes('const [{ orgSlug, projectId }, query] = await Promise.all([params, searchParams]);'));
-  assert.ok(projectDetail.includes('orgValue={orgSlug}'));
+  assert.ok(projectDetail.includes('orgValue={organizationLabel}'));
+  assert.ok(projectDetail.includes('orgRouteValue={orgSlug}'));
   assert.doesNotMatch(projectDetail, /crumbs=/);
 
   for (const [path, source] of [

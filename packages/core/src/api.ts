@@ -215,7 +215,8 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       if (projectOverviewMatch && method === 'GET') {
         const subject = authorizeAction(req, 'project:read', auth);
         const projectId = decodeURIComponent(projectOverviewMatch[1]);
-        const project = await assertProjectAccess(controlPlane.store, projectId, subject);
+        const scopedProject = await assertProjectAccess(controlPlane.store, projectId, subject);
+        const project = controlPlane.store.getProject(projectId) || scopedProject;
         const services = [...controlPlane.store.services.values()].filter((service) => String(service.projectId) === String(projectId));
         const resources = [...controlPlane.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId));
         const deployments = [...controlPlane.store.deployments.values()]

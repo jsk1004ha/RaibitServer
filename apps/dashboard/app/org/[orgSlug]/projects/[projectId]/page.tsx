@@ -54,8 +54,9 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
     ...(agentPlanResult ? collectLoadIssues([['AI 배포 계획', agentPlanResult]]) : []),
   ];
   const projectName = state.project.name || state.project.slug || projectId;
+  const organizationLabel = state.project.organization?.name || state.project.organizationSlug || '내 조직';
   const mainLink = projectMainLink({
-    organizationSlug: state.project.organizationSlug || state.project.organization?.slug || orgSlug,
+    organizationSlug: state.project.organizationSlug || state.project.organization?.slug,
     project: state.project,
     services: state.services,
     baseDomain: process.env.RAIBITSERVER_BASE_DOMAIN || process.env.BASE_DOMAIN,
@@ -74,7 +75,7 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
   ];
 
   return (
-    <ConsoleShell active="projects" orgValue={orgSlug} orgRouteValue={orgSlug} projectValue={projectName} projectId={projectId}>
+    <ConsoleShell active="projects" orgValue={organizationLabel} orgRouteValue={orgSlug} projectValue={projectName} projectId={projectId}>
       <section className="page page-focus" data-od-id="project-overview">
         <header className="page-header"><div><div className="project-title-line"><h1 className="page-title">{projectName}</h1>{mainLink ? <a className="project-main-link" href={mainLink.href} target="_blank" rel="noreferrer" aria-label={`${projectName} 메인 사이트 새 창에서 열기`} title={mainLink.href}><span>{mainLink.label}</span><span aria-hidden="true">↗</span></a> : null}</div><p className="page-subtitle">서비스 · 배포 · 리소스</p></div><StatusBadge status={state.project.status || 'healthy'} /></header>
         <LoadErrorSummary issues={loadErrors} />

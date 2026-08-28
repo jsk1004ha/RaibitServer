@@ -11,6 +11,10 @@ test('dashboard project detail is API-backed instead of hardcoded prototype arra
   for (const marker of ['loadProjectConsole', 'projectMainLink', 'project-main-link', '/deployments', '/console', 'sourceType', 'imageUrl', 'dockerfilePath', '서비스 만들기', '리소스 추가', '운영 배포', '미리보기', '런타임 로그']) {
     assert.ok(detail.includes(marker), `${marker} missing from project console page`);
   }
+  assert.match(detail, /organizationSlug:\s*state\.project\.organizationSlug\s*\|\|\s*state\.project\.organization\?\.slug/);
+  assert.doesNotMatch(detail, /organizationSlug:[^\n]*\|\|\s*orgSlug/);
+  assert.match(detail, /const organizationLabel = state\.project\.organization\?\.name \|\| state\.project\.organizationSlug \|\| '내 조직'/);
+  assert.ok(detail.includes('orgValue={organizationLabel} orgRouteValue={orgSlug}'));
 });
 
 test('dashboard exposes public, authenticated, admin, GitHub, deployment, and resource routes', async () => {

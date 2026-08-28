@@ -31,3 +31,19 @@ test('project main link rejects an unsafe configured base domain', () => {
   });
   assert.equal(link?.href, 'https://apps--team--site.raibitserver.app');
 });
+
+test('project main link never exposes an internal organization id as a public hostname', () => {
+  const organizationId = 'cmt9j8l06000c9s01hky93hl6';
+  assert.equal(projectMainLink({
+    organizationSlug: organizationId,
+    project: { organizationId, slug: 'rs-test2-db' },
+    services: [{ name: 'web', type: 'web' }],
+    baseDomain: 'raibit.kr',
+  }), null);
+  assert.equal(projectMainLink({
+    organizationSlug: '',
+    project: { organizationId, slug: 'rs-test2-db' },
+    services: [{ name: 'web', type: 'web' }],
+    baseDomain: 'raibit.kr',
+  }), null);
+});

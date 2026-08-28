@@ -168,7 +168,7 @@ export class InMemoryControlPlaneRepository {
       return { deployment, workflowJob };
     });
   }
-  async getProject(projectId: string) { return deepClone(this.store.projects.get(projectId) || null); }
+  async getProject(projectId: string) { return this.store.getProject(projectId); }
   async getService(serviceId: string) { return deepClone(this.store.services.get(serviceId) || null); }
   async getResource(resourceId: string) { return deepClone(this.store.resources.get(resourceId) || null); }
   async getDeployment(deploymentId: string) { return deepClone(this.store.deployments.get(deploymentId) || null); }
@@ -1018,7 +1018,11 @@ export class PrismaControlPlaneRepository {
   }
 
   async getProject(projectId: string) {
-    return this.prisma.project.findUnique({ where: { id: projectId } });
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      include: { organization: { select: { id: true, name: true, slug: true } } },
+    });
+    return project ? { ...project, organizationSlug: project.organization?.slug } : null;
   }
 
   async getService(serviceId: string) {

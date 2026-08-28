@@ -368,7 +368,14 @@ export class ControlPlaneStore {
   }
 
   getProject(projectId: string) {
-    return deepClone(this.projects.get(projectId) || null);
+    const project = this.projects.get(projectId);
+    if (!project) return null;
+    const organization = this.organizations.get(String(project.organizationId));
+    return deepClone(organization ? {
+      ...project,
+      organizationSlug: organization.slug,
+      organization: { id: organization.id, name: organization.name, slug: organization.slug },
+    } : project);
   }
 
   updateProject(projectId: string, updates: Record<string, any> = {}) {
