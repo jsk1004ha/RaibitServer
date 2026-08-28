@@ -63,6 +63,8 @@ hostedErrors:
     annotations:
       traefik.ingress.kubernetes.io/router.priority: "1"
     tls:
+      # Empty reuses ingress.tls.existingSecret. The effective Secret must
+      # include the wildcard host used by this fallback Ingress.
       existingSecret: ""
   traefik:
     # Requires Traefik v3.7.8+ CRDs and cross-namespace middleware access.

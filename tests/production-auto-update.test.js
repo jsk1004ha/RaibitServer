@@ -102,6 +102,8 @@ test('production updater rebuilds and digest-pins every Helm-managed platform im
   assert.match(updater, /containerimage\.digest/);
   assert.match(updater, /sha256:\[0-9a-f\]\{64\}/);
   assert.match(updater, /could not update all image digests/);
+  assert.match(updater, /digest_key" == dashboard[\s\S]*RAIBITSERVER_GIT_SHA=\$\{TARGET_SHA\}/);
+  assert.match(updater, /RAIBITSERVER_GITHUB_REPOSITORY=\$\{REPOSITORY\}/);
 });
 
 test('production updater preserves signing and version-appropriate Helm rollback gates', () => {

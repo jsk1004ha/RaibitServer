@@ -23,6 +23,7 @@ spec:
     errorRequestHeaders: []
 {{- end }}
 {{- if .Values.hostedErrors.fallbackIngress.enabled }}
+{{- $fallbackTlsSecret := default .Values.ingress.tls.existingSecret .Values.hostedErrors.fallbackIngress.tls.existingSecret }}
 {{- if .Values.hostedErrors.traefik.enabled }}
 ---
 {{- end }}
@@ -43,7 +44,7 @@ spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . | quote }}
   {{- end }}
-  {{- with .Values.hostedErrors.fallbackIngress.tls.existingSecret }}
+  {{- with $fallbackTlsSecret }}
   tls:
     - hosts:
         - {{ default (printf "*.%s" $.Values.ingress.hosts.public) $.Values.hostedErrors.fallbackIngress.host | quote }}

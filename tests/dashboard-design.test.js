@@ -181,10 +181,11 @@ test('public landing keeps the introduction focused and exposes an auto-refreshi
   assert.ok(status.includes('RAIBIT SERVER 상태'));
   assert.ok(status.includes('<SystemStatusPanel initialStatus={status} />'));
   assert.doesNotMatch(status, /loadPublicSites|public-site-list/);
-  for (const marker of ["'use client'", "fetch('/api/status'", 'window.setInterval', 'visibilitychange', '초 자동 갱신', "aria-label={refreshing ? '상태 확인 중' : '상태 새로고침'}", '<svg', 'status-refresh-icon']) {
+  for (const marker of ["'use client'", "fetch('/api/status'", 'window.setInterval', 'visibilitychange', '초 자동 갱신', '배포 버전', 'snapshot.deployment.commitUrl', 'GitHub 커밋', "aria-label={refreshing ? '상태 확인 중' : '상태 새로고침'}", '<svg', 'status-refresh-icon']) {
     assert.ok(statusPanel.includes(marker), `${marker} status UI contract missing`);
   }
   for (const marker of ['웹 콘솔', '제어 서버', '데이터 저장소']) assert.ok(statusModel.includes(marker), `${marker} status model missing`);
+  for (const marker of ['commitSha', 'shortCommitSha', 'https://github.com/']) assert.ok(statusModel.includes(marker), `${marker} deployment version contract missing`);
   assert.ok(statusRoute.includes('loadSystemStatus()'));
   assert.ok(statusRoute.includes("'cache-control': 'no-store, max-age=0'"));
   assert.match(css, /\.system-status-row\s*\{[^}]*border-top:\s*1px solid var\(--color-border\)/s);

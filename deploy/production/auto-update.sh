@@ -606,6 +606,13 @@ for target in "${IMAGE_TARGETS[@]}"; do
 
   image="${IMAGE_PREFIX}/${repository_suffix}:prod-${SHORT_SHA}"
   metadata_file="${RUN_DIR}/${digest_key}.metadata.json"
+  build_args=()
+  if [[ "$digest_key" == dashboard ]]; then
+    build_args+=(
+      --build-arg "RAIBITSERVER_GIT_SHA=${TARGET_SHA}"
+      --build-arg "RAIBITSERVER_GITHUB_REPOSITORY=${REPOSITORY}"
+    )
+  fi
 
   log "building ${digest_key} from ${dockerfile}"
   docker buildx build \
@@ -616,6 +623,7 @@ for target in "${IMAGE_TARGETS[@]}"; do
     --file "$dockerfile_path" \
     --tag "$image" \
     --push \
+    "${build_args[@]}" \
     --metadata-file "$metadata_file" \
     "$WORKTREE"
 

@@ -36,6 +36,8 @@ trap 'rm -rf "$OUTPUT_DIR"' EXIT HUP INT TERM
   --set-string builder.registryCredentials.privateGateway.podName=raibit-registry-auth \
   --set builder.registryCredentials.privateGateway.servicePort=443 \
   --set builder.registryCredentials.privateGateway.port=8443 >"$OUTPUT_DIR/production-with-private-registry-gateway.yaml"
+"$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" \
+  --set-string hostedErrors.fallbackIngress.tls.existingSecret= >"$OUTPUT_DIR/production-with-shared-ingress-tls.yaml"
 
 grep -q 'helm.sh/hook: pre-install,pre-upgrade' "$OUTPUT_DIR/production.yaml"
 grep -q 'kind: ValidatingAdmissionPolicy' "$OUTPUT_DIR/production.yaml"
@@ -49,6 +51,7 @@ grep -q 'value: "500,502,503,504"' "$OUTPUT_DIR/production.yaml"
 grep -q 'name: raibitserver-hosted-errors' "$OUTPUT_DIR/production.yaml"
 grep -q 'host: "\*.production.example"' "$OUTPUT_DIR/production.yaml"
 grep -q 'secretName: "ci-raibitserver-hosted-errors-tls"' "$OUTPUT_DIR/production.yaml"
+test "$(grep -c 'secretName: "ci-raibitserver-ingress-tls"' "$OUTPUT_DIR/production-with-shared-ingress-tls.yaml")" -ge 2
 grep -q 'host: "production.example"' "$OUTPUT_DIR/production.yaml"
 if grep -q 'RAIBITSERVER_COOKIE_DOMAIN\|RAIBITSERVER_DASHBOARD_ORIGIN' "$OUTPUT_DIR/production.yaml"; then
   echo "dual-host dashboard must keep host-only cookies and request-derived origins" >&2
@@ -289,7 +292,6 @@ expect_render_failure disabled-provisioner-execution --set provisioner.execute=f
 expect_render_failure invalid-provisioner-health-interval --set provisioner.healthIntervalSeconds=0
 expect_render_failure disabled-tls --set ingress.tls.enabled=false
 expect_render_failure missing-tls-secret --set-string ingress.tls.existingSecret=
-expect_render_failure missing-hosted-error-tls-secret --set-string hostedErrors.fallbackIngress.tls.existingSecret=
 expect_render_failure invalid-hosted-error-status --set-string hostedErrors.statuses[0]=501
 expect_render_failure missing-public-host --set-string ingress.hosts.public=
 expect_render_failure shared-public-dashboard-host --set-string ingress.hosts.public=console.production.example

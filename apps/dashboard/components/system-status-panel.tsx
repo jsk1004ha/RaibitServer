@@ -94,7 +94,13 @@ export function SystemStatusPanel({ initialStatus }: { initialStatus: SystemStat
       </div>
 
       <footer className={`system-status-meta${stale ? ' is-stale' : ''}`}>
-        <span><i aria-hidden="true" />{stale ? '자동 갱신 지연' : `${snapshot.refreshIntervalSeconds}초 자동 갱신`}</span>
+        <span className="system-status-refresh"><i aria-hidden="true" />{stale ? '자동 갱신 지연' : `${snapshot.refreshIntervalSeconds}초 자동 갱신`}</span>
+        <span className="system-status-version">
+          <span>배포 버전</span>
+          {snapshot.deployment.commitUrl && snapshot.deployment.shortCommitSha
+            ? <a href={snapshot.deployment.commitUrl} aria-label={`GitHub 커밋 ${snapshot.deployment.commitSha}`}>{snapshot.deployment.shortCommitSha}</a>
+            : <strong>확인 불가</strong>}
+        </span>
         <time dateTime={snapshot.checkedAt}>최근 확인 {formatCheckedAt(snapshot.checkedAt)}</time>
       </footer>
     </section>
@@ -129,12 +135,27 @@ function isSystemStatusSnapshot(value: unknown): value is SystemStatusSnapshot {
   const candidate = value as Partial<SystemStatusSnapshot>;
   if (!['operational', 'degraded', 'outage'].includes(String(candidate.status))) return false;
   if (typeof candidate.checkedAt !== 'string' || !Number.isFinite(candidate.refreshIntervalSeconds) || !Array.isArray(candidate.components)) return false;
+  if (!isDeploymentVersion(candidate.deployment)) return false;
   return candidate.components.every((component) => (
     component
     && typeof component.id === 'string'
     && typeof component.name === 'string'
     && ['operational', 'degraded', 'outage'].includes(String(component.status))
   ));
+}
+
+function isDeploymentVersion(value: unknown): value is SystemStatusSnapshot['deployment'] {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<SystemStatusSnapshot['deployment']>;
+  const nullableStrings = [candidate.repository, candidate.commitSha, candidate.shortCommitSha, candidate.commitUrl];
+  if (!nullableStrings.every((field) => field === null || typeof field === 'string')) return false;
+  if (candidate.repository !== null && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/.test(candidate.repository || '')) return false;
+  if (candidate.commitSha !== null && !/^[0-9a-f]{40}$/.test(candidate.commitSha || '')) return false;
+  if (candidate.shortCommitSha !== (candidate.commitSha?.slice(0, 12) || null)) return false;
+  const expectedUrl = candidate.repository && candidate.commitSha
+    ? `https://github.com/${candidate.repository}/commit/${candidate.commitSha}`
+    : null;
+  return candidate.commitUrl === expectedUrl;
 }
 
 function formatCheckedAt(value: string) {

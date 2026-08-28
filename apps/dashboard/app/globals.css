@@ -2360,15 +2360,42 @@ a:hover > .project-row-card,
   font-size: 10px;
 }
 
-.system-status-meta > span {
+.system-status-refresh {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   color: var(--color-primary);
 }
 
-.system-status-meta.is-stale > span {
+.system-status-meta.is-stale .system-status-refresh {
   color: var(--color-warning);
+}
+
+.system-status-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.system-status-version > span {
+  color: var(--color-text-muted);
+}
+
+.system-status-version a,
+.system-status-version strong {
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 700;
+}
+
+.system-status-version a {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 3px;
+}
+
+.system-status-version a:hover {
+  color: var(--color-primary);
 }
 
 .public-sites > header {

@@ -48,7 +48,7 @@ http://localhost:3000/api/hosted-error?code=507
 
 ## Helm 구성
 
-기본값은 호스팅 오류 backend Service와 wildcard fallback Ingress를 만듭니다. fallback TLS Secret은 `*.<BASE_DOMAIN>`을 포함해야 하며 production에서는 필수입니다.
+기본값은 호스팅 오류 backend Service와 wildcard fallback Ingress를 만듭니다. `hostedErrors.fallbackIngress.tls.existingSecret`을 비워 두면 `ingress.tls.existingSecret`을 재사용합니다. 최종적으로 선택되는 TLS Secret은 `*.<BASE_DOMAIN>`을 포함해야 하며 production에서는 필수입니다.
 
 ```yaml
 hostedErrors:

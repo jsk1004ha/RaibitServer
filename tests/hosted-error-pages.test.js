@@ -24,7 +24,8 @@ test('Helm wires a dedicated hosted-error backend to the replicated dashboard po
   assert.match(hostedErrors, /kind:\s*Middleware[\s\S]*query:\s*\/api\/hosted-error\?code=\{status\}/);
   assert.match(hostedErrors, /passHostHeader:\s*false/);
   assert.match(hostedErrors, /errorRequestHeaders:\s*\[\]/);
-  assert.match(validation, /hosted error fallback requires a wildcard TLS existingSecret/);
+  assert.match(hostedErrors, /default\s+\.Values\.ingress\.tls\.existingSecret\s+\.Values\.hostedErrors\.fallbackIngress\.tls\.existingSecret/);
+  assert.doesNotMatch(validation, /hosted error fallback requires a wildcard TLS existingSecret/);
   assert.match(validation, /may contain only 500, 502, 503, and 504/);
 });
 

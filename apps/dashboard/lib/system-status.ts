@@ -16,6 +16,12 @@ export type SystemStatusSnapshot = {
   status: SystemStatusTone;
   checkedAt: string;
   refreshIntervalSeconds: number;
+  deployment: {
+    repository: string | null;
+    commitSha: string | null;
+    shortCommitSha: string | null;
+    commitUrl: string | null;
+  };
   components: SystemStatusComponent[];
 };
 
@@ -32,6 +38,8 @@ export async function loadSystemStatus(): Promise<SystemStatusSnapshot> {
     apiLatencyMs: api.latencyMs,
     dataLatencyMs: data.latencyMs,
     checkedAt: new Date().toISOString(),
+    gitSha: process.env.RAIBITSERVER_GIT_SHA,
+    githubRepository: process.env.RAIBITSERVER_GITHUB_REPOSITORY,
   }) as SystemStatusSnapshot;
 }
 

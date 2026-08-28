@@ -66,6 +66,9 @@ test('runtime images contain only the executables their production entrypoints r
   );
   assert.match(dashboard, /chmod -R a\+rX \/app\/apps\/dashboard\/public/, 'dashboard public assets must remain readable under a restrictive checkout umask');
   assert.match(dashboard, /^USER 10001:10001$/m, 'dashboard image default user must match the Helm workload UID');
+  assert.equal((dashboard.match(/^ARG RAIBITSERVER_GIT_SHA=unknown$/gm) || []).length, 2, 'dashboard build and runtime stages must accept the deployed Git SHA');
+  assert.match(dashboard, /^ENV RAIBITSERVER_GIT_SHA=\$RAIBITSERVER_GIT_SHA$/m, 'dashboard runtime must expose its exact image revision');
+  assert.match(dashboard, /^ENV RAIBITSERVER_GITHUB_REPOSITORY=\$RAIBITSERVER_GITHUB_REPOSITORY$/m, 'dashboard runtime must expose the commit repository');
   assert.match(dashboard, /server\.js/);
   assert.match(cli, /exec tsc --ignoreConfig \.\.\/\.\.\/packages\/api-client\/src\/index\.ts[\s\S]*api-client-runtime/);
   assert.match(cli, /dist\/index\.js/);

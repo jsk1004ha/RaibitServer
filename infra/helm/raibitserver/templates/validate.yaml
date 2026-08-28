@@ -51,9 +51,6 @@
 {{- if or (not .Values.ingress.tls.enabled) (not .Values.ingress.tls.existingSecret) -}}
 {{- fail "production ingress TLS must be enabled with an existing secret" -}}
 {{- end -}}
-{{- if and .Values.hostedErrors.enabled .Values.hostedErrors.fallbackIngress.enabled (not .Values.hostedErrors.fallbackIngress.tls.existingSecret) -}}
-{{- fail "production hosted error fallback requires a wildcard TLS existingSecret" -}}
-{{- end -}}
 {{- if not .Values.migration.enabled -}}
 {{- fail "production database migration hook must be enabled" -}}
 {{- end -}}
