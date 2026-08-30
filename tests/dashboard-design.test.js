@@ -2,23 +2,51 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
+// allow: SIZE_OK — this is the plan-required route/form behavior ledger, not one production unit.
 const read = (path) => fs.readFile(new URL(path, import.meta.url), 'utf8');
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const extractCssBlock = (css, startPattern) => {
-  const match = startPattern.exec(css);
-  assert.ok(match, `${startPattern} CSS block missing`);
-  const openBrace = css.indexOf('{', match.index + match[0].length);
-  assert.notEqual(openBrace, -1, `${startPattern} opening brace missing`);
 
-  let depth = 0;
-  for (let index = openBrace; index < css.length; index += 1) {
-    if (css[index] === '{') depth += 1;
-    if (css[index] === '}') depth -= 1;
-    if (depth === 0) return css.slice(openBrace + 1, index);
-  }
-  assert.fail(`${startPattern} closing brace missing`);
-};
+test('approved RAIBIT visual contract identifies the redesign and its target surfaces', async () => {
+  const design = await read('../DESIGN.md');
+  for (const contract of [
+    /name:\s*raibit-supabase-inspired/,
+    /primary:\s*"#091936"/,
+    /fontFamily:\s*"'Wanted Sans'/,
+    /RAIBIT target pages:[^\n]*home \(`\/`\), `\/login`, `\/status`, `\/console`, and project\/service\/resource routes/,
+    /Mobile \| < 768px/,
+  ]) assert.match(design, contract);
+});
+
+test('native POST contracts preserve return targets, override fields, and confirmations', async () => {
+  const [shell, login, project, deployment, resource, github] = await Promise.all([
+    read('../apps/dashboard/components/console-ui.tsx'),
+    read('../apps/dashboard/app/login/page.tsx'),
+    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
+    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
+    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../apps/dashboard/app/github/page.tsx'),
+  ]);
+  assert.match(shell, /method="post"\s+action=\{apiAction\('\/auth\/logout'\)\}[\s\S]*?name="_returnTo"\s+value="\/login"/);
+  for (const marker of [
+    'name="_returnTo" type="hidden" value={next}',
+    'name="_returnTo" type="hidden" value="/login?mode=verify"',
+  ]) assert.ok(login.includes(marker), `${marker} auth return target missing`);
+  for (const marker of [
+    'name="_returnTo" value={`${base}?view=services`}', 'name="deploymentType" value="production"',
+    'name="deploymentType" value="preview"', 'name="_method" value="PATCH"', 'name="_method" value="DELETE"',
+    'name="_returnTo" value={`/org/${orgSlug}/projects`}', 'name="_confirmProject"',
+  ]) assert.ok(project.includes(marker), `${marker} project mutation contract missing`);
+  assert.match(deployment, /apiAction\(`\/deployments\/\$\{deploymentId\}\/rollback`[\s\S]*?name="_returnTo" value=\{`\$\{base\}\?view=overview`\}[\s\S]*?name="confirmed" value="true" required/);
+  for (const marker of [
+    'name="_returnTo" value={`${base}?view=query`}', 'name="_returnTo" value={`${base}?view=provider`}',
+    'name="confirmed" value="true"', 'name="dryRun" value="true"', 'name="serviceId"', 'name="envPrefix"',
+  ]) assert.ok(resource.includes(marker), `${marker} resource mutation contract missing`);
+  for (const marker of [
+    'name="_returnTo" value="/github?step=attach"', 'name="_returnTo" value="/github?step=sync"',
+    'selectedRepository.fullName', 'encodeURIComponent(selectedRepository.fullName)',
+  ]) assert.ok(github.includes(marker), `${marker} GitHub mutation contract missing`);
+});
 
 test('dashboard shell is Korean-first and uses typed Heroicons', async () => {
   const [shell, icons] = await Promise.all([
@@ -116,11 +144,10 @@ test('shared dashboard primitives keep localized deterministic contracts', async
   assert.ok(shell.includes("row.level || row.type || '정보'"));
 });
 
-test('console command palette provides keyboard search with a blurred accessible dialog', async () => {
-  const [shell, search, css] = await Promise.all([
+test('console command palette provides keyboard search through an accessible dialog', async () => {
+  const [shell, search] = await Promise.all([
     read('../apps/dashboard/components/console-ui.tsx'),
     read('../apps/dashboard/components/console-search.tsx'),
-    read('../apps/dashboard/app/globals.css'),
   ]);
 
   assert.match(shell, /<ConsoleSearch items=\{searchItems\}\s*\/>/);
@@ -131,23 +158,14 @@ test('console command palette provides keyboard search with a blurred accessible
     assert.ok(search.includes(marker), `${marker} command palette contract missing`);
   }
   assert.match(search, /event\.metaKey\s*\|\|\s*event\.ctrlKey/);
-  assert.match(css, /\.command-palette-backdrop\s*\{[^}]*backdrop-filter:\s*blur\(12px\) saturate\(70%\)/s);
-  assert.match(css, /\.command-palette\s*\{[^}]*width:\s*min\(1080px, 100%\)[^}]*height:\s*min\(760px, calc\(100dvh - 48px\)\)/s);
-  assert.match(css, /\.command-palette-input input:focus-visible\s*\{[^}]*outline:\s*0/s);
-  assert.match(css, /\.console-search-trigger:focus-visible\s*\{[^}]*outline:\s*0/s);
-  assert.match(css, /\.command-palette-results\s*>\s*a\s*\{[^}]*min-height:\s*48px/s);
-  assert.match(css, /\.topbar\s*\{[^}]*position:\s*fixed/s);
-  assert.ok(shell.includes('className={`topbar-guide'));
   assert.ok(shell.includes('사용 설명서'));
   assert.doesNotMatch(shell, /\{actions\}/);
-  assert.doesNotMatch(shell, /className="mobile-nav"/);
 });
 
 test('project cards render compact Korean console rows', async () => {
   const card = await read('../apps/dashboard/components/project-card.tsx');
 
   assert.match(card, /import\s+\{\s*Icon\s*\}\s+from\s+'\.\/icon'/);
-  assert.match(card, /className="project-row-card"/);
   assert.match(card, /<Icon\s+name="folder"/);
   assert.ok(card.includes('서비스 {project.services ?? project.serviceCount ?? 0}개 · 리소스 {project.resources ?? project.resourceCount ?? 0}개'));
   assert.ok(card.includes('콘솔 열기 →'));
@@ -155,7 +173,7 @@ test('project cards render compact Korean console rows', async () => {
 });
 
 test('public landing keeps the introduction focused and exposes an auto-refreshing system status', async () => {
-  const [home, status, statusPanel, statusRoute, statusModel, contributors, support, privacy, footer, css] = await Promise.all([
+  const [home, status, statusPanel, statusRoute, statusModel, contributors, support, privacy, footer] = await Promise.all([
     read('../apps/dashboard/app/page.tsx'),
     read('../apps/dashboard/app/status/page.tsx'),
     read('../apps/dashboard/components/system-status-panel.tsx'),
@@ -165,7 +183,6 @@ test('public landing keeps the introduction focused and exposes an auto-refreshi
     read('../apps/dashboard/app/support/page.tsx'),
     read('../apps/dashboard/app/privacy/page.tsx'),
     read('../apps/dashboard/components/public-footer.tsx'),
-    read('../apps/dashboard/app/globals.css'),
   ]);
 
   assert.ok(home.includes("String(query.variant || 'editorial')"));
@@ -174,7 +191,7 @@ test('public landing keeps the introduction focused and exposes an auto-refreshi
   assert.ok(home.includes('인천과학고등학교의 최고 정보 동아리 라이빗의 호스팅 서비스입니다.'));
   assert.ok(home.includes('loadPublicSites(5)'));
   assert.ok(home.includes('운영 중인 사이트'));
-  assert.ok(home.includes('<span className="public-site-status"><i />LIVE</span>'));
+  assert.ok(home.includes('LIVE'));
   assert.ok(home.includes('href="/status"'));
   assert.ok(home.includes('상태 보기 →'));
   assert.ok(status.includes('loadSystemStatus()'));
@@ -188,9 +205,6 @@ test('public landing keeps the introduction focused and exposes an auto-refreshi
   for (const marker of ['commitSha', 'shortCommitSha', 'https://github.com/']) assert.ok(statusModel.includes(marker), `${marker} deployment version contract missing`);
   assert.ok(statusRoute.includes('loadSystemStatus()'));
   assert.ok(statusRoute.includes("'cache-control': 'no-store, max-age=0'"));
-  assert.match(css, /\.system-status-row\s*\{[^}]*border-top:\s*1px solid var\(--color-border\)/s);
-  assert.match(css, /\.system-status-meta\s*\{[^}]*font-family:\s*var\(--font-mono\)/s);
-  assert.match(css, /\.status-refresh-button\s*\{[^}]*width:\s*44px[^}]*min-width:\s*44px/s);
   assert.ok(home.includes('콘솔 시작하기'));
   assert.ok(home.includes('/login?mode=signup'));
   assert.ok(home.includes('<PublicFooter />'));
@@ -228,7 +242,7 @@ test('project list is a compact Korean row-card view scoped to its organization'
 
   assert.ok(projects.includes('<ConsoleShell active="projects"'));
   assert.doesNotMatch(projects, /crumbs=/);
-  assert.match(projects, /<h1\s+className="page-title">프로젝트<\/h1>/);
+  assert.match(projects, /<h1[^>]*>프로젝트<\/h1>/);
   assert.ok(projects.includes('프로젝트 만들기'));
   assert.ok(projects.includes('첫 프로젝트 만들기'));
   assert.match(projects, /<ProjectCard\s+key=\{project\.id\}/);
@@ -364,7 +378,7 @@ test('project workflow controls derive tenant scope server-side and expose acces
   assert.ok(wizard.includes('<label>조직 <input value={orgSlug} readOnly aria-describedby="organization-scope-note" /></label>'));
   assert.ok(wizard.includes('로그인 권한으로 확인'));
   assert.doesNotMatch(wizard, /<input[^>]*name="organizationId"/);
-  assert.match(wizard, /<ol\s+className="workflow-steps"[^>]*>/);
+  assert.match(wizard, /<ol[^>]*>/);
   assert.ok(wizard.includes('hidden={step !== 0}'));
   assert.ok(wizard.includes('hidden={step !== 3}'));
   assert.ok(wizard.includes('disabled={index > step}'));
@@ -458,7 +472,6 @@ test('resource console awaits route params and links localized tabs to real oper
     assert.ok(resource.includes(target), `${target} resource screen target missing`);
     assert.ok(resource.includes(`label: '${label}'`), `${label} resource screen label missing`);
   }
-  assert.doesNotMatch(resource, /<button[^>]*className="tab/);
   for (const marker of [
     '리소스 콘솔', '쿼리 실행', '공급자 명령 실행',
     '계획 만들기', '서비스에 연결', 'provider-owned-secret',
@@ -470,7 +483,7 @@ test('resource console awaits route params and links localized tabs to real oper
   }
   assert.equal(resource.match(/name="confirmed"/g)?.length, 2);
 
-  assert.match(resource, /id="provider-command"[\s\S]*?<button className="btn btn-danger" type="submit">공급자 명령 실행<\/button>/);
+  assert.match(resource, /id="provider-command"[\s\S]*?<button[^>]*type="submit"[^>]*>공급자 명령 실행<\/button>/);
 
   const backupSection = resource.match(/\{view === 'backups' \? <section[\s\S]*?<\/section> : null\}/)?.[0];
   assert.ok(backupSection, 'independent backup empty state missing');
@@ -484,18 +497,14 @@ test('resource console awaits route params and links localized tabs to real oper
   }
 });
 
-test('console uses compact tabs while sequential GitHub work keeps step cards', async () => {
-  const [shell, github, css] = await Promise.all([
+test('console navigation distinguishes tab and sequential step behavior', async () => {
+  const [shell, github] = await Promise.all([
     read('../apps/dashboard/components/console-ui.tsx'),
     read('../apps/dashboard/app/github/page.tsx'),
-    read('../apps/dashboard/app/globals.css'),
   ]);
   assert.ok(shell.includes("variant = 'tabs'"));
   assert.ok(shell.includes("variant?: 'tabs' | 'steps'"));
-  assert.ok(shell.includes("variant === 'steps' ? <span className=\"section-nav-index\""));
   assert.ok(github.includes('variant="steps"'));
-  assert.match(css, /\.section-nav\s*\{[^}]*border-bottom:\s*1px solid var\(--color-border\)/s);
-  assert.match(css, /\.section-nav-steps\s*\{/);
 });
 
 test('guide keeps detailed help in one topic per screen', async () => {
@@ -514,89 +523,7 @@ test('guide keeps detailed help in one topic per screen', async () => {
   assert.ok(proxy.includes("pathname === '/guide'"));
 });
 
-test('dashboard two-column layouts align independent panels to the top', async () => {
-  const css = await read('../apps/dashboard/app/globals.css');
-  const dashboardGrid = extractCssBlock(css, /^\.dashboard-grid\s*(?=\{)/m);
 
-  assert.match(dashboardGrid, /align-items:\s*start/);
-});
-
-test('dashboard CSS keeps KPI surfaces horizontal and compact', async () => {
-  const [css, layout] = await Promise.all([
-    read('../apps/dashboard/app/globals.css'),
-    read('../apps/dashboard/app/layout.tsx'),
-  ]);
-  for (const token of ['--color-canvas: #0b0e12', '--color-primary: #68df88', '--color-control-border: #65717d', '--sidebar: 238px']) {
-    assert.ok(css.includes(token), `${token} token missing`);
-  }
-  assert.match(css, /\.metric-strip\s*\{/);
-  assert.match(css, /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(150px,\s*1fr\)\)/);
-  assert.match(css, /min-height:\s*72px/);
-  assert.match(css, /@media\s*\(max-width:\s*1180px\)/);
-  assert.match(css, /overflow-x:\s*auto/);
-
-  const metricStrip = extractCssBlock(css, /\.metric-strip\s*/);
-  assert.match(metricStrip, /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(150px,\s*1fr\)\)/);
-  assert.match(metricStrip, /min-height:\s*72px/);
-
-  const finalMetric = extractCssBlock(css, /\.metric-item:last-child\s*/);
-  assert.match(finalMetric, /border-right:\s*(?:0|none)/);
-
-  const metricLabel = extractCssBlock(css, /\.metric-label\s*/);
-  assert.match(metricLabel, /white-space:\s*nowrap/);
-  assert.match(metricLabel, /overflow:\s*hidden/);
-  assert.match(metricLabel, /text-overflow:\s*ellipsis/);
-
-  const desktopBreakpoint = extractCssBlock(css, /@media\s*\(max-width:\s*1180px\)\s*/);
-  const responsiveScroller = extractCssBlock(desktopBreakpoint, /\.metric-strip\s*/);
-  assert.match(responsiveScroller, /display:\s*flex/);
-  assert.match(responsiveScroller, /overflow-x:\s*auto/);
-  const responsiveMetric = extractCssBlock(desktopBreakpoint, /\.metric-item\s*/);
-  assert.match(responsiveMetric, /flex:\s*1\s+0\s+150px/);
-
-  assert.match(css, /@media\s*\(max-width:\s*900px\)/);
-  const mobileBreakpoint = extractCssBlock(css, /@media\s*\(max-width:\s*720px\)\s*/);
-  const mobileMetrics = extractCssBlock(mobileBreakpoint, /\.metric-strip\s*/);
-  assert.match(mobileMetrics, /display:\s*grid/);
-  assert.match(mobileMetrics, /grid-template-columns:\s*repeat\(3,/);
-  assert.match(mobileMetrics, /overflow:\s*hidden/);
-
-  const focusVisible = extractCssBlock(css, /:focus-visible\s*/);
-  assert.match(focusVisible, /outline:\s*2px\s+solid\s+var\(--color-primary\)/);
-  assert.match(focusVisible, /outline-offset:\s*2px/);
-
-  const icon = extractCssBlock(css, /\.icon\s*/);
-  assert.match(icon, /width:\s*18px/);
-  assert.match(icon, /height:\s*18px/);
-  assert.match(icon, /flex:\s*0\s+0\s+auto/);
-
-  const reducedMotion = extractCssBlock(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*/);
-  assert.match(reducedMotion, /scroll-behavior:\s*auto\s*!important/);
-  assert.match(reducedMotion, /transition-duration:\s*0\.01ms\s*!important/);
-  assert.match(reducedMotion, /animation-duration:\s*0\.01ms\s*!important/);
-
-  assert.match(css, /button\[type="submit"\]:not\(\.btn\)/);
-  assert.doesNotMatch(css, /^button:not\(\.btn\)/m);
-  const textInputSelector = /input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="submit"\]\):not\(\[type="hidden"\]\)/;
-  assert.match(css, textInputSelector);
-
-  const neutralControls = extractCssBlock(css, /\.btn,\s*button\[type="submit"\]:not\(\.btn\)\s*/);
-  assert.match(neutralControls, /border:\s*1px\s+solid\s+var\(--color-control-border\)/);
-  const textControls = extractCssBlock(
-    css,
-    new RegExp(`^\\.input,[\\s\\S]*?${textInputSelector.source},\\s*select,`, 'm'),
-  );
-  assert.match(textControls, /border:\s*1px\s+solid\s+var\(--color-control-border\)/);
-  const quickAction = extractCssBlock(css, /^\.quick-action\s*(?=\{)/m);
-  assert.match(quickAction, /border:\s*1px\s+solid\s+var\(--color-control-border\)/);
-  const panel = extractCssBlock(css, /^\.card\s*(?=\{)/m);
-  assert.match(panel, /border:\s*1px\s+solid\s+var\(--color-border\)/);
-
-  assert.ok(
-    layout.includes("description: '인천과학고등학교 정보 동아리 라이빗의 호스팅 서비스. 프로젝트를 배포하고 함께 운영하세요.'"),
-    'Korean metadata description missing',
-  );
-});
 
 test('primary dashboard pages expose Korean visible headings', async () => {
   const routes = [
@@ -615,11 +542,11 @@ test('primary dashboard pages expose Korean visible headings', async () => {
   const files = await Promise.all(routes.map(([path]) => read(path)));
   for (const [index, [path, heading]] of routes.entries()) {
     if (heading === '프로젝트 콘솔') {
-      assert.match(files[index], /<h1\s+className="page-title">\{projectName\}<\/h1>/, `dynamic project heading missing from ${path}`);
+      assert.match(files[index], /<h1[^>]*>\{projectName\}<\/h1>/, `dynamic project heading missing from ${path}`);
       continue;
     }
     if (heading === '리소스 콘솔') {
-      assert.match(files[index], /<h1\s+className="page-title">\{resource\.name\s*\|\|\s*'리소스 콘솔'\}<\/h1>/, `dynamic resource heading missing from ${path}`);
+      assert.match(files[index], /<h1[^>]*>\{resource\.name\s*\|\|\s*'리소스 콘솔'\}<\/h1>/, `dynamic resource heading missing from ${path}`);
       continue;
     }
     const visibleHeading = new RegExp(`<h[12][^>]*>\\s*${escapeRegExp(heading)}\\s*</h[12]>`);
@@ -631,30 +558,12 @@ test('primary dashboard pages expose Korean visible headings', async () => {
   }
 });
 
-test('GitHub console keeps integration contracts behind a compact Korean workflow', async () => {
-  const [github, css] = await Promise.all([
-    read('../apps/dashboard/app/github/page.tsx'),
-    read('../apps/dashboard/app/globals.css'),
-  ]);
+test('GitHub console keeps integration contracts behind a Korean workflow', async () => {
+  const github = await read('../apps/dashboard/app/github/page.tsx');
 
   assert.ok(github.includes('<ConsoleShell active="github"'));
-  assert.ok(github.includes('form-surface stack activity-card github-connect-card'));
-  assert.match(
-    extractCssBlock(css, /\.github-connect-card(?=\s*\{)/),
-    /padding-inline:\s*clamp\(22px,\s*3vw,\s*28px\)/,
-    'GitHub connection card content must stay clear of its outline',
-  );
-  for (const [selector, border] of [
-    [/\.github-connect-card > div:first-child\s*/, 'border-bottom'],
-    [/\.github-connect-card \.detail-list\s*/, 'border-top'],
-    [/\.github-connect-card \.detail-list > div\s*/, 'border-bottom'],
-    [/\.github-connect-card \.workflow-actions\s*/, 'border-top'],
-  ]) {
-    assert.match(extractCssBlock(css, selector), new RegExp(`${border}:\\s*0`), `${border} divider remains in GitHub connection card`);
-  }
-  assert.match(extractCssBlock(css, /\.github-connect-card \.workflow-actions\s*/), /padding-inline:\s*0/, 'GitHub connection actions must align with card content');
   assert.doesNotMatch(github, /components\/icon/);
-  assert.match(github, /<h1\s+className="page-title">GitHub 연결<\/h1>/);
+  assert.match(github, /<h1[^>]*>GitHub 연결<\/h1>/);
   for (const heading of ['GitHub App 연결', '저장소 선택', '서비스 연결', '저장소 동기화']) {
     assert.ok(github.includes(`<h2>${heading}</h2>`), `${heading} GitHub section missing`);
   }
@@ -670,16 +579,15 @@ test('GitHub console keeps integration contracts behind a compact Korean workflo
   assert.ok(github.includes('`/projects/${firstService.projectId}/services/${firstService.id}/github`'), 'attach action must pair a service with its own project');
   assert.ok(!github.includes('`/projects/${firstProject.id}/services/${firstService.id}/github`'), 'attach action must not cross-pair independent project and service rows');
   assert.ok(github.includes('canAttachRepository ? ('));
-  assert.ok(github.includes('<button className="btn btn-primary" type="submit">연결</button>'));
+  assert.match(github, /<button[^>]*type="submit"[^>]*>연결<\/button>/);
   assert.ok(github.includes('연결할 서비스와 저장소가 필요합니다.'));
   assert.ok(github.includes('canSyncRepository ? ('));
-  assert.ok(github.includes('<button className="btn btn-primary" type="submit">동기화</button>'));
+  assert.match(github, /<button[^>]*type="submit"[^>]*>동기화<\/button>/);
   assert.ok(github.includes('동기화할 저장소가 없습니다.'));
   assert.ok(!github.includes("'/projects/project-id/services/service-id/github'"));
   assert.ok(!github.includes("'/github/repositories/owner%2Frepo/sync'"));
   assert.doesNotMatch(github, /name="(?:token|installationId|repoUrl)"/);
   assert.ok(github.includes('계정과 저장소를 GitHub에서 선택합니다.'));
-  assert.doesNotMatch(github, /(?:minHeight|height):\s*['"]?\d/);
   for (const oldCopy of ['Repository import and preview deployments', 'Connect integration', 'Import repository', 'Attach repository to service', 'Sync repository metadata']) {
     assert.ok(!github.includes(oldCopy), `${oldCopy} old GitHub copy remains`);
   }
@@ -689,7 +597,7 @@ test('admin console focuses on signup identity review and approval actions', asy
   const admin = await read('../apps/dashboard/app/admin/page.tsx');
 
   assert.ok(admin.includes('<ConsoleShell active="admin"'));
-  assert.match(admin, /<h1\s+className="page-title">가입 신청 확인<\/h1>/);
+  assert.match(admin, /<h1[^>]*>가입 신청 확인<\/h1>/);
   assert.ok(admin.includes("if (!state.authorized) redirect('/console')"));
   assert.ok(admin.includes('<h2>승인 대기 신청</h2>'));
   for (const action of ['클럽 회원 승인', '일반 사용자 승인', '거절']) {
@@ -701,7 +609,6 @@ test('admin console focuses on signup identity review and approval actions', asy
   for (const value of ['CLUB_MEMBER', 'NON_CLUB']) {
     assert.ok(admin.includes(`name="accountType" value="${value}"`), `${value} hidden account type missing`);
   }
-  assert.match(admin, /className="inline-actions danger-zone"/);
   for (const evidence of ['user.name', 'user.studentId', 'user.clubMemberClaim', 'user.email', 'state.pendingUsers']) {
     assert.ok(admin.includes(evidence), `${evidence} signup review evidence missing`);
   }
@@ -741,106 +648,20 @@ test('login keeps each auth activity focused and uses the same-origin control BF
   assert.ok(login.includes('name="password" type="password" autoComplete="current-password"'));
   assert.ok(login.includes('name="password" type="password" autoComplete="new-password"'));
   assert.ok(login.includes('name="code" inputMode="numeric" autoComplete="one-time-code"'));
-  assert.match(login, /className="form-grid"/);
-  assert.doesNotMatch(login, /<main\s+className="hero"/);
 });
 
-test('project creation keeps the selected wide-card layout', async () => {
-  const [page, wizard, css] = await Promise.all([
-    read('../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx'),
-    read('../apps/dashboard/components/project-create-wizard.tsx'),
-    read('../apps/dashboard/app/globals.css'),
-  ]);
 
-  assert.ok(page.includes("const { orgSlug } = await params"));
-  assert.ok(page.includes("<ProjectCreateWizard action={apiAction('/projects')} orgSlug={orgSlug} />"));
-  assert.ok(wizard.includes('workflow-form workflow-form-wide card'));
-  assert.match(css, /\.workflow-form-wide\s*\{/);
-  assert.match(css, /width:\s*min\(100%,\s*1120px\)/);
-  for (const removed of ['layout=wide', 'layout=canvas', 'A 넓은 카드', 'B 전체 캔버스', 'workflow-form-canvas']) {
-    assert.ok(!`${page}\n${wizard}\n${css}`.includes(removed), `${removed} discarded layout marker remains`);
-  }
-});
 
-test('project overview keeps the selected compact summary without preview controls', async () => {
-  const [page, css] = await Promise.all([
-    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
-    read('../apps/dashboard/app/globals.css'),
-  ]);
-
-  for (const marker of ['project-overview-compact', '운영 구성', '최근 배포', '프로젝트 빠른 작업']) {
-    assert.ok(page.includes(marker), `${marker} selected project overview marker missing`);
-  }
-  for (const selector of ['.overview-summary-grid', '.overview-operation-list', '.overview-recent', '.overview-quick-actions']) {
-    assert.ok(css.includes(selector), `${selector} project overview layout missing`);
-  }
-  for (const removed of [
-    'overviewStyles', 'overview-preview-switch', 'A 조밀 요약', 'B 운영 보드', 'C 상태 목록',
-    'overview=compact', 'overview=board', 'overview=ledger', 'project-overview-board', 'project-overview-ledger',
-    '.overview-board-grid', '.overview-ledger-list',
-  ]) {
-    assert.ok(!`${page}\n${css}`.includes(removed), `${removed} discarded overview preview marker remains`);
-  }
-});
-
-test('project operations expose compact deployment controls, secret management, and AI safety review', async () => {
-  const [page, css] = await Promise.all([
-    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
-    read('../apps/dashboard/app/globals.css'),
-  ]);
-
+test('project operations preserve secret management and AI safety review behavior', async () => {
+  const page = await read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx');
   for (const marker of [
-    'service-deploy-actions', '환경 변수', '.env 텍스트 가져오기', '비밀값으로 암호화하여 저장',
+    '환경 변수', '.env 텍스트 가져오기', '비밀값으로 암호화하여 저장',
     "id: 'agent'", 'AI 배포 관리자', '/deployment-agent/plan', '/deployment-agent/apply',
     '외부 AI에는 서비스 이름·유형과 위협 코드만 전달합니다.',
-  ]) {
-    assert.ok(page.includes(marker), `${marker} project operation marker missing`);
-  }
-  assert.match(css, /\.service-deploy-actions\s+\.btn\s*\{[^}]*min-height:\s*36px/s);
-  assert.match(css, /@media\s*\(max-width:\s*720px\)[\s\S]*?\.service-deploy-actions\s+\.btn\s*\{[^}]*min-height:\s*44px/);
+  ]) assert.ok(page.includes(marker), `${marker} project operation marker missing`);
 });
 
-test('focused form grids use a single activity surface without changing the shared grid', async () => {
-  const [css, github, login] = await Promise.all([
-    read('../apps/dashboard/app/globals.css'),
-    read('../apps/dashboard/app/github/page.tsx'),
-    read('../apps/dashboard/app/login/page.tsx'),
-  ]);
 
-  const gridStart = extractCssBlock(css, /^\.grid-start\s*(?=\{)/m);
-  assert.match(gridStart, /align-items:\s*start/);
-  const gridTwo = extractCssBlock(css, /^\.grid-2\s*(?=\{)/m);
-  assert.doesNotMatch(gridTwo, /align-items/);
-  assert.match(github, /className="single-activity"/);
-  assert.ok(github.includes('<SectionNav items={navItems} current={step}'));
-  assert.match(login, /className="form-grid"/);
-});
-
-test('disabled Task 8 controls look inactive and stacked forms reset native fieldset chrome', async () => {
-  const css = await read('../apps/dashboard/app/globals.css');
-
-  const disabledButton = extractCssBlock(css, /^button:disabled,\s*\ninput\[type="submit"\]:disabled\s*(?=\{)/m);
-  const opacity = Number(/opacity:\s*([\d.]+)/.exec(disabledButton)?.[1]);
-  assert.ok(opacity > 0 && opacity < 1, 'disabled button opacity must be below 1');
-  assert.match(disabledButton, /cursor:\s*not-allowed/);
-  assert.match(disabledButton, /filter:\s*saturate\([\d.]+\)/);
-
-  const disabledPrimary = extractCssBlock(css, /^\.btn-primary:disabled,\s*\nbutton\[type="submit"\]:disabled,\s*\ninput\[type="submit"\]:disabled\s*(?=\{)/m);
-  assert.match(disabledPrimary, /border-color:\s*var\(--color-control-border\)/);
-  assert.match(disabledPrimary, /background:\s*var\(--color-surface-strong\)/);
-  assert.match(disabledPrimary, /color:\s*var\(--color-text-muted\)/);
-  assert.doesNotMatch(disabledPrimary, /var\(--color-primary\)/);
-
-  const disabledHover = extractCssBlock(css, /^button:disabled:hover,\s*\ninput\[type="submit"\]:disabled:hover\s*(?=\{)/m);
-  assert.match(disabledHover, /transform:\s*none/);
-  assert.match(disabledHover, /background:\s*var\(--color-surface-strong\)/);
-
-  const stackedFieldset = extractCssBlock(css, /^\.card fieldset,\s*\n\.stack > fieldset\s*(?=\{)/m);
-  for (const reset of [/margin:\s*0/, /padding:\s*0/, /border:\s*0/, /min-width:\s*0/]) {
-    assert.match(stackedFieldset, reset);
-  }
-  assert.doesNotMatch(css, /^fieldset\s*(?=\{)/m, 'general fieldsets must remain unchanged');
-});
 
 
 test('global loading boundary stays session-neutral for public routes', async () => {

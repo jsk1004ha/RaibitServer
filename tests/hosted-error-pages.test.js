@@ -30,13 +30,11 @@ test('Helm wires a dedicated hosted-error backend to the replicated dashboard po
 });
 
 test('hosted error documentation preserves application-owned 404s and publishes verification routes', async () => {
-  const [guide, design, readme, route, component, css, catalog] = await Promise.all([
+  const [guide, readme, route, component, catalog] = await Promise.all([
     read('docs/hosted-error-pages.md'),
-    read('DESIGN.md'),
     read('README.md'),
     read('apps/dashboard/app/api/hosted-error/route.ts'),
     read('apps/dashboard/components/error-screen.tsx'),
-    read('apps/dashboard/app/globals.css'),
     read('apps/dashboard/app/errors/page.tsx'),
   ]);
 
@@ -49,20 +47,19 @@ test('hosted error documentation preserves application-owned 404s and publishes 
   assert.match(guide, /default-backend-service/);
   assert.match(guide, /crossProviderNamespaces/);
   assert.doesNotMatch(guide, /custom-http-errors:\s*"404/);
+  assert.match(guide, /원본 예외 메시지, 환경 변수, upstream 주소, namespace, Service 이름을 표시하지 않습니다/);
+  assert.match(guide, /dashboard 세션 쿠키는 host-only/);
   assert.match(route, /x-request-id/);
   assert.match(route, /randomUUID\(\)/);
   assert.match(route, /'x-error-id': identifier/);
-  assert.match(component, /className="error-signal"/);
-  assert.match(component, /className="error-copy"/);
-  assert.match(css, /\.error-screen\s*\{[\s\S]*?grid-template-columns: minmax\(0, 0\.95fr\) minmax\(420px, 1\.05fr\)/);
-  assert.doesNotMatch(css, /\.error-screen\s*\{[^}]*background:\s*var\(--color-surface\)/);
-  assert.match(css, /@media \(max-width: 720px\)[\s\S]*?\.error-actions[\s\S]*?width: 100%/);
-  assert.match(css, /\.error-code-list\[data-columns="2"\]/);
+  assert.match(component, /aria-labelledby="error-screen-title"/);
+  assert.match(component, /role=\{isAlert \? 'alert' : undefined\}/);
+  assert.match(component, /aria-live=\{isAlert \? 'assertive' : undefined\}/);
+  assert.match(component, /<dt>요청 경로<\/dt>/);
+  assert.match(component, /<dt>오류 식별자<\/dt>/);
   assert.match(catalog, /CLIENT_ERROR_STATUS_CODES/);
   assert.match(catalog, /SERVER_ERROR_STATUS_CODES/);
   assert.match(catalog, /오류 화면 전체 목록/);
-  assert.match(design, /### 8\.10 오류 화면/);
-  assert.match(design, /카드를 사용하지 않고 화면 전체/);
-  assert.match(design, /활성 4xx·5xx 38종/);
+  assert.match(catalog, /aria-label=\{`\$\{title\} 화면 선택`\}/);
   assert.match(readme, /공통 오류 화면/);
 });

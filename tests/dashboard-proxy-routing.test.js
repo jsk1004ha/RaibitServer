@@ -4,16 +4,17 @@ import { createRequire } from 'node:module';
 import { registerHooks } from 'node:module';
 import test from 'node:test';
 
-const dashboardRequire = createRequire(new URL('../apps/dashboard/package.json', import.meta.url));
-const { NextRequest } = dashboardRequire('next/server');
+const nextServerUrl = new URL('../apps/dashboard/node_modules/next/server.js', import.meta.url).href;
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === 'next/server') {
-      return { shortCircuit: true, url: new URL('../apps/dashboard/node_modules/next/server.js', import.meta.url).href };
+      return { shortCircuit: true, url: nextServerUrl };
     }
     return nextResolve(specifier, context);
   },
 });
+const dashboardRequire = createRequire(new URL('../apps/dashboard/package.json', import.meta.url));
+const { NextRequest } = dashboardRequire('next/server');
 const { proxy } = await import('../apps/dashboard/proxy.ts');
 
 test('console host requires a session at its root and keeps the public host landing open', { concurrency: false }, () => {
