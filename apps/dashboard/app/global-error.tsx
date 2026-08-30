@@ -6,7 +6,7 @@ import './globals.css';
 
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   return (
-    <html lang="ko" data-theme="dark">
+    <html lang="ko" data-theme="light">
       <body>
         <ErrorScreen
           model={errorPageModel(500)}

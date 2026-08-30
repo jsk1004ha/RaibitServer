@@ -13,7 +13,7 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="ko" data-theme="dark">
+    <html lang="ko" data-theme="light">
       <body>
         {children}
       </body>
