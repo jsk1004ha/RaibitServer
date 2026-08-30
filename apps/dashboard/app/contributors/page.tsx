@@ -1,4 +1,4 @@
-import Image from 'next/image';
+import { Brand } from '../../components/brand';
 import { PublicFooter } from '../../components/public-footer';
 
 export const metadata = {
@@ -11,7 +11,7 @@ export default function ContributorsPage() {
     <main className="contributors-page">
       <nav className="landing-nav" aria-label="기여자 화면 탐색">
         <a className="landing-brand" href="/">
-          <Image src="/raibit-logo.jpg" alt="라이빗 로고" width={36} height={36} priority />
+          <Brand height={36} width={36} priority />
           <span>RAIBIT SERVER</span>
         </a>
         <a className="btn" href="/">메인으로 돌아가기</a>
@@ -32,7 +32,7 @@ export default function ContributorsPage() {
             <h2>최희진 <span className="contributor-crown" aria-hidden="true">👑</span></h2>
             <p>서버컴퓨터와 도메인 구매</p>
           </div>
-          <Image src="/raibit-logo.jpg" alt="라이빗" width={82} height={82} />
+          <Brand height={82} width={82} />
         </article>
         <article className="contributor-card">
           <div>
@@ -40,7 +40,7 @@ export default function ContributorsPage() {
             <h2><span className="contributor-inline-id">2309</span> 김준서</h2>
             <p>RAIBIT SERVER 개발</p>
           </div>
-          <Image src="/raibit-logo.jpg" alt="라이빗" width={82} height={82} />
+          <Brand height={82} width={82} />
         </article>
       </section>
 

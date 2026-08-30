@@ -1,4 +1,4 @@
-import Image from 'next/image';
+import { Brand } from '../../components/brand';
 import { apiAction } from '../../lib/api';
 
 const modes = ['login', 'signup', 'verify'] as const;
@@ -14,7 +14,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const publicHomeHref = process.env.NODE_ENV === 'production' ? 'https://raibit.kr/' : '/';
   return (
     <main className="auth-page" data-od-id="landing-auth">
-      <a className="auth-brand" href={publicHomeHref}><Image src="/raibit-logo.jpg" alt="라이빗 로고" width={42} height={42} priority /><span>RAIBIT SERVER</span></a>
+      <a className="auth-brand" href={publicHomeHref}><Brand height={42} width={42} priority /><span>RAIBIT SERVER</span></a>
       <section className="auth-panel">
         <header>
           <p className="eyebrow">RAIBIT ACCOUNT</p>

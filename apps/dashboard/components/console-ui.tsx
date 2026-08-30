@@ -1,9 +1,9 @@
 import { Suspense, type ReactNode } from 'react';
-import Image from 'next/image';
 import { redirect } from 'next/navigation';
 import { apiAction, dashboardApiContext, getJson } from '../lib/api';
 import { consoleOrganizationLinks, resolveOrganizationRouteValue } from '../lib/console-navigation';
 import { ConsoleSearch } from './console-search';
+import { Brand } from './brand';
 import { FlashBanner } from './flash-banner';
 import { Icon } from './icon';
 import type { IconName } from './icon';
@@ -90,7 +90,7 @@ export async function ConsoleShell({
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="/console"><span className="brand-mark"><Image src="/raibit-logo.jpg" alt="" width={27} height={27} /></span><span>RAIBIT SERVER</span></a>
+        <a className="brand" href="/console"><span className="brand-mark"><Brand height={27} width={27} /></span><span>RAIBIT SERVER</span></a>
         <div className="switcher"><p className="switcher-label">{orgLabel}</p><div className="switcher-title">{orgValue}</div></div>
         <div className="switcher"><p className="switcher-label">{projectLabel}</p><div className="switcher-title">{projectValue}</div></div>
         <nav className="nav-group"><p className="nav-title">{eyebrow}</p>{navItems.map((item) => <a key={item.id} className={`nav-link ${active === item.id ? 'active' : ''}`} aria-current={active === item.id ? 'page' : undefined} href={item.href}><Icon name={item.icon} /><span>{item.label}</span><span>›</span></a>)}</nav>

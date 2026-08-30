@@ -1,4 +1,4 @@
-import Image from 'next/image';
+import { Brand } from '../../components/brand';
 import { PublicFooter } from '../../components/public-footer';
 
 const supportEmail = 'ishsraibit@gmail.com';
@@ -14,7 +14,7 @@ export default function SupportPage() {
     <main className="support-page">
       <nav className="landing-nav" aria-label="지원 화면 탐색">
         <a className="landing-brand" href="/">
-          <Image src="/raibit-logo.jpg" alt="라이빗 로고" width={36} height={36} priority />
+          <Brand height={36} width={36} priority />
           <span>RAIBIT SERVER</span>
         </a>
         <a className="btn" href="/">메인으로 돌아가기</a>

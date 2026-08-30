@@ -1,4 +1,4 @@
-import Image from 'next/image';
+import { Brand } from '../components/brand';
 import { PublicFooter } from '../components/public-footer';
 import { loadPublicSites } from '../lib/api';
 import { configuredConsoleHref, consoleOriginHref } from '../lib/request-security.js';
@@ -17,7 +17,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
   return (
     <main className={`landing-page landing-variant-${variant}`}>
       <nav className="landing-nav" aria-label="메인 탐색">
-        <a className="landing-brand" href="/"><Image src="/raibit-logo.jpg" alt="라이빗 로고" width={36} height={36} priority /><span>RAIBIT SERVER</span></a>
+        <a className="landing-brand" href="/"><Brand height={36} width={36} priority /><span>RAIBIT SERVER</span></a>
         <div className="landing-nav-actions"><a className="btn btn-ghost" href="/status">운영 현황</a><a className="btn btn-ghost" href={loginUrl}>로그인</a><a className="btn btn-primary" href={consoleUrl}>콘솔 들어가기</a></div>
       </nav>
 
@@ -28,7 +28,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
           <p>인천과학고등학교의 최고 정보 동아리 라이빗의 호스팅 서비스입니다.</p>
           <div className="landing-actions"><a className="btn btn-primary" href={consoleUrl}>콘솔 시작하기</a><a className="btn" href={signupUrl}>가입 신청</a></div>
         </div>
-        <div className="landing-logo-wrap" aria-hidden="true"><Image src="/raibit-logo.jpg" alt="" width={340} height={340} priority /></div>
+        <div className="landing-logo-wrap" aria-hidden="true"><Brand height={340} width={340} priority /></div>
       </section>
 
       <section className="public-sites landing-public-sites" aria-labelledby="landing-sites-title">
