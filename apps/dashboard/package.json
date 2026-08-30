@@ -8,6 +8,8 @@
     "build": "next build",
     "lint": "next lint",
     "test": "node --test lib/*.test.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:serve": "node tests/e2e/fixture/serve.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
