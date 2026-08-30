@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import './globals.css';
+import './fonts.css';
 
 // Nonce-based CSP requires every document to be rendered with the nonce created
 // for its request by proxy.ts; static HTML cannot safely share a nonce.
@@ -13,7 +14,9 @@ export const metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="ko" data-theme="dark">
-      <body>{children}</body>
+      <body>
+        {children}
+      </body>
     </html>
   );
 }
