@@ -12,6 +12,7 @@ import {
   formMutationMethod,
   isSameOriginMutation,
   projectCreatePayloadFromForm,
+  publicUpstreamErrorCode,
   readBoundedBody,
   responseStatusAllowsBody,
   safeReturnPath,
@@ -256,13 +257,6 @@ async function readMutationBody(request: NextRequest) {
 function parseJson(value: string): { valid: boolean; payload: any } {
   if (!value) return { valid: true, payload: null };
   try { return { valid: true, payload: JSON.parse(value) }; } catch { return { valid: false, payload: { message: value } }; }
-}
-
-function publicUpstreamErrorCode(payload: any, status: number) {
-  for (const candidate of [payload?.error, payload?.message]) {
-    if (typeof candidate === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(candidate)) return candidate;
-  }
-  return `request_failed_${status}`;
 }
 
 function requestBodyErrorCode(error: unknown) {

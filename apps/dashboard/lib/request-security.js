@@ -187,6 +187,13 @@ export function withFlashMessage(requestUrl, returnPath, kind, value) {
 	return `${target.pathname}${target.search}${target.hash}`;
 }
 
+export function publicUpstreamErrorCode(payload, status) {
+	for (const candidate of [payload?.error, payload?.message]) {
+		if (typeof candidate === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(candidate)) return candidate;
+	}
+	return `request_failed_${Number.isInteger(status) ? status : 500}`;
+}
+
 export function upstreamPath(segments) {
   return `/${segments.map((segment) => encodeURIComponent(segment)).join('/')}`;
 }

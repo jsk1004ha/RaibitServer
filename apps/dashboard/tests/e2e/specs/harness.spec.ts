@@ -22,6 +22,8 @@ test('@harness real login preserves exact native FormData and reaches console', 
 
 test('@harness invalid credentials and upstream failure are sanitized', async ({ page }, testInfo) => {
   const assertNoErrors = observeBrowserErrors(page, [401, 500]);
+  const consoleMessages: string[] = [];
+  page.on('console', (message) => consoleMessages.push(message.text()));
   await page.goto('/login?next=%2Flogin');
   await page.getByLabel('이메일').fill('user@fixture.test');
   await page.getByLabel('비밀번호').fill('wrong-password-not-secret');
@@ -33,9 +35,11 @@ test('@harness invalid credentials and upstream failure are sanitized', async ({
   await page.getByLabel('이메일').fill('failure@fixture.test');
   await page.getByLabel('비밀번호').fill('upstream-input-must-not-reflect');
   await page.getByRole('button', { name: '콘솔에 로그인' }).click();
-  await expectRoute(page, '/login', { error: 'fixture_upstream_secret_must_not_escape' });
+  await expectRoute(page, '/login', { error: 'request_failed_500' });
+  expect(page.url()).not.toContain('fixture_upstream_secret_must_not_escape');
   await expect(page.locator('.auth-message[role="alert"]')).toHaveText('요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.');
   await expect(page.locator('body')).not.toContainText(/fixture_upstream_secret|upstream-input/);
+  expect(consoleMessages.join('\n')).not.toContain('fixture_upstream_secret_must_not_escape');
   await captureScreenshot(page, testInfo, 'failure-sanitized-login');
   assertNoErrors();
 });

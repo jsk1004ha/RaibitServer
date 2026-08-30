@@ -18,7 +18,7 @@ export default defineConfig({
     trace: 'on',
   },
   webServer: {
-    command: 'pnpm test:e2e:serve',
+    command: 'node tests/e2e/fixture/serve.mjs',
     url: `http://127.0.0.1:${dashboardPort}/healthz`,
     reuseExistingServer: false,
     timeout: 240_000,
