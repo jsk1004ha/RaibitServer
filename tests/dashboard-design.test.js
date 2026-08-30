@@ -114,9 +114,9 @@ test('shared dashboard primitives keep localized deterministic contracts', async
   }
   assert.match(shell, /active\s*=\s*'overview'/);
   assert.match(shell, /resolveOrganizationRouteValue/);
-  assert.match(shell, /active\s*===\s*item\.id/);
+  assert.match(shell, /const\s+current\s*=\s*active\s*===\s*item\.id/);
   assert.match(shell, /<Icon\s+name=\{item\.icon\}/);
-  assert.equal(shell.match(/aria-current=\{active === item\.id \? 'page' : undefined\}/g)?.length, 1);
+  assert.match(shell, /const\s+current\s*=\s*active\s*===\s*item\.id[\s\S]*aria-current=\{current \? 'page' : undefined\}/);
   for (const [index, [path, active]] of callerContracts.entries()) {
     assert.ok(callers[index].includes(`<ConsoleShell active="${active}"`), `${path} must use active id ${active}`);
   }
@@ -144,20 +144,29 @@ test('shared dashboard primitives keep localized deterministic contracts', async
   assert.ok(shell.includes("row.level || row.type || '정보'"));
 });
 
-test('console command palette provides keyboard search through an accessible dialog', async () => {
-  const [shell, search] = await Promise.all([
+test('console command palette provides keyboard search through an accessible Base UI dialog', async () => {
+  const [shell, search, command, dialog] = await Promise.all([
     read('../apps/dashboard/components/console-ui.tsx'),
     read('../apps/dashboard/components/console-search.tsx'),
+    read('../apps/dashboard/components/ui/command.tsx'),
+    read('../apps/dashboard/components/ui/dialog.tsx'),
   ]);
 
   assert.match(shell, /<ConsoleSearch items=\{searchItems\}\s*\/>/);
   for (const projectMenu of ['프로젝트 현황', '서비스', '배포', '리소스', '로그', '설정']) {
     assert.ok(shell.includes(`label: '${projectMenu}'`), `${projectMenu} project search item missing`);
   }
-  for (const marker of ["'use client'", '메뉴 검색', 'aria-haspopup="dialog"', 'role="dialog"', 'aria-modal="true"', "event.key === '/'", "event.key === 'Escape'", "event.key === 'ArrowDown'", "event.key === 'ArrowUp'"]) {
+  for (const marker of ["'use client'", '메뉴 검색', 'aria-haspopup="dialog"', 'CommandDialog', 'CommandInput', 'CommandList', 'CommandGroup', 'CommandItem', 'CommandEmpty', "event.key === '/'"]) {
     assert.ok(search.includes(marker), `${marker} command palette contract missing`);
   }
   assert.match(search, /event\.metaKey\s*\|\|\s*event\.ctrlKey/);
+  for (const marker of ['<Dialog ', '<DialogContent', '<DialogTitle>', '<DialogDescription>']) {
+    assert.ok(command.includes(marker), `${marker} command dialog composition missing`);
+  }
+  assert.match(dialog, /@base-ui\/react\/dialog/);
+  assert.match(dialog, /DialogPrimitive\.Backdrop/);
+  assert.match(dialog, /DialogPrimitive\.Popup/);
+  assert.doesNotMatch(search, /role="dialog"|aria-modal="true"|event\.key === 'Escape'|event\.key === 'ArrowDown'|event\.key === 'ArrowUp'/);
   assert.ok(shell.includes('사용 설명서'));
   assert.doesNotMatch(shell, /\{actions\}/);
 });

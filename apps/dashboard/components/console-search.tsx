@@ -1,116 +1,89 @@
 'use client';
 
+import { SearchIcon } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Icon } from './icon';
+import { Button } from '@/components/ui/button';
+import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from '@/components/ui/command';
 
 export type ConsoleSearchItem = {
-  label: string;
-  href: string;
-  group: string;
-  keywords?: string;
+  readonly label: string;
+  readonly href: string;
+  readonly group: string;
+  readonly keywords?: string;
 };
 
-export function ConsoleSearch({ items }: { items: ConsoleSearchItem[] }) {
+type ConsoleSearchProps = { readonly compact?: boolean; readonly items: readonly ConsoleSearchItem[] };
+
+export function ConsoleSearch({ compact = false, items }: ConsoleSearchProps) {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [activeIndex, setActiveIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const hasOpenedRef = useRef(false);
-
-  const results = useMemo(() => {
-    const term = query.trim().toLocaleLowerCase('ko');
-    if (!term) return items;
-    return items.filter((item) => `${item.label} ${item.group} ${item.keywords || ''}`.toLocaleLowerCase('ko').includes(term));
-  }, [items, query]);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const groups = useMemo(() => {
+    const grouped = new Map<string, ConsoleSearchItem[]>();
+    for (const item of items) {
+      const entries = grouped.get(item.group) ?? [];
+      entries.push(item);
+      grouped.set(item.group, entries);
+    }
+    return [...grouped.entries()];
+  }, [items]);
 
   useEffect(() => {
+    if (compact) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const editing = target?.matches('input, textarea, select, [contenteditable="true"]');
+      const editing = event.target instanceof Element
+        && event.target.matches('input, textarea, select, [contenteditable="true"]');
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') {
         event.preventDefault();
+        if (!open && document.activeElement instanceof HTMLElement) returnFocusRef.current = document.activeElement;
         setOpen((value) => !value);
       } else if (!open && event.key === '/' && !editing) {
         event.preventDefault();
+        if (document.activeElement instanceof HTMLElement) returnFocusRef.current = document.activeElement;
         setOpen(true);
-      } else if (open && event.key === 'Escape') {
-        event.preventDefault();
-        setOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open]);
+  }, [compact, open]);
 
   useEffect(() => {
     if (open) {
       hasOpenedRef.current = true;
-      setQuery('');
-      setActiveIndex(0);
-      window.requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
-    if (hasOpenedRef.current) triggerRef.current?.focus();
-  }, [open]);
-
-  const close = () => setOpen(false);
-  const handleListKeys = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setActiveIndex((index) => Math.min(results.length - 1, index + 1));
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setActiveIndex((index) => Math.max(0, index - 1));
-    } else if (event.key === 'Enter' && results[activeIndex]) {
-      event.preventDefault();
-      window.location.assign(results[activeIndex].href);
+    if (hasOpenedRef.current) {
+      returnFocusRef.current?.focus();
+      returnFocusRef.current = null;
     }
-  };
+  }, [open]);
 
   return (
     <>
-      <button ref={triggerRef} className="console-search-trigger" type="button" onClick={() => setOpen(true)} aria-haspopup="dialog" aria-label="메뉴 검색">
-        <Icon name="magnifying-glass" />
-        <span>메뉴 검색</span>
-        <kbd>Ctrl K</kbd>
-      </button>
-      {open ? (
-        <div className="command-palette-backdrop" role="presentation" onMouseDown={close}>
-          <section className="command-palette" role="dialog" aria-modal="true" aria-label="메뉴 검색" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="command-palette-input">
-              <Icon name="magnifying-glass" />
-              <input
-                ref={inputRef}
-                value={query}
-                onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }}
-                onKeyDown={handleListKeys}
-                placeholder="메뉴 검색"
-                aria-label="메뉴 검색어"
-                aria-controls="console-search-results"
-              />
-              <kbd>ESC</kbd>
-            </div>
-            <div id="console-search-results" className="command-palette-results" role="listbox">
-              {results.length ? results.map((item, index) => (
-                <a
-                  key={`${item.group}-${item.href}`}
-                  href={item.href}
-                  className={index === activeIndex ? 'active' : ''}
-                  role="option"
-                  aria-selected={index === activeIndex}
-                  onMouseEnter={() => setActiveIndex(index)}
-                >
-                  <span><strong>{item.label}</strong><small>{item.group}</small></span>
-                  <span aria-hidden="true">→</span>
-                </a>
-              )) : <p className="command-palette-empty">검색 결과 없음</p>}
-            </div>
-            <footer><span>↑↓ 이동</span><span>Enter 열기</span><span>Esc 닫기</span></footer>
-          </section>
-        </div>
-      ) : null}
+      <Button ref={triggerRef} aria-haspopup="dialog" aria-label="메뉴 검색" className={compact ? undefined : 'w-72 justify-between'} onClick={(event) => { returnFocusRef.current = event.currentTarget; setOpen(true); }} size={compact ? 'icon' : 'default'} type="button" variant="outline">
+        <SearchIcon data-icon="inline-start" />
+        {compact ? <span className="sr-only">메뉴 검색</span> : <span>메뉴 검색</span>}
+        {compact ? null : <kbd className="text-xs text-muted-foreground">Ctrl K</kbd>}
+      </Button>
+      <CommandDialog description="콘솔 메뉴와 현재 프로젝트 화면을 검색합니다." open={open} onOpenChange={setOpen} title="메뉴 검색">
+        <Command loop>
+          <CommandInput autoFocus placeholder="메뉴 또는 프로젝트 화면 검색" />
+          <CommandList>
+            <CommandEmpty>검색 결과가 없습니다.</CommandEmpty>
+            {groups.map(([group, entries]) => (
+              <CommandGroup heading={group} key={group}>
+                {entries.map((item) => (
+                  <CommandItem key={`${item.group}-${item.href}`} onSelect={() => { setOpen(false); window.location.assign(item.href); }} value={`${item.label} ${item.group} ${item.keywords ?? ''}`}>
+                    <span className="truncate">{item.label}</span>
+                    <CommandShortcut>Enter</CommandShortcut>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </CommandDialog>
     </>
   );
 }

@@ -1,8 +1,11 @@
 import { Suspense, type ReactNode } from 'react';
 import { redirect } from 'next/navigation';
+import { buttonVariants } from '@/components/ui/button';
 import { apiAction, dashboardApiContext, getJson } from '../lib/api';
 import { consoleOrganizationLinks, resolveOrganizationRouteValue } from '../lib/console-navigation';
+import { cn } from '../lib/utils';
 import { ConsoleSearch } from './console-search';
+import { ConsoleMobileNav } from './console-mobile-nav';
 import { Brand } from './brand';
 import { FlashBanner } from './flash-banner';
 import { Icon } from './icon';
@@ -86,19 +89,55 @@ export async function ConsoleShell({
     ...navItems.map((item) => ({ label: item.label, href: item.href, group: '메뉴', keywords: item.id })),
     ...projectSearchItems,
   ];
+  const logoutAction = apiAction('/auth/logout');
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <a className="brand" href="/console"><span className="brand-mark"><Brand height={27} width={27} /></span><span>RAIBIT SERVER</span></a>
-        <div className="switcher"><p className="switcher-label">{orgLabel}</p><div className="switcher-title">{orgValue}</div></div>
-        <div className="switcher"><p className="switcher-label">{projectLabel}</p><div className="switcher-title">{projectValue}</div></div>
-        <nav className="nav-group"><p className="nav-title">{eyebrow}</p>{navItems.map((item) => <a key={item.id} className={`nav-link ${active === item.id ? 'active' : ''}`} aria-current={active === item.id ? 'page' : undefined} href={item.href}><Icon name={item.icon} /><span>{item.label}</span><span>›</span></a>)}</nav>
-        <div className="sidebar-account"><span>{user?.email || '로그인 사용자'}</span><form method="post" action={apiAction('/auth/logout')}><input type="hidden" name="_returnTo" value="/login" /><button className="btn btn-ghost" type="submit">로그아웃</button></form></div>
+    <div className="grid h-dvh min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden bg-background md:grid-cols-[16.5rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]" data-console-shell>
+      <aside className="hidden min-h-0 flex-col border-r border-border bg-card md:flex" aria-label="콘솔 사이드바">
+        <a className="flex min-h-16 items-center gap-3 border-b border-border px-5 text-sm font-medium text-foreground" href="/console">
+          <Brand height={28} width={28} />
+          <span>RAIBIT SERVER</span>
+        </a>
+        <div className="flex flex-col gap-3 border-b border-border p-4">
+          <div className="min-w-0 rounded-md border border-border bg-background px-3 py-2.5">
+            <p className="text-xs text-muted-foreground">{orgLabel}</p>
+            <p className="truncate text-sm font-medium text-foreground" title={orgValue}>{orgValue}</p>
+          </div>
+          <div className="min-w-0 px-3 py-1">
+            <p className="text-xs text-muted-foreground">{projectLabel}</p>
+            <p className="truncate text-sm text-foreground" title={projectValue}>{projectValue}</p>
+          </div>
+        </div>
+        <nav className="flex min-h-0 flex-1 flex-col gap-1 p-3" aria-label="콘솔 메뉴">
+          <p className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">{eyebrow}</p>
+          {navItems.map((item) => {
+            const current = active === item.id;
+            return (
+              <a key={item.id} className={cn('flex min-h-9 items-center gap-2 rounded-sm border-l-2 px-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/25', current ? 'border-primary bg-primary-soft text-primary' : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground')} aria-current={current ? 'page' : undefined} href={item.href}>
+                <Icon name={item.icon} />
+                <span className="truncate">{item.label}</span>
+              </a>
+            );
+          })}
+        </nav>
+        <div className="border-t border-border p-3">
+          <p className="truncate px-2 pb-2 text-xs text-muted-foreground" title={user?.email || '로그인 사용자'}>{user?.email || '로그인 사용자'}</p>
+          <form method="post" action={apiAction('/auth/logout')}><input type="hidden" name="_returnTo" value="/login" /><button className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'w-full justify-start')} type="submit">로그아웃</button></form>
+        </div>
       </aside>
-      <main className="main">
-        <div className="topbar"><div className="toolbar" aria-label="콘솔 도구"><ConsoleSearch items={searchItems} /><a className={`topbar-guide ${active === 'guide' ? 'active' : ''}`} href="/guide"><Icon name="command-line" /><span>사용 설명서</span></a></div></div>
-        <div className="flash-stack"><Suspense fallback={null}><FlashBanner /></Suspense></div>
+      <header className="flex min-w-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
+        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} projectLabel={projectLabel} projectValue={projectValue} userEmail={user?.email || '로그인 사용자'} />
+        <ConsoleSearch compact items={searchItems} />
+      </header>
+      <main id="main-content" className="min-h-0 min-w-0 overflow-y-auto overscroll-y-contain md:col-start-2 md:row-start-1">
+        <header className="sticky top-0 z-10 hidden min-h-16 items-center justify-between gap-4 border-b border-border bg-background/95 px-6 supports-backdrop-filter:backdrop-blur-sm md:flex">
+          <div><p className="text-xs text-muted-foreground">{eyebrow}</p><p className="text-sm font-medium text-foreground">{projectValue}</p></div>
+          <div className="flex items-center gap-2" aria-label="콘솔 도구">
+            <ConsoleSearch items={searchItems} />
+            <a className={buttonVariants({ variant: active === 'guide' ? 'secondary' : 'ghost', size: 'sm' })} href="/guide"><Icon name="command-line" /><span>사용 설명서</span></a>
+          </div>
+        </header>
+        <div className="px-4 pt-3 md:px-6"><Suspense fallback={null}><FlashBanner /></Suspense></div>
         {children}
       </main>
     </div>
@@ -124,7 +163,7 @@ export type LoadIssue = {
 
 export function LoadErrorSummary({ issues }: { issues?: LoadIssue[] }) {
   if (!issues?.length) return null;
-  return <aside className="load-error-summary" role="alert" aria-live="polite"><strong>일부 정보를 불러오지 못했습니다.</strong><ul>{issues.map((issue, index) => <li key={`${issue.label}-${issue.status}-${index}`}><span>{issue.label}</span>: {issue.message}</li>)}</ul><p className="muted">잠시 후 다시 시도해 주세요.</p></aside>;
+  return <div className="load-error-summary" role="alert" aria-live="polite" aria-atomic="true"><strong>일부 정보를 불러오지 못했습니다.</strong><ul className="text-foreground">{issues.map((issue, index) => <li key={`${issue.label}-${issue.status}-${index}`}><span>{issue.label}</span>: {issue.message}</li>)}</ul><p className="text-foreground">잠시 후 다시 시도해 주세요.</p></div>;
 }
 
 export function JsonCard({ title, value }: JsonCardProps) {

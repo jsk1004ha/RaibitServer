@@ -1,13 +1,15 @@
 'use client';
 
+import { CircleAlertIcon, CircleCheckIcon } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
-const NOTICE_MESSAGES: Record<string, string> = {
+const NOTICE_MESSAGES: Readonly<Record<string, string>> = {
   saved: '변경 사항을 저장했습니다.',
   github_connected: 'GitHub 연결을 완료했습니다.',
 };
 
-const ERROR_MESSAGES: Record<string, string> = {
+const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   authentication_required: '로그인이 필요하거나 세션이 만료되었습니다.',
   confirmation_required: '대상과 작업 내용을 확인한 뒤 다시 시도하세요.',
   control_plane_unavailable: '제어 영역에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
@@ -27,22 +29,20 @@ const ERROR_MESSAGES: Record<string, string> = {
 
 function errorMessage(code: string | null) {
   if (!code) return null;
-  if (ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
-  if (code.startsWith('request_failed_')) return '요청을 처리하지 못했습니다. 입력과 권한을 확인하세요.';
-  return '요청을 처리하지 못했습니다. 입력과 권한을 확인하세요.';
+  return ERROR_MESSAGES[code] ?? '요청을 처리하지 못했습니다. 입력과 권한을 확인하세요.';
 }
 
 export function FlashBanner() {
   const searchParams = useSearchParams();
   const error = errorMessage(searchParams.get('error'));
   const noticeCode = searchParams.get('notice');
-  const notice = noticeCode ? NOTICE_MESSAGES[noticeCode] || null : null;
+  const notice = noticeCode ? NOTICE_MESSAGES[noticeCode] ?? null : null;
 
   if (error) {
-    return <p className="flash-message flash-error" role="alert" aria-live="assertive">{error}</p>;
+    return <Alert aria-live="assertive" role="alert" variant="destructive"><CircleAlertIcon /><AlertDescription>{error}</AlertDescription></Alert>;
   }
   if (notice) {
-    return <p className="flash-message flash-notice" role="status" aria-live="polite">{notice}</p>;
+    return <Alert aria-live="polite" role="status" variant="notice"><CircleCheckIcon /><AlertDescription>{notice}</AlertDescription></Alert>;
   }
   return null;
 }
