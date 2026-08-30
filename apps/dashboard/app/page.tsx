@@ -15,7 +15,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
   const sites = await loadPublicSites(5);
 
   return (
-    <main className={`landing-page landing-variant-${variant}`}>
+    <main id="main-content" className={`landing-page landing-variant-${variant}`}>
       <nav className="landing-nav" aria-label="메인 탐색">
         <a className="landing-brand" href="/"><Brand height={36} width={36} priority /><span>RAIBIT SERVER</span></a>
         <div className="landing-nav-actions"><a className="btn btn-ghost" href="/status">운영 현황</a><a className="btn btn-ghost" href={loginUrl}>로그인</a><a className="btn btn-primary" href={consoleUrl}>콘솔 들어가기</a></div>

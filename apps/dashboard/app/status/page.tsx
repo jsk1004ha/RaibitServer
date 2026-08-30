@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export default async function StatusPage() {
   const status = await loadSystemStatus();
   return (
-    <main className="landing-page status-page">
+    <main id="main-content" className="landing-page status-page">
       <nav className="landing-nav" aria-label="메인 탐색">
         <a className="landing-brand" href="/"><Brand height={36} width={36} priority /><span>RAIBIT SERVER</span></a>
         <div className="landing-nav-actions"><a className="btn btn-ghost" href="/">메인</a><a className="btn btn-primary" href="/console">콘솔</a></div>

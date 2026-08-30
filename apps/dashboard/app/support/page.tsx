@@ -11,7 +11,7 @@ export const metadata = {
 
 export default function SupportPage() {
   return (
-    <main className="support-page">
+    <main id="main-content" className="support-page">
       <nav className="landing-nav" aria-label="지원 화면 탐색">
         <a className="landing-brand" href="/">
           <Brand height={36} width={36} priority />

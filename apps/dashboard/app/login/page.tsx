@@ -13,7 +13,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const notice = String(query.notice || '');
   const publicHomeHref = process.env.NODE_ENV === 'production' ? 'https://raibit.kr/' : '/';
   return (
-    <main className="auth-page" data-od-id="landing-auth">
+    <main id="main-content" className="auth-page" data-od-id="landing-auth">
       <a className="auth-brand" href={publicHomeHref}><Brand height={42} width={42} priority /><span>RAIBIT SERVER</span></a>
       <section className="auth-panel">
         <header>

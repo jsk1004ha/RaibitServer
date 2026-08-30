@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { cookies } from 'next/headers';
 import './globals.css';
 import './fonts.css';
 
@@ -11,10 +12,29 @@ export const metadata = {
   description: '인천과학고등학교 정보 동아리 라이빗의 호스팅 서비스. 프로젝트를 배포하고 함께 운영하세요.',
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+class T6GlobalErrorFixture extends Error {
+  constructor() {
+    super('T6_E2E_GLOBAL_ERROR');
+  }
+}
+
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const requestCookies = await cookies();
+  if (process.env.RAIBITSERVER_E2E_FIXTURES === '1' && requestCookies.get('T6_E2E_GLOBAL_ERROR')?.value === '1') {
+    throw new T6GlobalErrorFixture();
+  }
+
   return (
     <html lang="ko" data-theme="light">
-      <body>
+      <body className="bg-background font-sans text-foreground">
+        <nav aria-label="바로가기">
+          <a
+            className="sr-only fixed left-raibit-md top-raibit-md z-50 rounded-sm bg-primary px-raibit-md py-raibit-sm text-button-md text-primary-foreground focus:not-sr-only"
+            href="#main-content"
+          >
+            본문으로 건너뛰기
+          </a>
+        </nav>
         {children}
       </body>
     </html>

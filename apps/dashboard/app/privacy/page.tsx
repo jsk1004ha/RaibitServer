@@ -10,7 +10,7 @@ export const metadata = {
 
 export default function PrivacyPage() {
   return (
-    <main className="privacy-page">
+    <main id="main-content" className="privacy-page">
       <nav className="landing-nav" aria-label="개인정보처리방침 화면 탐색">
         <a className="landing-brand" href="/">
           <Brand height={36} width={36} priority />

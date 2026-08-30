@@ -8,7 +8,7 @@ export const metadata = {
 
 export default function ContributorsPage() {
   return (
-    <main className="contributors-page">
+    <main id="main-content" className="contributors-page">
       <nav className="landing-nav" aria-label="기여자 화면 탐색">
         <a className="landing-brand" href="/">
           <Brand height={36} width={36} priority />
