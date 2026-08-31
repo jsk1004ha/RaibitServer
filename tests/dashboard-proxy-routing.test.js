@@ -219,8 +219,13 @@ test('tenant workload hosts always rewrite dashboard fallbacks to the branded ho
 
 test('production login links return to the public raibit.kr landing instead of looping on the console root', async () => {
   const loginPage = await readFile(new URL('../apps/dashboard/app/login/page.tsx', import.meta.url), 'utf8');
-  assert.match(loginPage, /process\.env\.NODE_ENV === 'production' \? 'https:\/\/raibit\.kr\/' : '\/'/);
-  assert.equal(loginPage.match(/href=\{publicHomeHref\}/g)?.length, 2);
+  assert.match(loginPage, /const publicHomeHref = process\.env\.NODE_ENV === 'production' \? 'https:\/\/raibit\.kr\/' : '\/';/);
+  assert.equal(loginPage.match(/href=\{publicHomeHref\}/g)?.length, 3);
+  for (const marker of [
+    'className="flex w-fit items-center gap-3 text-sm font-medium" href={publicHomeHref}',
+    'className="mb-8 flex w-fit items-center gap-3 text-sm font-medium lg:hidden" href={publicHomeHref}',
+    'className="w-fit hover:text-foreground" href={publicHomeHref}',
+  ]) assert.ok(loginPage.includes(marker), `${marker} must keep the public production landing target`);
 });
 
 function restoreEnvironment(key, value) {

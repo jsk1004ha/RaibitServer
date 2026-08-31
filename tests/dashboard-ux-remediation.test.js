@@ -25,13 +25,15 @@ test('dashboard mutations return to the console with explicit success and error 
 });
 
 test('API loader failures stay sanitized, preserve fallback data and surface on authenticated data pages', async () => {
-	const [api, shell, ...pages] = await Promise.all([
+	const [api, shell, projects, projectRoute, projectHub, projectShared, admin, github, deployment, resource] = await Promise.all([
 		read('../apps/dashboard/lib/api.ts'),
 		read('../apps/dashboard/components/console-ui.tsx'),
-		read('../apps/dashboard/app/admin/page.tsx'),
-		read('../apps/dashboard/app/github/page.tsx'),
 		read('../apps/dashboard/app/org/[orgSlug]/projects/page.tsx'),
 		read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
+		read('../apps/dashboard/components/project-hub/project-hub.tsx'),
+		read('../apps/dashboard/components/project-hub/shared.tsx'),
+		read('../apps/dashboard/app/admin/page.tsx'),
+		read('../apps/dashboard/app/github/page.tsx'),
 		read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
 		read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
 	]);
@@ -40,7 +42,13 @@ test('API loader failures stay sanitized, preserve fallback data and surface on 
 	assert.match(api, /body: fallback/);
 	assert.doesNotMatch(api, /error:\s*payload\?\.error/);
 	assert.match(shell, /export function LoadErrorSummary/);
-	for (const page of pages) assert.match(page, /<LoadErrorSummary issues=/);
+	assert.match(projects, /<Alert variant="destructive">[\s\S]*?state\.loadErrors\.map\(\(issue\) => issue\.label\)\.join/);
+	assert.doesNotMatch(projects, /issue\.message|payload\?\.error|upstream/);
+	assert.match(projectHub, /<LoadIssues issues=\{data\.loadErrors\}/);
+	assert.match(projectShared, /<Alert aria-live="polite" variant="destructive">/);
+	assert.match(projectShared, /\{issue\.label\}: \{issue\.message\}/);
+	assert.doesNotMatch(projectShared, /payload\?\.error|upstream/);
+	for (const page of [admin, github, deployment, resource]) assert.match(page, /<LoadErrorSummary issues=/);
 });
 
 test('dangerous actions require an explicit target-specific confirmation', async () => {
@@ -118,18 +126,24 @@ test('dashboard server loaders bound control-plane connection time and response 
 });
 
 test('dashboard has route-level loading, error, not-found, accessible controls and functional project navigation', async () => {
-	const [loading, error, notFound, project, css] = await Promise.all([
+	const [loading, error, notFound, project, projectHub, projectModel, sectionNavigation, css] = await Promise.all([
 		read('../apps/dashboard/app/loading.tsx'),
 		read('../apps/dashboard/app/error.tsx'),
 		read('../apps/dashboard/app/not-found.tsx'),
 		read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
+		read('../apps/dashboard/components/project-hub/project-hub.tsx'),
+		read('../apps/dashboard/components/project-hub/model.ts'),
+		read('../apps/dashboard/components/section-navigation.tsx'),
 		read('../apps/dashboard/app/globals.css'),
 	]);
 	assert.match(loading, /aria-live="polite"/);
 	assert.match(error, /role="alert"/);
 	assert.match(notFound, /찾을 수 없습니다/);
-	for (const target of ['overview', 'services', 'deployments', 'resources']) assert.match(project, new RegExp(`\\?view=${target}`));
-	assert.match(project, /<SectionNav items=\{navItems\} current=\{view === 'edit-service' \? 'services' : view\}/);
+	assert.match(project, /<ProjectHub data=\{data\} orgSlug=\{orgSlug\}/);
+	assert.match(projectHub, /<SectionNavigation current=\{current\} items=\{projectNavigation\(data\.base\)\} label="프로젝트 콘솔 화면"/);
+	for (const target of ['overview', 'services', 'deployments', 'resources']) assert.match(projectModel, new RegExp(`href: ` + '`\\$\\{base\\}\\?view=' + `${target}` + '`'));
+	assert.match(sectionNavigation, /aria-current=\{isCurrent \? 'page' : undefined\}/);
+	assert.match(sectionNavigation, /href=\{item\.href\}/);
 	assert.doesNotMatch(project, /href=\{apiAction\(`\/services\/\$\{state\.services\[0\]\.id\}\/logs`\)\}/);
 	assert.match(css, /min-height:\s*44px/);
 	assert.match(css, /-webkit-overflow-scrolling:\s*touch/);

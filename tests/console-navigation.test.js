@@ -25,9 +25,10 @@ test('console navigation keeps display labels separate from the verified organiz
   ]);
   assert.match(admin, /orgValue="관리자"/);
   assert.match(github, /orgValue="GitHub 연동"/);
-  assert.match(guide, /<ConsoleShell active="guide">/);
+  assert.match(guide, /<ConsoleShell active="guide"\s+orgValue=\{orgSlug\}\s+orgRouteValue=\{orgSlug\}>/);
   assert.match(shell, /resolveOrganizationRouteValue[\s\S]*?memberships: me\.body\?\.memberships/);
-  assert.doesNotMatch(`${admin}\n${github}\n${guide}`, /orgRouteValue="(?:관리자|GitHub 연동|RAIBITSERVER)"/);
+  assert.doesNotMatch(`${admin}\n${github}`, /orgRouteValue="(?:관리자|GitHub 연동|RAIBITSERVER)"/);
+  assert.doesNotMatch(guide, /orgRouteValue="(?:관리자|GitHub 연동|RAIBITSERVER)"/);
 });
 
 test('route-scoped project screens can preserve an explicit organization identifier', () => {
