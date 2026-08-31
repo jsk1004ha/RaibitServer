@@ -126,7 +126,7 @@ test('dashboard server loaders bound control-plane connection time and response 
 });
 
 test('dashboard has route-level loading, error, not-found, accessible controls and functional project navigation', async () => {
-	const [loading, error, notFound, project, projectHub, projectModel, sectionNavigation, css] = await Promise.all([
+	const [loading, error, notFound, project, projectHub, projectModel, sectionNavigation, admin, css] = await Promise.all([
 		read('../apps/dashboard/app/loading.tsx'),
 		read('../apps/dashboard/app/error.tsx'),
 		read('../apps/dashboard/app/not-found.tsx'),
@@ -134,6 +134,7 @@ test('dashboard has route-level loading, error, not-found, accessible controls a
 		read('../apps/dashboard/components/project-hub/project-hub.tsx'),
 		read('../apps/dashboard/components/project-hub/model.ts'),
 		read('../apps/dashboard/components/section-navigation.tsx'),
+		read('../apps/dashboard/app/admin/page.tsx'),
 		read('../apps/dashboard/app/globals.css'),
 	]);
 	assert.match(loading, /aria-live="polite"/);
@@ -148,5 +149,12 @@ test('dashboard has route-level loading, error, not-found, accessible controls a
 	assert.match(css, /min-height:\s*44px/);
 	assert.match(css, /-webkit-overflow-scrolling:\s*touch/);
 	assert.match(css, /\.confirmation-control/);
-	assert.match(css, /\.quota-editor > summary/);
+	assert.equal([...css.matchAll(/^@import\s+"tailwindcss\/preflight\.css";$/gm)].length, 1);
+	for (const component of ['badge', 'button', 'card', 'field', 'input', 'table']) {
+		assert.match(admin, new RegExp(`from '@/components/ui/${component}'`));
+	}
+	for (const marker of ['className="mx-auto flex w-full max-w-7xl', '<Card>', '<Table>', '<FieldGroup']) {
+		assert.ok(admin.includes(marker), `${marker} current admin UI composition missing`);
+	}
+	assert.doesNotMatch(admin, /className="[^"]*quota-editor/);
 });
