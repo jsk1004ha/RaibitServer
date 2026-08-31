@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { fetchWithInitialResponseTimeout, readBoundedBody, SESSION_COOKIE_NAME } from './request-security.js';
+import { controlPlaneErrorCode } from './control-plane-errors.js';
 
 const CONTROL_PLANE_CONNECT_TIMEOUT_MS = 10_000;
 const CONTROL_PLANE_BODY_TIMEOUT_MS = 15_000;
@@ -84,7 +85,7 @@ async function requestJson(path: string, { method = 'GET', body = undefined, fal
       }
     }
     if (!response.ok) {
-      const errorCode = safeErrorCode(payload?.error || payload?.message, response.status);
+      const errorCode = controlPlaneErrorCode(payload, response.status);
       return { ok: false, status: response.status, error: publicFailureMessage(response.status), errorCode, body: fallback };
     }
     return { ok: true, status: response.status, body: payload };
@@ -98,12 +99,6 @@ function controlPlaneBoundaryCode(error: unknown) {
   return ['control_plane_timeout', 'control_plane_response_too_large', 'control_plane_response_timeout'].includes(code)
     ? code
     : 'control_plane_unavailable';
-}
-
-function safeErrorCode(value: unknown, status: number) {
-  return typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(value)
-    ? value
-    : `request_failed_${status}`;
 }
 
 function publicFailureMessage(status: number) {

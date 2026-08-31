@@ -60,9 +60,22 @@ test('GitHub App installation and authorization states are signed, scoped, stage
   assert.throws(() => verifyGitHubAppInstallationState(`${installState}x`, {
     userId: 'user-1', organizationId: 'org-1', purpose: 'github-app-install',
   }, { stateSecret, now }), /github_install_state_invalid/);
+  assert.equal(verifyGitHubAppInstallationState(installState, {
+    userId: 'user-1', organizationId: 'org-1', purpose: 'github-app-install',
+  }, { stateSecret, now: now + 60 * 60_000 }).purpose, 'github-app-install');
   assert.throws(() => verifyGitHubAppInstallationState(installState, {
     userId: 'user-1', organizationId: 'org-1', purpose: 'github-app-install',
-  }, { stateSecret, now: now + 11 * 60_000 }), /github_install_state_expired/);
+  }, { stateSecret, now: now + 2 * 60 * 60_000 + 1_000 }), /github_install_state_expired/);
+
+  assert.throws(() => createGitHubAppInstallationPlan({ userId: 'user-1', organizationId: 'org-1' }, {
+    appSlug: 'raibit-server', stateSecret, now, installTtlSeconds: 24 * 60 * 60 + 1,
+  }), /github_state_ttl_invalid/);
+
+  assert.throws(() => createGitHubAppAuthorizationPlan({
+    userId: 'user-1', organizationId: 'org-1', installation_id: '900', setup_action: 'install', state: installState,
+  }, {
+    clientId: 'Iv1.fixture', stateSecret, now, authorizationTtlSeconds: 30 * 60 + 1,
+  }), /github_state_ttl_invalid/);
 });
 
 test('GitHub user authorization proves the installation, catalogs selected repositories, and revokes its token', async () => {

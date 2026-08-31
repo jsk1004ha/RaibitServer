@@ -2,7 +2,10 @@ import crypto from 'node:crypto';
 import { parseGitHubRepository } from './github-integration.ts';
 
 const GITHUB_API_VERSION = '2022-11-28';
-const DEFAULT_STATE_TTL_SECONDS = 10 * 60;
+const DEFAULT_INSTALL_STATE_TTL_SECONDS = 2 * 60 * 60;
+const DEFAULT_AUTHORIZATION_STATE_TTL_SECONDS = 10 * 60;
+const MAX_INSTALL_STATE_TTL_SECONDS = 24 * 60 * 60;
+const MAX_AUTHORIZATION_STATE_TTL_SECONDS = 30 * 60;
 const MAX_GITHUB_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_GITHUB_PAGES = 100;
 const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 15_000;
@@ -75,10 +78,10 @@ export function createGitHubAppAuthorizationPlan(input: Record<string, any>, opt
 export function signGitHubAppInstallationState(input: Record<string, any>, options: Record<string, any> = {}) {
   const secret = githubStateSecret(options);
   const now = finiteTimestamp(options.now, Date.now());
-  const ttlSeconds = boundedStateTtl(options.ttlSeconds);
   const userId = requiredIdentifier(input.userId, 'github_state_user_required');
   const organizationId = requiredIdentifier(input.organizationId, 'github_state_organization_required');
   const purpose = input.purpose === 'github-app-authorize' ? 'github-app-authorize' : 'github-app-install';
+  const ttlSeconds = stateTtlSeconds(purpose, options);
   const payload: GitHubAppInstallationState = {
     version: 1,
     purpose,
@@ -322,9 +325,21 @@ function requiredConfiguredIdentifier(value: unknown, code: string) {
   }
 }
 
-function boundedStateTtl(value: unknown) {
-  const ttl = Number(value || DEFAULT_STATE_TTL_SECONDS);
-  if (!Number.isInteger(ttl) || ttl < 60 || ttl > 30 * 60) throw githubAppError('github_state_ttl_invalid', 500);
+function stateTtlSeconds(purpose: GitHubAppInstallationState['purpose'], options: Record<string, any>) {
+  const installation = purpose === 'github-app-install';
+  const configured = options.ttlSeconds ?? (installation
+    ? options.installTtlSeconds ?? process.env.RAIBITSERVER_GITHUB_INSTALL_STATE_TTL_SECONDS
+    : options.authorizationTtlSeconds ?? process.env.RAIBITSERVER_GITHUB_AUTHORIZATION_STATE_TTL_SECONDS);
+  return boundedStateTtl(
+    configured,
+    installation ? DEFAULT_INSTALL_STATE_TTL_SECONDS : DEFAULT_AUTHORIZATION_STATE_TTL_SECONDS,
+    installation ? MAX_INSTALL_STATE_TTL_SECONDS : MAX_AUTHORIZATION_STATE_TTL_SECONDS,
+  );
+}
+
+function boundedStateTtl(value: unknown, fallback: number, maximum: number) {
+  const ttl = value === undefined || value === null || value === '' ? fallback : Number(value);
+  if (!Number.isInteger(ttl) || ttl < 60 || ttl > maximum) throw githubAppError('github_state_ttl_invalid', 500);
   return ttl;
 }
 

@@ -18,6 +18,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   request_too_large: '요청 크기가 허용 범위를 초과했습니다.',
   github_access_denied: 'GitHub 연결이 취소되었습니다.',
   github_install_state_expired: '연결 시간이 만료되었습니다. 다시 시작하세요.',
+  github_install_state_invalid: '연결 정보가 유효하지 않습니다. 다시 시작하세요.',
+  github_install_state_stage_mismatch: '연결 순서가 올바르지 않습니다. 다시 시작하세요.',
   github_installation_not_accessible: '선택한 GitHub 설치를 확인할 수 없습니다.',
   github_state_secret_not_configured: 'GitHub 연결 설정이 완료되지 않았습니다.',
   github_app_slug_not_configured: 'GitHub App 설정이 완료되지 않았습니다.',

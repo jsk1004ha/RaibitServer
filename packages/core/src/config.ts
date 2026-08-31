@@ -15,6 +15,8 @@ export const RUNTIME_KEY_CATALOG = Object.freeze([
   { name: 'RAIBITSERVER_GITHUB_CLIENT_SECRET', category: 'github', required: false, secret: true, description: 'GitHub OAuth/App client secret' },
   { name: 'RAIBITSERVER_GITHUB_CALLBACK_URL', category: 'github', required: false, secret: false, description: 'Dashboard GitHub App setup and OAuth callback URL' },
   { name: 'RAIBITSERVER_GITHUB_STATE_SECRET', category: 'github', required: false, secret: true, description: 'Optional dedicated HMAC secret for GitHub App installation state' },
+  { name: 'RAIBITSERVER_GITHUB_INSTALL_STATE_TTL_SECONDS', category: 'github', required: false, secret: false, description: 'Signed GitHub App installation state lifetime in seconds (default 7200, max 86400)' },
+  { name: 'RAIBITSERVER_GITHUB_AUTHORIZATION_STATE_TTL_SECONDS', category: 'github', required: false, secret: false, description: 'Signed GitHub OAuth authorization state lifetime in seconds (default 600, max 1800)' },
   { name: 'RAIBITSERVER_GITHUB_WEBHOOK_SECRET', category: 'github', required: false, secret: true, description: 'GitHub webhook HMAC verification secret' },
   { name: 'RAIBITSERVER_REGISTRY_USERNAME', category: 'registry', required: false, secret: false, description: 'Default image registry username' },
   { name: 'RAIBITSERVER_REGISTRY_PASSWORD', category: 'registry', required: false, secret: true, description: 'Default image registry password/token' },
