@@ -52,10 +52,30 @@ export function createGitHubAppInstallationPlan(input: Record<string, any>, opti
 export function createGitHubAppAuthorizationPlan(input: Record<string, any>, options: Record<string, any> = {}) {
   const userId = requiredIdentifier(input.userId, 'github_state_user_required');
   const organizationId = requiredIdentifier(input.organizationId, 'github_state_organization_required');
-  verifyGitHubAppInstallationState(input.state, { userId, organizationId, purpose: 'github-app-install' }, options);
+  // An installation callback is only a launch ticket. The authenticated,
+  // scope-matched user may renew it after it expires; repository access still
+  // requires the fresh OAuth state and code created below.
+  verifyResumableGitHubAppState(input.state, { userId, organizationId, purpose: 'github-app-install' }, options);
   const installationId = requiredNumericIdentifier(input.installationId || input.installation_id, 'github_installation_id_invalid');
   const setupAction = String(input.setupAction || input.setup_action || 'install').trim().toLowerCase();
   if (!['install', 'update'].includes(setupAction)) throw githubAppError('github_setup_action_invalid', 400);
+  return buildGitHubAppAuthorizationPlan({ userId, organizationId, installationId }, options);
+}
+
+export function createGitHubAppAuthorizationRetryPlan(input: Record<string, any>, options: Record<string, any> = {}) {
+  const userId = requiredIdentifier(input.userId, 'github_state_user_required');
+  const organizationId = requiredIdentifier(input.organizationId, 'github_state_organization_required');
+  const callbackState = verifyResumableGitHubAppState(input.state, {
+    userId,
+    organizationId,
+    purpose: 'github-app-authorize',
+  }, options);
+  const installationId = requiredNumericIdentifier(callbackState.installationId, 'github_installation_id_invalid');
+  return buildGitHubAppAuthorizationPlan({ userId, organizationId, installationId }, options);
+}
+
+function buildGitHubAppAuthorizationPlan(input: Record<string, any>, options: Record<string, any>) {
+  const { userId, organizationId, installationId } = input;
   const clientId = requiredConfiguredIdentifier(options.clientId || process.env.GITHUB_CLIENT_ID || process.env.RAIBITSERVER_GITHUB_CLIENT_ID, 'github_client_id_not_configured');
   const state = signGitHubAppInstallationState({
     userId,
@@ -100,6 +120,14 @@ export function signGitHubAppInstallationState(input: Record<string, any>, optio
 }
 
 export function verifyGitHubAppInstallationState(state: unknown, expected: Record<string, any>, options: Record<string, any> = {}) {
+  return verifyGitHubAppState(state, expected, options, false);
+}
+
+function verifyResumableGitHubAppState(state: unknown, expected: Record<string, any>, options: Record<string, any>) {
+  return verifyGitHubAppState(state, expected, options, true);
+}
+
+function verifyGitHubAppState(state: unknown, expected: Record<string, any>, options: Record<string, any>, allowExpired: boolean) {
   const value = String(state || '');
   const [encoded, signature, extra] = value.split('.');
   if (!encoded || !signature || extra) throw githubAppError('github_install_state_invalid', 400);
@@ -119,10 +147,15 @@ export function verifyGitHubAppInstallationState(state: unknown, expected: Recor
   } catch {
     throw githubAppError('github_install_state_invalid', 400);
   }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw githubAppError('github_install_state_invalid', 400);
   const nowSeconds = Math.floor(finiteTimestamp(options.now, Date.now()) / 1000);
-  if (payload.version !== 1 || !['github-app-install', 'github-app-authorize'].includes(payload.purpose) || !payload.nonce || payload.expiresAt <= nowSeconds || payload.issuedAt > nowSeconds + 60) {
-    throw githubAppError(payload?.expiresAt <= nowSeconds ? 'github_install_state_expired' : 'github_install_state_invalid', 400);
+  const validTimestamps = Number.isInteger(payload.issuedAt)
+    && Number.isInteger(payload.expiresAt)
+    && payload.expiresAt > payload.issuedAt;
+  if (payload.version !== 1 || !['github-app-install', 'github-app-authorize'].includes(payload.purpose) || !payload.nonce || !validTimestamps || payload.issuedAt > nowSeconds + 60) {
+    throw githubAppError('github_install_state_invalid', 400);
   }
+  if (!allowExpired && payload.expiresAt <= nowSeconds) throw githubAppError('github_install_state_expired', 400);
   if (String(payload.userId) !== String(expected.userId || '') || String(payload.organizationId) !== String(expected.organizationId || '')) {
     throw githubAppError('github_install_state_scope_mismatch', 403);
   }

@@ -7,6 +7,7 @@ import { signJwtHs256 } from '../packages/core/src/auth.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import {
   createGitHubAppAuthorizationPlan,
+  createGitHubAppAuthorizationRetryPlan,
   createGitHubAppInstallationPlan,
   resolveGitHubAppInstallationSelection,
   verifyGitHubAppInstallationState,
@@ -16,7 +17,7 @@ import { ControlPlaneStore } from '../packages/core/src/store.ts';
 const stateSecret = 'github-state-secret-for-tests-only-1234567890';
 const now = Date.parse('2026-08-28T00:00:00Z');
 
-test('GitHub App installation and authorization states are signed, scoped, staged, and expiring', () => {
+test('GitHub App states expire strictly while authenticated scoped flows remain resumable', () => {
   const install = createGitHubAppInstallationPlan({ userId: 'user-1', organizationId: 'org-1' }, {
     appSlug: 'raibit-server', stateSecret, now,
   });
@@ -66,6 +67,32 @@ test('GitHub App installation and authorization states are signed, scoped, stage
   assert.throws(() => verifyGitHubAppInstallationState(installState, {
     userId: 'user-1', organizationId: 'org-1', purpose: 'github-app-install',
   }, { stateSecret, now: now + 2 * 60 * 60_000 + 1_000 }), /github_install_state_expired/);
+
+  const resumedAt = now + 30 * 24 * 60 * 60_000;
+  const resumedAuthorization = createGitHubAppAuthorizationPlan({
+    userId: 'user-1', organizationId: 'org-1', installation_id: '900', setup_action: 'install', state: installState,
+  }, { clientId: 'Iv1.fixture', stateSecret, now: resumedAt });
+  const resumedCallbackState = new URL(resumedAuthorization.authorizationUrl).searchParams.get('state');
+  assert.equal(verifyGitHubAppInstallationState(resumedCallbackState, {
+    userId: 'user-1', organizationId: 'org-1', purpose: 'github-app-authorize',
+  }, { stateSecret, now: resumedAt }).installationId, '900');
+  assert.throws(() => createGitHubAppAuthorizationPlan({
+    userId: 'user-2', organizationId: 'org-1', installation_id: '900', setup_action: 'install', state: installState,
+  }, { clientId: 'Iv1.fixture', stateSecret, now: resumedAt }), /github_install_state_scope_mismatch/);
+
+  const retriedAt = resumedAt + 31 * 60_000;
+  assert.throws(() => verifyGitHubAppInstallationState(resumedCallbackState, {
+    userId: 'user-1', organizationId: 'org-1', purpose: 'github-app-authorize',
+  }, { stateSecret, now: retriedAt }), /github_install_state_expired/);
+  const retry = createGitHubAppAuthorizationRetryPlan({
+    userId: 'user-1', organizationId: 'org-1', state: resumedCallbackState,
+  }, { clientId: 'Iv1.fixture', stateSecret, now: retriedAt });
+  assert.equal(verifyGitHubAppInstallationState(new URL(retry.authorizationUrl).searchParams.get('state'), {
+    userId: 'user-1', organizationId: 'org-1', purpose: 'github-app-authorize',
+  }, { stateSecret, now: retriedAt }).installationId, '900');
+  assert.throws(() => createGitHubAppAuthorizationRetryPlan({
+    userId: 'user-1', organizationId: 'org-2', state: resumedCallbackState,
+  }, { clientId: 'Iv1.fixture', stateSecret, now: retriedAt }), /github_install_state_scope_mismatch/);
 
   assert.throws(() => createGitHubAppInstallationPlan({ userId: 'user-1', organizationId: 'org-1' }, {
     appSlug: 'raibit-server', stateSecret, now, installTtlSeconds: 24 * 60 * 60 + 1,
@@ -138,6 +165,7 @@ test('prototype API completes the one-button install, proof, and repository sync
   const user = controlPlane.store.createUser({ email: 'owner@example.com', approvalStatus: 'APPROVED', accountType: 'NON_CLUB' });
   controlPlane.store.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
   const jwtSecret = 'jwt-secret-for-github-app-tests-1234567890';
+  let currentTime = now;
   const token = signJwtHs256({ sub: user.id, role: 'owner', organizationId: organization.id }, jwtSecret);
   const fetchImpl = async (resource, init = {}) => {
     const url = new URL(String(resource));
@@ -147,9 +175,13 @@ test('prototype API completes the one-button install, proof, and repository sync
     if (url.pathname === '/applications/Iv1.fixture/token' && init.method === 'DELETE') return new Response(null, { status: 204 });
     return jsonResponse({}, 500);
   };
+  const githubAppOptions = {
+    appSlug: 'raibit-server', clientId: 'Iv1.fixture', clientSecret: 'client-secret', stateSecret, fetchImpl,
+    get now() { return currentTime; },
+  };
   const server = http.createServer(createApiHandler(controlPlane, {
     auth: { mode: 'jwt', jwtSecret },
-    githubApp: { appSlug: 'raibit-server', clientId: 'Iv1.fixture', clientSecret: 'client-secret', stateSecret, fetchImpl },
+    githubApp: githubAppOptions,
   }));
   server.listen(0);
   await once(server, 'listening');
@@ -159,11 +191,19 @@ test('prototype API completes the one-button install, proof, and repository sync
     assert.equal(install.statusCode, 200);
     const installState = new URL(install.body.installUrl).searchParams.get('state');
 
+    currentTime += 30 * 24 * 60 * 60_000;
     const authorize = await request(port, `/github/authorize?${new URLSearchParams({ installation_id: '900', setup_action: 'install', state: installState })}`, token);
     assert.equal(authorize.statusCode, 200);
     const callbackState = new URL(authorize.body.authorizationUrl).searchParams.get('state');
 
-    const callback = await request(port, `/github/callback?${new URLSearchParams({ code: 'single-use-code', state: callbackState })}`, token);
+    currentTime += 31 * 60_000;
+    const expiredCallback = await request(port, `/github/callback?${new URLSearchParams({ code: 'expired-code', state: callbackState })}`, token);
+    assert.equal(expiredCallback.statusCode, 200);
+    assert.equal(expiredCallback.body.connected, false);
+    assert.equal(expiredCallback.body.resumeRequired, true);
+    const retriedCallbackState = new URL(expiredCallback.body.authorizationUrl).searchParams.get('state');
+
+    const callback = await request(port, `/github/callback?${new URLSearchParams({ code: 'single-use-code', state: retriedCallbackState })}`, token);
     assert.equal(callback.statusCode, 200);
     assert.equal(callback.body.connected, true);
     assert.equal(callback.body.repositoryCount, 1);

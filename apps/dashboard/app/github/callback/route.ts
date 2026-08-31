@@ -11,6 +11,12 @@ export async function GET(request: NextRequest) {
   if (code) {
     const result = await getJson(`/github/callback?${new URLSearchParams({ code, state: state || '' })}`, {});
     if (!result.ok) return githubPageError(request, result.errorCode);
+    if (result.body?.resumeRequired) {
+      const authorizationUrl = safeAuthorizationUrl(result.body?.authorizationUrl);
+      if (!authorizationUrl) return githubPageError(request, 'github_authorization_url_invalid');
+      return NextResponse.redirect(authorizationUrl, 302);
+    }
+    if (result.body?.connected !== true) return githubPageError(request, 'github_callback_failed');
     const target = githubConsoleTarget(request);
     target.searchParams.set('step', 'import');
     target.searchParams.set('notice', 'github_connected');

@@ -35,7 +35,7 @@ export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from '
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 export { buildPostgresProviderPlan, buildResourceProviderPlan, provisionPostgresProvider, provisionResourceProvider, providerConnectionEnvForResource, providerConsoleSurface } from './resource-providers.ts';
 export { parseGitHubRepository, githubIntegrationSummary, githubCloneOptionsFromIntegration, verifyGitHubWebhookSignature, githubWebhookActionPlan, githubWebhookOutboundPlan, githubOAuthLoginPlan, deterministicGitHubCallbackAllowed } from './github-integration.ts';
-export { createGitHubAppInstallationPlan, createGitHubAppAuthorizationPlan, signGitHubAppInstallationState, verifyGitHubAppInstallationState, resolveGitHubAppInstallationSelection } from './github-app.ts';
+export { createGitHubAppInstallationPlan, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, signGitHubAppInstallationState, verifyGitHubAppInstallationState, resolveGitHubAppInstallationSelection } from './github-app.ts';
 export type { GitHubAppInstallationState, GitHubInstallationRepository } from './github-app.ts';
 export { previewKey, previewWorkloadName, previewRuntimePlan } from './preview-deployments.ts';
 export { createControlPlaneRepository, resolveControlPlaneRepositoryConfig, InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from './persistence.ts';

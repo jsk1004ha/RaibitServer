@@ -11,7 +11,7 @@ import { assertEnvironmentWriteAllowed } from './env-policy.ts';
 import { quotaUsageGauges, quotaWarnings } from './quota.ts';
 import { assertSystemDeploymentActor, enforceAuthAbuseLimits, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
 import { githubOAuthLoginPlan } from './github-integration.ts';
-import { createGitHubAppAuthorizationPlan, createGitHubAppInstallationPlan, resolveGitHubAppInstallationSelection, verifyGitHubAppInstallationState } from './github-app.ts';
+import { createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, resolveGitHubAppInstallationSelection, verifyGitHubAppInstallationState } from './github-app.ts';
 import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
 import { publicSitesFromSnapshot } from './public-sites.ts';
 
@@ -621,11 +621,26 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'team:invite', auth);
         const organizationId = requiredSubjectOrganization(subject);
         requireScope(subject, { organizationId });
-        const callbackState = verifyGitHubAppInstallationState(url.searchParams.get('state'), {
-          userId: subject.id,
-          organizationId,
-          purpose: 'github-app-authorize',
-        }, options.githubApp || {});
+        let callbackState;
+        try {
+          callbackState = verifyGitHubAppInstallationState(url.searchParams.get('state'), {
+            userId: subject.id,
+            organizationId,
+            purpose: 'github-app-authorize',
+          }, options.githubApp || {});
+        } catch (error) {
+          if ((error as any)?.code !== 'github_install_state_expired') throw error;
+          const retry = createGitHubAppAuthorizationRetryPlan({
+            state: url.searchParams.get('state'),
+            userId: subject.id,
+            organizationId,
+          }, options.githubApp || {});
+          return send(res, 200, {
+            connected: false,
+            resumeRequired: true,
+            authorizationUrl: retry.authorizationUrl,
+          });
+        }
         const selection = await resolveGitHubAppInstallationSelection({
           code: url.searchParams.get('code'),
           installationId: callbackState.installationId,

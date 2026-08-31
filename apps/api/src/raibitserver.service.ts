@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, githubOAuthLoginPlan, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, githubOAuthLoginPlan, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -618,11 +618,26 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const organizationId = githubOrganizationId(subject);
     enforceScope(subject, { organizationId });
     try {
-      const callbackState = verifyGitHubAppInstallationState(input.state, {
-        userId: subject.id,
-        organizationId,
-        purpose: 'github-app-authorize',
-      });
+      let callbackState;
+      try {
+        callbackState = verifyGitHubAppInstallationState(input.state, {
+          userId: subject.id,
+          organizationId,
+          purpose: 'github-app-authorize',
+        });
+      } catch (error) {
+        if ((error as any)?.code !== 'github_install_state_expired') throw error;
+        const retry = createGitHubAppAuthorizationRetryPlan({
+          state: input.state,
+          userId: subject.id,
+          organizationId,
+        });
+        return {
+          connected: false,
+          resumeRequired: true,
+          authorizationUrl: retry.authorizationUrl,
+        };
+      }
       const selection = await resolveGitHubAppInstallationSelection({
         code: input.code,
         installationId: callbackState.installationId,
