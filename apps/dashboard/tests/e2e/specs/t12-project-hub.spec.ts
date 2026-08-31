@@ -123,6 +123,7 @@ test('@t12 project hub survives long logs and narrow responsive tables without d
     await expect(projectNavigation).toBeVisible();
     expect(await projectNavigation.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
     expect(await projectNavigation.locator(':scope > nav').evaluate((element) => getComputedStyle(element).position)).toBe('relative');
+    await expect(projectNavigation.locator('[aria-current="page"]')).toBeInViewport();
     expect(await userPage.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `${view} must not widen the document`).toBe(true);
   }
   await expect(userPage.getByRole('heading', { name: '프로젝트 삭제' })).toBeVisible();

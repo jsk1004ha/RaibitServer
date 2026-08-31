@@ -131,7 +131,10 @@ export async function ConsoleShell({
       </header>
       <main id="main-content" className="min-h-0 min-w-0 overflow-y-auto overscroll-y-contain md:col-start-2 md:row-start-1">
         <header className="sticky top-0 z-10 hidden min-h-16 items-center justify-between gap-4 border-b border-border bg-background/95 px-6 supports-backdrop-filter:backdrop-blur-sm md:flex">
-          <div><p className="text-xs text-muted-foreground">{eyebrow}</p><p className="text-sm font-medium text-foreground">{projectValue}</p></div>
+          <div className="hidden min-w-0 lg:block">
+            <p className="text-xs text-muted-foreground">{eyebrow}</p>
+            <p className="truncate text-sm font-medium text-foreground" title={projectValue}>{projectValue}</p>
+          </div>
           <div className="flex items-center gap-2" aria-label="콘솔 도구">
             <ConsoleSearch items={searchItems} />
             <a className={buttonVariants({ variant: active === 'guide' ? 'secondary' : 'ghost', size: 'sm' })} href="/guide"><Icon name="command-line" /><span>사용 설명서</span></a>

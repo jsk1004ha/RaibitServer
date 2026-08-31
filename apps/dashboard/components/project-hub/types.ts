@@ -1,4 +1,4 @@
-import type { DashboardApiContext, DashboardLoadIssue } from '@/lib/api';
+import type { DashboardLoadIssue } from '@/lib/api';
 
 export const projectViews = ['overview', 'services', 'new-service', 'edit-service', 'deployments', 'agent', 'resources', 'new-resource', 'environment', 'logs', 'settings'] as const;
 export type ProjectView = (typeof projectViews)[number];
@@ -98,7 +98,6 @@ export type RuntimeLog = Readonly<{
 export type ProjectHubData = Readonly<{
   agentPlan: AgentPlan | null;
   base: string;
-  context: DashboardApiContext;
   deletionPending: boolean;
   deployments: readonly DeploymentRecord[];
   editedEnvironment: EnvironmentEntry | null;

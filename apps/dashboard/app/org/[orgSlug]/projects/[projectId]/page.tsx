@@ -52,7 +52,6 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
   const data = {
     agentPlan: agentPlanResult?.body || null,
     base,
-    context: state.context,
     deletionPending: ['DELETE_REQUESTED', 'DELETING'].includes(String(state.project.status || '').toUpperCase()),
     deployments: state.deployments,
     editedEnvironment,

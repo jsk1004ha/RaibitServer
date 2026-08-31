@@ -72,7 +72,7 @@ export function RuntimeLogViewer({ rows }: Readonly<{ rows: readonly RuntimeLog[
   return (
     <div className="max-h-[32rem] overflow-auto rounded-sm bg-inverse p-raibit-lg font-mono text-sm text-inverse-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40" role="log" aria-label="런타임 로그" data-runtime-log-viewport tabIndex={0}>
       {rows.map((row, index) => (
-        <div className="grid min-w-0 gap-raibit-xs border-b border-white/10 py-raibit-sm last:border-0 sm:grid-cols-[10rem_5rem_minmax(0,1fr)]" key={row.id ?? index}>
+        <div className="grid min-w-0 gap-raibit-xs border-b border-white/10 py-raibit-sm last:border-0 lg:grid-cols-[10rem_5rem_minmax(0,1fr)]" key={row.id ?? index}>
           <span className="text-white/60">{row.createdAt ?? row.timestamp ?? '이벤트'}</span>
           <span className="text-white/70">{row.level ?? row.type ?? '정보'}</span>
           <span className="break-words [overflow-wrap:anywhere]">{row.line ?? row.message ?? ''}</span>

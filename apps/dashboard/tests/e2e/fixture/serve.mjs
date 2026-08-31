@@ -14,7 +14,7 @@ try {
   await run(process.execPath, [nextBin, 'build'], { NODE_ENV: 'production' });
   const control = start(process.execPath, [path.join(dashboardDirectory, 'tests/e2e/fixture/control-plane.mjs')]);
   await ready('http://127.0.0.1:3411/__fixture/ready', control);
-  const dashboard = start(process.execPath, [nextBin, 'start', '--hostname', '0.0.0.0', '--port', '3410'], {
+  const dashboard = start(process.execPath, [nextBin, 'start', '--hostname', '127.0.0.1', '--port', '3410'], {
     NODE_ENV: 'production', RAIBITSERVER_API_URL: 'http://127.0.0.1:3411/api',
     RAIBITSERVER_DASHBOARD_ORIGIN: 'http://console.localhost:3410', RAIBITSERVER_CONSOLE_URL: 'http://console.localhost:3410/console',
     RAIBITSERVER_BASE_DOMAIN: 'localhost', RAIBITSERVER_GIT_SHA: '0123456789abcdef0123456789abcdef01234567', RAIBITSERVER_GITHUB_REPOSITORY: 'raibit/fixture-app',

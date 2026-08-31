@@ -69,6 +69,7 @@ test('console shell has a single bounded main scroll owner across the 768px brea
   assert.match(shell, /overflow-hidden/);
   assert.match(shell, /min-h-0[^"\n]*overflow-y-auto/);
   assert.match(shell, /hidden[^"\n]*md:flex/);
+  assert.match(shell, /<div className="hidden min-w-0 lg:block">\s*<p[^>]+>\{eyebrow\}<\/p>\s*<p[^>]+>\{projectValue\}<\/p>\s*<\/div>/);
   assert.match(mobile, /md:hidden/);
   assert.doesNotMatch(combined, /h-screen|overflow-x-auto/);
 });

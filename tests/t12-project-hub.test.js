@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 
 const projectPageUrl = new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', import.meta.url);
 const featureDirectoryUrl = new URL('../apps/dashboard/components/project-hub/', import.meta.url);
+const sectionNavigationUrl = new URL('../apps/dashboard/components/section-navigation.tsx', import.meta.url);
+const sectionNavigationScrollUrl = new URL('../apps/dashboard/components/section-navigation-scroll.tsx', import.meta.url);
 
 async function projectHubSource() {
   const entries = await fs.readdir(featureDirectoryUrl);
@@ -80,6 +82,8 @@ test('project hub contains narrow content and renders one deploy form pair per s
   assert.equal(serviceIterations.length, 1);
   assert.match(services, /data-service-id=\{service\.id\}/);
   assert.doesNotMatch(services, /hidden md:block[\s\S]+md:hidden/);
+  assert.match(services, /lg:grid-cols-\[minmax\(0,1\.25fr\)_4\.5rem_6rem_minmax\(0,1fr\)_auto_auto\]/);
+  assert.doesNotMatch(services, /md:grid-cols-\[minmax\(0,1\.25fr\)_4\.5rem_6rem_minmax\(0,1fr\)_auto_auto\]/);
   assert.equal((services.match(/name="deploymentType"[^>]+value="production"/g) || []).length, 1);
   assert.equal((services.match(/name="deploymentType"[^>]+value="preview"/g) || []).length, 1);
 });
@@ -93,6 +97,23 @@ test('runtime logs expose a labelled keyboard-scroll viewport', async () => {
   assert.match(shared, /role="log" aria-label="런타임 로그" data-runtime-log-viewport tabIndex=\{0\}/);
   assert.match(shared, /overflow-auto/);
   assert.match(shared, /focus-visible:ring-3/);
+  assert.match(shared, /lg:grid-cols-\[10rem_5rem_minmax\(0,1fr\)\]/);
+  assert.doesNotMatch(shared, /sm:grid-cols-\[10rem_5rem_minmax\(0,1fr\)\]/);
+});
+
+test('project navigation reveals the active tab after direct mobile navigation', async () => {
+  // Given a URL-addressable project view whose active tab may start outside the narrow viewport.
+  const [navigation, scroll] = await Promise.all([
+    fs.readFile(sectionNavigationUrl, 'utf8'),
+    fs.readFile(sectionNavigationScrollUrl, 'utf8'),
+  ]);
+
+  // When the isolated scroll leaf hydrates, then the server-rendered current item is centered without a vertical page jump.
+  assert.doesNotMatch(navigation, /['"]use client['"]/);
+  assert.match(navigation, /<SectionNavigationScroll current=\{current\}>/);
+  assert.match(scroll, /^'use client';/);
+  assert.match(scroll, /querySelector<HTMLElement>\('\[aria-current="page"\]'\)/);
+  assert.match(scroll, /scrollIntoView\(\{ block: 'nearest', inline: 'center' \}\)/);
 });
 
 test('service creation keeps baseline sources while editing retains advanced sources and a valid port range', async () => {

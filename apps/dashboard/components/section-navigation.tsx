@@ -1,3 +1,5 @@
+import { SectionNavigationScroll } from './section-navigation-scroll';
+
 export type SectionNavigationItem = Readonly<{
   description?: string;
   href: string;
@@ -14,7 +16,7 @@ type SectionNavigationProps = Readonly<{
 export function SectionNavigation({ current, items, label }: SectionNavigationProps) {
   return (
     <nav aria-label={label} className="border-b border-border">
-      <div className="flex overflow-x-auto">
+      <SectionNavigationScroll current={current}>
         {items.map((item) => {
           const isCurrent = item.id === current;
           return (
@@ -30,7 +32,7 @@ export function SectionNavigation({ current, items, label }: SectionNavigationPr
             </a>
           );
         })}
-      </div>
+      </SectionNavigationScroll>
     </nav>
   );
 }
