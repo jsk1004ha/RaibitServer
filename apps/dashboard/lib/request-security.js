@@ -1,4 +1,5 @@
 export const SESSION_COOKIE_NAME = 'raibitserver_session';
+export const GITHUB_INSTALL_STATE_COOKIE_NAME = 'raibitserver_github_install_state';
 
 const BROWSER_SECRET_KEYS = new Set([
   'token',
@@ -23,6 +24,17 @@ export function sessionCookieOptions(env = process.env) {
   // User workloads are sibling hosts under the same base domain. A Domain
   // attribute would send this bearer-token cookie to tenant-controlled apps.
   return { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge };
+}
+
+export function githubInstallStateCookieOptions(env = process.env) {
+  const { httpOnly, sameSite, secure } = sessionCookieOptions(env);
+  return {
+    httpOnly,
+    sameSite,
+    secure,
+    path: '/github/callback',
+    maxAge: 7 * 24 * 60 * 60,
+  };
 }
 
 export function configuredConsoleHref(value, fallback = '/console') {

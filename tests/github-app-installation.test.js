@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import fs from 'node:fs/promises';
 import { once } from 'node:events';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
@@ -16,6 +17,16 @@ import { ControlPlaneStore } from '../packages/core/src/store.ts';
 
 const stateSecret = 'github-state-secret-for-tests-only-1234567890';
 const now = Date.parse('2026-08-28T00:00:00Z');
+
+test('GitHub App setup keeps update redirects enabled for existing installations', async () => {
+  const [guide, readme] = await Promise.all([
+    fs.readFile(new URL('../docs/github-app.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../README.md', import.meta.url), 'utf8'),
+  ]);
+  assert.match(guide, /\| Redirect on update \| 켬 \|/);
+  assert.match(readme, /Redirect on update\*\*는 켭니다/);
+  assert.doesNotMatch(`${guide}\n${readme}`, /Redirect on update(?:\*\*)?[^\n]*끕니다/);
+});
 
 test('GitHub App states expire strictly while authenticated scoped flows remain resumable', () => {
   const install = createGitHubAppInstallationPlan({ userId: 'user-1', organizationId: 'org-1' }, {

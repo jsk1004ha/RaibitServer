@@ -341,7 +341,7 @@ private 저장소 빌드용 App ID와 RSA private key는 API 환경변수에 넣
    - 실제 적용 환경에서는 `RAIBITSERVER_EXECUTE=1`, build push가 필요하면 `RAIBITSERVER_PUSH=1`을 설정합니다.
 7. **GitHub App/OAuth 연결**
    - App callback과 setup URL: `https://console.<BASE_DOMAIN>/github/callback`
-   - GitHub App의 **Request user authorization during installation**과 **Redirect on update**는 끕니다.
+   - GitHub App의 **Request user authorization during installation**은 끄고 **Redirect on update**는 켭니다. 이미 설치된 App의 저장소 설정을 변경해도 Setup URL로 돌아와야 연결이 완료됩니다.
    - Webhook URL: `https://api.<BASE_DOMAIN>/api/github/webhooks`
    - Webhook event는 `push`, `pull_request`, `installation`, `installation_repositories`를 포함합니다.
    - 자세한 권한과 fixture 검증은 [GitHub App 문서](docs/github-app.md)와 [Preview Deployment 문서](docs/preview-deployments.md)를 참고하세요.

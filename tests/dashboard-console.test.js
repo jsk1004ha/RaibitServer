@@ -58,6 +58,12 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
     }
     assert.doesNotMatch(route, /new URL\('\/github', request\.url\)/, `${name} GitHub route must not expose the internal Next.js bind origin`);
   }
+  for (const marker of ['GITHUB_INSTALL_STATE_COOKIE_NAME', 'githubInstallStateCookieOptions', "installUrl.searchParams.get('state')", 'response.cookies.set']) {
+    assert.ok(githubInstall.includes(marker), `GitHub install route must persist setup state: ${marker}`);
+  }
+  for (const marker of ['GITHUB_INSTALL_STATE_COOKIE_NAME', 'githubInstallStateCookieOptions', 'request.cookies.get', 'installState', 'maxAge: 0']) {
+    assert.ok(githubCallback.includes(marker), `GitHub callback must recover and clear setup state: ${marker}`);
+  }
   assert.ok(guide.includes('사용 안내'));
   for (const marker of ['/deployments/${deploymentId}/cancel', '/deployments/${deploymentId}/rollback', 'imageDigest', 'errorCode', '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소']) {
     assert.ok(deployment.includes(marker), `${marker} missing from deployment screen`);

@@ -1,20 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJson } from '../../../lib/api';
-import { consoleOriginHref, dashboardRequestUrl } from '../../../lib/request-security.js';
+import {
+  consoleOriginHref,
+  dashboardRequestUrl,
+  GITHUB_INSTALL_STATE_COOKIE_NAME,
+  githubInstallStateCookieOptions,
+} from '../../../lib/request-security.js';
 
 export async function GET(request: NextRequest) {
   const result = await getJson('/github/install', {});
   if (!result.ok) return githubPageError(request, result.errorCode);
   const installUrl = safeGitHubRedirect(result.body?.installUrl);
   if (!installUrl) return githubPageError(request, 'github_install_url_invalid');
-  return NextResponse.redirect(installUrl, 302);
+  const response = NextResponse.redirect(installUrl, 302);
+  const cookieOptions = { ...githubInstallStateCookieOptions(), sameSite: 'lax' as const };
+  response.cookies.set(
+    GITHUB_INSTALL_STATE_COOKIE_NAME,
+    installUrl.searchParams.get('state') as string,
+    cookieOptions,
+  );
+  return response;
 }
 
 function githubPageError(request: NextRequest, code = 'github_install_failed') {
   const target = githubConsoleTarget(request);
   target.searchParams.set('step', 'connect');
   target.searchParams.set('error', code);
-  return NextResponse.redirect(target, 303);
+  return clearGitHubInstallState(NextResponse.redirect(target, 303));
+}
+
+function clearGitHubInstallState(response: NextResponse) {
+  response.cookies.set(GITHUB_INSTALL_STATE_COOKIE_NAME, '', {
+    ...githubInstallStateCookieOptions(),
+    sameSite: 'lax' as const,
+    maxAge: 0,
+  });
+  return response;
 }
 
 function githubConsoleTarget(request: NextRequest) {

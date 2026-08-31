@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  GITHUB_INSTALL_STATE_COOKIE_NAME,
   SESSION_COOKIE_NAME,
 	boundedPassThrough,
 	browserSafePayload,
@@ -12,7 +13,8 @@ import {
 	environmentPayloadFromForm,
 	extractSessionToken,
 	fetchWithInitialResponseTimeout,
-  formMutationMethod,
+	formMutationMethod,
+  githubInstallStateCookieOptions,
   isSameOriginMutation,
 	projectCreatePayloadFromForm,
 	publicHostnameForConsole,
@@ -37,6 +39,19 @@ test('session cookie is host-only, HttpOnly and only Secure when configured or i
   assert.equal(sessionCookieOptions({ NODE_ENV: 'production', RAIBITSERVER_SESSION_COOKIE_SECURE: 'false' }).secure, true);
   assert.equal(sessionCookieOptions({ NODE_ENV: 'development', RAIBITSERVER_SESSION_COOKIE_SECURE: 'true' }).secure, true);
   assert.equal(sessionCookieOptions({ NODE_ENV: 'production', RAIBITSERVER_COOKIE_DOMAIN: '.raibit.kr' }).domain, undefined);
+});
+
+test('GitHub install state survives the cross-site setup redirect without leaving the callback path', () => {
+  assert.equal(GITHUB_INSTALL_STATE_COOKIE_NAME, 'raibitserver_github_install_state');
+  assert.deepEqual(githubInstallStateCookieOptions({ NODE_ENV: 'development' }), {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: false,
+    path: '/github/callback',
+    maxAge: 604_800,
+  });
+  assert.equal(githubInstallStateCookieOptions({ NODE_ENV: 'production' }).secure, true);
+  assert.equal(githubInstallStateCookieOptions({ NODE_ENV: 'production', RAIBITSERVER_COOKIE_DOMAIN: '.raibit.kr' }).domain, undefined);
 });
 
 test('console navigation accepts only credential-free HTTP origins and derives the public apex safely', () => {

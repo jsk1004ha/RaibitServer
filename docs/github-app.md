@@ -22,12 +22,14 @@ GitHub 연결
 | Callback URL | `https://console.<BASE_DOMAIN>/github/callback` |
 | Setup URL | `https://console.<BASE_DOMAIN>/github/callback` |
 | Request user authorization during installation | 끔 |
-| Redirect on update | 끔 |
+| Redirect on update | 켬 |
 | Repository permission: Contents | Read-only |
 | Webhook URL | `https://api.<BASE_DOMAIN>/api/github/webhooks` |
 | Webhook events | `push`, `pull_request`, `installation`, `installation_repositories` |
 
-RAIBITSERVER는 Setup URL에서 installation ID와 설치용 state를 받은 뒤 별도 OAuth authorization으로 이동합니다. 따라서 GitHub App 설정의 “Request user authorization during installation”은 켜지 않습니다.
+RAIBITSERVER는 Setup URL에서 installation ID를 받은 뒤 별도 OAuth authorization으로 이동합니다. 따라서 GitHub App 설정의 “Request user authorization during installation”은 켜지 않습니다. 기존 설치의 저장소 선택을 바꿀 때도 Setup URL로 돌아오도록 “Redirect on update”는 켭니다.
+
+GitHub가 기존 설치의 Configure 링크에서 설치용 `state` 쿼리를 제거할 수 있으므로 Dashboard는 연결 시작 시 같은 서명값을 host-only, HttpOnly, SameSite=Lax 쿠키에도 보관합니다. 이 쿠키는 `/github/callback`에만 전송되고 OAuth 단계가 시작되면 즉시 삭제됩니다. API는 로그인 사용자와 조직 scope 및 새 OAuth proof를 계속 확인합니다.
 
 ## API runtime Secret
 
