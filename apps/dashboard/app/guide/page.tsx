@@ -1,7 +1,26 @@
-import { ConsoleShell, SectionNav } from '../../components/console-ui';
+import { ArrowRightIcon, BookOpenIcon, InfoIcon } from 'lucide-react';
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { ConsoleShell } from '../../components/console-ui';
+import { dashboardApiContext, getJson } from '../../lib/api';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { buttonVariants } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 const topics = ['projects', 'source', 'environment', 'deployments', 'resources', 'github', 'administration'] as const;
 type GuideTopic = typeof topics[number];
+
+const navItems = [
+  { id: 'projects', label: '프로젝트', description: '4단계 시작', href: '/guide?topic=projects' },
+  { id: 'source', label: '자동 인식', description: '파일·프레임워크', href: '/guide?topic=source' },
+  { id: 'environment', label: '비밀키', description: '환경 변수', href: '/guide?topic=environment' },
+  { id: 'deployments', label: '배포', description: 'AI·로그', href: '/guide?topic=deployments' },
+  { id: 'resources', label: '리소스', description: 'DB·캐시', href: '/guide?topic=resources' },
+  { id: 'github', label: 'GitHub', description: '저장소·PR', href: '/guide?topic=github' },
+  { id: 'administration', label: '관리', description: '승인·밴', href: '/guide?topic=administration' },
+] as const;
 
 type Guide = {
   title: string;
@@ -9,7 +28,7 @@ type Guide = {
   paragraphs: string[];
   steps: Array<{ title: string; detail: string }>;
   note: string;
-  next: { label: string; href: string };
+  next: { label: string; destination: 'projects' | 'github' | 'admin' };
 };
 
 const guides: Record<GuideTopic, Guide> = {
@@ -27,7 +46,7 @@ const guides: Record<GuideTopic, Guide> = {
       { title: '리소스 확인하고 생성하기', detail: 'PostgreSQL·MySQL·MongoDB와 Redis·Valkey 중 필요한 것만 고릅니다. 추가 안 함을 선택해도 나중에 리소스 화면에서 만들 수 있습니다.' },
     ],
     note: '4 / 4 화면에 도착하기 전에는 프로젝트가 생성되지 않습니다. 예전 화면이 보이면 새 Dashboard 배포와 브라우저 캐시를 확인하세요.',
-    next: { label: '프로젝트 목록 열기', href: '/projects' },
+    next: { label: '프로젝트 목록 열기', destination: 'projects' },
   },
   source: {
     title: '소스 자동 인식',
@@ -43,7 +62,7 @@ const guides: Record<GuideTopic, Guide> = {
       { title: '필요할 때만 직접 수정', detail: '자동 감지가 틀린 항목만 직접 지정합니다. 실제 .env와 node_modules, .git은 탐색하지 않으며 .env.example에서는 키 이름만 읽습니다.' },
     ],
     note: '비밀값이 든 실제 .env 파일은 저장소에 올리지 마세요. .env.example에는 필요한 키 이름과 빈 값만 남기는 편이 안전합니다.',
-    next: { label: 'GitHub 저장소 연결', href: '/github?step=attach' },
+    next: { label: 'GitHub 저장소 연결', destination: 'github' },
   },
   environment: {
     title: '환경 변수와 비밀키',
@@ -59,7 +78,7 @@ const guides: Record<GuideTopic, Guide> = {
       { title: '교체 후 배포', detail: '비밀값 수정 화면은 기존 원문을 다시 보여 주지 않습니다. 새 값을 입력해 교체한 뒤 서비스를 재배포합니다.' },
     ],
     note: '플랫폼 자체의 JWT, 암호화 키, registry와 signing credential은 tenant 화면이 아니라 서버 secret manager 또는 Kubernetes Secret으로 관리합니다.',
-    next: { label: '프로젝트 목록 열기', href: '/projects' },
+    next: { label: '프로젝트 목록 열기', destination: 'projects' },
   },
   deployments: {
     title: 'AI 배포와 수동 배포',
@@ -75,7 +94,7 @@ const guides: Record<GuideTopic, Guide> = {
       { title: '배포와 로그 확인', detail: '배포 탭에서 build event와 image를 확인하고, 실행 중 문제는 로그 탭에서 봅니다. 한 서비스만 배포할 때는 서비스 목록의 운영 배포 또는 미리보기를 사용합니다.' },
     ],
     note: '배포 실패는 먼저 빌드 로그, root directory와 Dockerfile 경로, 필수 환경 변수, quota와 보안 차단 순서로 확인하세요.',
-    next: { label: '프로젝트 목록 열기', href: '/projects' },
+    next: { label: '프로젝트 목록 열기', destination: 'projects' },
   },
   resources: {
     title: '관리형 리소스',
@@ -91,7 +110,7 @@ const guides: Record<GuideTopic, Guide> = {
       { title: '백업과 권한 준비', detail: 'production 전에는 백업, 복구, 용량 제한과 DB console 권한을 별도로 정합니다.' },
     ],
     note: '엔진별 live 지원 범위가 다릅니다. 화면에 항목이 있다는 사실만으로 production provider가 완성된 것으로 판단하지 마세요.',
-    next: { label: '프로젝트 목록 열기', href: '/projects' },
+    next: { label: '프로젝트 목록 열기', destination: 'projects' },
   },
   github: {
     title: 'GitHub 연결',
@@ -107,7 +126,7 @@ const guides: Record<GuideTopic, Guide> = {
       { title: 'Webhook과 미리보기 확인', detail: 'push와 pull_request event가 서명 검증을 통과했는지 보고 preview 주소와 cleanup event를 확인합니다.' },
     ],
     note: '저장소 권한은 필요한 범위만 선택하고 webhook secret이 비어 있는 production 요청은 항상 거부해야 합니다.',
-    next: { label: '저장소 연결 시작', href: '/github?step=connect' },
+    next: { label: '저장소 연결 시작', destination: 'github' },
   },
   administration: {
     title: '사용자 승인과 밴',
@@ -123,41 +142,48 @@ const guides: Record<GuideTopic, Guide> = {
       { title: '감사 기록과 해제', detail: '관리 작업과 사유를 감사 로그에서 확인합니다. 문제가 해결되면 밴 해제로 새 로그인을 허용합니다.' },
     ],
     note: '관리자는 자기 자신을 밴할 수 없습니다. 운영 접근을 잃지 않도록 최소 두 명의 검증된 관리자와 별도 복구 절차를 준비하세요.',
-    next: { label: '관리자 화면 열기', href: '/admin' },
+    next: { label: '관리자 화면 열기', destination: 'admin' },
   },
 };
 
 export default async function GuidePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const query = await searchParams;
+  const context = await dashboardApiContext();
+  if (!context.token) redirect('/login?error=session_expired&next=/guide');
+  const [query, me, projectsResult] = await Promise.all([
+    searchParams,
+    getJson('/auth/me', { user: null, subject: null }, context),
+    getJson('/projects', { projects: [] }, context),
+  ]);
+  if (!me.ok) redirect('/login?error=session_expired&next=/guide');
   const requestedTopic = String(query.topic || 'projects');
   const topic: GuideTopic = topics.includes(requestedTopic as GuideTopic) ? requestedTopic as GuideTopic : 'projects';
   const guide = guides[topic];
-  const navItems = [
-    { id: 'projects', label: '프로젝트', description: '4단계 시작', href: '/guide?topic=projects' },
-    { id: 'source', label: '자동 인식', description: '파일·프레임워크', href: '/guide?topic=source' },
-    { id: 'environment', label: '비밀키', description: '환경 변수', href: '/guide?topic=environment' },
-    { id: 'deployments', label: '배포', description: 'AI·로그', href: '/guide?topic=deployments' },
-    { id: 'resources', label: '리소스', description: 'DB·캐시', href: '/guide?topic=resources' },
-    { id: 'github', label: 'GitHub', description: '저장소·PR', href: '/guide?topic=github' },
-    { id: 'administration', label: '관리', description: '승인·밴', href: '/guide?topic=administration' },
-  ];
-
+  const subject = me.body?.subject;
+  const firstProject = projectsResult.body?.projects?.[0];
+  const orgSlug = firstProject?.organizationSlug || firstProject?.organizationId || subject?.organizationSlug || subject?.organizationId || 'default';
+  const nextHref = guide.next.destination === 'projects'
+    ? `/org/${encodeURIComponent(orgSlug)}/projects`
+    : guide.next.destination === 'admin' ? '/admin' : topic === 'source' ? '/github?step=attach' : '/github?step=connect';
   return (
-    <ConsoleShell active="guide">
-      <section className="page page-focus">
-        <header className="page-header"><div><p className="eyebrow">RAIBIT GUIDE</p><h1 className="page-title">사용 안내</h1><p className="page-subtitle">처음 시작하는 사람의 눈높이로 설명합니다.</p></div></header>
-        <SectionNav items={navItems} current={topic} label="사용 안내 주제" />
-        <article className="guide-article">
-          <header><p className="eyebrow">{guide.summary}</p><h2>{guide.title}</h2></header>
-          <section className="guide-prose" aria-label={`${guide.title} 설명`}>
-            {guide.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-          </section>
-          <ol className="guide-steps">
-            {guide.steps.map((step, index) => <li key={step.title}><span>{index + 1}</span><div><strong>{step.title}</strong><p>{step.detail}</p></div></li>)}
-          </ol>
-          <aside className="guide-note"><strong>알아두기</strong><p>{guide.note}</p></aside>
-          <div className="workflow-actions"><a className="btn btn-primary" href={guide.next.href}>{guide.next.label}</a><a className="btn" href="https://github.com/jsk1004ha/RaibitServer/blob/main/docs/handbook/README.md">전체 사용 설명서</a></div>
-        </article>
+    <ConsoleShell active="guide" orgValue={orgSlug} orgRouteValue={orgSlug}>
+      <section className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+        <header className="border-b border-border pb-6"><p className="mb-1.5 text-xs font-medium text-muted-foreground">RAIBIT GUIDE</p><h1 className="text-2xl font-medium tracking-tight text-foreground md:text-[1.75rem]">사용 안내</h1><p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">Dockerfile 우선 배포부터 운영 관리까지, 필요한 주제를 URL로 바로 열어 확인합니다.</p></header>
+        {!projectsResult.ok ? <Alert variant="destructive"><AlertTitle>프로젝트 정보를 불러오지 못했습니다.</AlertTitle><AlertDescription>안내 내용은 계속 볼 수 있습니다. 프로젝트 상태는 잠시 후 다시 확인해 주세요.</AlertDescription></Alert> : null}
+        <div className="grid min-w-0 gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
+          <nav aria-label="사용 안내 주제" className="min-w-0"><ul className="flex min-w-0 gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">{navItems.map((item) => { const current = item.id === topic; return <li key={item.id} className="min-w-36 lg:min-w-0"><Link className={cn('flex min-h-14 flex-col justify-center rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/25', current ? 'border-primary bg-primary-soft text-primary' : 'border-border bg-card text-foreground hover:bg-muted')} aria-current={current ? 'page' : undefined} href={item.href}><strong className="font-medium">{item.label}</strong><span className={cn('text-xs', current ? 'text-primary' : 'text-muted-foreground')}>{item.description}</span></Link></li>; })}</ul></nav>
+          <article className="flex min-w-0 flex-col gap-5">
+            <Card>
+              <CardHeader className="border-b"><Badge variant="secondary" className="mb-1">{guide.summary}</Badge><CardTitle><h2 className="text-xl md:text-2xl">{guide.title}</h2></CardTitle><CardDescription>현재 조직: <span className="break-all font-medium text-foreground">{orgSlug}</span></CardDescription></CardHeader>
+              <CardContent className="flex flex-col gap-6">
+                <section className="flex flex-col gap-3 text-sm leading-7 text-foreground" aria-label={`${guide.title} 설명`}>{guide.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}</section>
+                <ol className="grid gap-3">{guide.steps.map((step, index) => <li key={step.title} className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-md border border-border bg-background p-4"><span className="flex size-7 items-center justify-center rounded-full bg-primary-soft text-xs font-medium text-primary" aria-hidden="true">{index + 1}</span><div className="min-w-0"><strong className="text-sm font-medium text-foreground">{step.title}</strong><p className="mt-1 text-sm leading-6 text-muted-foreground">{step.detail}</p></div></li>)}</ol>
+                <Alert variant="notice"><InfoIcon /><AlertTitle>알아두기</AlertTitle><AlertDescription>{guide.note}</AlertDescription></Alert>
+              </CardContent>
+            </Card>
+            <div className="flex flex-wrap gap-2"><Link className={buttonVariants()} href={nextHref}>{guide.next.label}<ArrowRightIcon data-icon="inline-end" /></Link><a className={buttonVariants({ variant: 'outline' })} href="https://github.com/jsk1004ha/RaibitServer/blob/main/docs/handbook/README.md"><BookOpenIcon data-icon="inline-start" />전체 사용 설명서</a></div>
+            <p className="sr-only">선택한 안내 주제는 주소에 저장되어 브라우저 뒤로 가기와 앞으로 가기로 이동할 수 있습니다.</p>
+          </article>
+        </div>
       </section>
     </ConsoleShell>
   );
