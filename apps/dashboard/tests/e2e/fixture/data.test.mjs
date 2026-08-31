@@ -153,3 +153,18 @@ test('Given long and hostile operational records, when fixture responses are req
   });
   assert.deepEqual(request('GET', `${resourceBase}/schema`, TOKENS.partial), { status: 503, body: { error: 'fixture_resource_data_unavailable' } });
 });
+
+test('Given admin state sessions, when admin loaders request snapshot and usage data, then empty, partial, and long states preserve admin authorization', () => {
+  const emptySnapshot = request('GET', '/snapshot', TOKENS.adminEmpty);
+  const partialSnapshot = request('GET', '/snapshot', TOKENS.adminPartial);
+  const partialUsage = request('GET', '/usage/me', TOKENS.adminPartial);
+  const longSnapshot = request('GET', '/snapshot', TOKENS.adminLong);
+
+  assert.deepEqual(emptySnapshot, { status: 200, body: { users: [], quotas: [], auditLogs: [] } });
+  assert.equal(partialSnapshot.status, 200);
+  assert.equal(partialSnapshot.body.users[0].role, 'USER');
+  assert.deepEqual(partialUsage, { status: 500, body: { error: 'fixture_internal_secret_must_not_escape' } });
+  assert.equal(longSnapshot.status, 200);
+  assert.match(longSnapshot.body.users[0].name, /배포 로그가 길어져도/);
+  assert.equal(longSnapshot.body.users[0].role, 'USER');
+});

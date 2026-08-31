@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from '../helpers/fixtures';
-import { expectAccessible, FIXTURE_ORIGIN, installSession } from '../helpers/contracts';
+import { expectAccessible, FIXTURE_ORIGIN, installSession, isBenignNextPrefetchCancellation } from '../helpers/contracts';
 
 const fixtureEnabled = process.env.RAIBITSERVER_E2E_FIXTURES === '1';
 const resourceBase = '/org/raibit/projects/prj_fixture_001/resources/res_fixture_pg/console';
@@ -19,17 +19,7 @@ function observeT15BrowserErrors(page: Page): () => void {
   page.on('console', (message) => { if (message.type() === 'error') errors.push(`console:${message.text()}`); });
   page.on('pageerror', (error) => errors.push(`page:${error.message}`));
   page.on('requestfailed', (request) => {
-    const url = new URL(request.url());
-    const headers = request.headers();
-    const benignPrefetchCancellation = request.failure()?.errorText === 'net::ERR_ABORTED'
-      && request.method() === 'GET'
-      && request.resourceType() === 'fetch'
-      && !request.isNavigationRequest()
-      && url.origin === 'http://console.localhost:3410'
-      && url.searchParams.has('_rsc')
-      && headers.rsc === '1'
-      && headers['next-router-prefetch'] === '1';
-    if (!benignPrefetchCancellation) errors.push(`request:${request.url()}:${request.failure()?.errorText || 'failed'}`);
+    if (!isBenignNextPrefetchCancellation(request)) errors.push(`request:${request.url()}:${request.failure()?.errorText || 'failed'}`);
   });
   page.on('response', (response) => { if (response.status() >= 400) errors.push(`response:${response.status()}:${response.url()}`); });
   return () => expect(errors, errors.join('\n')).toEqual([]);

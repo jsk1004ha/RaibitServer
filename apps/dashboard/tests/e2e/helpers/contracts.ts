@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
+import { expect, type BrowserContext, type Page, type Request, type Response, type TestInfo } from '@playwright/test';
 
 export const DASHBOARD_ORIGIN = 'http://console.localhost:3410';
 export const FIXTURE_ORIGIN = 'http://127.0.0.1:3411';
@@ -28,11 +28,36 @@ export async function expectAccessible(page: Page): Promise<void> {
   expect(result.violations, JSON.stringify(result.violations, null, 2)).toEqual([]);
 }
 
+export function isBenignNextPrefetchCancellation(request: Request): boolean {
+  const url = new URL(request.url());
+  const headers = request.headers();
+  return request.failure()?.errorText === 'net::ERR_ABORTED'
+    && request.method() === 'GET'
+    && request.resourceType() === 'fetch'
+    && !request.isNavigationRequest()
+    && url.origin === DASHBOARD_ORIGIN
+    && url.searchParams.has('_rsc')
+    && headers.rsc === '1'
+    && headers['next-router-prefetch'] === '1';
+}
+
+export async function gotoWithNetworkChangedRetry(page: Page, path: string): Promise<Response | null> {
+  try {
+    return await page.goto(path);
+  } catch (error) {
+    const target = new URL(path, DASHBOARD_ORIGIN).href;
+    const firstLine = error instanceof Error ? error.message.split(/\r?\n/, 1)[0] : '';
+    if (firstLine !== `page.goto: net::ERR_NETWORK_CHANGED at ${target}`
+      && firstLine !== `net::ERR_NETWORK_CHANGED at ${target}`) throw error;
+    return page.goto(path);
+  }
+}
+
 export function observeBrowserErrors(page: Page, expectedStatuses: readonly number[] = []): () => void {
   const errors: string[] = [];
   page.on('console', (message) => { if (message.type() === 'error') errors.push(`console:${message.text()}`); });
   page.on('pageerror', (error) => errors.push(`page:${error.message}`));
-  page.on('requestfailed', (request) => errors.push(`request:${request.url()}:${request.failure()?.errorText || 'failed'}`));
+  page.on('requestfailed', (request) => { if (!isBenignNextPrefetchCancellation(request)) errors.push(`request:${request.url()}:${request.failure()?.errorText || 'failed'}`); });
   page.on('response', (response) => { if (response.status() >= 400 && !expectedStatuses.includes(response.status())) errors.push(`response:${response.status()}:${response.url()}`); });
   return () => expect(errors, errors.join('\n')).toEqual([]);
 }

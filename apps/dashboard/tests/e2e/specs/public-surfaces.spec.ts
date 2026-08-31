@@ -144,7 +144,9 @@ test.describe("@t9-public-surfaces", () => {
         await expect(
           page.getByRole("heading", { name: "모든 시스템 정상" }),
         ).toBeVisible();
-        await expect(page.locator('[aria-live="polite"]')).toBeVisible();
+        const staleAnnouncer = page.locator('footer[aria-live="polite"]').filter({ hasText: '자동 갱신 지연' });
+        await expect(staleAnnouncer).toHaveCount(1);
+        await expect(staleAnnouncer).toBeVisible();
         await captureScreenshot(
           page,
           testInfo,

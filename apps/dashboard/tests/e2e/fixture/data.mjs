@@ -89,6 +89,7 @@ const users = {
 export const TOKENS = {
   user: 'fixture-user-populated', admin: 'fixture-admin-populated', empty: 'fixture-user-empty',
   partial: 'fixture-user-partial', long: 'fixture-user-long', expired: 'fixture-expired',
+  adminEmpty: 'fixture-admin-empty', adminPartial: 'fixture-admin-partial', adminLong: 'fixture-admin-long',
 };
 
 export const loginAccounts = new Map([
@@ -103,8 +104,14 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   if (pathname === '/health') return json(200, { status: 'ok', checkedAt: FIXED_TIME });
   if (pathname === '/public/sites') return publicSitesResponse(publicSiteScenario, searchParams);
   if (!token || token === TOKENS.expired) return json(401, { error: 'session_expired' });
-  const state = token === TOKENS.empty ? 'empty' : token === TOKENS.partial ? 'partial' : token === TOKENS.long ? 'long' : 'populated';
-  const actor = token === TOKENS.admin ? users.admin : users.user;
+  const state = [TOKENS.empty, TOKENS.adminEmpty].includes(token)
+    ? 'empty'
+    : [TOKENS.partial, TOKENS.adminPartial].includes(token)
+      ? 'partial'
+      : [TOKENS.long, TOKENS.adminLong].includes(token)
+        ? 'long'
+        : 'populated';
+  const actor = [TOKENS.admin, TOKENS.adminEmpty, TOKENS.adminPartial, TOKENS.adminLong].includes(token) ? users.admin : users.user;
   if (state === 'partial' && pathname === '/usage/me') return json(500, { error: 'fixture_internal_secret_must_not_escape' });
   if (pathname === '/auth/me') return json(200, { user: actor, subject: { ...actor, organizationId: project.organizationId, organizationSlug: project.organizationSlug } });
   if (pathname === '/projects') return json(200, { projects: state === 'empty' ? [] : [{ ...project, name: state === 'long' ? longKoreanText : project.name }] });
@@ -130,9 +137,17 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   if (pathname === `/resources/${resource.id}`) return json(200, resource);
   if (pathname.startsWith(`/resources/${resource.id}/console/`)) return resourceConsoleResponse({ body, method, pathname, state });
   if (pathname === `/services/${service.id}/logs`) return json(200, { logs: [{ timestamp: FIXED_TIME, line: longKoreanText }] });
-  if (pathname === '/snapshot') return token === TOKENS.admin
-    ? json(200, { users: [users.user, users.admin, { id: 'usr_pending', email: 'pending@fixture.test', name: '승인 대기', role: 'USER', approvalStatus: 'PENDING', clubMemberClaim: true }], quotas: [], auditLogs: [] })
-    : json(403, { error: 'forbidden' });
+  if (pathname === '/snapshot') {
+    if (actor.role !== 'ADMIN') return json(403, { error: 'forbidden' });
+    const snapshotUsers = state === 'empty'
+      ? []
+      : [
+          { ...users.user, name: state === 'long' ? longKoreanText : users.user.name },
+          users.admin,
+          { id: 'usr_pending', email: 'pending@fixture.test', name: '승인 대기', role: 'USER', accountType: 'NON_CLUB', approvalStatus: 'PENDING', clubMemberClaim: true },
+        ];
+    return json(200, { users: snapshotUsers, quotas: [], auditLogs: [] });
+  }
   if (method === 'POST') return json(200, { ok: true });
   return json(404, { error: 'fixture_route_not_found' });
 }

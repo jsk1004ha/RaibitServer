@@ -29,7 +29,9 @@ test('@harness invalid credentials and upstream failure are sanitized', async ({
   await page.getByLabel('비밀번호').fill('wrong-password-not-secret');
   await page.getByRole('button', { name: '콘솔에 로그인' }).click();
   await expectRoute(page, '/login', { error: 'invalid_credentials' });
-  await expect(page.locator('.auth-message[role="alert"]')).toContainText('이메일 또는 비밀번호');
+  const invalidAlert = page.locator('.auth-message[role="alert"]');
+  await expect(invalidAlert.locator('[data-slot="alert-title"]')).toHaveText('확인해 주세요');
+  await expect(invalidAlert.locator('[data-slot="alert-description"]')).toHaveText('이메일 또는 비밀번호를 확인해 주세요.');
   await expect(page.locator('body')).not.toContainText('wrong-password-not-secret');
   await page.goto('/login?next=%2Flogin');
   await page.getByLabel('이메일').fill('failure@fixture.test');
@@ -37,7 +39,10 @@ test('@harness invalid credentials and upstream failure are sanitized', async ({
   await page.getByRole('button', { name: '콘솔에 로그인' }).click();
   await expectRoute(page, '/login', { error: 'request_failed_500' });
   expect(page.url()).not.toContain('fixture_upstream_secret_must_not_escape');
-  await expect(page.locator('.auth-message[role="alert"]')).toHaveText('요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.');
+  const failureAlert = page.locator('.auth-message[role="alert"]');
+  await expect(failureAlert.locator('[data-slot="alert-title"]')).toHaveText('확인해 주세요');
+  await expect(failureAlert.locator('[data-slot="alert-description"]')).toHaveText('요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.');
+  await expect(failureAlert).not.toContainText(/fixture_upstream_secret|upstream-input/);
   await expect(page.locator('body')).not.toContainText(/fixture_upstream_secret|upstream-input/);
   expect(consoleMessages.join('\n')).not.toContain('fixture_upstream_secret_must_not_escape');
   await captureScreenshot(page, testInfo, 'failure-sanitized-login');
@@ -59,7 +64,9 @@ test('@harness reusable role and deterministic state contexts enforce contracts'
 
 test('@harness seeded project, deployment, resource, GitHub, status and viewport matrix are stable', async ({ userPage }, testInfo) => {
   for (const viewport of VIEWPORT_MATRIX) { await userPage.setViewportSize(viewport); await userPage.goto('/console'); await expect(userPage.getByText('결정적 운영 프로젝트')).toBeVisible(); }
-  await userPage.goto('/org/raibit/projects/prj_fixture_001?view=deployments'); await expect(userPage.getByText('sha256:fixture0001')).toBeVisible();
+  await userPage.goto('/org/raibit/projects/prj_fixture_001?view=deployments');
+  const deploymentDigest = userPage.locator('[data-slot="table"] tbody').getByText('sha256:fixture0001', { exact: true });
+  await expect(deploymentDigest).toHaveCount(1); await expect(deploymentDigest).toBeVisible();
   await userPage.goto('/org/raibit/projects/prj_fixture_001?view=resources'); await expect(userPage.getByText('primary-postgres')).toBeVisible();
   await userPage.goto('/github'); await expect(userPage.locator('body')).toContainText(/raibit-fixture|fixture-app/);
   await userPage.goto('/status'); await expect(userPage.getByRole('heading', { name: '모든 시스템 정상' })).toBeVisible();

@@ -5,6 +5,7 @@ const fixtureEnabled = process.env.RAIBITSERVER_E2E_FIXTURES === '1';
 const secretMarker = 'T6_E2E_SECRET_SHOULD_NOT_RENDER';
 const PUBLIC_HOME_URL = 'http://localhost:3410/';
 const CONSOLE_LOGIN_URL = `${DASHBOARD_ORIGIN}/login`;
+const LOOPBACK_ORIGIN = 'http://127.0.0.1:3410';
 
 async function expectPublicErrorSurface(page: import('@playwright/test').Page): Promise<void> {
   await expect(page.locator('main#main-content')).toHaveCount(1);
@@ -12,6 +13,29 @@ async function expectPublicErrorSurface(page: import('@playwright/test').Page): 
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   await expect(page.locator('body')).not.toContainText(secretMarker);
   await expect(page.locator('body')).not.toContainText(/\bat\s+\w+\s*\(/);
+}
+
+async function openGlobalErrorFixture(
+  page: import('@playwright/test').Page,
+  request: import('@playwright/test').APIRequestContext,
+): Promise<void> {
+  const arm = await request.get(`${LOOPBACK_ORIGIN}/errors/fixtures/global-error/arm`, {
+    headers: { cookie: 'raibitserver_session=fixture-user-populated', host: new URL(DASHBOARD_ORIGIN).host },
+    maxRedirects: 0,
+  });
+  expect(arm.status()).toBe(307);
+  expect(arm.headers().location).toMatch(/\/errors\/fixtures\/global-error$/);
+  const fixtureCookie = arm.headers()['set-cookie']?.match(/T6_E2E_GLOBAL_ERROR=([^;]+)/)?.[1];
+  expect(fixtureCookie).toBe('1');
+  await page.context().addCookies([{
+    name: 'T6_E2E_GLOBAL_ERROR',
+    value: fixtureCookie,
+    domain: new URL(DASHBOARD_ORIGIN).hostname,
+    path: '/errors/fixtures/global-error',
+    httpOnly: true,
+    sameSite: 'Strict',
+  }]);
+  await page.goto('/errors/fixtures/global-error', { waitUntil: 'networkidle' });
 }
 
 async function expectKeyboardSkipLink(page: import('@playwright/test').Page, url: string): Promise<void> {
@@ -65,7 +89,7 @@ test.describe('@t6-error-boundaries', () => {
     await captureScreenshot(userPage, testInfo, 't6-loading');
   });
 
-  test('injected route and global failures keep recovery controls focusable and sanitized', async ({ userPage }, testInfo) => {
+  test('injected route and global failures keep recovery controls focusable and sanitized', async ({ userPage, request }, testInfo) => {
     await userPage.goto('/errors/fixtures/route-error');
     await expectPublicErrorSurface(userPage);
     const retry = userPage.getByRole('button', { name: '다시 시도하기' });
@@ -77,7 +101,7 @@ test.describe('@t6-error-boundaries', () => {
     await expectAccessible(userPage);
     await captureScreenshot(userPage, testInfo, 't6-route-error');
 
-    await userPage.goto('/errors/fixtures/global-error');
+    await openGlobalErrorFixture(userPage, request);
     await expectPublicErrorSurface(userPage);
     await expect(userPage.getByRole('alert')).toBeVisible();
     const globalRetry = userPage.getByRole('button', { name: '다시 시도하기' });
