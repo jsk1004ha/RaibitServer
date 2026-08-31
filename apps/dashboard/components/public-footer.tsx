@@ -11,11 +11,11 @@ export function PublicFooter() {
           <span>RAIBIT SERVER</span>
         </a>
         <nav className="flex flex-wrap items-center gap-x-raibit-lg gap-y-raibit-xs" aria-label="푸터 탐색">
-          <a className="inline-flex min-h-11 items-center hover:text-foreground" href="/support">Support</a>
-          <a className="inline-flex min-h-11 items-center hover:text-foreground" href="/status">System Status</a>
-          <a className="inline-flex min-h-11 items-center hover:text-foreground" href={githubUrl} target="_blank" rel="noreferrer">GitHub</a>
-          <a className="inline-flex min-h-11 items-center hover:text-foreground" href="/contributors">Contributors</a>
-          <a className="inline-flex min-h-11 items-center hover:text-foreground" href="/privacy">Privacy Policy</a>
+          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/support">Support</a>
+          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/status">System Status</a>
+          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href={githubUrl} target="_blank" rel="noreferrer">GitHub</a>
+          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/contributors">Contributors</a>
+          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/privacy">Privacy Policy</a>
         </nav>
         <span>© 2026 Raibit, ISHS.</span>
       </div>

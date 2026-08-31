@@ -1,21 +1,29 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { SystemStatusSnapshot, SystemStatusTone } from '../lib/system-status';
+import { RefreshCwIcon } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Spinner } from "./ui/spinner";
+import type { SystemStatusSnapshot, SystemStatusTone } from "../lib/system-status";
 
-const overallCopy: Record<SystemStatusTone, { title: string; detail: string }> = {
-  operational: { title: '모든 시스템 정상', detail: 'RAIBIT SERVER가 정상 작동 중입니다.' },
-  degraded: { title: '일부 확인 필요', detail: '일부 기능이 지연되고 있습니다.' },
-  outage: { title: '시스템 장애', detail: '핵심 기능을 확인하고 있습니다.' },
-};
+// prettier-ignore
+const overallCopy = {
+  operational: { title: "모든 시스템 정상", detail: "RAIBIT SERVER가 정상 작동 중입니다." },
+  degraded: { title: "일부 확인 필요", detail: "일부 기능이 지연되고 있습니다." },
+  outage: { title: "시스템 장애", detail: "핵심 기능을 확인하고 있습니다." },
+} as const satisfies Record<SystemStatusTone, Readonly<{ title: string; detail: string }>>;
 
-const statusLabels: Record<SystemStatusTone, string> = {
-  operational: '정상',
-  degraded: '지연',
-  outage: '장애',
-};
+// prettier-ignore
+const statusPresentation = {
+  operational: { label: "정상", variant: "default" },
+  degraded: { label: "지연", variant: "secondary" },
+  outage: { label: "장애", variant: "destructive" },
+} as const satisfies Record<SystemStatusTone, Readonly<{ label: string; variant: "default" | "secondary" | "destructive" }>>;
 
-export function SystemStatusPanel({ initialStatus }: { initialStatus: SystemStatusSnapshot }) {
+export function SystemStatusPanel({
+  initialStatus,
+}: Readonly<{ initialStatus: SystemStatusSnapshot }>) {
   const [snapshot, setSnapshot] = useState(initialStatus);
   const [refreshing, setRefreshing] = useState(false);
   const [stale, setStale] = useState(false);
@@ -28,17 +36,19 @@ export function SystemStatusPanel({ initialStatus }: { initialStatus: SystemStat
     requestRef.current = controller;
     setRefreshing(true);
     try {
-      const response = await fetch('/api/status', {
-        cache: 'no-store',
-        headers: { accept: 'application/json' },
+      const response = await fetch("/api/status", {
+        cache: "no-store",
+        headers: { accept: "application/json" },
         signal: controller.signal,
       });
-      const payload = await response.json();
-      if (!response.ok || !isSystemStatusSnapshot(payload)) throw new Error('invalid_status_response');
+      const payload: unknown = await response.json();
+      if (!response.ok || !isSystemStatusSnapshot(payload))
+        throw new StatusResponseError();
       setSnapshot(payload);
       setStale(false);
     } catch (error) {
-      if ((error as Error).name !== 'AbortError') setStale(true);
+      if (!(error instanceof DOMException && error.name === "AbortError"))
+        setStale(true);
     } finally {
       if (requestRef.current === controller) requestRef.current = null;
       setRefreshing(false);
@@ -46,128 +56,203 @@ export function SystemStatusPanel({ initialStatus }: { initialStatus: SystemStat
   }, []);
 
   useEffect(() => {
-    const interval = window.setInterval(() => void refresh(), snapshot.refreshIntervalSeconds * 1000);
+    const interval = window.setInterval(
+      () => void refresh(),
+      snapshot.refreshIntervalSeconds * 1000,
+    );
     const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') void refresh();
+      if (document.visibilityState === "visible") void refresh();
     };
-    document.addEventListener('visibilitychange', refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       window.clearInterval(interval);
-      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       requestRef.current?.abort();
     };
   }, [refresh, snapshot.refreshIntervalSeconds]);
 
   return (
-    <section className="system-status" aria-labelledby="system-status-title" aria-busy={refreshing}>
-      <header className="system-status-summary">
-        <div className="system-status-summary-copy">
-          <span className={`system-status-signal status-${snapshot.status}`} aria-hidden="true"><i /></span>
+    <section
+      className="mx-auto w-full max-w-7xl px-raibit-lg pb-raibit-huge sm:px-raibit-xl"
+      aria-labelledby="system-status-title"
+      aria-busy={refreshing}
+    >
+      <header className="grid gap-raibit-xl border-b border-border py-raibit-xxl sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+        <div className="flex min-w-0 items-start gap-raibit-lg">
+          <span
+            className="mt-raibit-xs size-4 shrink-0 rounded-full bg-primary shadow-[0_0_0_8px_rgb(9_25_54/0.08)]"
+            aria-hidden="true"
+          />
           <div>
-            <h2 id="system-status-title">{copy.title}</h2>
-            <p>{copy.detail}</p>
+            <h2
+              className="text-display-md font-medium text-foreground"
+              id="system-status-title"
+            >
+              {copy.title}
+            </h2>
+            <p className="mt-raibit-sm text-body-md text-muted-foreground">
+              {copy.detail}
+            </p>
           </div>
         </div>
-        <button
-          className="btn status-refresh-button"
+        <Button
+          variant="outline"
+          size="icon-lg"
           type="button"
           onClick={() => void refresh()}
           disabled={refreshing}
-          aria-label={refreshing ? '상태 확인 중' : '상태 새로고침'}
+          aria-label={refreshing ? "상태 확인 중" : "상태 새로고침"}
         >
-          <RefreshIcon refreshing={refreshing} />
-        </button>
+          {refreshing ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <RefreshCwIcon data-icon="inline-start" />
+          )}
+        </Button>
       </header>
-
-      <div className="system-status-list" role="list" aria-live="polite">
-        {snapshot.components.map((component) => (
-          <div className="system-status-row" role="listitem" key={component.id}>
-            <div>
-              <strong>{component.name}</strong>
-              <small>{component.detail}{component.latencyMs === null ? '' : ` · ${component.latencyMs}ms`}</small>
+      <div className="border-b border-border" role="list" aria-live="polite">
+        {snapshot.components.map((component, index) => {
+          const presentation = statusPresentation[component.status];
+          return (
+            <div
+              className="grid min-h-24 grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-raibit-md border-b border-border py-raibit-lg last:border-b-0 sm:grid-cols-[4rem_minmax(0,1fr)_auto]"
+              role="listitem"
+              key={component.id}
+            >
+              <span className="font-mono text-caption text-muted-foreground">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <div className="min-w-0">
+                <strong className="block text-heading-md font-medium text-foreground">
+                  {component.name}
+                </strong>
+                <small className="mt-raibit-xs block text-caption text-pretty text-muted-foreground">
+                  {component.detail}
+                  {component.latencyMs === null
+                    ? ""
+                    : ` · ${component.latencyMs}ms`}
+                </small>
+              </div>
+              <Badge variant={presentation.variant}>{presentation.label}</Badge>
             </div>
-            <span className={`system-status-badge status-${component.status}`}>
-              <i aria-hidden="true" />{statusLabels[component.status]}
-            </span>
-          </div>
-        ))}
+          );
+        })}
       </div>
-
-      <footer className={`system-status-meta${stale ? ' is-stale' : ''}`}>
-        <span className="system-status-refresh"><i aria-hidden="true" />{stale ? '자동 갱신 지연' : `${snapshot.refreshIntervalSeconds}초 자동 갱신`}</span>
-        <span className="system-status-version">
-          <span>배포 버전</span>
-          {snapshot.deployment.commitUrl && snapshot.deployment.shortCommitSha
-            ? <a href={snapshot.deployment.commitUrl} aria-label={`GitHub 커밋 ${snapshot.deployment.commitSha}`}>{snapshot.deployment.shortCommitSha}</a>
-            : <strong>확인 불가</strong>}
+      <footer
+        className="flex flex-col gap-raibit-sm py-raibit-lg text-caption text-muted-foreground sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
+        aria-live="polite"
+      >
+        <span className={stale ? "font-medium text-destructive" : undefined}>
+          {stale
+            ? "자동 갱신 지연"
+            : `${snapshot.refreshIntervalSeconds}초 자동 갱신`}
         </span>
-        <time dateTime={snapshot.checkedAt}>최근 확인 {formatCheckedAt(snapshot.checkedAt)}</time>
+        <span className="flex flex-wrap items-center gap-raibit-sm">
+          <span>배포 버전</span>
+          {snapshot.deployment.commitUrl &&
+          snapshot.deployment.shortCommitSha ? (
+            <a
+              className="font-mono text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
+              href={snapshot.deployment.commitUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`GitHub 커밋 ${snapshot.deployment.commitSha}`}
+            >
+              {snapshot.deployment.shortCommitSha}
+            </a>
+          ) : (
+            <strong className="text-foreground">확인 불가</strong>
+          )}
+        </span>
+        <time dateTime={snapshot.checkedAt}>
+          최근 확인 {formatCheckedAt(snapshot.checkedAt)}
+        </time>
       </footer>
     </section>
   );
 }
 
-function RefreshIcon({ refreshing }: { refreshing: boolean }) {
-  return (
-    <svg
-      className={`status-refresh-icon${refreshing ? ' is-spinning' : ''}`}
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-      <path d="M21 3v5h-5" />
-      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-      <path d="M8 16H3v5" />
-    </svg>
-  );
+class StatusResponseError extends Error {
+  constructor() {
+    super("invalid_status_response");
+    this.name = "StatusResponseError";
+  }
 }
 
 function isSystemStatusSnapshot(value: unknown): value is SystemStatusSnapshot {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Partial<SystemStatusSnapshot>;
-  if (!['operational', 'degraded', 'outage'].includes(String(candidate.status))) return false;
-  if (typeof candidate.checkedAt !== 'string' || !Number.isFinite(candidate.refreshIntervalSeconds) || !Array.isArray(candidate.components)) return false;
-  if (!isDeploymentVersion(candidate.deployment)) return false;
-  return candidate.components.every((component) => (
-    component
-    && typeof component.id === 'string'
-    && typeof component.name === 'string'
-    && ['operational', 'degraded', 'outage'].includes(String(component.status))
-  ));
+  if (
+    !isRecord(value) ||
+    !isTone(value.status) ||
+    typeof value.checkedAt !== "string" ||
+    typeof value.refreshIntervalSeconds !== "number" ||
+    !Number.isFinite(value.refreshIntervalSeconds) ||
+    !Array.isArray(value.components) ||
+    !isDeploymentVersion(value.deployment)
+  )
+    return false;
+  return value.components.every(
+    (component) =>
+      isRecord(component) &&
+      typeof component.id === "string" &&
+      typeof component.name === "string" &&
+      typeof component.detail === "string" &&
+      isTone(component.status) &&
+      (component.latencyMs === null || typeof component.latencyMs === "number"),
+  );
 }
 
-function isDeploymentVersion(value: unknown): value is SystemStatusSnapshot['deployment'] {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Partial<SystemStatusSnapshot['deployment']>;
-  const nullableStrings = [candidate.repository, candidate.commitSha, candidate.shortCommitSha, candidate.commitUrl];
-  if (!nullableStrings.every((field) => field === null || typeof field === 'string')) return false;
-  if (candidate.repository !== null && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/.test(candidate.repository || '')) return false;
-  if (candidate.commitSha !== null && !/^[0-9a-f]{40}$/.test(candidate.commitSha || '')) return false;
-  if (candidate.shortCommitSha !== (candidate.commitSha?.slice(0, 12) || null)) return false;
-  const expectedUrl = candidate.repository && candidate.commitSha
-    ? `https://github.com/${candidate.repository}/commit/${candidate.commitSha}`
-    : null;
-  return candidate.commitUrl === expectedUrl;
+function isDeploymentVersion(
+  value: unknown,
+): value is SystemStatusSnapshot["deployment"] {
+  if (!isRecord(value)) return false;
+  const fields = [
+    value.repository,
+    value.commitSha,
+    value.shortCommitSha,
+    value.commitUrl,
+  ];
+  if (!fields.every((field) => field === null || typeof field === "string"))
+    return false;
+  if (
+    value.repository !== null &&
+    (typeof value.repository !== "string" ||
+      !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/.test(
+        value.repository,
+      ))
+  )
+    return false;
+  if (
+    value.commitSha !== null &&
+    (typeof value.commitSha !== "string" ||
+      !/^[0-9a-f]{40}$/.test(value.commitSha))
+  )
+    return false;
+  const shortCommit =
+    typeof value.commitSha === "string" ? value.commitSha.slice(0, 12) : null;
+  if (value.shortCommitSha !== shortCommit) return false;
+  const expectedUrl =
+    typeof value.repository === "string" && typeof value.commitSha === "string"
+      ? `https://github.com/${value.repository}/commit/${value.commitSha}`
+      : null;
+  return value.commitUrl === expectedUrl;
 }
 
-function formatCheckedAt(value: string) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+function isTone(value: unknown): value is SystemStatusTone {
+  return value === "operational" || value === "degraded" || value === "outage";
+}
+function formatCheckedAt(value: string): string {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '확인 중';
-  return new Intl.DateTimeFormat('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
+  if (Number.isNaN(date.getTime())) return "확인 중";
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
     hour12: false,
   }).format(date);
 }

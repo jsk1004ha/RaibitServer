@@ -34,7 +34,7 @@ export function PublicHeader({
             {items.map((item) => (
               <a
                 aria-current={currentPath === item.href ? 'page' : undefined}
-                className="inline-flex min-h-11 items-center rounded-sm px-raibit-sm text-button-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-sm px-raibit-sm text-button-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 href={item.href}
                 key={item.href}
               >
