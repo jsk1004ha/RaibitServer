@@ -5,23 +5,29 @@ import test from "node:test";
 const appDirectory = new URL("../", import.meta.url);
 const css = await readFile(new URL("app/globals.css", appDirectory), "utf8");
 
-test("global semantics use the RAIBIT light canvas and navy primary", () => {
+test("global semantics preserve the RAIBIT light canvas and add a dark palette", () => {
   assert.match(css, /--background:\s*#ffffff;/);
   assert.match(css, /--primary:\s*#091936;/);
   assert.match(css, /@theme inline/);
   assert.equal(css.includes(`#${"68df88"}`), false);
   assert.equal(css.includes([104, 223, 136].join(" ")), false);
-  assert.doesNotMatch(css, /color-scheme:\s*dark/);
+  assert.match(css, /\[data-theme="dark"\][\s\S]*color-scheme:\s*dark/);
+  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*#111315;/);
+  assert.match(css, /prefers-color-scheme:\s*dark[\s\S]*\[data-theme="system"\]/);
 });
 
-test("root documents select the light contract", async () => {
-  const [layout, globalError] = await Promise.all([
+test("root documents select a normalized saved theme with a system fallback", async () => {
+  const [layout, globalError, toggle] = await Promise.all([
     readFile(new URL("app/layout.tsx", appDirectory), "utf8"),
     readFile(new URL("app/global-error.tsx", appDirectory), "utf8"),
+    readFile(new URL("components/theme-toggle.tsx", appDirectory), "utf8"),
   ]);
 
-  assert.match(layout, /data-theme="light"/);
-  assert.match(globalError, /data-theme="light"/);
+  assert.match(layout, /data-theme=\{theme\}/);
+  assert.match(layout, /requestCookies\.get\(THEME_COOKIE_NAME\)/);
+  assert.match(globalError, /data-theme="system"/);
+  assert.match(toggle, /nextThemePreference/);
+  assert.match(toggle, /serializeThemeCookie/);
 });
 
 test("the exact planned primitive modules exist without forbidden catalog filler", async () => {

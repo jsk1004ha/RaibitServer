@@ -1,7 +1,7 @@
 ---
 version: alpha
 name: raibit-supabase-inspired
-description: "A RAIBIT SERVER adaptation of the Supabase-inspired white-and-near-black design system, preserving its layout, spacing, component, and elevation grammar while replacing the brand accent with RAIBIT navy and the UI font with Wanted Sans."
+description: "A RAIBIT SERVER adaptation of the Supabase-inspired editorial design system, preserving its layout, spacing, component, and elevation grammar across light and dark themes while using RAIBIT navy and Wanted Sans."
 
 colors:
   primary: "#091936"
@@ -31,6 +31,23 @@ colors:
   accent-pink: "#c7007e"
   accent-indigo: "#054cff"
   accent-crimson: "#e2005a"
+
+colorsDark:
+  primary: "#9bb7e8"
+  primary-deep: "#b4c7eb"
+  primary-soft: "#1c2a42"
+  ink: "#f4f4f5"
+  ink-secondary: "#d4d4d8"
+  ink-mute: "#a1a1aa"
+  ink-mute-2: "#8b8b95"
+  ink-faint: "#71717a"
+  on-primary: "#071229"
+  canvas: "#111315"
+  canvas-soft: "#171a1e"
+  canvas-night: "#090b0e"
+  canvas-night-soft: "#14181d"
+  hairline: "#2f343b"
+  hairline-strong: "#454b55"
 
 typography:
   display-xxl:
@@ -225,15 +242,15 @@ components:
 
 ## Overview
 
-RAIBIT SERVER's design language is engineered for clarity above all else. The marketing surfaces sit on `{colors.canvas}` (pure white), with text rendered in `{colors.ink}` (`#171717` — near-black, never pure black). Across the entire system the only consistent chromatic event is the **RAIBIT navy primary** (`{colors.primary}` — `#091936`) — used as the filled CTA, occasional accent dot, and the signature highlight color in the wordmark. Everything else is a calibrated grey ladder from `#ededed` hairline-cool to `#171717` ink, with thin black-on-white typography doing most of the visual work.
+RAIBIT SERVER's design language is engineered for clarity above all else. Light mode remains the editorial default on `{colors.canvas}` with `{colors.ink}` text. Dark mode maps the same semantic hierarchy onto `{colorsDark.canvas}` with `{colorsDark.ink}` text for low-light and long console sessions. Across both modes, the only consistent chromatic event is the **RAIBIT navy primary**: deep navy in light mode and an illuminated navy tint in dark mode.
 
-Typography runs **Wanted Sans** at weight 500 for display and 400 for body. The display tier uses tight negative letter-spacing (-1.92px at 64px) to pull the rounded humanist letterforms into editorial density. There's no atmospheric gradient, no full-bleed photography, no dark-canvas marketing track — the brand commits to white.
+Typography runs **Wanted Sans** at weight 500 for display and 400 for body. The display tier uses tight negative letter-spacing (-1.92px at 64px) to pull the rounded humanist letterforms into editorial density. There is no atmospheric gradient or full-bleed photography; both themes preserve the same restrained product-first composition.
 
 The product itself appears as composited UI screenshots on every page: dashboard tables, deployment views, resource panels, log streams. These screenshots are the brand's argument. They sit inside `{rounded.lg}` 12px containers with subtle 1px hairlines, often arranged 2-up or in a floating "stacked panes" composition above the hero band.
 
 **Key Characteristics:**
 - Single navy primary (`{colors.primary}` `#091936`) as the only chromatic event; everything else is monochrome.
-- White canvas marketing track with greyscale hierarchy from `{colors.hairline-cool}` to `{colors.ink}`.
+- Semantic light and dark canvases with a shared greyscale hierarchy and identical information emphasis.
 - Custom humanist sans display tier at weight 500 with negative letter-spacing of -1.92px to -0.42px.
 - Composited product UI screenshots (dashboard, deployment view, log stream) are the dominant decorative element — never photography, never illustrations.
 - Tight 6px / 8px button radii — square-ish, technical, never pill-shaped.
@@ -243,6 +260,12 @@ The product itself appears as composited UI screenshots on every page: dashboard
 ## Colors
 
 > **RAIBIT target pages:** home (`/`), `/login`, `/status`, `/console`, and project/service/resource routes.
+
+### Theme Modes
+- **System** is the default preference and follows `prefers-color-scheme`.
+- **Light** uses `{colors.canvas}` / `{colors.ink}` and the original deep RAIBIT navy primary.
+- **Dark** uses `{colorsDark.canvas}` / `{colorsDark.ink}` and `{colorsDark.primary}` so controls retain AA contrast without turning the interface into pure black.
+- Theme selection is global, persists in a same-site cookie, and must not require inline boot scripts or new runtime permissions.
 
 ### Brand & Accent
 - **RAIBIT Navy** (`{colors.primary}` — `#091936`): The signature CTA color. Filled-button background, brand wordmark accent, dot indicator.
@@ -261,6 +284,7 @@ The product itself appears as composited UI screenshots on every page: dashboard
 - **Hairline** (`{colors.hairline}` — `#dfdfdf`): 1px borders on cards and tables.
 - **Hairline Strong** (`{colors.hairline-strong}` — `#c7c7c7`): Slightly darker border for emphasis.
 - **Hairline Cool** (`{colors.hairline-cool}` — `#ededed`) / **Hairline Cool 2** (`#efefef`) / **Hairline Cool 3** (`#d4d4d4`): The brand's grey ladder for fine chrome work.
+- **Dark Canvas** (`{colorsDark.canvas}` — `#111315`) and **Dark Card** (`{colorsDark.canvas-soft}` — `#171a1e`): Elevated charcoal surfaces that preserve separation without pure-black glare.
 
 ### Text
 - **Ink** (`{colors.ink}` — `#171717`): Default body text. Near-black, never pure.
@@ -320,7 +344,7 @@ Wanted Sans is distributed under the SIL Open Font License. Preserve the license
 - Product UI mockups stack 2-up or render as overlapping panes inside the same container.
 
 ### Whitespace Philosophy
-The brand uses generous 64–96px section padding without atmospheric gradients filling the space — the white canvas is the design. The composited product UI mockups break up sections without requiring decoration.
+The brand uses generous 64–96px section padding without atmospheric gradients filling the space. The active semantic canvas—white in light mode, charcoal in dark mode—is the design. Composited product UI mockups break up sections without requiring decoration.
 
 ## Elevation & Depth
 
@@ -358,7 +382,7 @@ The brand uses minimal photography. Customer logo strips display wordmarks at un
 - Background `{colors.primary}`, text `{colors.on-primary}` (white), type `{typography.button-md}`, padding `{spacing.sm} {spacing.lg}` (8px 16px), rounded `{rounded.sm}` 6px.
 - Pressed state `button-primary-navy-pressed` shifts to `{colors.primary-deep}`.
 
-**`button-secondary-outline`** — outline alternative on white.
+**`button-secondary-outline`** — outline alternative on the active semantic canvas.
 - Background `{colors.canvas}`, text `{colors.ink}`, 1px solid `{colors.hairline-strong}` border, same shape.
 
 **`button-on-dark`** — used on dark surfaces / code-block CTAs.
@@ -391,7 +415,7 @@ The brand uses minimal photography. Customer logo strips display wordmarks at un
 
 ### Navigation
 
-**`nav-bar-light`** — top nav across the site.
+**`nav-bar-light`** — legacy token name for the theme-aware top nav across the site.
 - Background `{colors.canvas}`, text `{colors.ink}`, padding `{spacing.lg} {spacing.xl}`. Logo on the left, primary nav center, login link + filled `button-primary-navy` on the right.
 
 ### Pills, Tags, and Chips
@@ -404,7 +428,7 @@ The brand uses minimal photography. Customer logo strips display wordmarks at un
 
 ### Signature Components
 
-**Composited Product UI Mockups** — multi-layer dashboard / deployment / log pane composites with subtle Level 2 shadows. The product is the brand's argument; mockups always sit on white canvas with no surrounding decoration.
+**Composited Product UI Mockups** — multi-layer dashboard / deployment / log pane composites with subtle Level 2 shadows. The product is the brand's argument; mockups sit on the active semantic canvas with no surrounding decoration.
 
 **`link-on-light`** — inline links in body copy.
 - Text `{colors.ink}` rendered in `{typography.body-md}` with a persistent underline.
@@ -421,13 +445,15 @@ The brand uses minimal photography. Customer logo strips display wordmarks at un
 - Composite product UI mockups inside `{rounded.lg}` containers with subtle Level 2 shadows.
 - Use white `{colors.on-primary}` text on the navy button for strong contrast.
 - Apply system mono for every code block.
+- Keep hierarchy, focus visibility, and contrast equivalent in system, light, and dark preferences.
 
 ### Don't
 - Don't introduce additional accent colors as system colors — purples, yellows, and pinks belong inside chart points and integration logos only.
 - Don't bump display weight above 500 — the brand's calibrated mid-weight breaks at 600+.
 - Don't use pill-shaped buttons; the brand's button radius is square-ish 6px.
 - Don't use dark text on the navy button — white is required for contrast.
-- Don't add atmospheric gradients to hero bands — the white canvas is the design.
+- Don't add atmospheric gradients to hero bands — the semantic canvas is the design.
+- Don't hard-code light-only colors in components; use semantic tokens so dark mode stays complete.
 
 ## Responsive Behavior
 
@@ -459,4 +485,4 @@ Product UI mockups use `srcset` with desktop / mobile crops; mobile crops focus 
 3. Run `npx --yes -p @google/design.md@0.4.0 designmd lint DESIGN.md` after edits.
 4. Default body to `{typography.body-md}`; use `{typography.code}` for any developer-facing snippet.
 5. Keep navy scarce; one filled navy button per viewport.
-6. The white-canvas commitment is non-negotiable — adding atmospheric backdrops breaks the brand.
+6. The semantic-canvas commitment is non-negotiable — light and dark must share hierarchy without atmospheric backdrops.

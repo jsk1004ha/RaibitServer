@@ -5,9 +5,10 @@ import test from 'node:test';
 const appDirectory = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, appDirectory), 'utf8');
 
-test('shared document and chrome keep the public light accessibility contract', async () => {
-  const [layout, header, footer, pageHeader, actionNavigation, sectionNavigation] = await Promise.all([
+test('shared document and chrome keep the public accessibility and theme contract', async () => {
+  const [layout, themeToggle, header, footer, pageHeader, actionNavigation, sectionNavigation] = await Promise.all([
     read('app/layout.tsx'),
+    read('components/theme-toggle.tsx'),
     read('components/public-header.tsx'),
     read('components/public-footer.tsx'),
     read('components/page-header.tsx'),
@@ -17,13 +18,18 @@ test('shared document and chrome keep the public light accessibility contract', 
 
   assert.match(layout, /export const dynamic = 'force-dynamic'/);
   assert.match(layout, /lang="ko"/);
-  assert.match(layout, /data-theme="light"/);
+  assert.match(layout, /normalizeThemePreference\(requestCookies\.get\(THEME_COOKIE_NAME\)/);
+  assert.match(layout, /data-theme=\{theme\}/);
+  assert.match(layout, /<ThemeToggle initialTheme=\{theme\}/);
   assert.match(layout, /href="#main-content"/);
   assert.match(layout, /<nav\s+aria-label="바로가기">/);
   assert.doesNotMatch(layout, /<div\s+id="main-content"/);
   assert.doesNotMatch(layout, /<main/);
   for (const source of [header, footer]) assert.match(source, /import\s+\{\s*Brand\s*\}/);
   for (const source of [layout, header, footer, pageHeader, actionNavigation, sectionNavigation]) assert.doesNotMatch(source, /['"]use client['"]/);
+  assert.match(themeToggle, /^['"]use client['"]/);
+  assert.match(themeToggle, /type="button"/);
+  assert.match(themeToggle, /aria-label=\{accessibleLabel\}/);
 });
 
 test('loading and error boundaries expose neutral, sanitized recovery states', async () => {
@@ -53,6 +59,8 @@ test('loading and error boundaries expose neutral, sanitized recovery states', a
   assert.match(globalError, /<head>\s*<title>오류가 발생했습니다 · RAIBIT SERVER<\/title>\s*<\/head>/);
   assert.match(globalError, /<body/);
   assert.match(globalError, /import '\.\/globals\.css'/);
+  assert.match(globalError, /data-theme="system"/);
+  assert.match(globalError, /<ThemeToggle initialTheme="system"/);
   assert.match(notFound, /찾을 수 없습니다/);
   for (const source of [routeError, globalError, notFound, preview]) assert.match(source, /<ErrorScreen/);
   assert.match(screen, /<main\s+id="main-content"/);

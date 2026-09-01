@@ -26,8 +26,8 @@ test("Given Tailwind v4, when global CSS loads, then Preflight is imported exact
   assert.equal(imports.includes("tailwindcss"), false);
 });
 
-test("Given the RAIBIT light contract, when legacy CSS is retired, then dark and green aliases are absent", () => {
-  for (const forbidden of [`#${"68"}df88`, [104, 223, 136].join(" "), "raibit-legacy", "color-scheme: dark"]) {
+test("Given the RAIBIT theme contract, when legacy CSS is retired, then green aliases remain absent", () => {
+  for (const forbidden of [`#${"68"}df88`, [104, 223, 136].join(" "), "raibit-legacy"]) {
     assert.equal(css.toLowerCase().includes(forbidden), false, `${forbidden} must not remain`);
   }
   for (const selector of [".app-shell", ".sidebar", ".topbar", ".landing-page", ".btn", ".quota-editor"]) {
@@ -40,6 +40,8 @@ test("Given the RAIBIT light contract, when legacy CSS is retired, then dark and
   assert.match(css, /--primary:\s*#091936;/);
   assert.match(css, /--canvas-night:\s*#1c1c1c;/);
   assert.match(css, /--destructive:\s*color-mix\(in srgb, var\(--integration-crimson\) 78%, var\(--foreground\)\);/);
+  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*#111315;/);
+  assert.match(css, /prefers-color-scheme:\s*dark[\s\S]*\[data-theme="system"\]/);
 });
 
 test("Given surviving non-Tailwind consumers, when classes are composed dynamically, then the temporary allowlist documents every recipe", () => {

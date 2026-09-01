@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { cookies, headers } from 'next/headers';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { e2eFixturesEnabled } from '@/lib/e2e-fixture-policy';
+import { THEME_COOKIE_NAME, normalizeThemePreference } from '@/lib/theme';
 import './globals.css';
 import './fonts.css';
 
@@ -24,9 +26,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   if (e2eFixturesEnabled(process.env, requestHeaders.get('host')) && requestCookies.get('T6_E2E_GLOBAL_ERROR')?.value === '1') {
     throw new T6GlobalErrorFixture();
   }
+  const theme = normalizeThemePreference(requestCookies.get(THEME_COOKIE_NAME)?.value);
 
   return (
-    <html lang="ko" data-theme="light">
+    <html lang="ko" data-theme={theme}>
       <body className="bg-background font-sans text-foreground">
         <nav aria-label="바로가기">
           <a
@@ -37,6 +40,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           </a>
         </nav>
         {children}
+        <ThemeToggle initialTheme={theme} />
       </body>
     </html>
   );
