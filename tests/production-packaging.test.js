@@ -395,6 +395,10 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
   assert.match(workloadPolicy, /!has\(env\.value\)[\s\S]*has\(env\.valueFrom\.secretKeyRef\)/, 'secret runtime environment values must remain explicit Secret references');
   assert.match(workerSecurity, /@sha256:\[a-f0-9\]\{64\}/);
   assert.match(workerSecurity, /variables\.target\.kind != 'Ingress'[\s\S]*!variables\.ingressHost\.startsWith\('\*\.'\)/);
+  assert.match(workerSecurity, /\$ingressAnnotationCount := 1[\s\S]*\.Values\.hostedErrors\.enabled[\s\S]*add \$ingressAnnotationCount 1/);
+  assert.match(workloadPolicy, /metadata\.annotations\.size\(\) == \{\{ \$ingressAnnotationCount \}\}/);
+  assert.match(workloadPolicy, /nginx\.ingress\.kubernetes\.io\/custom-http-errors'[\s\S]*join "," \.Values\.hostedErrors\.statuses/);
+  assert.match(workloadPolicy, /traefik\.ingress\.kubernetes\.io\/router\.middlewares'[\s\S]*hosted-errors@kubernetescrd/);
   assert.match(workerSecurity, /variables\.target\.spec\.ingressClassName == \{\{ \$ingressClassName \| squote \}\}/);
   assert.match(workerSecurity, /variables\.target\.kind != 'NetworkPolicy'[\s\S]*podSelector\.matchLabels\['app\.kubernetes\.io\/name'\]/);
   assert.match(workerSecurity, /has\(rule\.from\)[\s\S]*has\(peer\.namespaceSelector\)[\s\S]*!has\(peer\.ipBlock\)/);

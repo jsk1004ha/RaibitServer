@@ -1,6 +1,13 @@
 {{- $databaseEgress := .Values.builder.databaseEgress -}}
 {{- $githubApp := .Values.builder.githubAppCredentials -}}
 {{- $ingressClassName := .Values.ingress.className | trim -}}
+{{- $ingressAnnotationCount := 1 -}}
+{{- if .Values.hostedErrors.enabled -}}
+{{- $ingressAnnotationCount = add $ingressAnnotationCount 1 -}}
+{{- end -}}
+{{- if and .Values.hostedErrors.enabled .Values.hostedErrors.traefik.enabled -}}
+{{- $ingressAnnotationCount = add $ingressAnnotationCount 1 -}}
+{{- end -}}
 {{- if or (empty $ingressClassName) (gt (len $ingressClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$" $ingressClassName)) -}}
 {{- fail "ingress className must be a Kubernetes DNS subdomain" -}}
 {{- end -}}
@@ -369,7 +376,15 @@ spec:
       message: "orchestrator Services must remain compiler-shaped internal ClusterIP services"
     - expression: >-
         variables.target.kind != 'Ingress' ||
-        (variables.target.metadata.name == variables.appName && variables.target.metadata.annotations.size() == 1 &&
+        (variables.target.metadata.name == variables.appName && variables.target.metadata.annotations.size() == {{ $ingressAnnotationCount }} &&
+        {{- if .Values.hostedErrors.enabled }}
+        'nginx.ingress.kubernetes.io/custom-http-errors' in variables.target.metadata.annotations &&
+        variables.target.metadata.annotations['nginx.ingress.kubernetes.io/custom-http-errors'] == {{ join "," .Values.hostedErrors.statuses | squote }} &&
+        {{- end }}
+        {{- if and .Values.hostedErrors.enabled .Values.hostedErrors.traefik.enabled }}
+        'traefik.ingress.kubernetes.io/router.middlewares' in variables.target.metadata.annotations &&
+        variables.target.metadata.annotations['traefik.ingress.kubernetes.io/router.middlewares'] == {{ printf "%s-%s-hosted-errors@kubernetescrd" .Release.Namespace (include "raibitserver.fullname" .) | squote }} &&
+        {{- end }}
         variables.ingressHost.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$') && !variables.ingressHost.startsWith('*.') &&
         !has(variables.target.spec.defaultBackend) && variables.target.spec.ingressClassName == {{ $ingressClassName | squote }} &&
         (!has(variables.target.spec.tls) || variables.target.spec.tls.size() == 0) && variables.target.spec.rules.size() == 1 &&
