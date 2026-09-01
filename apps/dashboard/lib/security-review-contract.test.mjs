@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { e2eFixturesEnabled } from './e2e-fixture-policy.js';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -22,14 +23,26 @@ test('Given the local E2E dashboard When its server starts Then it binds only to
   assert.doesNotMatch(source, /'--hostname', '0\.0\.0\.0'/);
 });
 
-test('Given error fixtures When their runtime policy is evaluated Then only an explicit local fixture environment is allowed', async () => {
-  const source = await read('../app/errors/fixtures/fixture-access.ts');
+test('Given error fixtures When their runtime policy is evaluated Then only an explicit local fixture environment and request host are allowed', () => {
+  const localEnvironment = {
+    RAIBITSERVER_E2E_FIXTURES: '1',
+    RAIBITSERVER_BASE_DOMAIN: 'localhost',
+    RAIBITSERVER_DASHBOARD_ORIGIN: 'http://console.localhost:3410',
+  };
 
-  assert.match(source, /function e2eFixturesEnabled/);
-  assert.match(source, /RAIBITSERVER_E2E_FIXTURES/);
-  assert.match(source, /RAIBITSERVER_BASE_DOMAIN/);
-  assert.match(source, /RAIBITSERVER_DASHBOARD_ORIGIN/);
-  assert.match(source, /\.localhost/);
+  assert.equal(e2eFixturesEnabled({}, 'console.localhost:3410'), false);
+  assert.equal(e2eFixturesEnabled({ ...localEnvironment, RAIBITSERVER_BASE_DOMAIN: 'example.com' }, 'console.localhost:3410'), false);
+  assert.equal(e2eFixturesEnabled({ ...localEnvironment, RAIBITSERVER_DASHBOARD_ORIGIN: 'https://console.example.com' }, 'console.localhost:3410'), false);
+  assert.equal(e2eFixturesEnabled(localEnvironment, 'console.example.com'), false);
+  assert.equal(e2eFixturesEnabled(localEnvironment, null), false);
+  assert.equal(e2eFixturesEnabled(localEnvironment, 'console.localhost:3410'), true);
+});
+
+test('Given the root layout When the global-error cookie is evaluated Then the shared local fixture policy gates it', async () => {
+  const layout = await read('../app/layout.tsx');
+
+  assert.match(layout, /e2eFixturesEnabled\(process\.env, requestHeaders\.get\('host'\)\)/);
+  assert.doesNotMatch(layout, /process\.env\.RAIBITSERVER_E2E_FIXTURES\s*===\s*'1'/);
 });
 
 test('Given project hub data When it reaches presentation components Then API authorization context is absent', async () => {

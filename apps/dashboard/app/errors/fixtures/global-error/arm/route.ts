@@ -3,8 +3,8 @@ import { assertE2eFixturesEnabled } from '../../fixture-access';
 
 const globalErrorFixturePath = '/errors/fixtures/global-error';
 
-export function GET(request: Request): NextResponse {
-  assertE2eFixturesEnabled();
+export async function GET(request: Request): Promise<NextResponse> {
+  await assertE2eFixturesEnabled();
   const response = NextResponse.redirect(new URL(globalErrorFixturePath, request.url));
   response.cookies.set('T6_E2E_GLOBAL_ERROR', '1', {
     httpOnly: true,

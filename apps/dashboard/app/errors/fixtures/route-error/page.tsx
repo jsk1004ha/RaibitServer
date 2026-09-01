@@ -6,7 +6,7 @@ class T6RouteErrorFixture extends Error {
   }
 }
 
-export default function RouteErrorFixturePage(): never {
-  assertE2eFixturesEnabled();
+export default async function RouteErrorFixturePage(): Promise<never> {
+  await assertE2eFixturesEnabled();
   throw new T6RouteErrorFixture();
 }

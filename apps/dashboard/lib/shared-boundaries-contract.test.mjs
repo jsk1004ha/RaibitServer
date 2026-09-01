@@ -68,10 +68,11 @@ test('loading and error boundaries expose neutral, sanitized recovery states', a
   for (const source of [notFound, screen, catalog, preview]) assert.doesNotMatch(source, /['"]use client['"]/);
 });
 
-test('E2E-only fixture routes are inert without the explicit environment switch', async () => {
-  const [layout, access, fixtureLayout, loading, routeError, globalError, arm, primitiveFixture, browserSpec, dashboardFixtures, browserContracts, fixtureServer] = await Promise.all([
+test('E2E-only fixture routes are inert without the explicit local environment and request host', async () => {
+  const [layout, access, policy, fixtureLayout, loading, routeError, globalError, arm, primitiveFixture, browserSpec, dashboardFixtures, browserContracts, fixtureServer] = await Promise.all([
     read('app/layout.tsx'),
     read('app/errors/fixtures/fixture-access.ts'),
+    read('lib/e2e-fixture-policy.js'),
     read('app/errors/fixtures/layout.tsx'),
     read('app/errors/fixtures/loading/page.tsx'),
     read('app/errors/fixtures/route-error/page.tsx'),
@@ -84,7 +85,11 @@ test('E2E-only fixture routes are inert without the explicit environment switch'
     read('tests/e2e/fixture/serve.mjs'),
   ]);
 
-  for (const source of [layout, access]) assert.match(source, /RAIBITSERVER_E2E_FIXTURES/);
+  for (const name of ['RAIBITSERVER_E2E_FIXTURES', 'RAIBITSERVER_BASE_DOMAIN', 'RAIBITSERVER_DASHBOARD_ORIGIN']) {
+    assert.match(policy, new RegExp(name));
+  }
+  assert.match(layout, /e2eFixturesEnabled\(process\.env, requestHeaders\.get\('host'\)\)/);
+  assert.match(access, /e2eFixturesEnabled\(process\.env, requestHeaders\.get\('host'\)\)/);
   assert.match(access, /notFound\(\)/);
   assert.match(fixtureLayout, /dynamic = 'force-dynamic'/);
   assert.match(loading, /new Promise\(\(\) => undefined\)/);

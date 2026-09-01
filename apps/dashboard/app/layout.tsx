@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
+import { e2eFixturesEnabled } from '@/lib/e2e-fixture-policy';
 import './globals.css';
 import './fonts.css';
 
@@ -19,8 +20,8 @@ class T6GlobalErrorFixture extends Error {
 }
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const requestCookies = await cookies();
-  if (process.env.RAIBITSERVER_E2E_FIXTURES === '1' && requestCookies.get('T6_E2E_GLOBAL_ERROR')?.value === '1') {
+  const [requestCookies, requestHeaders] = await Promise.all([cookies(), headers()]);
+  if (e2eFixturesEnabled(process.env, requestHeaders.get('host')) && requestCookies.get('T6_E2E_GLOBAL_ERROR')?.value === '1') {
     throw new T6GlobalErrorFixture();
   }
 

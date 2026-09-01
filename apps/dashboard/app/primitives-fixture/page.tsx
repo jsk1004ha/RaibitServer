@@ -25,8 +25,8 @@ import { assertE2eFixturesEnabled } from "../errors/fixtures/fixture-access"
 
 export const dynamic = "force-dynamic"
 
-export default function PrimitiveFixturePage() {
-  assertE2eFixturesEnabled()
+export default async function PrimitiveFixturePage() {
+  await assertE2eFixturesEnabled()
 
   return (
     <main className="min-h-dvh bg-background px-4 py-10 text-foreground sm:px-8">
