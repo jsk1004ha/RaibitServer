@@ -12,7 +12,7 @@ test("global semantics preserve the RAIBIT light canvas and add a dark palette",
   assert.equal(css.includes(`#${"68df88"}`), false);
   assert.equal(css.includes([104, 223, 136].join(" ")), false);
   assert.match(css, /\[data-theme="dark"\][\s\S]*color-scheme:\s*dark/);
-  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*#111315;/);
+  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*var\(--raibit-dark-canvas\);/);
   assert.match(css, /prefers-color-scheme:\s*dark[\s\S]*\[data-theme="system"\]/);
 });
 

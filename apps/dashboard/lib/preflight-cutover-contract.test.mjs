@@ -40,7 +40,7 @@ test("Given the RAIBIT theme contract, when legacy CSS is retired, then green al
   assert.match(css, /--primary:\s*#091936;/);
   assert.match(css, /--canvas-night:\s*#1c1c1c;/);
   assert.match(css, /--destructive:\s*color-mix\(in srgb, var\(--integration-crimson\) 78%, var\(--foreground\)\);/);
-  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*#111315;/);
+  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*var\(--raibit-dark-canvas\);/);
   assert.match(css, /prefers-color-scheme:\s*dark[\s\S]*\[data-theme="system"\]/);
 });
 
