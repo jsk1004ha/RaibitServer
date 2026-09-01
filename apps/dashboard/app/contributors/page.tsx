@@ -33,11 +33,11 @@ export default function ContributorsPage() {
               <p className="text-micro font-medium tracking-[0.16em] text-primary">
                 BUILT BY RAIBIT
               </p>
-              <h1 className="mt-raibit-lg text-display-xl font-medium text-foreground sm:text-display-xxl">
+              <h1 className="mt-raibit-lg break-keep [overflow-wrap:anywhere] text-display-xl font-medium text-foreground sm:text-display-xxl">
                 기여자
               </h1>
             </div>
-            <p className="text-body-lg text-pretty text-muted-foreground">
+            <p className="break-keep [overflow-wrap:anywhere] text-body-lg text-pretty text-muted-foreground">
               RAIBIT SERVER를 만들고 운영하는 사람들입니다.
             </p>
           </header>
