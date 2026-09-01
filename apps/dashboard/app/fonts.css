@@ -1,0 +1,12 @@
+@font-face {
+  font-family: "Wanted Sans";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("/fonts/wanted-sans/WantedSansVariable.woff2") format("woff2");
+}
+
+:root {
+  --font-body: "Wanted Sans", "Noto Sans KR", system-ui, sans-serif;
+  --font-display: "Wanted Sans", "Noto Sans KR", system-ui, sans-serif;
+}

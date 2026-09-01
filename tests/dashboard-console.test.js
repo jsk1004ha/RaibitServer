@@ -5,16 +5,23 @@ import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 
 test('dashboard project detail is API-backed instead of hardcoded prototype arrays', async () => {
-  const detail = await fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', import.meta.url), 'utf8');
+  const [detail, hub, services, operations] = await Promise.all([
+    fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/components/project-hub/project-hub.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/components/project-hub/services.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/components/project-hub/operations.tsx', import.meta.url), 'utf8'),
+  ]);
+  const projectFeatures = `${detail}\n${hub}\n${services}\n${operations}`;
   assert.doesNotMatch(detail, /const\s+services\s*=\s*\[/);
   assert.doesNotMatch(detail, /const\s+resources\s*=\s*\[/);
-  for (const marker of ['loadProjectConsole', 'projectMainLink', 'project-main-link', '/deployments', '/console', 'sourceType', 'imageUrl', 'dockerfilePath', '서비스 만들기', '리소스 추가', '운영 배포', '미리보기', '런타임 로그']) {
-    assert.ok(detail.includes(marker), `${marker} missing from project console page`);
+  for (const marker of ['loadProjectConsole', 'projectMainLink', 'ProjectHub', '/deployments', '/console', 'sourceType', 'imageUrl', 'dockerfilePath', '서비스 만들기', '리소스 추가', '운영 배포', '미리보기', '런타임 로그']) {
+    assert.ok(projectFeatures.includes(marker), `${marker} missing from project console feature set`);
   }
   assert.match(detail, /organizationSlug:\s*state\.project\.organizationSlug\s*\|\|\s*state\.project\.organization\?\.slug/);
   assert.doesNotMatch(detail, /organizationSlug:[^\n]*\|\|\s*orgSlug/);
   assert.match(detail, /const organizationLabel = state\.project\.organization\?\.name \|\| state\.project\.organizationSlug \|\| '내 조직'/);
-  assert.ok(detail.includes('orgValue={organizationLabel} orgRouteValue={orgSlug}'));
+  assert.ok(detail.includes('orgRouteValue={orgSlug}'));
+  assert.ok(detail.includes('orgValue={organizationLabel}'));
 });
 
 test('dashboard exposes public, authenticated, admin, GitHub, deployment, and resource routes', async () => {
@@ -65,7 +72,7 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
     assert.ok(githubCallback.includes(marker), `GitHub callback must recover and clear setup state: ${marker}`);
   }
   assert.ok(guide.includes('사용 안내'));
-  for (const marker of ['/deployments/${deploymentId}/cancel', '/deployments/${deploymentId}/rollback', 'imageDigest', 'errorCode', '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소']) {
+  for (const marker of ['/deployments/${encodedDeploymentId}/cancel', '/deployments/${encodedDeploymentId}/rollback', 'imageDigest', 'errorCode', '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소']) {
     assert.ok(deployment.includes(marker), `${marker} missing from deployment screen`);
   }
   assert.doesNotMatch(deployment, /\/deployments\/\$\{deploymentId\}\/status/, 'tenant dashboard must not expose worker-owned deployment status mutation');

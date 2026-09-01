@@ -4,16 +4,17 @@ import { createRequire } from 'node:module';
 import { registerHooks } from 'node:module';
 import test from 'node:test';
 
-const dashboardRequire = createRequire(new URL('../apps/dashboard/package.json', import.meta.url));
-const { NextRequest } = dashboardRequire('next/server');
+const nextServerUrl = new URL('../apps/dashboard/node_modules/next/server.js', import.meta.url).href;
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === 'next/server') {
-      return { shortCircuit: true, url: new URL('../apps/dashboard/node_modules/next/server.js', import.meta.url).href };
+      return { shortCircuit: true, url: nextServerUrl };
     }
     return nextResolve(specifier, context);
   },
 });
+const dashboardRequire = createRequire(new URL('../apps/dashboard/package.json', import.meta.url));
+const { NextRequest } = dashboardRequire('next/server');
 const { proxy } = await import('../apps/dashboard/proxy.ts');
 
 test('console host requires a session at its root and keeps the public host landing open', { concurrency: false }, () => {
@@ -218,8 +219,13 @@ test('tenant workload hosts always rewrite dashboard fallbacks to the branded ho
 
 test('production login links return to the public raibit.kr landing instead of looping on the console root', async () => {
   const loginPage = await readFile(new URL('../apps/dashboard/app/login/page.tsx', import.meta.url), 'utf8');
-  assert.match(loginPage, /process\.env\.NODE_ENV === 'production' \? 'https:\/\/raibit\.kr\/' : '\/'/);
-  assert.equal(loginPage.match(/href=\{publicHomeHref\}/g)?.length, 2);
+  assert.match(loginPage, /const publicHomeHref = process\.env\.NODE_ENV === 'production' \? 'https:\/\/raibit\.kr\/' : '\/';/);
+  assert.equal(loginPage.match(/href=\{publicHomeHref\}/g)?.length, 3);
+  for (const marker of [
+    'className="flex w-fit items-center gap-3 text-sm font-medium" href={publicHomeHref}',
+    'className="mb-8 flex w-fit items-center gap-3 text-sm font-medium lg:hidden" href={publicHomeHref}',
+    'className="w-fit hover:text-foreground" href={publicHomeHref}',
+  ]) assert.ok(loginPage.includes(marker), `${marker} must keep the public production landing target`);
 });
 
 function restoreEnvironment(key, value) {

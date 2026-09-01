@@ -17,6 +17,7 @@ import {
   githubInstallStateCookieOptions,
   isSameOriginMutation,
 	projectCreatePayloadFromForm,
+	publicUpstreamErrorCode,
 	publicHostnameForConsole,
 	readBoundedBody,
 	responseStatusAllowsBody,
@@ -25,6 +26,19 @@ import {
 	withFlashMessage,
   upstreamPath,
 } from './request-security.js';
+
+test('Given an upstream failure, when its code is a bounded safe identifier, then the public proxy preserves it', () => {
+	assert.equal(publicUpstreamErrorCode({ error: 'invalid_credentials' }, 401), 'invalid_credentials');
+	assert.equal(publicUpstreamErrorCode({ message: 'fixture_route_not_found' }, 404), 'fixture_route_not_found');
+	assert.equal(publicUpstreamErrorCode({ error: 'provider.rate-limit:exceeded' }, 429), 'provider.rate-limit:exceeded');
+});
+
+test('Given an upstream failure, when its message is unsafe or unbounded, then the public proxy exposes only the status fallback', () => {
+	assert.equal(publicUpstreamErrorCode({ error: '<script>alert(1)</script>' }, 500), 'request_failed_500');
+	assert.equal(publicUpstreamErrorCode({ message: 'secret='.concat('x'.repeat(81)) }, 418), 'request_failed_418');
+	assert.equal(publicUpstreamErrorCode({ error: 'safe', message: 'ignored' }, undefined), 'safe');
+	assert.equal(publicUpstreamErrorCode({}, undefined), 'request_failed_500');
+});
 
 test('session cookie is host-only, HttpOnly and only Secure when configured or in production', () => {
   assert.equal(SESSION_COOKIE_NAME, 'raibitserver_session');

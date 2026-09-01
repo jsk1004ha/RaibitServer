@@ -112,6 +112,21 @@ pnpm --filter @raibitserver/dashboard lint
 pnpm --filter @raibitserver/cli typecheck
 ```
 
+### Dashboard 최종 UI 회귀 매트릭스
+
+정적 완전성 계약은 실제 앱을 띄우지 않고 38개 오류 코드, 7개 가이드 주제, 11개 프로젝트 뷰, 5개 배포 뷰, 7개 리소스 뷰, 4개 GitHub 단계와 권한·fixture·viewport 축을 검증합니다.
+
+```sh
+node --test tests/dashboard-regression-matrix.test.js apps/dashboard/tests/e2e/fixture/data.test.mjs
+pnpm --filter @raibitserver/dashboard exec playwright test tests/e2e/specs/t16-full-regression-matrix.spec.ts --list
+```
+
+최종 production build에서 fixture를 활성화한 뒤 전체 T16 브라우저 매트릭스를 실행합니다. 긴 라우트 cohort는 최대 12개씩, 대표 화면과 standalone hosted-error는 화면/상태별 테스트로 분할되므로 30초 전역 timeout에 의존하지 않습니다. 공개 `/errors/*` 미리보기와 해당 44px action 검증은 public apex에서 실행하고, 익명 사용자의 같은 경로에 대한 console host 접근은 별도 로그인 redirect 시나리오로 검증합니다. 이 실행은 각 라우트의 axe 결과와 접근성 스냅샷, 대표 375×812/1280×800 화면, 767/768 shell 경계, standalone hosted-error 헤더를 Playwright 결과 디렉터리에 남깁니다.
+
+```sh
+RAIBITSERVER_E2E_FIXTURES=1 pnpm --filter @raibitserver/dashboard test:e2e -- tests/e2e/specs/t16-full-regression-matrix.spec.ts
+```
+
 ## Known coverage gaps
 
 - `pnpm lint`는 현재 `git diff --check`와 `node scripts/check-structure.js`를 실행하며, 모든 package의 full ESLint가 아닙니다.
