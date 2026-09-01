@@ -6,6 +6,7 @@ import { consoleOrganizationLinks, resolveOrganizationRouteValue } from '../lib/
 import { cn } from '../lib/utils';
 import { ConsoleSearch } from './console-search';
 import { ConsoleMobileNav } from './console-mobile-nav';
+import { ThemeMenu } from './theme-menu';
 import { Brand } from './brand';
 import { FlashBanner } from './flash-banner';
 import { Icon } from './icon';
@@ -127,7 +128,10 @@ export async function ConsoleShell({
       </aside>
       <header className="flex min-w-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
         <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} projectLabel={projectLabel} projectValue={projectValue} userEmail={user?.email || '로그인 사용자'} />
-        <ConsoleSearch compact items={searchItems} />
+        <div className="flex shrink-0 items-center gap-2" aria-label="모바일 콘솔 도구">
+          <ConsoleSearch compact items={searchItems} />
+          <ThemeMenu />
+        </div>
       </header>
       <main id="main-content" className="min-h-0 min-w-0 overflow-y-auto overscroll-y-contain md:col-start-2 md:row-start-1">
         <header className="sticky top-0 z-10 hidden min-h-16 items-center justify-between gap-4 border-b border-border bg-background/95 px-6 supports-backdrop-filter:backdrop-blur-sm md:flex">
@@ -138,6 +142,7 @@ export async function ConsoleShell({
           <div className="flex items-center gap-2" aria-label="콘솔 도구">
             <ConsoleSearch items={searchItems} />
             <a className={buttonVariants({ variant: active === 'guide' ? 'secondary' : 'ghost', size: 'sm' })} href="/guide"><Icon name="command-line" /><span>사용 설명서</span></a>
+            <ThemeMenu />
           </div>
         </header>
         <div className="px-4 pt-3 md:px-6"><Suspense fallback={null}><FlashBanner /></Suspense></div>
