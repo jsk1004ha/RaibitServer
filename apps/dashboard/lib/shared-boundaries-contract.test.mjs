@@ -32,6 +32,32 @@ test('shared document and chrome keep the public accessibility and theme contrac
   assert.doesNotMatch(themeMenu, /nextThemePreference|data-theme-toggle/);
 });
 
+test('Given public chrome and the home hero When theme-aware responsive markup renders Then every link, action, and Korean copy contract remains deliberate', async () => {
+  const [layout, header, home] = await Promise.all([
+    read('app/layout.tsx'),
+    read('components/public-header.tsx'),
+    read('app/page.tsx'),
+  ]);
+
+  assert.match(header, /import\s+\{\s*ThemeMenu\s*\}\s+from\s+['"]\.\/theme-menu['"]/);
+  assert.equal((header.match(/<ThemeMenu/g) ?? []).length, 1);
+  assert.doesNotMatch(header, /['"]use client['"]/);
+  assert.doesNotMatch(layout, /ThemeToggle|ThemeMenu/);
+  assert.match(header, /flex-col[\s\S]*sm:flex-row/);
+  assert.match(header, /w-full[\s\S]*sm:w-auto/);
+  assert.match(header, /href: '\/status', label: '운영 현황'/);
+  assert.match(header, /href: '\/support', label: '지원'/);
+  assert.match(header, /aria-label="공개 화면 탐색"/);
+  assert.match(home, /href=\{loginUrl\}[\s\S]{0,120}>\s*로그인/);
+  assert.match(home, /href=\{consoleUrl\}[\s\S]{0,120}>\s*콘솔 들어가기/);
+  assert.match(home, /href=\{consoleUrl\}[\s\S]{0,120}>\s*콘솔 시작하기/);
+  assert.match(home, /href=\{signupUrl\}[\s\S]{0,120}>\s*가입 신청/);
+  assert.match(home, /max-w-\[12ch\] break-keep \[overflow-wrap:anywhere\]/);
+  assert.match(home, /만들고, 올리고, 운영하세요\./);
+  assert.match(home, /text-pretty break-keep \[overflow-wrap:anywhere\]/);
+  assert.match(home, /인천과학고등학교의 최고 정보 동아리 라이빗의 호스팅 서비스입니다\./);
+});
+
 test('loading and error boundaries expose neutral, sanitized recovery states', async () => {
   const [loading, routeError, globalError, notFound, screen, catalog, preview] = await Promise.all([
     read('app/loading.tsx'),
