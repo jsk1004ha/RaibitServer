@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader } from '../../components
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '../../components/ui/field';
 import { Input } from '../../components/ui/input';
 import { Brand } from '../../components/brand';
+import { ThemeMenu } from '../../components/theme-menu';
 import { apiAction } from '../../lib/api';
 
 const modes = ['login', 'signup', 'verify'] as const;
@@ -32,16 +33,16 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
   return (
     <main id="main-content" className="grid min-h-dvh bg-background lg:grid-cols-2">
-      <section className="hidden min-h-dvh flex-col justify-between bg-primary px-10 py-10 text-primary-foreground lg:flex">
+      <section className="hidden min-h-dvh flex-col justify-between bg-brand-surface px-10 py-10 text-brand-surface-foreground lg:flex">
         <a className="flex w-fit items-center gap-3 text-sm font-medium" href={publicHomeHref}>
           <Brand height={44} width={44} priority />
           <span>RAIBIT SERVER</span>
         </a>
         <div className="max-w-md">
-          <p className="text-xs font-medium text-primary-foreground/70">DEPLOYMENT PLATFORM</p>
-          <p className="mt-4 text-3xl leading-tight font-medium text-balance">동아리의 프로젝트를 한곳에서 배포하고 운영하세요.</p>
+          <p className="text-xs font-medium text-brand-surface-foreground/70">DEPLOYMENT PLATFORM</p>
+          <p className="mt-4 text-3xl leading-tight font-medium text-balance break-keep [overflow-wrap:anywhere]">동아리의 프로젝트를 한곳에서 배포하고 운영하세요.</p>
         </div>
-        <p className="text-sm text-primary-foreground/70">인천과학고 라이빗 호스팅 서비스</p>
+        <p className="text-sm text-brand-surface-foreground/70 break-keep [overflow-wrap:anywhere]">인천과학고 라이빗 호스팅 서비스</p>
       </section>
 
       <section className="flex min-h-dvh items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
@@ -51,6 +52,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             <span>RAIBIT SERVER</span>
           </a>
           <Card>
+            <div data-slot="theme-utility" className="flex justify-end px-(--card-spacing)">
+              <ThemeMenu />
+            </div>
             <CardHeader>
               <p className="text-xs font-medium text-muted-foreground">{copy.eyebrow}</p>
               <h1 className="text-2xl tracking-tight">{copy.title}</h1>
