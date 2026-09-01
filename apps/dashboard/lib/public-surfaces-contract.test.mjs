@@ -88,7 +88,15 @@ test('Given legal and contributor surfaces When rendered Then required Korean co
   assert.match(support, /mailto:/);
   assert.match(support, /GitHub Issues/);
   assert.match(support, /target="_blank"[\s\S]{0,80}rel="noreferrer"/);
-  for (const marker of ['2309', '김준서', 'teacher', '최희진']) assert.match(contributors, new RegExp(marker));
+  for (const marker of [
+    '2309',
+    '김준서',
+    'teacher',
+    '최희진',
+    '2414',
+    '엄지오',
+    'RAIBIT SERVER 프론트엔드 개발',
+  ]) assert.match(contributors, new RegExp(marker));
   for (const marker of ['/support', '/status', '/contributors', '/privacy', 'github\.com']) assert.match(footer, new RegExp(marker));
   assert.match(privacy, /table-fixed/);
   assert.doesNotMatch(privacy, /overflow-x-auto|min-w-\[42rem\]|text-primary-foreground\//);

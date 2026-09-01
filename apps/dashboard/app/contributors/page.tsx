@@ -15,6 +15,12 @@ const contributors = [
     area: "DEVELOPMENT",
     contribution: "RAIBIT SERVER 개발",
   },
+  {
+    id: "2414",
+    name: "엄지오",
+    area: "DEVELOPMENT",
+    contribution: "RAIBIT SERVER 프론트엔드 개발",
+  },
 ] as const;
 
 export const metadata = {
