@@ -344,6 +344,8 @@ FAILED
 
 ### 4.1 지원 수준과 증거 상태
 
+단일 원본 `test-fixtures/contracts/resource-capabilities-v1.json`의 local/release 기능과 planOnly/liveEvidence 구분을 따른다. TypeScript·Go·Helm hash parity를 검사하며 현재 운영 릴리스 증거는 `not-recorded`, 모든 관리형 backup/restore는 false다. MySQL/MariaDB/MongoDB/Redis/Valkey query/schema는 계획 전용이다.
+
 아래 표는 **현재 구현 상태**다. 코드나 dry-run 계약이 있다는 사실을 실제 cluster에서 검증된 지원으로 간주하지 않는다. 이 문서의 `[x]`는 해당 행에 명시된 정적·로컬 계약이 구현됐다는 뜻이고, 실제 생성·인증·연결·삭제는 release 환경의 live evidence가 있어야만 `[x]`로 바꾼다.
 
 | 엔진 | 현재 구현 경로 | Closed Beta 판정 |
@@ -353,9 +355,9 @@ FAILED
 | MongoDB | Go dedicated-local compiler/reconciler와 인증 ping | live lifecycle 미검증 |
 | Redis / Valkey | Go dedicated-local compiler/reconciler와 인증 `PING` | live lifecycle 미검증 |
 | SQLite | Node 로컬 console와 provider-neutral 계약 | Go/Kubernetes managed-resource adapter 대상 아님 |
-| Object Storage / MinIO | TypeScript plan과 Go manifest 계약 | primitive bootstrap 미구현으로 live fail-closed |
-| Qdrant / Vector DB | TypeScript plan과 Go manifest 계약 | primitive bootstrap 미구현으로 live fail-closed |
-| NATS / Message Queue | TypeScript plan과 Go manifest 계약 | primitive bootstrap 미구현으로 live fail-closed |
+| Object Storage / MinIO | 비활성 카탈로그, API/TS/Go 거부 | 준비 중 · ENGINE_NOT_IMPLEMENTED |
+| Qdrant / Vector DB | 비활성 카탈로그, API/TS/Go 거부 | 준비 중 · ENGINE_NOT_IMPLEMENTED |
+| NATS / Message Queue | 비활성 카탈로그, API/TS/Go 거부 | 준비 중 · ENGINE_NOT_IMPLEMENTED |
 
 Beta 목표 범위는 PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey의 dedicated-local lifecycle과 SQLite 로컬 경로다. Object Storage, Qdrant, NATS는 인증된 bucket/collection/stream bootstrap과 health reconciliation이 구현·검증되기 전까지 사용자에게 live 지원으로 표시하지 않는다.
 
@@ -483,12 +485,11 @@ Beta 목표 범위는 PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey의 dedica
 
 ### 4.6 Object Storage / MinIO
 
-현재는 plan-only다. Go reconciler는 non-dry-run에서 인증된 bucket primitive bootstrap이 없음을 감지해 명시적으로 실패한다.
+현재는 비활성 카탈로그 항목이다. API 입력과 TS/Go 컴파일 단계에서 ENGINE_NOT_IMPLEMENTED로 거부하며, 이미지 설정으로 활성화할 수 없다.
 
 ```txt
-[x] Deterministic S3 endpoint/bucket/env plan
-[x] Provider-owned secret/manifest 계약과 masked dashboard model
-[x] Live 요청은 primitive bootstrap 전 fail-closed
+[x] 준비 중 사유가 표시되는 비활성 카탈로그
+[x] API/TS/Go 생성 요청은 capability 검사에서 fail-closed
 [ ] 인증된 bucket 생성과 ownership 검증
 [ ] 실제 service secretKeyRef env 주입
 [ ] file upload/list/download/delete와 presigned URL live 검증
@@ -602,12 +603,11 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 
 ### 4.10 Qdrant / Vector DB
 
-현재는 plan-only다. Go reconciler는 non-dry-run에서 인증된 collection primitive bootstrap이 없음을 감지해 명시적으로 실패한다.
+현재는 비활성 카탈로그 항목이다. API 입력과 TS/Go 컴파일 단계에서 ENGINE_NOT_IMPLEMENTED로 거부하며, 이미지 설정으로 활성화할 수 없다.
 
 ```txt
-[x] Deterministic URL/API key/collection/env plan
-[x] Provider-owned secret/manifest 계약과 masked dashboard model
-[x] Live 요청은 primitive bootstrap 전 fail-closed
+[x] 준비 중 사유가 표시되는 비활성 카탈로그
+[x] API/TS/Go 생성 요청은 capability 검사에서 fail-closed
 [ ] 인증된 collection 생성과 ownership 검증
 [ ] 실제 service secretKeyRef env 주입
 [ ] collection list/create/delete와 search live 검증
@@ -627,12 +627,11 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 
 ### 4.11 NATS / Message Queue
 
-현재는 plan-only다. Go reconciler는 non-dry-run에서 인증된 stream/subject primitive bootstrap이 없음을 감지해 명시적으로 실패한다.
+현재는 비활성 카탈로그 항목이다. API 입력과 TS/Go 컴파일 단계에서 ENGINE_NOT_IMPLEMENTED로 거부하며, 이미지 설정으로 활성화할 수 없다.
 
 ```txt
-[x] Deterministic URL/topic/credential/env plan
-[x] Provider-owned secret/manifest 계약과 masked dashboard model
-[x] Live 요청은 primitive bootstrap 전 fail-closed
+[x] 준비 중 사유가 표시되는 비활성 카탈로그
+[x] API/TS/Go 생성 요청은 capability 검사에서 fail-closed
 [ ] 인증된 stream/subject 생성과 ownership 검증
 [ ] 실제 service secretKeyRef env 주입
 [ ] publish/subscribe와 consumer smoke live 검증
@@ -655,7 +654,7 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 
 - Resource lifecycle API: `GET/PATCH/DELETE /resources/:resourceId`, `POST /resources/:resourceId/attach`, `POST /resources/:resourceId/provision`.
 - Deterministic contract: `packages/core/src/resource-providers.ts`와 로컬 테스트가 provider env, 명령 plan, masking, console response shape를 검증한다. 이는 외부 provider 명령의 실제 성공 증거가 아니다.
-- Go adapter contract: `services/provisioner/internal/provider`가 digest-pinned dedicated-local manifest와 인증 probe를 컴파일한다. Object Storage/Qdrant/NATS는 `requiresPrimitiveBootstrap`에 의해 live에서 fail-closed다.
+- Go adapter contract: `services/provisioner/internal/provider`가 지원 엔진의 digest-pinned dedicated-local manifest와 인증 probe를 컴파일한다. Object Storage/Qdrant/NATS는 capability 검사에서 typed error로 거부한다.
 - Local proof: `tests/db-resource-beta.test.js`, `tests/db-console.test.js`, `tests/resource-providers.test.js`, `pnpm e2e:dry`의 `betaResourceEvidence`.
 - Required live proof: release 환경 명령과 날짜, image digest, resource ID/namespace, 인증 probe, service env binding, console query, backup/restore, deletion 결과를 보존해야 한다. 이 증거가 없는 엔진은 지원 완료로 표시하지 않는다.
 
@@ -1162,7 +1161,7 @@ Beta P0 checklist:
 목표: Closed Beta
 핵심 gate: pnpm e2e:live reconciliation + 전체 앱 lifecycle live evidence
 검증 목표 DB 범위: PostgreSQL, SQLite, Redis/Valkey, MySQL/MariaDB, MongoDB
-Plan-only/live fail-closed: Object Storage, Qdrant, NATS
+비활성 카탈로그/API·TS·Go 생성 거부: Object Storage, Qdrant, NATS
 성공 기준: 실제 build/deploy/db/log/preview/admin/quota/security 통과
 ```
 

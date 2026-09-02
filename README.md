@@ -11,7 +11,7 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 - **멀티 서비스 프로젝트**: `web`, `private`, `worker`, `cron`, `job` 서비스를 한 프로젝트에서 관리합니다.
 - **컨테이너 우선 빌드**: 사용자 Dockerfile을 최우선으로 사용하고, 없을 때만 프레임워크 감지/생성 Dockerfile fallback을 사용합니다.
 - **BuildKit 캐시 경로**: builder는 inline cache와 선택적 registry cache(`cache-from/cache-to`) 및 패키지 매니저 cache mount를 계획해 반복 배포 시간을 줄입니다.
-- **관리형 리소스**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, SQLite, Object Storage, Qdrant/vector, NATS/queue를 카탈로그 리소스로 다룹니다.
+- **관리형 리소스**: PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey는 dedicated-local, SQLite는 로컬 파일 전용입니다. 객체 저장소·Qdrant·NATS 및 나머지 카탈로그 항목은 사유가 표시되는 비활성 `준비 중` 상태입니다. [단일 기능 매트릭스](test-fixtures/contracts/resource-capabilities-v1.json)가 API·UI·컴파일러·Helm을 제어하며, 운영 릴리스와 관리형 백업·복구 지원을 의미하지 않습니다.
 - **서브도메인 라우팅**: 서비스 실행 URL은 조직 slug를 tenant segment로 쓰는 `apps--<org>--<project>.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 flat single-label 규칙을 따릅니다.
 - **공통 오류 화면**: 활성 표준 4xx·5xx 38종을 미리보기·오류 backend에서 제공하고, 호스팅 라우팅 404·upstream 500/502/503/504를 같은 RAIBIT 상태 화면으로 안내하되 사용자 앱의 자체 오류 응답은 유지합니다.
 - **검증 가능한 배포 버전**: 공개 `/status`는 현재 실행 중인 Dashboard 이미지에 기록된 GitHub 커밋 SHA를 표시하고 정확한 커밋 페이지로 연결합니다.
@@ -333,7 +333,7 @@ private 저장소 빌드용 App ID와 RSA private key는 API 환경변수에 넣
 4. **이미지 빌드/배포**
    - 저장소 루트를 build context로 사용해 API, Dashboard, CLI와 Go service Dockerfile을 빌드하고 registry에 push합니다. 예: `docker build -f apps/api/Dockerfile -t <registry>/api:<tag> .`
    - 배포 전 각 push 결과의 manifest-list digest를 확인하고 Helm의 `image.digests.api`, `dashboard`, `orchestrator`, `builder`, `provisioner`, `logIngester`, `metricsIngester`에 활성화할 component의 `sha256:...` 값을 넣습니다. production 모드는 tag-only 이미지를 허용하지 않습니다.
-   - live 관리형 PostgreSQL/MySQL/MariaDB/MongoDB/Redis/Valkey workload 이미지는 `provisioner.providerImages.*`에 `repository@sha256:<digest>` 형식으로 모두 지정합니다. production chart는 이 6개 이미지가 누락되거나 tag-only이면 거부합니다. MinIO/Qdrant/NATS 이미지는 plan-only adapter가 live bootstrap을 구현할 때까지 비워 둘 수 있으며, 값을 넣는 경우에도 digest pin은 필수입니다.
+   - 로컬 관리형 PostgreSQL/MySQL/MariaDB/MongoDB/Redis/Valkey workload 이미지는 `provisioner.providerImages.*`에 `repository@sha256:<digest>` 형식으로 모두 지정합니다. production chart는 이 6개 이미지가 누락되거나 tag-only이면 거부합니다. MinIO/Qdrant/NATS 이미지는 비워 두며, 값을 넣어도 비활성 엔진을 활성화하지 않습니다. 이미지 설정은 운영 릴리스 검증을 대신하지 않습니다.
    - certified provider 이미지는 restricted Pod Security의 엔진별 non-root UID/GID 계약(PostgreSQL `70`, MySQL/MariaDB/MongoDB/Redis/Valkey `999`)으로 실행되고 데이터 경로에 쓸 수 있어야 합니다. 또한 `/bin/sh`와 인증 확인 CLI(`psql`, `mysql`/`mariadb`, `mongosh`, `redis-cli`/`valkey-cli`)를 포함해야 합니다. provisioner는 생성한 자격 증명으로 실제 인증 명령이 성공한 뒤에만 READY로 전환합니다.
    - `runtimeSecrets.existingSecret`, `database.existingSecret`, `ingress.tls.existingSecret`과 builder의 registry/signing/dispatch mTLS secret ref를 미리 생성합니다. hosted error 전용 Secret이 필요하면 `hostedErrors.fallbackIngress.tls.existingSecret`을 별도로 지정하고, 비우면 ingress TLS Secret을 재사용합니다. 선택된 Secret은 `*.<BASE_DOMAIN>`을 포함해야 합니다. `builder.dispatch.existingSecret`에는 release 전용 CA, dispatcher server keypair, executor client keypair가 필요하며 server certificate SAN은 `<release>-builder-dispatcher` Service DNS를 포함해야 합니다. private GitHub build를 켜면 App ID와 private key를 `builder.githubAppCredentials.existingSecret`에 별도로 두며 이 Secret은 dispatcher에만 mount합니다. chart는 application credential Secret을 생성하지 않습니다.
    - `infra/helm/raibitserver/ci-production-values.yaml`의 platform digest는 정적 chart 검증용 가짜 값이므로 실제 배포에 사용하지 않습니다. production 값은 `sh scripts/verify-helm.sh`로 fail-closed 조건을 먼저 검증합니다.
@@ -429,11 +429,11 @@ RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로
 | MongoDB | dry-run + dedicated-local 구현; release live evidence 대기 | immutable credential, authenticated ping |
 | Redis/Valkey | dry-run + dedicated-local 구현; release live evidence 대기 | immutable credential, authenticated `PING` |
 | SQLite | 실행 가능한 로컬 console | Go live managed-resource adapter 대상 아님 |
-| Object Storage | MinIO/S3 env plan | bucket bootstrap/HeadBucket 전까지 live fail-closed |
-| Qdrant/vector | collection/search-test plan | collection bootstrap/auth check 전까지 live fail-closed |
-| NATS/queue | subject/connection plan | stream/subject bootstrap/auth smoke 전까지 live fail-closed |
+| Object Storage | 비활성 카탈로그 | API/TS/Go에서 ENGINE_NOT_IMPLEMENTED로 생성 거부 |
+| Qdrant/vector | 비활성 카탈로그 | API/TS/Go에서 ENGINE_NOT_IMPLEMENTED로 생성 거부 |
+| NATS/queue | 비활성 카탈로그 | API/TS/Go에서 ENGINE_NOT_IMPLEMENTED로 생성 거부 |
 
-공유 provider의 noisy-neighbor 제어, PgBouncer, tenant별 role/ACL/quota, primitive 단위 백업·복구는 목표 계약이며 현재 Go live adapter의 완료 기능이 아닙니다. Closed Beta에서는 위 6개 dedicated-local 엔진만 digest-pinned certified image와 인증 probe를 통과한 경우 활성화하고, 나머지는 계획만 제공하거나 실패하도록 운영해야 합니다.
+공유 provider의 noisy-neighbor 제어, PgBouncer, tenant별 role/ACL/quota, primitive 단위 백업·복구는 목표 계약이며 현재 Go live adapter의 완료 기능이 아닙니다. 위 6개 dedicated-local 엔진은 digest-pinned 이미지와 인증 probe를 요구하고, SQLite는 로컬 파일 전용입니다. 나머지 카탈로그 엔진은 생성할 수 없습니다. 운영 릴리스 검증은 별도로 필요합니다.
 
 자세한 내용은 [리소스 프로비저닝](docs/provisioning.md)과 [DB console](docs/db-console.md)을 참고하세요.
 

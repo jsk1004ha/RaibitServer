@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
+import { resourceCapabilityHelp } from '../packages/core/src/resource-capabilities.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { maskSecrets } from '../packages/core/src/secrets.ts';
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
@@ -175,6 +176,7 @@ function projectSpecFromPayload(payload: Record<string, any>) {
 }
 
 function help() {
+  process.stdout.write(`Resource capabilities (local only; release evidence not recorded):\n${resourceCapabilityHelp()}\nManaged backup/restore: unavailable; command plans only.\n\n`);
   process.stdout.write(`RAIBITSERVER CLI\n\nUsage:\n  node src/cli.js catalog\n  node src/cli.js config\n  node src/cli.js env-parse <.env>\n  node src/cli.js github-repo <owner/repo|https://github.com/owner/repo>\n  node src/cli.js build <service-or-project.json>\n  node src/cli.js source-plan <project.json> [--service web]\n  node src/cli.js clone <service-or-project.json> [--service web] [--workspace .work] [--execute]\n  node src/cli.js build-execute <project.json> [--service web] [--builder docker-buildx|buildctl] [--push] [--execute]\n  node src/cli.js registry-push <image> [--execute]\n  node src/cli.js manifest <project.json>\n  node src/cli.js k8s-apply <project.json> [--execute] [--kubeconfig path] [--context name]\n  node src/cli.js provision-plan <project.json>\n  node src/cli.js provision <project.json> [--execute]\n  node src/cli.js validate <project.json>\n  node src/cli.js compose <docker-compose.yml> [project-name]\n  node src/cli.js guard-query <SQL text>\n  RAIBITSERVER_AUTH_JWT_SECRET=... node src/cli.js auth-token --role owner --sub user-1 --organization-id org-1\n\nSide-effecting commands default to dry-run. Add --execute to run git/docker/kubectl commands.\n\n`);
 }
 

@@ -3,6 +3,7 @@ import { connectionEnvForResource, injectResourceEnv } from './env-injection.ts'
 import { resolveBuildStrategy } from './build-strategy.ts';
 import { DEFAULT_DOMAIN, DEFAULT_PORT, SERVICE_TYPES, trustedIngressGatewayNamespace } from './constants.ts';
 import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
+import { requireResourceCapability } from './resource-capabilities.ts';
 import { slugify } from './ids.ts';
 import { boundedDnsLabel, domainPlanForProject, serviceHostname, tenantProjectLabel } from './domain-router.ts';
 
@@ -489,6 +490,7 @@ function arrayStrings(value: any) {
 
 function resourcePlan(resource: AnyRecord, namespace: string, projectSlug: string): AnyRecord {
   const engine = normalizeResourceEngine(resource.engine || resource.type);
+  const capabilities = requireResourceCapability(engine, 'provision');
   const entry = getCatalogEntry(engine);
   return {
     name: slugify(resource.name),
@@ -502,8 +504,8 @@ function resourcePlan(resource: AnyRecord, namespace: string, projectSlug: strin
     provider: resource.provider || 'hybrid-managed',
     operator: entry.operator,
     plan: resource.plan || 'shared-small',
-    lifecycle: ['provision', 'credential', 'backup', 'metrics', 'restore', 'delete'],
+    capabilities,
+    lifecycle: Object.entries(capabilities.local).filter(([, enabled]) => enabled).map(([operation]) => operation),
     env: entry.env,
-    backup: resource.backup || { schedule: 'daily', retentionDays: 7 },
   };
 }

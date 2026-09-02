@@ -8,6 +8,10 @@
 
 ## 지원 catalog
 
+지원 여부의 유일한 원본은 `test-fixtures/contracts/resource-capabilities-v1.json`입니다. `local`은 구현된 로컬 기능, `release`는 운영 릴리스 기능이며 현재 release 기능은 모두 false입니다. `planOnly`의 명령 계획과 `liveEvidence: not-recorded`는 실행 성공이 아닙니다. MySQL/MariaDB/MongoDB/Redis/Valkey의 query/schema는 아직 계획 전용이고, 모든 엔진의 관리형 backup/restore는 미제공입니다.
+
+변경 후 `node scripts/generate-resource-capabilities.mjs`로 TypeScript/CLI/Go/Helm 패키지 내부의 복제 파일을 생성하고 `node --test tests/resource-capability-parity.test.js`로 byte/hash drift를 검사합니다. production Helm 패키징은 dedicated-local 지원 6개 엔진의 digest-pinned 이미지를 요구하지만 운영 인증을 부여하지 않습니다.
+
 - PostgreSQL
 - MySQL
 - MariaDB
@@ -15,17 +19,17 @@
 - Redis
 - Valkey
 - SQLite
-- Object Storage
-- Qdrant/vector
-- NATS/queue
+- Object Storage — 준비 중 (`ENGINE_NOT_IMPLEMENTED`), 생성 불가
+- Qdrant/vector — 준비 중 (`ENGINE_NOT_IMPLEMENTED`), 생성 불가
+- NATS/queue — 준비 중 (`ENGINE_NOT_IMPLEMENTED`), 생성 불가
 
 ## Desired-state plan
 
-`packages/core/src/provisioner.ts`는 각 resource를 provider-neutral plan으로 compile합니다.
+`packages/core/src/provisioner.ts`는 지원되는 로컬 resource를 provider-neutral plan으로 compile하며 미지원 엔진은 거부합니다.
 
-- `ManagedDatabase`, `ManagedCache`, `ManagedObjectStorage`, `ManagedVectorDatabase`, `ManagedMessageQueue` 형태의 CR-style manifest
+- `ManagedDatabase`, `ManagedCache` 형태의 CR-style manifest (storage/vector/queue 형태는 미활성 계약)
 - provider 이름과 plan (`shared-small` 기본값). 이는 provider-neutral 목표 계약이며 현재 Go live adapter의 실행 방식과 동일하다는 뜻은 아닙니다.
-- storage, version, backup policy, credential secret 이름
+- storage, version, credential secret 이름 (자동 backup policy 없음)
 - connection environment variable용 Secret manifest
 
 `provisionProjectResources`는 workload Kubernetes apply와 같은 dry-run/execute command surface로 이 manifest를 적용합니다.
@@ -101,7 +105,7 @@ Authoritative Go provisioner의 live mode는 다음 원칙을 적용합니다.
 - Kubernetes 명령을 실행하기 직전에 DB claim heartbeat를 갱신하되 원래 CAS claim token은 바꾸지 않습니다. 따라서 긴 rollout/delete 중 stale lease가 다른 worker에 넘어가지 않으며, 지속적인 deletion/health/provisioning backlog도 교대 슬롯으로 서로를 무기한 굶기지 않습니다.
 - live mode에서 성공적으로 한 리소스를 처리한 경우 polling sleep 없이 다음 backlog 항목을 처리합니다. idle/error와 상태를 다시 `PROVISIONING`으로 되돌리는 dry-run은 같은 row를 hot-loop하지 않도록 `provisioner.reconcileIntervalSeconds`만큼 대기합니다.
 - provisioner의 cluster 권한은 managed namespace와 제한된 RoleBinding bootstrap에만 사용합니다. 실제 provider object 권한은 managed tenant namespace에 생성한 전용 RoleBinding으로 한정하며 Secret read와 `pods/exec`는 부여하지 않습니다.
-- Object Storage/Qdrant/NATS는 bucket/collection/stream bootstrap과 authenticated semantic check가 없으므로 live 요청을 Kubernetes object 생성 전에 fail-closed 합니다. dry-run plan은 계속 생성할 수 있습니다.
+- Object Storage/Qdrant/NATS는 bucket/collection/stream bootstrap과 authenticated semantic check가 없어 API 입력과 TS/Go 컴파일 단계에서 거부합니다. 이미지 설정이나 과거 템플릿 존재만으로 활성화되지 않습니다.
 
 - PostgreSQL console query는 sealed provider `connectionSecretName`에서 connection material을 가져옵니다.
 - tenant request body와 resource-create payload는 connection URL/URI/DSN/JDBC variants를 제공할 수 없습니다.

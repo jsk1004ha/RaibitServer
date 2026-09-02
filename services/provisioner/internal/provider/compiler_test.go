@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func TestTenantNamespaceMatchesRuntimeForLongProjectSlugs(t *testing.T) {
 }
 
 func TestCompileBuildsProviderSpecificPinnedWorkloadsWithoutLeakingCredentials(t *testing.T) {
-	engines := []string{"postgresql", "mysql", "mariadb", "mongodb", "redis", "valkey", "object-storage", "qdrant", "nats"}
+	engines := []string{"postgresql", "mysql", "mariadb", "mongodb", "redis", "valkey"}
 	dataMounts := map[string]string{"postgresql": "/var/lib/postgresql/data", "mysql": "/var/lib/mysql", "mariadb": "/var/lib/mysql", "mongodb": "/data/db", "redis": "/data", "valkey": "/data", "object-storage": "/data", "qdrant": "/qdrant/storage", "nats": "/data"}
 	runtimeUsers := map[string]int{"postgresql": 70, "mysql": 999, "mariadb": 999, "mongodb": 999, "redis": 999, "valkey": 999, "object-storage": 10001, "qdrant": 10001, "nats": 10001}
 	for _, engine := range engines {
@@ -335,14 +336,14 @@ func TestProviderContractsUseRunnableConnectionDefaults(t *testing.T) {
 	}
 
 	storage := base
-	storage.Engine = "object-storage"
+	storage.Engine = "postgresql"
 	storage.DesiredSpec = map[string]any{"databaseName": "team_assets", "storageMb": 256}
-	storagePlan, err := Compile(&storage, "registry.example/minio@"+testDigest)
+	storagePlan, err := Compile(&storage, "registry.example/postgresql@"+testDigest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if storagePlan.SecretData["S3_BUCKET"] != "team-assets" {
-		t.Fatalf("object-storage bucket must be S3-compatible: %q", storagePlan.SecretData["S3_BUCKET"])
+	if storagePlan.SecretData["PGDATABASE"] != "team_assets" {
+		t.Fatalf("PostgreSQL database identifier must be preserved: %q", storagePlan.SecretData["PGDATABASE"])
 	}
 	storagePayload, _ := json.Marshal(storagePlan.PublicManifests)
 	if !strings.Contains(string(storagePayload), `"storage":"256Mi"`) {
@@ -350,7 +351,7 @@ func TestProviderContractsUseRunnableConnectionDefaults(t *testing.T) {
 	}
 }
 
-func TestCompileUsesEngineSpecificRequestedPrimitiveNames(t *testing.T) {
+func TestCompileRejectsUnsupportedEnginesDespiteRequestedPrimitiveNames(t *testing.T) {
 	base := store.Resource{ID: "resource-1", ProjectID: "project-1", OrganizationID: "org-1", ProjectSlug: "demo", Name: "fallback"}
 	for _, test := range []struct {
 		engine string
@@ -368,11 +369,9 @@ func TestCompileUsesEngineSpecificRequestedPrimitiveNames(t *testing.T) {
 			resource.Engine = test.engine
 			resource.DesiredSpec = map[string]any{test.key: test.value, "databaseName": "must_not_win"}
 			plan, err := Compile(&resource, "registry.example/provider@"+testDigest)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if plan.SecretData[test.env] != test.want {
-				t.Fatalf("%s must honor desiredSpec.%s, got %q", test.engine, test.key, plan.SecretData[test.env])
+			var unavailable *CapabilityUnavailableError
+			if !errors.As(err, &unavailable) || plan != nil {
+				t.Fatalf("%s must reject before generating manifests: plan=%v err=%v", test.engine, plan, err)
 			}
 		})
 	}

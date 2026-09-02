@@ -41,21 +41,15 @@ test('web service uses secret refs and safe container defaults', () => {
   assert.equal(deployment.spec.strategy.rollingUpdate.maxUnavailable, 0);
 });
 
-test('provider-owned storage and vector placeholders are marked as not-live secrets', () => {
-  const storagePlan = compileProject({
+test('unsupported storage and vector resources reject before creating placeholder secrets', () => {
+  for (const engine of ['object-storage', 'vector-db']) assert.throws(() => compileProject({
     organization: { slug: 'gdg' },
     project: { name: 'assets' },
-    services: [{ name: 'web', type: 'web', sourceType: 'image', image: 'example/web:1', attachedResources: ['assets', 'vectors'] }],
+    services: [{ name: 'web', type: 'web', sourceType: 'image', image: 'example/web:1', attachedResources: ['assets'] }],
     resources: [
-      { name: 'assets', engine: 'object-storage', type: 'storage', bucket: 'assets' },
-      { name: 'vectors', engine: 'vector-db', type: 'vector' },
+      { name: 'assets', engine },
     ],
-  });
-  const secret = storagePlan.manifests.find((manifest) => manifest.kind === 'Secret' && manifest.metadata.name === 'web-env');
-  assert.equal(secret.metadata.annotations['raibitserver.io/provider-contract'], 'not-live-secret');
-  assert.match(secret.stringData.S3_ACCESS_KEY, /provider-managed-/);
-  assert.match(secret.stringData.S3_SECRET_KEY, /provider-managed-/);
-  assert.match(secret.stringData.VECTOR_DB_API_KEY, /provider-managed-/);
+  }), { code: 'RESOURCE_CAPABILITY_UNAVAILABLE' });
 });
 
 test('tenant network policy allows DNS but blocks metadata and private control-plane ranges', () => {
@@ -148,8 +142,9 @@ test('trusted hosted error disable sentinel omits controller error annotations',
 
 test('resource plans expose catalog lifecycle and env variable names', () => {
   const postgres = plan.resourcePlans.find((resource) => resource.name === 'festival-postgres');
-  assert.equal(postgres.operator, 'CloudNativePG');
-  assert.equal(postgres.lifecycle.includes('backup'), true);
+  assert.equal(postgres.operator, 'dedicated-local');
+  assert.equal(postgres.lifecycle.includes('backup'), false);
+  assert.equal(postgres.capabilities.local.backup, false);
   assert.equal(postgres.env.includes('DATABASE_URL'), true);
 });
 

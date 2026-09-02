@@ -768,7 +768,8 @@ func TestLiveProvidersWithoutPrimitiveBootstrapFailClosed(t *testing.T) {
 			state := &fakeStore{resource: resource}
 			runner := &fakeRunner{}
 			result, err := New(Config{DryRun: false, OutputDir: t.TempDir(), Images: map[string]string{engine: "registry.example/provider@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, state, runner).RunOnce(context.Background())
-			if err == nil || result == nil || result.Status != store.StatusFailed || !strings.Contains(strings.ToLower(err.Error()), "bootstrap") {
+			var unavailable *provider.CapabilityUnavailableError
+			if !errors.As(err, &unavailable) || result == nil || result.Status != store.StatusFailed {
 				t.Fatalf("%s live provisioning must fail closed before truthful primitive readiness exists: result=%#v err=%v", engine, result, err)
 			}
 			if state.readyTransitions != 0 || len(runner.calls) != 0 {

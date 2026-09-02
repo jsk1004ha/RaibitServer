@@ -660,7 +660,7 @@ spec:
         variables.target.metadata.labels['raibitserver.io/project-id'] == namespaceObject.metadata.labels['raibitserver.io/project-id'] &&
         variables.target.metadata.labels['raibitserver.io/resource-id'] != '' &&
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         variables.target.metadata.namespace == request.namespace
       message: "the provisioner may delete only exact provider-owned tenant objects"
     - expression: >-
@@ -818,7 +818,7 @@ spec:
         object.metadata.labels['app.kubernetes.io/name'].matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         object.metadata.labels['raibitserver.io/project-id'] != '' &&
         object.metadata.labels['raibitserver.io/resource-id'] != '' &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats']
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }}
       message: "provider StatefulSets require the exact managed identity label contract"
     - expression: >-
         object.metadata.name == variables.providerName && object.metadata.namespace == request.namespace &&
@@ -988,7 +988,7 @@ spec:
         object.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' && object.metadata.labels['raibitserver.io/managed'] == 'true' &&
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         object.metadata.labels['raibitserver.io/project-id'] != '' && object.metadata.labels['raibitserver.io/resource-id'] != '' &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         object.metadata.name == variables.providerName + '-provider' && object.metadata.namespace == request.namespace
       message: "provider NetworkPolicies require the exact managed name and identity contract"
     - expression: >-
@@ -1062,7 +1062,7 @@ spec:
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         variables.target.metadata.labels['raibitserver.io/project-id'] != '' && variables.target.metadata.labels['raibitserver.io/resource-id'] != '' &&
         variables.target.metadata.labels['raibitserver.io/project-id'] == namespaceObject.metadata.labels['raibitserver.io/project-id'] &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         variables.target.metadata.name == variables.providerName + '-connection' && variables.target.metadata.namespace == request.namespace
       message: "provider Secrets require the exact connection name and managed identity contract"
     - expression: >-
@@ -1134,7 +1134,7 @@ spec:
         object.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' && object.metadata.labels['raibitserver.io/managed'] == 'true' &&
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         object.metadata.labels['raibitserver.io/project-id'] != '' && object.metadata.labels['raibitserver.io/resource-id'] != '' &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         object.metadata.name == variables.providerName + '-data' && object.metadata.namespace == request.namespace
       message: "provider PVCs require the exact data name and managed identity contract"
     - expression: >-
@@ -1192,7 +1192,7 @@ spec:
         object.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' && object.metadata.labels['raibitserver.io/managed'] == 'true' &&
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         object.metadata.labels['raibitserver.io/project-id'] != '' && object.metadata.labels['raibitserver.io/resource-id'] != '' &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         object.metadata.name == variables.providerName && object.metadata.namespace == request.namespace
       message: "provider Services require the exact managed name and identity contract"
     - expression: >-

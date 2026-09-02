@@ -193,8 +193,9 @@ provisioner:
   execute: false
   reconcileIntervalSeconds: 5
   healthIntervalSeconds: 300
-  # Production requires every catalog provider image to be an immutable
-  # repository@sha256:digest reference. Empty defaults keep local dry-run usable.
+  # Production packaging requires images only for dedicated-local engines in
+  # files/resource-capabilities-v1.json. This is not release readiness evidence.
+  # Unsupported minio/qdrant/nats may stay empty. SQLite is local-file only.
   providerImages:
     postgresql: ""
     mysql: ""
