@@ -23,8 +23,9 @@ export async function expectRoute(page: Page, path: string, query: Readonly<Reco
   expect(url.host).toBe('console.localhost:3410');
 }
 
-export async function expectAccessible(page: Page): Promise<void> {
-  const result = await new AxeBuilder({ page }).analyze();
+export async function expectAccessible(page: Page, include?: string): Promise<void> {
+  const builder = new AxeBuilder({ page });
+  const result = await (include ? builder.include(include) : builder).analyze();
   expect(result.violations, JSON.stringify(result.violations, null, 2)).toEqual([]);
 }
 

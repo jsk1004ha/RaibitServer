@@ -70,8 +70,12 @@ test('deployment route IDs decode at most once and use one canonical encoded pat
 });
 
 test('resource operations keep seven views, engine defaults, and exact mutation contracts', async () => {
-  // Given: the resource console is a server-owned operations surface.
-  const source = await read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx');
+  // Given: the resource console keeps server-owned loading and a bounded client query leaf.
+  const [source, queryConsole] = await Promise.all([
+    read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../components/resource-query-console.tsx'),
+  ]);
+  const mutationSource = `${source}\n${queryConsole}`;
 
   // When: its URL, engine, and native form contracts are inspected.
   // Then: all seven views and all four mutation endpoints remain present.
@@ -79,29 +83,38 @@ test('resource operations keep seven views, engine defaults, and exact mutation 
     assert.ok(source.includes(`view=${view}`), `missing resource view=${view}`);
   }
   for (const endpoint of ['/console/query', '/console/command', '/provision', '/attach']) {
-    assert.ok(source.includes(endpoint), `missing resource endpoint ${endpoint}`);
+    assert.ok(mutationSource.includes(endpoint), `missing resource endpoint ${endpoint}`);
   }
   for (const field of ['query', 'command', 'confirmed', 'dryRun', 'serviceId', 'envPrefix', '_returnTo']) {
-    assert.ok(source.includes(`name="${field}"`), `missing resource field ${field}`);
+    assert.ok(mutationSource.includes(`name="${field}"`), `missing resource field ${field}`);
   }
-  assert.equal(source.match(/name="confirmed"/g)?.length, 2);
+  assert.equal(mutationSource.match(/name="confirmed"/g)?.length, 2);
   assert.match(source, /id="provider-command"[\s\S]*name="confirmed"[\s\S]*required/);
-  assert.match(source, /name="query"[\s\S]*name="confirmed" value="true"(?! required)/);
+  assert.match(queryConsole, /name="query"[\s\S]*name="confirmed"[\s\S]*value="true"(?![\s\S]*required)/);
+  assert.match(queryConsole, /fetch\(action,[\s\S]*'content-type': 'application\/json'/);
+  assert.match(queryConsole, /if \(!response\.ok\)/);
   assert.match(source, /postgresql:[\s\S]*mongodb:[\s\S]*redis:[\s\S]*'object-storage':[\s\S]*nats:/);
   assert.match(source, /provider-owned-secret/);
   assert.match(source, /filter\(\(\[key\]\) => key !== 'connectionInfo'\)/);
 });
 
-test('resource schema and operations surfaces use semantic bounded regions without client data state', async () => {
+test('resource schema stays server-owned while query results use one bounded client leaf', async () => {
   // Given: partial, empty, and long provider data can reach the server-rendered page.
-  const source = await read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx');
+  const [source, queryConsole] = await Promise.all([
+    read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../components/resource-query-console.tsx'),
+  ]);
 
   // When: its presentation boundary is inspected.
-  // Then: data tables and code regions preserve data with bounded overflow and no client ownership.
+  // Then: server data stays server-rendered and only the interactive query owns client state.
   assert.match(source, /<Table[\s\S]*?<TableHeader[\s\S]*?<TableHead/);
   assert.match(source, /overflow-x-auto/);
-  assert.match(source, /overflow-auto/);
+  assert.match(source, /code-panel/);
   assert.match(source, /break-all/);
   assert.doesNotMatch(source, /['"]use client['"]/);
   assert.doesNotMatch(source, /use(?:State|Effect|Reducer|Query)\s*\(/);
+  assert.match(queryConsole, /^['"]use client['"]/);
+  assert.match(queryConsole, /aria-label="쿼리 결과"/);
+  assert.match(queryConsole, /overflow-x-auto/);
+  assert.doesNotMatch(queryConsole, /dangerouslySetInnerHTML/);
 });

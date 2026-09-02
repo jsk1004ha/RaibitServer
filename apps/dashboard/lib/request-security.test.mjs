@@ -35,6 +35,7 @@ test('Given an upstream failure, when its code is a bounded safe identifier, the
 
 test('Given an upstream failure, when its message is unsafe or unbounded, then the public proxy exposes only the status fallback', () => {
 	assert.equal(publicUpstreamErrorCode({ error: '<script>alert(1)</script>' }, 500), 'request_failed_500');
+	assert.equal(publicUpstreamErrorCode({ error: 'fixture_upstream_secret_must_not_escape' }, 500), 'request_failed_500');
 	assert.equal(publicUpstreamErrorCode({ message: 'secret='.concat('x'.repeat(81)) }, 418), 'request_failed_418');
 	assert.equal(publicUpstreamErrorCode({ error: 'safe', message: 'ignored' }, undefined), 'safe');
 	assert.equal(publicUpstreamErrorCode({}, undefined), 'request_failed_500');

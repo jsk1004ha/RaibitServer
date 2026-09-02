@@ -64,7 +64,7 @@ export default async function HomePage() {
             <p className="text-micro font-medium tracking-[0.16em] text-primary">
               RAIBIT HOSTING SERVICE
             </p>
-            <h1 className="max-w-[12ch] break-keep [overflow-wrap:anywhere] text-display-xl font-medium text-balance text-foreground sm:text-display-xxl">
+            <h1 className="max-w-[15ch] break-keep text-display-xl font-medium text-balance text-foreground sm:text-display-xxl">
               만들고, 올리고, 운영하세요.
             </h1>
             <p className="max-w-2xl text-body-lg text-pretty break-keep [overflow-wrap:anywhere] text-muted-foreground">

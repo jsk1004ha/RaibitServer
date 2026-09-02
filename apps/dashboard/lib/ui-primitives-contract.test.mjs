@@ -38,6 +38,7 @@ test("the exact planned primitive modules exist without forbidden catalog filler
 
   assert.deepEqual(files, [
     "alert.tsx",
+    "avatar.tsx",
     "badge.tsx",
     "breadcrumb.tsx",
     "button.tsx",
@@ -89,6 +90,7 @@ test("interactive code is isolated to the planned client leaves", async () => {
   }
 
   assert.deepEqual(clientFiles.sort(), [
+    "avatar.tsx",
     "checkbox.tsx",
     "command.tsx",
     "dialog.tsx",

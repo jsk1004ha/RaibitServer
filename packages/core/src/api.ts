@@ -10,7 +10,7 @@ import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { assertEnvironmentWriteAllowed } from './env-policy.ts';
 import { quotaUsageGauges, quotaWarnings } from './quota.ts';
 import { assertSystemDeploymentActor, enforceAuthAbuseLimits, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
-import { githubOAuthLoginPlan } from './github-integration.ts';
+import { fetchGitHubOAuthIdentity, githubOAuthLoginPlan } from './github-integration.ts';
 import { createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, resolveGitHubAppInstallationSelection, verifyGitHubAppInstallationState } from './github-app.ts';
 import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
 import { publicSitesFromSnapshot } from './public-sites.ts';
@@ -81,17 +81,52 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, { user: publicUser, memberships, token });
       }
       if (method === 'GET' && url.pathname === '/auth/github/login') {
-        return send(res, 200, githubOAuthLoginPlan(Object.fromEntries(url.searchParams.entries())));
+        return send(res, 200, githubOAuthLoginPlan({
+          state: url.searchParams.get('state'),
+          codeChallenge: url.searchParams.get('codeChallenge'),
+        }));
       }
       if (method === 'GET' && url.pathname === '/auth/github/callback') {
-        if (url.searchParams.get('code') && !url.searchParams.get('state')) return send(res, 400, { error: 'oauth_state_required' });
+        const code = url.searchParams.get('code');
+        const state = url.searchParams.get('state');
+        if (!code) {
+          return send(res, 200, {
+            provider: 'github',
+            received: true,
+            codePresent: false,
+            state,
+            mode: 'oauth-callback-pending',
+            linked: false,
+          });
+        }
+        if (!state) return send(res, 400, { error: 'oauth_state_required' });
+        if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
+        const identity = await fetchGitHubOAuthIdentity({
+          code,
+          codeVerifier: url.searchParams.get('codeVerifier'),
+        }, options.githubOAuth || {});
+        let user = controlPlane.store.findUserByGitHubId(identity.githubId) || controlPlane.store.findUserByEmail(identity.email);
+        if (!user) throw statusError('github_account_not_registered', 403);
+        assertUserEmailVerified(user);
+        assertUserApproved(user);
+        user = controlPlane.store.linkGitHubUser(user.id, {
+          githubId: identity.githubId,
+          githubLogin: identity.githubLogin,
+          avatarUrl: identity.avatarUrl,
+          name: user.name ? null : identity.name,
+          actorUserId: user.id,
+        });
+        const memberships = controlPlane.store.listMembershipsForUser(user.id);
+        const token = createSessionToken(user, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth) });
         return send(res, 200, {
           provider: 'github',
           received: true,
-          codePresent: Boolean(url.searchParams.get('code')),
-          state: url.searchParams.get('state'),
-          mode: 'oauth-callback-pending',
-          linked: false,
+          codePresent: true,
+          mode: 'oauth-complete',
+          linked: true,
+          user: publicUser(user),
+          memberships,
+          token,
         });
       }
       if (method === 'GET' && url.pathname === '/auth/me') {
@@ -834,6 +869,12 @@ function publicUser(user) {
   if (!user) return null;
   const { passwordHash, ...rest } = user;
   return rest;
+}
+
+function statusError(message: string, statusCode: number) {
+  const error = new Error(message) as Error & { statusCode: number };
+  error.statusCode = statusCode;
+  return error;
 }
 
 function pageOptions(url: URL) {

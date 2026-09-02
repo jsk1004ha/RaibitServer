@@ -15,8 +15,8 @@ type SectionNavigationProps = Readonly<{
 
 export function SectionNavigation({ current, items, label }: SectionNavigationProps) {
   return (
-    <nav aria-label={label} className="border-b border-border">
-      <SectionNavigationScroll current={current}>
+    <nav aria-label={label} className="min-w-0">
+      <SectionNavigationScroll current={current} viewportClassName="border-b border-border">
         {items.map((item) => {
           const isCurrent = item.id === current;
           return (

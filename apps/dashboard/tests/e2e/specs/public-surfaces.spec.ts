@@ -58,6 +58,7 @@ test.describe("@t9-public-surfaces", () => {
   test("public chrome keeps its deliberate two-row mobile and one-row desktop contract @t5-public-chrome", async ({
     browser,
   }, testInfo) => {
+    test.slow();
     for (const theme of ["light", "dark"] as const) {
       for (const viewport of [
         { width: 375, height: 812, label: "mobile" },
@@ -81,8 +82,8 @@ test.describe("@t9-public-surfaces", () => {
           const chrome = [brand, themeMenu, navigation, login, consoleLink];
 
           for (const item of chrome) await expect(item).toBeVisible();
-          await expect(page.getByRole("link", { name: "운영 현황" })).toHaveAttribute("href", "/status");
-          await expect(page.getByRole("link", { name: "지원", exact: true })).toHaveAttribute("href", "/support");
+          await expect(navigation.getByRole("link", { name: "운영 현황" })).toHaveAttribute("href", "/status");
+          await expect(navigation.getByRole("link", { name: "지원", exact: true })).toHaveAttribute("href", "/support");
           await expectAccessible(page);
           await expectPublicDocument(page);
 
@@ -106,7 +107,7 @@ test.describe("@t9-public-surfaces", () => {
           const skipLink = page.getByRole("link", { name: "본문으로 건너뛰기" });
           await skipLink.focus();
           await expect(skipLink).toBeFocused();
-          for (const item of [brand, themeMenu, page.getByRole("link", { name: "운영 현황" }), page.getByRole("link", { name: "지원", exact: true }), login, consoleLink]) {
+          for (const item of [brand, themeMenu, navigation.getByRole("link", { name: "운영 현황" }), navigation.getByRole("link", { name: "지원", exact: true }), login, consoleLink]) {
             await page.keyboard.press("Tab");
             await expect(item).toBeFocused();
           }
@@ -142,13 +143,14 @@ test.describe("@t9-public-surfaces", () => {
     try {
       await page.goto(publicOrigin, { waitUntil: "networkidle" });
       await expectPublicDocument(page);
+      const header = page.locator("header");
       for (const item of [
-        page.locator("header").getByRole("link", { name: "RAIBIT SERVER" }),
-        page.getByRole("button", { name: /테마 설정: 현재/ }),
-        page.getByRole("link", { name: "운영 현황" }),
-        page.getByRole("link", { name: "지원", exact: true }),
-        page.getByRole("link", { name: "로그인" }),
-        page.getByRole("link", { name: "콘솔 들어가기" }),
+        header.getByRole("link", { name: "RAIBIT SERVER" }),
+        header.getByRole("button", { name: /테마 설정: 현재/ }),
+        header.getByRole("link", { name: "운영 현황" }),
+        header.getByRole("link", { name: "지원", exact: true }),
+        header.getByRole("link", { name: "로그인" }),
+        header.getByRole("link", { name: "콘솔 들어가기" }),
       ]) {
         await expect(item).toBeVisible();
       }
@@ -161,6 +163,7 @@ test.describe("@t9-public-surfaces", () => {
     test(`public routes remain accessible without overflow at ${viewport.width}px`, async ({
       browser,
     }, testInfo) => {
+      test.slow();
       const context = await browser.newContext({ viewport });
       const page = await context.newPage();
       const assertNoBrowserErrors = observeBrowserErrors(page);

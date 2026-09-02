@@ -1,6 +1,6 @@
 import { PublicFooter } from "../../components/public-footer";
 import { PublicHeader } from "../../components/public-header";
-import { Brand } from "../../components/brand";
+import { UserAvatar } from "../../components/user-avatar";
 
 const contributors = [
   {
@@ -12,6 +12,12 @@ const contributors = [
   {
     id: "2309",
     name: "김준서",
+    area: "DEVELOPMENT",
+    contribution: "RAIBIT SERVER 개발",
+  },
+  {
+    id: "2414",
+    name: "엄지오",
     area: "DEVELOPMENT",
     contribution: "RAIBIT SERVER 개발",
   },
@@ -44,12 +50,13 @@ export default function ContributorsPage() {
           <div aria-label="RAIBIT SERVER 기여자 목록">
             {contributors.map((contributor, index) => (
               <article
-                className="grid min-h-44 grid-cols-[3rem_minmax(0,1fr)] gap-raibit-lg border-b border-border py-raibit-xxl sm:grid-cols-[5rem_minmax(0,1fr)_auto] sm:items-center"
+                className="grid min-h-36 grid-cols-[2.25rem_2.5rem_minmax(0,1fr)] items-center gap-raibit-md border-b border-border py-raibit-xl sm:grid-cols-[3rem_2.5rem_minmax(0,1fr)] sm:gap-raibit-lg"
                 key={contributor.id}
               >
                 <span className="font-mono text-caption text-muted-foreground">
                   {String(index + 1).padStart(2, "0")}
                 </span>
+                <UserAvatar name={contributor.name} size="lg" />
                 <div className="min-w-0">
                   <p className="text-micro font-medium tracking-[0.12em] text-primary">
                     {contributor.area}
@@ -64,7 +71,6 @@ export default function ContributorsPage() {
                     {contributor.contribution}
                   </p>
                 </div>
-                <Brand height={64} width={64} />
               </article>
             ))}
           </div>

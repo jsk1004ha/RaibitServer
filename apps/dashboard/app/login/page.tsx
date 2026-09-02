@@ -1,5 +1,6 @@
+import { GitBranch } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert';
-import { Button } from '../../components/ui/button';
+import { Button, buttonVariants } from '../../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader } from '../../components/ui/card';
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '../../components/ui/field';
 import { Input } from '../../components/ui/input';
@@ -77,14 +78,21 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               {error ? <Alert className="auth-message border-destructive/40 bg-destructive/10 text-foreground [&_[data-slot=alert-description]]:text-foreground" id="auth-message" variant="destructive"><AlertTitle>확인해 주세요</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
               {notice ? <Alert className="auth-message" id="auth-message" role="status" variant="notice"><AlertTitle>안내</AlertTitle><AlertDescription>{notice}</AlertDescription></Alert> : null}
 
-              {mode === 'login' ? <form method="post" action={apiAction('/auth/login')} className="auth-form">
-                <input name="_returnTo" type="hidden" value={next} />
-                <FieldGroup>
-                  <Field><FieldLabel htmlFor="login-email">이메일</FieldLabel><Input aria-describedby={messageId} autoComplete="email" defaultValue={email} id="login-email" name="email" required type="email" /></Field>
-                  <Field><FieldLabel htmlFor="login-password">비밀번호</FieldLabel><Input aria-describedby={messageId} id="login-password" name="password" type="password" autoComplete="current-password" required /></Field>
-                  <Button type="submit">콘솔에 로그인</Button>
-                </FieldGroup>
-              </form> : null}
+              {mode === 'login' ? <div className="flex flex-col gap-5">
+                <form method="post" action={apiAction('/auth/login')} className="auth-form">
+                  <input name="_returnTo" type="hidden" value={next} />
+                  <FieldGroup>
+                    <Field><FieldLabel htmlFor="login-email">이메일</FieldLabel><Input aria-describedby={messageId} autoComplete="email" defaultValue={email} id="login-email" name="email" required type="email" /></Field>
+                    <Field><FieldLabel htmlFor="login-password">비밀번호</FieldLabel><Input aria-describedby={messageId} id="login-password" name="password" type="password" autoComplete="current-password" required /></Field>
+                    <Button type="submit">콘솔에 로그인</Button>
+                  </FieldGroup>
+                </form>
+                <div aria-hidden="true" className="flex items-center gap-3 text-xs text-muted-foreground"><span className="h-px flex-1 bg-border" /><span>또는</span><span className="h-px flex-1 bg-border" /></div>
+                <div className="flex flex-col gap-2">
+                  <a className={buttonVariants({ variant: 'outline', className: 'w-full' })} href={apiAction('/auth/github/login')}><GitBranch aria-hidden="true" />GitHub로 로그인</a>
+                  <p className="text-xs leading-relaxed text-muted-foreground break-keep">가입 승인된 계정과 GitHub의 인증 이메일이 같으면 프로필 사진도 함께 연결됩니다.</p>
+                </div>
+              </div> : null}
 
               {mode === 'signup' ? <form method="post" action={apiAction('/auth/signup')} className="auth-form">
                 <input name="_returnTo" type="hidden" value="/login?mode=verify" />
@@ -154,6 +162,11 @@ function errorMessage(code: string): string {
     invalid_credentials: '이메일 또는 비밀번호를 확인해 주세요.',
     email_not_verified: '먼저 이메일 인증을 완료해 주세요.',
     session_expired: '세션이 만료되었습니다. 다시 로그인해 주세요.',
+    github_account_not_registered: 'GitHub 인증 이메일과 일치하는 승인 계정을 찾지 못했습니다.',
+    github_oauth_denied: 'GitHub 로그인이 취소되었습니다.',
+    github_oauth_not_configured: 'GitHub 로그인이 아직 설정되지 않았습니다.',
+    github_oauth_state_invalid: 'GitHub 로그인 요청이 만료되었습니다. 다시 시도해 주세요.',
+    github_verified_email_required: 'GitHub에서 인증된 이메일을 확인할 수 없습니다.',
     invalid_or_expired_email_verification_code: '인증 코드가 올바르지 않거나 만료되었습니다.',
     request_failed: '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
   };

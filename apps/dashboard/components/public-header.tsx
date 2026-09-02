@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Brand } from './brand';
 import { ThemeMenu } from './theme-menu';
+import { buttonVariants } from './ui/button';
 
 export type PublicNavigationItem = Readonly<{
   href: string;
@@ -23,6 +24,10 @@ export function PublicHeader({
   currentPath,
   items = publicNavigationItems,
 }: PublicHeaderProps) {
+  const resolvedActions = actions === undefined
+    ? <a className={buttonVariants({ size: 'sm' })} href="/console">콘솔</a>
+    : actions;
+
   return (
     <header className="border-b border-border bg-background">
       <div className="mx-auto flex min-h-16 w-full max-w-7xl flex-col gap-raibit-sm px-raibit-lg py-raibit-sm sm:flex-row sm:items-center sm:justify-between sm:gap-raibit-md sm:px-raibit-xl">
@@ -46,7 +51,7 @@ export function PublicHeader({
               </a>
             ))}
           </nav>
-          {actions}
+          {resolvedActions}
         </div>
       </div>
     </header>

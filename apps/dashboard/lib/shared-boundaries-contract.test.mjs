@@ -52,7 +52,7 @@ test('Given public chrome and the home hero When theme-aware responsive markup r
   assert.match(home, /href=\{consoleUrl\}[\s\S]{0,120}>\s*콘솔 들어가기/);
   assert.match(home, /href=\{consoleUrl\}[\s\S]{0,120}>\s*콘솔 시작하기/);
   assert.match(home, /href=\{signupUrl\}[\s\S]{0,120}>\s*가입 신청/);
-  assert.match(home, /max-w-\[12ch\] break-keep \[overflow-wrap:anywhere\]/);
+  assert.match(home, /max-w-\[15ch\] break-keep text-display-xl/);
   assert.match(home, /만들고, 올리고, 운영하세요\./);
   assert.match(home, /text-pretty break-keep \[overflow-wrap:anywhere\]/);
   assert.match(home, /인천과학고등학교의 최고 정보 동아리 라이빗의 호스팅 서비스입니다\./);

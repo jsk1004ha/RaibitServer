@@ -68,7 +68,7 @@ test("Given surviving non-Tailwind consumers, when classes are composed dynamica
 
   const selectors = [...new Set([...css.matchAll(/(?<![\w-])\.([a-z][a-z0-9-]*)/g)].map((match) => match[1]))].sort();
   assert.deepEqual(selectors, [
-    "auth-form", "auth-message", "auth-resend", "badge", "card-title", "code-panel",
+    "admin-responsive-table", "admin-table-card", "auth-form", "auth-message", "auth-resend", "badge", "card-title", "code-panel",
     "confirmation-control", "console-data-block", "danger", "icon", "info", "load-error-summary",
     "log-line", "log-viewer", "metric-detail", "metric-item", "metric-label", "metric-meter",
     "metric-strip", "metric-value", "muted", "ok", "section-nav", "section-nav-index",

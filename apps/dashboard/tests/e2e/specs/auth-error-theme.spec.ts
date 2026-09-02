@@ -93,7 +93,7 @@ test.describe('@todo6-auth-error-theme', () => {
       if (scenario.viewport.width === 1280) {
         await expect(page.locator('main > section').first()).toHaveCSS(
           'background-color',
-          scenario.preference === 'dark' ? 'rgb(11, 29, 58)' : 'rgb(9, 25, 54)',
+          scenario.preference === 'dark' ? 'rgb(16, 33, 61)' : 'rgb(9, 25, 54)',
         );
       }
       await captureScreenshot(page, testInfo, `todo6-login-${scenario.preference}-${scenario.viewport.width}`);

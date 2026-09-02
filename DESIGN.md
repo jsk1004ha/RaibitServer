@@ -33,31 +33,31 @@ colors:
   accent-crimson: "#e2005a"
 
 colorsDark:
-  primary: "#7fa4dd"
-  primary-deep: "#6d90c8"
-  primary-soft: "#1d3150"
-  primary-foreground: "#071229"
-  ink: "#f4f6f8"
-  ink-secondary: "#d3dae3"
-  ink-mute: "#a9b4c3"
-  ink-mute-2: "#8a95a4"
-  ink-faint: "#758190"
-  on-primary: "#071229"
-  on-dark: "#f4f6f8"
-  canvas: "#11161d"
-  canvas-soft: "#181f29"
-  card: "#202a36"
-  popover: "#2a3645"
-  canvas-night: "#090c11"
-  canvas-night-soft: "#151b24"
-  brand-surface: "#0b1d3a"
-  brand-surface-foreground: "#f5f8ff"
-  hairline: "#344459"
-  hairline-strong: "#708197"
+  primary: "#8aafe6"
+  primary-deep: "#7799cc"
+  primary-soft: "#22324a"
+  primary-foreground: "#081326"
+  ink: "#f3f4f6"
+  ink-secondary: "#d6d9de"
+  ink-mute: "#a8aeb7"
+  ink-mute-2: "#949ca8"
+  ink-faint: "#7b8490"
+  on-primary: "#081326"
+  on-dark: "#f3f4f6"
+  canvas: "#17191d"
+  canvas-soft: "#1d2025"
+  card: "#23272d"
+  popover: "#2a2f36"
+  canvas-night: "#0f1115"
+  canvas-night-soft: "#191c21"
+  brand-surface: "#10213d"
+  brand-surface-foreground: "#f5f7fb"
+  hairline: "#343a43"
+  hairline-strong: "#747d89"
   accent-foreground: "#dce9ff"
   destructive: "#ff7098"
   destructive-foreground: "#260914"
-  selection: "rgb(127 164 221 / 32%)"
+  selection: "rgb(138 175 230 / 28%)"
 
 typography:
   display-xxl:
@@ -287,7 +287,7 @@ The product itself appears as composited UI screenshots on every page: dashboard
 - **Accent Yellow** (`{colors.accent-yellow}` — `#ffdb13`): Chart accent / status indicator only.
 - **Accent Pink / Crimson / Indigo / Tomato**: Reserved for integration logos and rare chart highlights, never as system colors.
 - **Dark Brand Surface** (`{colorsDark.brand-surface}` — `#0b1d3a`) with **Dark Brand Foreground** (`{colorsDark.brand-surface-foreground}` — `#f5f8ff`) is a large RAIBIT brand field only: a hero, identity band, or deliberate large-area surface. It is never a generic control fill.
-- **Dark Primary** (`{colorsDark.primary}` — `#7fa4dd`) is reserved for compact CTAs, links, active states, and focus; its filled-control foreground is `{colorsDark.primary-foreground}` / `{colorsDark.on-primary}` (`#071229`). Do not turn this illuminated blue into a large-area background.
+- **Dark Primary** (`{colorsDark.primary}` — `#8aafe6`) is reserved for compact CTAs, links, active states, and focus; its filled-control foreground is `{colorsDark.primary-foreground}` / `{colorsDark.on-primary}` (`#081326`). Do not turn this illuminated blue into a large-area background.
 
 ### Surface
 - **Canvas** (`{colors.canvas}` — `#ffffff`): Default page background.
@@ -297,8 +297,8 @@ The product itself appears as composited UI screenshots on every page: dashboard
 - **Hairline** (`{colors.hairline}` — `#dfdfdf`): 1px borders on cards and tables.
 - **Hairline Strong** (`{colors.hairline-strong}` — `#c7c7c7`): Slightly darker border for emphasis.
 - **Hairline Cool** (`{colors.hairline-cool}` — `#ededed`) / **Hairline Cool 2** (`#efefef`) / **Hairline Cool 3** (`#d4d4d4`): The brand's grey ladder for fine chrome work.
-- **Dark Canvas** (`{colorsDark.canvas}` — `#11161d`) is the page/app background. **Dark Surface 1** (`{colorsDark.canvas-soft}` — `#181f29`) is the subtle section/muted/secondary layer; **Dark Card** (`{colorsDark.card}` — `#202a36`) is the raised product surface; **Dark Popover** (`{colorsDark.popover}` — `#2a3645`) is the menu/overlay layer.
-- **Dark Night** (`{colorsDark.canvas-night}` — `#090c11`) is the code/log well and inverse canvas. **Dark Night Raised** (`{colorsDark.canvas-night-soft}` — `#151b24`) is raised content inside that inverse well. **Dark Hairline** (`{colorsDark.hairline}` — `#344459`) separates decorative surfaces, while **Dark Control Border** (`{colorsDark.hairline-strong}` — `#708197`) is for inputs and outline controls.
+- **Dark Canvas** (`{colorsDark.canvas}` — `#17191d`) is the page/app background. **Dark Surface 1** (`{colorsDark.canvas-soft}` — `#1d2025`) is the subtle section/muted/secondary layer; **Dark Card** (`{colorsDark.card}` — `#23272d`) is the raised product surface; **Dark Popover** (`{colorsDark.popover}` — `#2a2f36`) is the menu/overlay layer.
+- **Dark Night** (`{colorsDark.canvas-night}` — `#0f1115`) is the code/log well and inverse canvas. **Dark Night Raised** (`{colorsDark.canvas-night-soft}` — `#191c21`) is raised content inside that inverse well. **Dark Hairline** (`{colorsDark.hairline}` — `#343a43`) separates decorative surfaces, while **Dark Control Border** (`{colorsDark.hairline-strong}` — `#747d89`) is for inputs and outline controls.
 
 ### Text
 - **Ink** (`{colors.ink}` — `#171717`): Default body text. Near-black, never pure.
@@ -308,7 +308,7 @@ The product itself appears as composited UI screenshots on every page: dashboard
 - **Ink Faint** (`{colors.ink-faint}` — `#b2b2b2`): Disabled / placeholder text.
 - **On Primary** (`{colors.on-primary}` — `#ffffff`): White text on the navy primary fill for strong contrast.
 - **On Dark** (`{colors.on-dark}` — `#ffffff`): Text on canvas-night surfaces.
-- In dark mode, `{colorsDark.ink}` (`#f4f6f8`) is primary readable text, `{colorsDark.ink-secondary}` (`#d3dae3`) secondary readable text, `{colorsDark.ink-mute}` (`#a9b4c3`) muted readable text, `{colorsDark.ink-mute-2}` (`#8a95a4`) low-emphasis metadata, and `{colorsDark.ink-faint}` (`#758190`) decorative or disabled content only. `{colorsDark.accent-foreground}` (`#dce9ff`) sits on `{colorsDark.primary-soft}`; destructive states use `{colorsDark.destructive}` (`#ff7098`) with `{colorsDark.destructive-foreground}` (`#260914`); selection is `{colorsDark.selection}` (`rgb(127 164 221 / 32%)`).
+- In dark mode, `{colorsDark.ink}` (`#f3f4f6`) is primary readable text, `{colorsDark.ink-secondary}` (`#d6d9de`) secondary readable text, `{colorsDark.ink-mute}` (`#a8aeb7`) muted readable text, `{colorsDark.ink-mute-2}` (`#949ca8`) low-emphasis metadata, and `{colorsDark.ink-faint}` (`#7b8490`) decorative or disabled content only. `{colorsDark.accent-foreground}` (`#dce9ff`) sits on `{colorsDark.primary-soft}`; destructive states use `{colorsDark.destructive}` (`#ff7098`) with `{colorsDark.destructive-foreground}` (`#260914`); selection is `{colorsDark.selection}` (`rgb(138 175 230 / 28%)`).
 
 ### Semantic Theme Mapping
 
@@ -465,6 +465,9 @@ The brand uses minimal photography. Customer logo strips display wordmarks at un
 **`nav-bar-light`** — legacy token name for the theme-aware top nav across the site.
 - Background `{colors.canvas}`, text `{colors.ink}`, padding `{spacing.lg} {spacing.xl}`. Logo on the left, primary nav center, login link + filled `button-primary-navy` on the right.
 
+**`section-nav-responsive`** — theme-aware tabs and steps for dense product screens.
+- Keep items on one horizontal rail, scroll the active item into view, and show a short scroll affordance below the rail on mobile.
+
 ### Pills, Tags, and Chips
 
 **`pill-tag-navy`** — small navy pill used for "new" or featured indicators.
@@ -476,6 +479,9 @@ The brand uses minimal photography. Customer logo strips display wordmarks at un
 ### Signature Components
 
 **Composited Product UI Mockups** — multi-layer dashboard / deployment / log pane composites with subtle Level 2 shadows. The product is the brand's argument; mockups sit on the active semantic canvas with no surrounding decoration.
+
+**`identity-avatar`** — 24–40px user or contributor identity.
+- Prefer the profile image with descriptive alternative text; fall back to initials on `{colors.canvas-soft}`. Do not repeat the brand logo as a person avatar.
 
 **`link-on-light`** — inline links in body copy.
 - Text `{colors.ink}` rendered in `{typography.body-md}` with a persistent underline.
@@ -521,6 +527,7 @@ The brand uses minimal photography. Customer logo strips display wordmarks at un
 - Display tiers stair-step 64 → 48 → 36 → 28 → 22px.
 - Product UI mockups simplify to a single primary panel on mobile.
 - Service tiers stair-step 4-up → 2-up → 1-up; dark featured tier always distinguished.
+- Dense administration tables collapse into bordered, labeled rows on mobile; actions fill the row width and account labels stay intact.
 
 ### Image Behavior
 Product UI mockups use `srcset` with desktop / mobile crops; mobile crops focus on the most actionable inner panel.

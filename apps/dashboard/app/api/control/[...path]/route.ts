@@ -1,6 +1,9 @@
+import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { dashboardApiContext } from '../../../../lib/api';
 import {
+  GITHUB_OAUTH_STATE_COOKIE_NAME,
+  GITHUB_OAUTH_VERIFIER_COOKIE_NAME,
   SESSION_COOKIE_NAME,
   boundedPassThrough,
   browserSafePayload,
@@ -10,6 +13,10 @@ import {
   environmentPayloadFromForm,
   fetchWithInitialResponseTimeout,
   formMutationMethod,
+  githubOAuthAuthorizeHref,
+  githubOAuthCookieOptions,
+  isGitHubOAuthCodeVerifier,
+  isGitHubOAuthState,
   isSameOriginMutation,
   projectCreatePayloadFromForm,
   publicUpstreamErrorCode,
@@ -68,6 +75,9 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
   }
 
   const context = await dashboardApiContext();
+  if (method === 'GET' && (path === '/auth/github/login' || path === '/auth/github/callback')) {
+    return handleGitHubOAuthRequest(request, browserRequestUrl, path, context);
+  }
   const isPublicPath = method === 'GET' ? PUBLIC_GET_PATHS.has(path) : PUBLIC_POST_PATHS.has(path);
   if (!context.token && !isPublicPath) {
     if (isFormSubmission) return formErrorRedirect(browserRequestUrl, '/login', 'authentication_required');
@@ -208,6 +218,92 @@ function applySessionCookie(response: NextResponse, path: string, payload: any) 
   const cookieOptions = { ...sessionCookieOptions(), sameSite: 'lax' as const };
   if (token) response.cookies.set(SESSION_COOKIE_NAME, token, cookieOptions);
   if (path === '/auth/logout') response.cookies.set(SESSION_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
+}
+
+async function handleGitHubOAuthRequest(request: NextRequest, browserRequestUrl: string, path: string, context: Awaited<ReturnType<typeof dashboardApiContext>>) {
+  if (path === '/auth/github/login') {
+    const state = crypto.randomBytes(32).toString('base64url');
+    const codeVerifier = crypto.randomBytes(48).toString('base64url');
+    const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+    const redirectUri = new URL('/api/control/auth/github/callback', browserRequestUrl).toString();
+    const result = await requestGitHubOAuthJson(context, path, new URLSearchParams({ state, codeChallenge }), request.signal);
+    if (!result.ok) return githubOAuthErrorRedirect(browserRequestUrl, result.error);
+    const authorizeHref = githubOAuthAuthorizeHref(result.payload?.oauthUrl, { state, redirectUri, codeChallenge });
+    if (!authorizeHref) return githubOAuthErrorRedirect(browserRequestUrl, result.payload?.configured === false ? 'github_oauth_not_configured' : 'github_oauth_configuration_invalid');
+    const response = NextResponse.redirect(new URL(authorizeHref), 302);
+    const cookieOptions = { ...githubOAuthCookieOptions(), sameSite: 'lax' as const };
+    response.cookies.set(GITHUB_OAUTH_STATE_COOKIE_NAME, state, cookieOptions);
+    response.cookies.set(GITHUB_OAUTH_VERIFIER_COOKIE_NAME, codeVerifier, cookieOptions);
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  }
+
+  const expectedState = request.cookies.get(GITHUB_OAUTH_STATE_COOKIE_NAME)?.value || '';
+  const codeVerifier = request.cookies.get(GITHUB_OAUTH_VERIFIER_COOKIE_NAME)?.value || '';
+  const returnedState = request.nextUrl.searchParams.get('state') || '';
+  if (!oauthStateMatches(expectedState, returnedState) || !isGitHubOAuthCodeVerifier(codeVerifier)) {
+    return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_state_invalid', true);
+  }
+  if (request.nextUrl.searchParams.has('error')) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_denied', true);
+  const code = request.nextUrl.searchParams.get('code');
+  if (!validOAuthCode(code)) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_code_required', true);
+  const result = await requestGitHubOAuthJson(context, path, new URLSearchParams({ code, state: returnedState, codeVerifier }), request.signal);
+  if (!result.ok) return githubOAuthErrorRedirect(browserRequestUrl, result.error, true);
+  if (!extractSessionToken(result.payload)) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_session_invalid', true);
+  const response = NextResponse.redirect(new URL('/console', browserRequestUrl), 302);
+  applySessionCookie(response, path, result.payload);
+  clearGitHubOAuthCookies(response);
+  response.headers.set('cache-control', 'no-store');
+  return response;
+}
+
+async function requestGitHubOAuthJson(context: Awaited<ReturnType<typeof dashboardApiContext>>, path: string, query: URLSearchParams, signal: AbortSignal) {
+  try {
+    const upstream = await fetchWithInitialResponseTimeout(
+      fetch,
+      `${context.baseUrl}${path}?${query.toString()}`,
+      { method: 'GET', headers: { ...context.headers, accept: 'application/json' }, cache: 'no-store', redirect: 'manual' },
+      UPSTREAM_INITIAL_RESPONSE_TIMEOUT_MS,
+      signal,
+    );
+    const bytes = await readBoundedBody(upstream.body, {
+      maxBytes: MAX_RESPONSE_BYTES,
+      timeoutMs: UPSTREAM_BODY_TIMEOUT_MS,
+      declaredLength: upstream.headers.get('content-length'),
+      tooLargeCode: 'control_plane_response_too_large',
+      timeoutCode: 'control_plane_response_timeout',
+    });
+    const parsed = parseJson(new TextDecoder().decode(bytes));
+    if (!parsed.valid || !parsed.payload || typeof parsed.payload !== 'object') return { ok: false as const, error: 'invalid_control_plane_response', payload: null };
+    if (!upstream.ok) return { ok: false as const, error: publicUpstreamErrorCode(parsed.payload, upstream.status), payload: null };
+    return { ok: true as const, error: '', payload: parsed.payload };
+  } catch (error) {
+    return { ok: false as const, error: boundaryErrorCode(error, 'control_plane_unavailable'), payload: null };
+  }
+}
+
+function oauthStateMatches(expected: string, actual: string) {
+  if (!isGitHubOAuthState(expected) || !isGitHubOAuthState(actual)) return false;
+  const expectedBytes = Buffer.from(expected);
+  const actualBytes = Buffer.from(actual);
+  return expectedBytes.byteLength === actualBytes.byteLength && crypto.timingSafeEqual(expectedBytes, actualBytes);
+}
+
+function validOAuthCode(value: string | null): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function githubOAuthErrorRedirect(browserRequestUrl: string, code: string, clearCookies = false) {
+  const response = NextResponse.redirect(new URL(withFlashMessage(browserRequestUrl, '/login', 'error', code), browserRequestUrl), 302);
+  if (clearCookies) clearGitHubOAuthCookies(response);
+  response.headers.set('cache-control', 'no-store');
+  return response;
+}
+
+function clearGitHubOAuthCookies(response: NextResponse) {
+  const cookieOptions = { ...githubOAuthCookieOptions(), sameSite: 'lax' as const };
+  response.cookies.set(GITHUB_OAUTH_STATE_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
+  response.cookies.set(GITHUB_OAUTH_VERIFIER_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
 }
 
 function signupVerificationPath(email: unknown) {

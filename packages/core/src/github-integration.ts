@@ -1,6 +1,22 @@
 import crypto from 'node:crypto';
 import { maskSecretValue } from './secrets.ts';
 
+const GITHUB_API_VERSION = '2022-11-28';
+const GITHUB_OAUTH_TOKEN_URL = 'https://github.com/login/oauth/access_token';
+const GITHUB_API_URL = 'https://api.github.com';
+const MAX_GITHUB_OAUTH_RESPONSE_BYTES = 256 * 1024;
+const DEFAULT_GITHUB_OAUTH_TIMEOUT_MS = 10_000;
+
+type FetchLike = typeof fetch;
+
+export type GitHubOAuthIdentity = Readonly<{
+  avatarUrl: string | null;
+  email: string;
+  githubId: string;
+  githubLogin: string;
+  name: string;
+}>;
+
 export function parseGitHubRepository(input: string | Record<string, any>) {
   const value = typeof input === 'string' ? input : (input.repoUrl || input.repositoryUrl || `${input.owner}/${input.repo}`);
   const text = String(value || '').trim();
@@ -155,18 +171,179 @@ export function githubWebhookOutboundPlan(actionPlan: Record<string, any>, actio
 export function githubOAuthLoginPlan(options: Record<string, any> = {}) {
   const clientId = options.clientId || process.env.GITHUB_CLIENT_ID || process.env.RAIBITSERVER_GITHUB_CLIENT_ID || '';
   const redirectUri = options.redirectUri || process.env.RAIBITSERVER_GITHUB_REDIRECT_URI || '';
-  const state = options.state || crypto.randomBytes(24).toString('base64url');
+  const state = validOAuthState(options.state) ? options.state : crypto.randomBytes(32).toString('base64url');
   const configured = Boolean(clientId && redirectUri);
-  const oauthUrl = configured
-    ? `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(options.scope || 'read:user user:email')}&state=${encodeURIComponent(state)}`
-    : null;
-  return { provider: 'github', configured, oauthUrl, state, mode: configured ? 'redirect' : 'configuration-required' };
+  const oauthUrl = configured ? new URL('https://github.com/login/oauth/authorize') : null;
+  if (oauthUrl) {
+    oauthUrl.searchParams.set('client_id', clientId);
+    oauthUrl.searchParams.set('redirect_uri', redirectUri);
+    oauthUrl.searchParams.set('scope', options.scope || 'read:user user:email');
+    oauthUrl.searchParams.set('state', state);
+    if (validCodeChallenge(options.codeChallenge)) {
+      oauthUrl.searchParams.set('code_challenge', options.codeChallenge);
+      oauthUrl.searchParams.set('code_challenge_method', 'S256');
+    }
+  }
+  return { provider: 'github', configured, oauthUrl: oauthUrl?.toString() || null, state, mode: configured ? 'redirect' : 'configuration-required' };
+}
+
+export async function fetchGitHubOAuthIdentity(input: Record<string, any>, options: Record<string, any> = {}): Promise<GitHubOAuthIdentity> {
+  const clientId = options.clientId || process.env.GITHUB_CLIENT_ID || process.env.RAIBITSERVER_GITHUB_CLIENT_ID || '';
+  const clientSecret = options.clientSecret || process.env.GITHUB_CLIENT_SECRET || process.env.RAIBITSERVER_GITHUB_CLIENT_SECRET || '';
+  const redirectUri = options.redirectUri || process.env.RAIBITSERVER_GITHUB_REDIRECT_URI || '';
+  const code = requiredOAuthValue(input.code, 'github_oauth_code_required', 256);
+  if (!clientId || !clientSecret || !redirectUri) throw githubOAuthError('github_oauth_not_configured', 503);
+
+  const tokenBody = new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: redirectUri });
+  if (validCodeVerifier(input.codeVerifier)) tokenBody.set('code_verifier', input.codeVerifier);
+  const requestOptions = {
+    fetchImpl: (options.fetchImpl || globalThis.fetch) as FetchLike,
+    requestTimeoutMs: boundedTimeout(options.requestTimeoutMs),
+  };
+  const tokenResponse = await githubOAuthJson(options.tokenUrl || GITHUB_OAUTH_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded',
+      'user-agent': 'raibitserver-github-oauth',
+    },
+    body: tokenBody.toString(),
+  }, requestOptions, 'github_oauth_exchange_failed');
+  const accessToken = typeof tokenResponse.access_token === 'string' ? tokenResponse.access_token : '';
+  if (!accessToken) throw githubOAuthError('github_oauth_exchange_failed', 502);
+
+  const apiBaseUrl = String(options.apiBaseUrl || GITHUB_API_URL).replace(/\/$/, '');
+  const apiHeaders = {
+    accept: 'application/vnd.github+json',
+    authorization: `Bearer ${accessToken}`,
+    'user-agent': 'raibitserver-github-oauth',
+    'x-github-api-version': GITHUB_API_VERSION,
+  };
+  const [profile, emails] = await Promise.all([
+    githubOAuthJson(`${apiBaseUrl}/user`, { headers: apiHeaders }, requestOptions, 'github_oauth_profile_failed'),
+    githubOAuthJson(`${apiBaseUrl}/user/emails`, { headers: apiHeaders }, requestOptions, 'github_oauth_email_failed'),
+  ]);
+  const verifiedEmails = Array.isArray(emails)
+    ? emails.filter((entry) => entry && entry.verified === true && validEmail(entry.email))
+    : [];
+  const selectedEmail = verifiedEmails.find((entry) => entry.primary === true)?.email || verifiedEmails[0]?.email;
+  if (!selectedEmail) throw githubOAuthError('github_verified_email_required', 403);
+  const githubId = requiredOAuthValue(profile.id, 'github_oauth_profile_failed', 80);
+  const githubLogin = requiredOAuthValue(profile.login, 'github_oauth_profile_failed', 100);
+  const profileName = boundedProfileName(profile.name) || githubLogin;
+  return {
+    avatarUrl: safeGitHubAvatarUrl(profile.avatar_url),
+    email: String(selectedEmail).trim().toLowerCase(),
+    githubId,
+    githubLogin,
+    name: profileName,
+  };
 }
 
 export function deterministicGitHubCallbackAllowed(input: Record<string, any> = {}, env: Record<string, any> = process.env) {
   if (env.RAIBITSERVER_GITHUB_OAUTH_LOCAL_CALLBACK === '1') return true;
   if (env.NODE_ENV === 'production') return false;
   return Boolean(input.localDev === '1' || input.mode === 'deterministic-local-callback' || input.email || input.githubEmail || input.userEmail);
+}
+
+function validCodeChallenge(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{43,128}$/.test(value);
+}
+
+function validOAuthState(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{32,128}$/.test(value);
+}
+
+function validCodeVerifier(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9._~-]{43,128}$/.test(value);
+}
+
+function requiredOAuthValue(value: unknown, code: string, maxLength: number): string {
+  const normalized = String(value ?? '').trim();
+  if (!normalized || normalized.length > maxLength || /[\u0000-\u001f\u007f]/.test(normalized)) throw githubOAuthError(code, 400);
+  return normalized;
+}
+
+function validEmail(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function boundedProfileName(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim();
+  return normalized && normalized.length <= 100 && !/[\u0000-\u001f\u007f]/.test(normalized) ? normalized : '';
+}
+
+function safeGitHubAvatarUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 2048) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'avatars.githubusercontent.com' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function boundedTimeout(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 500), 30_000) : DEFAULT_GITHUB_OAUTH_TIMEOUT_MS;
+}
+
+async function githubOAuthJson(url: string, init: RequestInit, options: { fetchImpl: FetchLike; requestTimeoutMs: number }, failureCode: string): Promise<any> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.requestTimeoutMs);
+  try {
+    const response = await options.fetchImpl(url, { ...init, redirect: 'error', signal: controller.signal });
+    if (!response.ok) throw githubOAuthError(failureCode, response.status === 401 || response.status === 403 ? 401 : 502);
+    const declaredLength = Number(response.headers.get('content-length') || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_GITHUB_OAUTH_RESPONSE_BYTES) throw githubOAuthError('github_oauth_response_too_large', 502);
+    const bytes = await readBoundedOAuthBody(response.body);
+    try {
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      throw githubOAuthError(failureCode, 502);
+    }
+  } catch (error) {
+    if (Number.isInteger((error as any)?.statusCode)) throw error;
+    const timedOut = controller.signal.aborted || (error as Error)?.name === 'AbortError';
+    throw githubOAuthError(timedOut ? 'github_oauth_timeout' : failureCode, timedOut ? 504 : 502);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readBoundedOAuthBody(body: ReadableStream<Uint8Array> | null): Promise<Uint8Array> {
+  if (!body) return new Uint8Array();
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_GITHUB_OAUTH_RESPONSE_BYTES) {
+        await reader.cancel('github_oauth_response_too_large').catch(() => undefined);
+        throw githubOAuthError('github_oauth_response_too_large', 502);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
+function githubOAuthError(code: string, statusCode: number) {
+  const error = new Error(code) as Error & { statusCode: number };
+  error.statusCode = statusCode;
+  return error;
 }
 
 function webhookRepository(payload: Record<string, any>) {

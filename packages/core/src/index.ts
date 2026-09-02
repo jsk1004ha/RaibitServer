@@ -34,7 +34,7 @@ export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured, par
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 export { buildPostgresProviderPlan, buildResourceProviderPlan, provisionPostgresProvider, provisionResourceProvider, providerConnectionEnvForResource, providerConsoleSurface } from './resource-providers.ts';
-export { parseGitHubRepository, githubIntegrationSummary, githubCloneOptionsFromIntegration, verifyGitHubWebhookSignature, githubWebhookActionPlan, githubWebhookOutboundPlan, githubOAuthLoginPlan, deterministicGitHubCallbackAllowed } from './github-integration.ts';
+export { parseGitHubRepository, githubIntegrationSummary, githubCloneOptionsFromIntegration, verifyGitHubWebhookSignature, githubWebhookActionPlan, githubWebhookOutboundPlan, githubOAuthLoginPlan, fetchGitHubOAuthIdentity, deterministicGitHubCallbackAllowed, type GitHubOAuthIdentity } from './github-integration.ts';
 export { createGitHubAppInstallationPlan, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, signGitHubAppInstallationState, verifyGitHubAppInstallationState, resolveGitHubAppInstallationSelection } from './github-app.ts';
 export type { GitHubAppInstallationState, GitHubInstallationRepository } from './github-app.ts';
 export { previewKey, previewWorkloadName, previewRuntimePlan } from './preview-deployments.ts';

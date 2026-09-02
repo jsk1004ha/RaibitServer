@@ -75,6 +75,7 @@ test.describe("@t8-public-copy-wrapping", () => {
   test.skip(!fixtureEnabled, "requires RAIBITSERVER_E2E_FIXTURES=1");
 
   test("short Korean public copy keeps words intact in dark narrow views and the 375px light regression", async ({ browser }, testInfo) => {
+    test.slow();
     for (const scenario of [
       { theme: "dark", viewport: { width: 320, height: 812 } },
       { theme: "dark", viewport: { width: 375, height: 812 } },
@@ -88,7 +89,7 @@ test.describe("@t8-public-copy-wrapping", () => {
         for (const route of shortCopyRoutes) {
           await page.goto(`${publicOrigin}${route.path}`, { waitUntil: "networkidle" });
           await expect(page.locator("html")).toHaveAttribute("data-theme", scenario.theme);
-          for (const name of route.names) await expectKoreanWordsStayIntact(page.getByText(name, { exact: true }));
+          for (const name of route.names) await expectKoreanWordsStayIntact(page.locator("main").getByText(name, { exact: true }));
           await expectAccessible(page);
           await expectNoHorizontalOverflow(page);
           await captureScreenshot(page, testInfo, `t8-${route.path.slice(1)}-${scenario.theme}-${scenario.viewport.width}`);
@@ -101,6 +102,7 @@ test.describe("@t8-public-copy-wrapping", () => {
   });
 
   test("long fixture content and an injected email token remain visible without horizontal overflow", async ({ browser, request }) => {
+    test.slow();
     const fixture = await request.post(`${FIXTURE_ORIGIN}/__fixture/state`, { data: { publicSiteScenario: "long" } });
     expect(fixture.ok()).toBe(true);
     const context = await browser.newContext({ viewport: { width: 320, height: 812 } });

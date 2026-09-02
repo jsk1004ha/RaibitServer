@@ -6,29 +6,29 @@ const dashboardRoot = new URL("../", import.meta.url);
 const css = await readFile(new URL("app/globals.css", dashboardRoot), "utf8");
 
 const lockedPalette = {
-  "--raibit-dark-canvas": "#11161d",
-  "--raibit-dark-surface-1": "#181f29",
-  "--raibit-dark-surface-2": "#202a36",
-  "--raibit-dark-surface-3": "#2a3645",
-  "--raibit-dark-night": "#090c11",
-  "--raibit-dark-night-raised": "#151b24",
-  "--raibit-dark-brand-surface": "#0b1d3a",
-  "--raibit-dark-brand-foreground": "#f5f8ff",
-  "--raibit-dark-foreground": "#f4f6f8",
-  "--raibit-dark-foreground-secondary": "#d3dae3",
-  "--raibit-dark-muted-foreground": "#a9b4c3",
-  "--raibit-dark-muted-2": "#8a95a4",
-  "--raibit-dark-faint": "#758190",
-  "--raibit-dark-border": "#344459",
-  "--raibit-dark-control-border": "#708197",
-  "--raibit-dark-primary": "#7fa4dd",
-  "--raibit-dark-primary-foreground": "#071229",
-  "--raibit-dark-primary-pressed": "#6d90c8",
-  "--raibit-dark-primary-soft": "#1d3150",
+  "--raibit-dark-canvas": "#17191d",
+  "--raibit-dark-surface-1": "#1d2025",
+  "--raibit-dark-surface-2": "#23272d",
+  "--raibit-dark-surface-3": "#2a2f36",
+  "--raibit-dark-night": "#0f1115",
+  "--raibit-dark-night-raised": "#191c21",
+  "--raibit-dark-brand-surface": "#10213d",
+  "--raibit-dark-brand-foreground": "#f5f7fb",
+  "--raibit-dark-foreground": "#f3f4f6",
+  "--raibit-dark-foreground-secondary": "#d6d9de",
+  "--raibit-dark-muted-foreground": "#a8aeb7",
+  "--raibit-dark-muted-2": "#949ca8",
+  "--raibit-dark-faint": "#7b8490",
+  "--raibit-dark-border": "#343a43",
+  "--raibit-dark-control-border": "#747d89",
+  "--raibit-dark-primary": "#8aafe6",
+  "--raibit-dark-primary-foreground": "#081326",
+  "--raibit-dark-primary-pressed": "#7799cc",
+  "--raibit-dark-primary-soft": "#22324a",
   "--raibit-dark-accent-foreground": "#dce9ff",
   "--raibit-dark-destructive": "#ff7098",
   "--raibit-dark-destructive-foreground": "#260914",
-  "--raibit-dark-selection": "rgb(127 164 221 / 32%)",
+  "--raibit-dark-selection": "rgb(138 175 230 / 28%)",
   "--raibit-dark-integration-purple": "#c084fc",
   "--raibit-dark-integration-violet": "#a78bfa",
   "--raibit-dark-integration-purple-soft": "#312044",
@@ -217,8 +217,8 @@ test("dark semantics use one locked raw palette and identical explicit/system al
 
 test("dark CSS contract rejects duplicate literals, selector drift, and the former weak control border", () => {
   assert.throws(
-    () => assertDarkCssContract(css.replace("--raibit-dark-canvas: #11161d;", "--raibit-dark-canvas: #11161d;\n  --raibit-dark-canvas-copy: #11161d;")),
-    /#11161d must have one raw dark declaration/,
+    () => assertDarkCssContract(css.replace("--raibit-dark-canvas: #17191d;", "--raibit-dark-canvas: #17191d;\n  --raibit-dark-canvas-copy: #17191d;")),
+    /#17191d must have one raw dark declaration/,
   );
 
   const systemCard = css.lastIndexOf("--card: var(--raibit-dark-surface-2);");
@@ -229,7 +229,7 @@ test("dark CSS contract rejects duplicate literals, selector drift, and the form
   );
 
   assert.throws(
-    () => assertDarkCssContract(css.replace("--raibit-dark-control-border: #708197;", "--raibit-dark-control-border: #454b55;")),
+    () => assertDarkCssContract(css.replace("--raibit-dark-control-border: #747d89;", "--raibit-dark-control-border: #454b55;")),
     /--raibit-dark-control-border must use its locked value/,
   );
 });
