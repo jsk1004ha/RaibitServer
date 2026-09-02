@@ -76,7 +76,7 @@ export function parseOrganizationMembershipRoleForMutation(value: unknown):
 }
 
 export function parseOrganizationRouteSlug(value: unknown): OrganizationRouteSlugResult {
-  if (typeof value !== 'string' || !ORGANIZATION_ROUTE_SLUG_PATTERN.test(value)) {
+  if (typeof value !== 'string' || !ORGANIZATION_ROUTE_SLUG_PATTERN.test(value) || value.includes('--')) {
     return { ok: false, statusCode: 400, code: 'organization_route_slug_invalid' };
   }
   if (new TextEncoder().encode(value).byteLength > 63) {

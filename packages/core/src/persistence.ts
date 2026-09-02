@@ -14,7 +14,7 @@ import { redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
-import { membershipRoleTransition, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
+import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import { parseGitHubRepository } from './github-integration.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
@@ -668,7 +668,7 @@ export class PrismaControlPlaneRepository {
     const where = { organizationId_userId: { organizationId: input.organizationId, userId: input.userId } };
     return this.prisma.$transaction(async (transaction: any) => {
       const existing = await transaction.membership.findUnique({ where });
-      const protectCanonicalOwner = existing?.role === 'OWNER' && roleResult.role !== 'OWNER';
+      const protectCanonicalOwner = normalizeOrganizationRoleForRead(existing?.role) === 'OWNER' && roleResult.role !== 'OWNER';
       const ownerCount = protectCanonicalOwner || input.actorRole !== undefined
         ? await organizationOwnerCount(transaction, input.organizationId)
         : 0;

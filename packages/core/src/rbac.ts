@@ -14,7 +14,7 @@ export type OrganizationRouteSlugResult =
   | { readonly ok: false; readonly statusCode: 400; readonly code: 'organization_route_slug_invalid' | 'organization_route_slug_reserved' | 'organization_route_slug_too_long' };
 
 export function parseOrganizationRouteSlug(value: unknown): OrganizationRouteSlugResult {
-  if (typeof value !== 'string' || !ORGANIZATION_ROUTE_SLUG_PATTERN.test(value)) {
+  if (typeof value !== 'string' || !ORGANIZATION_ROUTE_SLUG_PATTERN.test(value) || value.includes('--')) {
     return { ok: false, statusCode: 400, code: 'organization_route_slug_invalid' };
   }
   if (new TextEncoder().encode(value).byteLength > 63) {

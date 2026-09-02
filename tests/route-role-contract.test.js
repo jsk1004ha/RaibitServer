@@ -7,9 +7,16 @@ import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { ControlPlaneStore } from '../packages/core/src/store.ts';
 import { resourceConsoleHostname, serviceConsoleHostname, serviceHostname } from '../packages/core/src/domain-router.ts';
-import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
+import { InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
+import { issueSignupEmailVerificationCode, verifyEmailCodeAndCreateSession } from '../packages/core/src/email-verification.ts';
 
 const contract = JSON.parse(await fs.readFile(new URL('../test-fixtures/contracts/organization-roles-v1.json', import.meta.url), 'utf8'));
+const verificationEnv = Object.freeze({
+  NODE_ENV: 'test',
+  RAIBITSERVER_EMAIL_FROM: 'RAIBITSERVER <route-role@example.test>',
+  RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE: '246810',
+});
+const verificationOptions = Object.freeze({ jwtSecret: 'route-role-verification-secret', issuer: 'raibitserver-route-role-test', env: verificationEnv });
 
 function hostnameForFixture(fixture) {
   if (fixture.kind === 'service' || fixture.kind === 'preview') return serviceHostname(fixture.input);
@@ -102,8 +109,107 @@ test('adversarial role and route matrix', async () => {
   );
 });
 
+test('given a normalized sole owner when any caller demotes it then Store and Prisma reject without writes', async () => {
+  for (const storedRole of ['owner', 'OWNER']) {
+    for (const actorRole of [undefined, 'OWNER', 'VIEWER']) {
+      const store = new ControlPlaneStore();
+      const actorLabel = String(actorRole || 'none').toLowerCase();
+      const organization = store.createOrganization({ name: `Sole ${storedRole}`, slug: `sole-${storedRole.toLowerCase()}-${actorLabel}` });
+      const user = store.createUser({ email: `sole-${storedRole.toLowerCase()}-${actorLabel}@example.test`, approvalStatus: 'APPROVED' });
+      store.addMember({ organizationId: organization.id, userId: user.id, role: storedRole });
+      const before = {
+        membership: structuredClone(store.members.find((member) => member.organizationId === organization.id && member.userId === user.id)),
+        sessionVersion: store.users.get(user.id).sessionVersion,
+        auditCount: store.auditLogs.length,
+      };
+      const input = { organizationId: organization.id, userId: user.id, role: 'VIEWER', ...(actorRole === undefined ? {} : { actorRole }) };
+      assert.throws(() => store.addMember(input), (error) => error.statusCode === 409 && error.message === 'membership_last_owner', `${storedRole}/${actorRole || 'actorless'}`);
+      assert.deepEqual(store.members.find((member) => member.organizationId === organization.id && member.userId === user.id), before.membership);
+      assert.equal(store.users.get(user.id).sessionVersion, before.sessionVersion);
+      assert.equal(store.auditLogs.length, before.auditCount);
+
+      let upserts = 0;
+      let sessionMutations = 0;
+      const repository = new PrismaControlPlaneRepository({
+        $transaction: async (callback) => callback({
+          membership: {
+            findUnique: async () => ({ role: storedRole }),
+            count: async () => 1,
+            upsert: async () => { upserts += 1; return { role: 'VIEWER' }; },
+          },
+          user: { update: async () => { sessionMutations += 1; return {}; } },
+        }),
+      });
+      await assert.rejects(repository.addMember(input), (error) => error.statusCode === 409 && error.message === 'membership_last_owner', `Prisma ${storedRole}/${actorRole || 'actorless'}`);
+      assert.equal(upserts, 0);
+      assert.equal(sessionMutations, 0);
+    }
+  }
+
+  const store = new ControlPlaneStore();
+  const organization = store.createOrganization({ name: 'Two Owners', slug: 'two-owners' });
+  const first = store.createUser({ email: 'two-owners-first@example.test', approvalStatus: 'APPROVED' });
+  const second = store.createUser({ email: 'two-owners-second@example.test', approvalStatus: 'APPROVED' });
+  store.addMember({ organizationId: organization.id, userId: first.id, role: 'owner' });
+  store.addMember({ organizationId: organization.id, userId: second.id, role: 'OWNER' });
+  const priorSessionVersion = store.users.get(first.id).sessionVersion;
+  const priorAuditCount = store.auditLogs.length;
+  assert.equal(store.addMember({ organizationId: organization.id, userId: first.id, role: 'VIEWER' }).role, 'VIEWER');
+  assert.equal(store.users.get(first.id).sessionVersion, priorSessionVersion + 1);
+  assert.equal(store.auditLogs.length, priorAuditCount + 1);
+});
+
+test('given explicit double-hyphen organization slugs when signup and verification run in either order then identity state cannot collide', async () => {
+  for (const validFirst of [false, true]) {
+    const repository = new InMemoryControlPlaneRepository();
+    const validEmail = `valid-${validFirst ? 'first' : 'second'}@example.test`;
+    const rejectedEmail = `rejected-${validFirst ? 'second' : 'first'}@example.test`;
+    const issue = (email, organizationSlug) => issueSignupEmailVerificationCode(repository, {
+      email,
+      password: 'correct-horse',
+      name: email.split('@')[0],
+      studentId: '2600',
+      organizationSlug,
+    }, verificationOptions);
+    const verify = (email) => verifyEmailCodeAndCreateSession(repository, { email, code: '246810' }, verificationOptions);
+
+    if (validFirst) {
+      await issue(validEmail, 'alpha-demo');
+      await verify(validEmail);
+    }
+
+    const beforeRejectedSignup = {
+      organizations: repository.store.organizations.size,
+      users: repository.store.users.size,
+      members: structuredClone(repository.store.members),
+      projects: structuredClone([...repository.store.projects.values()]),
+      codes: structuredClone(repository.store.emailVerificationCodes),
+    };
+    await assert.rejects(issue(rejectedEmail, 'alpha--demo'), (error) => error.statusCode === 400 && error.message === 'organization_route_slug_invalid');
+    assert.equal(repository.store.emailVerificationCodes.some((code) => code.email === rejectedEmail), false);
+    assert.equal(repository.store.organizations.size, beforeRejectedSignup.organizations);
+    assert.equal(repository.store.users.size, beforeRejectedSignup.users);
+    assert.deepEqual(repository.store.members, beforeRejectedSignup.members);
+    assert.deepEqual([...repository.store.projects.values()], beforeRejectedSignup.projects);
+    assert.deepEqual(repository.store.emailVerificationCodes, beforeRejectedSignup.codes);
+
+    if (!validFirst) {
+      await issue(validEmail, 'alpha-demo');
+      await verify(validEmail);
+    }
+    const organization = repository.store.findOrganizationBySlug('alpha-demo');
+    const user = repository.store.findUserByEmail(validEmail);
+    const project = repository.store.createProject({ organizationId: organization.id, name: 'api', slug: 'api' });
+    assert.equal(repository.store.organizations.size, 1);
+    assert.equal(repository.store.members.length, 1);
+    assert.equal(repository.store.members[0].organizationId, organization.id);
+    assert.equal(repository.store.members[0].userId, user.id);
+    assert.equal(project.organizationId, organization.id);
+  }
+});
+
 test('given an explicit organization route slug when direct, repository, and API creation occur then invalid input is a typed 400 before normalization', async () => {
-  const invalidSlugs = ['api', '*foo', '1.2.3.4', 'a'.repeat(64)];
+  const invalidSlugs = ['api', '*foo', '1.2.3.4', 'alpha--demo', 'a'.repeat(64)];
   const store = new ControlPlaneStore();
   for (const slug of invalidSlugs) {
     assert.throws(
@@ -166,6 +272,16 @@ test('given an explicit organization route slug when direct, repository, and API
   );
   assert.equal(desiredOrganizationUpserts.length, 0);
 
+  await assert.rejects(
+    desiredProjectRepository.writeDesiredProject({ organization: { name: 'Double Hyphen Organization', slug: 'alpha--demo' }, project: { name: 'desired-project', slug: 'desired-project' } }),
+    (error) => error.statusCode === 400 && error.message === 'organization_route_slug_invalid',
+  );
+  await assert.rejects(
+    desiredProjectRepository.writeDesiredProject({ organizationSlug: 'alpha--demo', project: { name: 'defaulted-project', slug: 'defaulted-project' } }),
+    (error) => error.statusCode === 400 && error.message === 'organization_route_slug_invalid',
+  );
+  assert.equal(desiredOrganizationUpserts.length, 0);
+
   const validDesired = await desiredProjectRepository.writeDesiredProject({ organization: { name: 'Valid Desired Organization', slug: 'valid-desired-org' }, project: { name: 'desired-project', slug: 'desired-project' } });
   assert.equal(validDesired.organization.slug, 'valid-desired-org');
   assert.equal(desiredOrganizationUpserts.at(-1).where.slug, 'valid-desired-org');
@@ -191,11 +307,11 @@ test('given an explicit organization route slug when direct, repository, and API
 
   store.emailVerificationCodes.push({
     id: 'email_1', email: 'in-memory-route-boundary@example.test', purpose: 'signup', expiresAt: new Date(Date.now() + 60_000).toISOString(), attempts: 0, consumedAt: null,
-    payload: { kind: 'signup', organizationSlug: 'api' },
+    payload: { kind: 'signup', organizationSlug: 'alpha--demo' },
   });
   assert.throws(
     () => store.completeSignupEmailVerification({ email: 'in-memory-route-boundary@example.test', verifyCode: () => true }),
-    (error) => error.statusCode === 400 && error.message === 'organization_route_slug_reserved',
+    (error) => error.statusCode === 400 && error.message === 'organization_route_slug_invalid',
   );
   assert.equal(store.emailVerificationCodes.at(-1).consumedAt, null);
 
@@ -203,14 +319,14 @@ test('given an explicit organization route slug when direct, repository, and API
   const prismaSignupRepository = new PrismaControlPlaneRepository({
     $transaction: async (callback) => callback({
       emailVerificationCode: {
-        findFirst: async () => ({ id: 'email_1', expiresAt: new Date(Date.now() + 60_000), attempts: 0, payload: { kind: 'signup', organizationSlug: 'api' } }),
+        findFirst: async () => ({ id: 'email_1', expiresAt: new Date(Date.now() + 60_000), attempts: 0, payload: { kind: 'signup', organizationSlug: 'alpha--demo' } }),
         updateMany: async () => { verificationClaimed = true; return { count: 1 }; },
       },
     }),
   });
   await assert.rejects(
     prismaSignupRepository.completeSignupEmailVerification({ email: 'route-boundary@example.test', verifyCode: () => true }),
-    (error) => error.statusCode === 400 && error.message === 'organization_route_slug_reserved',
+    (error) => error.statusCode === 400 && error.message === 'organization_route_slug_invalid',
   );
   assert.equal(verificationClaimed, false);
 
@@ -227,7 +343,7 @@ test('given an explicit organization route slug when direct, repository, and API
     assert.equal(directResponse.body.error, 'organization_route_slug_reserved');
 
     const signupResponse = await requestJson(port, '/auth/signup', {
-      name: 'Signup Route', studentId: '2600', clubMemberClaim: false, email: 'route-boundary@example.test', password: 'correct-horse', organizationSlug: '*foo',
+      name: 'Signup Route', studentId: '2600', clubMemberClaim: false, email: 'route-boundary@example.test', password: 'correct-horse', organizationSlug: 'alpha--demo',
     });
     assert.equal(signupResponse.statusCode, 400);
     assert.equal(signupResponse.body.error, 'organization_route_slug_invalid');

@@ -338,7 +338,7 @@ export class ControlPlaneStore {
     const storedRole = typeof role === 'string' && role === role.toLowerCase() ? role : roleResult.role;
     const existing = this.members.find((member) => member.organizationId === organizationId && member.userId === userId);
     const currentCanonicalRole = normalizeOrganizationRoleForRead(existing?.role);
-    const protectCanonicalOwner = existing?.role === 'OWNER' && currentCanonicalRole === 'OWNER' && roleResult.role !== 'OWNER';
+    const protectCanonicalOwner = currentCanonicalRole === 'OWNER' && roleResult.role !== 'OWNER';
     const ownerCount = protectCanonicalOwner || actorRole !== undefined
       ? this.members.filter((member) => member.organizationId === organizationId && normalizeOrganizationRoleForRead(member.role) === 'OWNER').length
       : 0;
