@@ -128,6 +128,62 @@ test('given an explicit organization route slug when direct, repository, and API
   assert.equal(upsertCalled, false);
   assert.equal((await repository.createOrganization({ name: 'Stable Route', slug: 'stable-route' })).slug, 'stable-route');
 
+  const desiredOrganizationUpserts = [];
+  const desiredProjectUpserts = [];
+  const desiredProjectRepository = new PrismaControlPlaneRepository({
+    $transaction: async (callback) => callback({
+      organization: {
+        findUnique: async () => null,
+        upsert: async (input) => {
+          desiredOrganizationUpserts.push(input);
+          return { id: 'org_desired', name: input.create.name, slug: input.create.slug, plan: input.create.plan };
+        },
+      },
+      project: {
+        findUnique: async () => null,
+        upsert: async (input) => {
+          desiredProjectUpserts.push(input);
+          return { id: 'project_desired', organizationId: input.create.organizationId, slug: input.create.slug };
+        },
+      },
+      auditLog: { create: async () => ({}) },
+    }),
+  });
+  await assert.rejects(
+    desiredProjectRepository.writeDesiredProject({ organization: { name: 'Invalid Desired Organization', slug: 'api' }, project: { name: 'desired-project', slug: 'desired-project' } }),
+    (error) => error.statusCode === 400 && error.message === 'organization_route_slug_reserved',
+  );
+  assert.equal(desiredOrganizationUpserts.length, 0);
+
+  await assert.rejects(
+    desiredProjectRepository.writeDesiredProject({ organizationSlug: 'api', project: { name: 'defaulted-project', slug: 'defaulted-project' } }),
+    (error) => error.statusCode === 400 && error.message === 'organization_route_slug_reserved',
+  );
+  assert.equal(desiredOrganizationUpserts.length, 0);
+
+  const validDesired = await desiredProjectRepository.writeDesiredProject({ organization: { name: 'Valid Desired Organization', slug: 'valid-desired-org' }, project: { name: 'desired-project', slug: 'desired-project' } });
+  assert.equal(validDesired.organization.slug, 'valid-desired-org');
+  assert.equal(desiredOrganizationUpserts.at(-1).where.slug, 'valid-desired-org');
+  assert.equal(desiredProjectUpserts.at(-1).create.organizationId, 'org_desired');
+
+  let existingOrganizationUpserts = 0;
+  const existingOrganizationRepository = new PrismaControlPlaneRepository({
+    $transaction: async (callback) => callback({
+      organization: {
+        findUnique: async ({ where }) => where.id === 'org_existing' ? { id: 'org_existing', name: 'Existing Organization', slug: 'api', plan: 'free' } : null,
+        upsert: async () => { existingOrganizationUpserts += 1; throw new Error('unexpected organization upsert'); },
+      },
+      project: {
+        findUnique: async () => null,
+        upsert: async (input) => ({ id: 'project_existing', organizationId: input.create.organizationId, slug: input.create.slug }),
+      },
+      auditLog: { create: async () => ({}) },
+    }),
+  });
+  const existingDesired = await existingOrganizationRepository.writeDesiredProject({ organizationId: 'org_existing', project: { name: 'existing-project', slug: 'existing-project' } });
+  assert.equal(existingDesired.organization.id, 'org_existing');
+  assert.equal(existingOrganizationUpserts, 0);
+
   store.emailVerificationCodes.push({
     id: 'email_1', email: 'in-memory-route-boundary@example.test', purpose: 'signup', expiresAt: new Date(Date.now() + 60_000).toISOString(), attempts: 0, consumedAt: null,
     payload: { kind: 'signup', organizationSlug: 'api' },

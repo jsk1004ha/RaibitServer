@@ -2132,10 +2132,13 @@ async function resolveDesiredOrganization(tx: any, orgInput: Record<string, any>
     throw error;
   }
   const desired = orgInput || { name: organizationSlug || 'default', slug: organizationSlug || 'default', plan: 'free' };
+  const slug = Object.hasOwn(desired, 'slug')
+    ? validatedOrganizationRouteSlug(desired.slug)
+    : slugInput(desired.name);
   return tx.organization.upsert({
-    where: { slug: desired.slug || slugInput(desired.name) },
-    update: { name: desired.name || desired.slug, plan: desired.plan || 'free' },
-    create: { name: desired.name || desired.slug, slug: desired.slug || slugInput(desired.name), plan: desired.plan || 'free' },
+    where: { slug },
+    update: { name: desired.name || slug, plan: desired.plan || 'free' },
+    create: { name: desired.name || slug, slug, plan: desired.plan || 'free' },
   });
 }
 
