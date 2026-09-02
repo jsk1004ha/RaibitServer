@@ -244,6 +244,8 @@ export class InMemoryControlPlaneRepository {
   async enforceUserCan(input: Record<string, any>) { return this.store.enforceUserCan(input); }
   async writeDesiredProject(projectSpec: Record<string, any>) {
     const orgInput = projectSpec.organization || null;
+    if (Object.hasOwn(projectSpec, 'organizationSlug')) validatedOrganizationRouteSlug(projectSpec.organizationSlug);
+    if (orgInput && Object.hasOwn(orgInput, 'slug')) validatedOrganizationRouteSlug(orgInput.slug);
     const requestedOrganizationId = projectSpec.organizationId || projectSpec.orgId || null;
     const existingOrganization = (requestedOrganizationId ? this.store.organizations.get(String(requestedOrganizationId)) : null)
       || [...this.store.organizations.values()].find((organization) => String(organization.slug) === slugInput(projectSpec.organizationSlug || orgInput?.slug || orgInput?.name || requestedOrganizationId || ''));
@@ -1733,6 +1735,8 @@ export class PrismaControlPlaneRepository {
 
   async writeDesiredProject(projectSpec: Record<string, any>) {
     const orgInput = projectSpec.organization || null;
+    if (Object.hasOwn(projectSpec, 'organizationSlug')) validatedOrganizationRouteSlug(projectSpec.organizationSlug);
+    if (orgInput && Object.hasOwn(orgInput, 'slug')) validatedOrganizationRouteSlug(orgInput.slug);
     const requestedOrganizationId = projectSpec.organizationId || projectSpec.orgId || null;
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const organization = await resolveDesiredOrganization(tx, orgInput, requestedOrganizationId, projectSpec.organizationSlug);

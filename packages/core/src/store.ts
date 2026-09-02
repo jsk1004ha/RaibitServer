@@ -90,6 +90,8 @@ export class ControlPlaneStore {
     const { name, plan = 'free' } = input;
     const slug = organizationSlugForCreate(input);
     const org = { id: stableId('org', slug || name), name, slug, plan, createdAt: nowIso() };
+    const existing = this.organizations.get(org.id);
+    if (existing && existing.slug !== slug) throw conflict('organization_identity_collision');
     this.organizations.set(org.id, org);
     this.audit('system', 'organization:create', 'organization', org.id, { slug: org.slug, plan });
     return deepClone(org);
@@ -105,6 +107,7 @@ export class ControlPlaneStore {
     const timestamp = nowIso();
     const id = stableId('usr', email || name);
     const existing = this.users.get(id);
+    if (existing && existing.email !== String(email || '').toLowerCase()) throw conflict('user_identity_collision');
     const passwordChanged = Boolean(existing && passwordHash && passwordHash !== existing.passwordHash);
     const user = {
       id,
@@ -382,6 +385,8 @@ export class ControlPlaneStore {
 
   createProject({ organizationId, name, slug, description = '', status = 'active' }: Record<string, any>) {
     const project = { id: stableId('prj', organizationId, slug || name), organizationId, name, slug: slugify(slug || name), description, status, createdAt: nowIso(), updatedAt: nowIso() };
+    const existing = this.projects.get(project.id);
+    if (existing && (existing.organizationId !== organizationId || existing.slug !== project.slug)) throw conflict('project_identity_collision');
     this.projects.set(project.id, project);
     this.audit('system', 'project:create', 'project', project.id, { organizationId, slug: project.slug });
     return deepClone(project);
@@ -1015,6 +1020,7 @@ export class ControlPlaneStore {
     const organizationSlug = organizationSlugForCreate({ slug: payload.organizationSlug });
     if (this.findUserByEmail(email)) throw conflict('user_already_exists');
     if (this.findOrganizationBySlug(organizationSlug)) throw conflict('organization_slug_already_exists');
+    if (this.users.has(stableId('usr', email))) throw conflict('user_identity_collision');
     const firstUser = this.users.size === 0;
     const policy = typeof input.resolvePolicy === 'function'
       ? input.resolvePolicy(payload, { firstUser })

@@ -71,10 +71,11 @@ test('adversarial role and route matrix', async () => {
   const roles = await import('../packages/schemas/src/organization-role.ts');
   const rbac = await import('../packages/core/src/rbac.ts');
 
-  for (const slug of contract.invalidTenantSlugs) {
+  for (const slug of [...contract.invalidTenantSlugs, 'alpha--demo']) {
     const result = roles.parseOrganizationRouteSlug(slug);
     assert.equal(result.statusCode, 400, slug);
     assert.deepEqual(rbac.parseOrganizationRouteSlug(slug), result, slug);
+    assert.equal(roles.OrganizationRouteSlugSchema.safeParse(slug).success, false, slug);
   }
   for (const slug of ['valid-route', 'a'.repeat(63)]) {
     const result = roles.parseOrganizationRouteSlug(slug);
@@ -176,6 +177,8 @@ test('given explicit double-hyphen organization slugs when signup and verificati
     if (validFirst) {
       await issue(validEmail, 'alpha-demo');
       await verify(validEmail);
+      const victim = repository.store.findOrganizationBySlug('alpha-demo');
+      repository.store.createProject({ organizationId: victim.id, name: 'victim-project' });
     }
 
     const beforeRejectedSignup = {
@@ -375,3 +378,189 @@ function requestJson(port, path, body) {
     req.end(payload);
   });
 }
+
+function tenantState(store) {
+  return structuredClone({
+    organizations: [...store.organizations], users: [...store.users], members: store.members,
+    projects: [...store.projects], auditLogs: store.auditLogs, codes: store.emailVerificationCodes,
+  });
+}
+
+for (const [scenario, first, second] of [
+  ['long-slug forward', ['victim@example.test', 'x'.repeat(59) + 'a'], ['other@example.test', 'x'.repeat(59) + 'b']],
+  ['long-slug reverse', ['victim@example.test', 'x'.repeat(59) + 'b'], ['other@example.test', 'x'.repeat(59) + 'a']],
+  ['email forward', ['victim.a@example.test', 'victim-org'], ['victim-a@example.test', 'other-org']],
+  ['email reverse', ['victim-a@example.test', 'victim-org'], ['victim.a@example.test', 'other-org']],
+]) {
+  test(`given a victim project when ${scenario} signup is verified then conflict preserves all tenant state and the challenge`, async () => {
+    // Given a verified tenant owning a project before the distinct identity attempts signup.
+    const repository = new InMemoryControlPlaneRepository();
+    const issue = ([email, organizationSlug]) => issueSignupEmailVerificationCode(repository, {
+      email, organizationSlug, name: 'Member', studentId: '2600', password: 'correct-horse',
+    }, verificationOptions);
+    const verify = ([email]) => verifyEmailCodeAndCreateSession(repository, { email, code: '246810' }, verificationOptions);
+    await issue(first);
+    await verify(first);
+    const victim = repository.store.findOrganizationBySlug(first[1]);
+    repository.store.createProject({ organizationId: victim.id, name: 'victim-project' });
+    await issue(second);
+    assert.equal(repository.store.emailVerificationCodes.at(-1).payload.kind, 'signup');
+    const before = tenantState(repository.store);
+
+    // When the real verification service completes the colliding signup.
+    await assert.rejects(verify(second), (error) => error.statusCode === 409);
+
+    // Then no organization, user, membership, project, audit or challenge field changed.
+    assert.deepEqual(tenantState(repository.store), before);
+    assert.equal(repository.store.emailVerificationCodes.at(-1).consumedAt, null);
+  });
+}
+
+test('given colliding project identity parts when either organization creates then the victim project and audit remain unchanged', () => {
+  for (const reverse of [false, true]) {
+    // Given distinct existing organizations whose multipart project IDs collide.
+    const store = new ControlPlaneStore();
+    const alphaBeta = store.createOrganization({ name: 'Alpha Beta', slug: 'alpha-beta' });
+    const alpha = store.createOrganization({ name: 'Alpha', slug: 'alpha' });
+    const pair = [{ organizationId: alphaBeta.id, name: 'gamma' }, { organizationId: alpha.id, name: 'beta-gamma' }];
+    if (reverse) pair.reverse();
+    store.createProject(pair[0]);
+    const before = tenantState(store);
+    // When the other tenant creates its project, then fail closed before replacing the victim.
+    assert.throws(() => store.createProject(pair[1]), (error) => error.statusCode === 409);
+    assert.deepEqual(tenantState(store), before);
+  }
+});
+
+test('given colliding organization and user keys when direct creation runs then identities are preserved and same-identity updates remain valid', () => {
+  // Given existing normal identities and a long-slug tenant.
+  const store = new ControlPlaneStore();
+  const organization = store.createOrganization({ name: 'Stable', slug: 'stable-route' });
+  const user = store.createUser({ name: 'Victim', email: 'victim.a@example.test' });
+  const project = store.createProject({ organizationId: organization.id, name: 'web' });
+  store.createOrganization({ name: 'Long', slug: 'x'.repeat(59) + 'a' });
+  const before = tenantState(store);
+  // When distinct identities share a key, then reject; normal same-identity updates keep literal IDs.
+  assert.throws(() => store.createOrganization({ name: 'Other', slug: 'x'.repeat(59) + 'b' }), (error) => error.statusCode === 409);
+  assert.throws(() => store.createUser({ name: 'Other', email: 'victim-a@example.test' }), (error) => error.statusCode === 409);
+  assert.deepEqual(tenantState(store), before);
+  assert.equal(store.createOrganization({ name: 'Updated', slug: 'stable-route' }).id, 'org-stable-route');
+  assert.equal(store.createUser({ name: 'Updated', email: 'VICTIM.A@EXAMPLE.TEST' }).id, user.id);
+  assert.equal(store.createProject({ organizationId: organization.id, name: 'Updated', slug: 'web' }).id, project.id);
+  assert.equal(project.id, 'prj-org-stable-route-web');
+});
+
+test('given an existing organization when explicit invalid nested desired slugs are supplied then both repositories reject before lookup or writes', async (t) => {
+  for (const explicit of [{ organizationSlug: 'alpha--demo' }, { organization: { name: 'Ignored', slug: 'alpha--demo' } }]) {
+    for (const useId of [false, true]) {
+      // Given a victim organization/project and a Prisma seam that can resolve that existing ID.
+      const repository = new InMemoryControlPlaneRepository();
+      const organization = repository.store.createOrganization({ name: 'Alpha', slug: 'alpha-demo' });
+      repository.store.createProject({ organizationId: organization.id, name: 'victim' });
+      const input = { ...explicit, ...(useId ? { organizationId: organization.id } : {}), project: { name: 'other' } };
+      const before = tenantState(repository.store);
+      const calls = { lookups: 0, organizations: 0, projects: 0, audits: 0 };
+      const prisma = new PrismaControlPlaneRepository({
+        $transaction: async (callback) => callback({
+          organization: {
+            findUnique: async () => { calls.lookups += 1; return organization; },
+            upsert: async () => { calls.organizations += 1; return organization; },
+          },
+          project: {
+            findUnique: async () => { calls.lookups += 1; return null; },
+            upsert: async () => { calls.projects += 1; return { id: 'other', organizationId: organization.id }; },
+          },
+          auditLog: { create: async () => { calls.audits += 1; return {}; } },
+        }),
+      });
+      // When explicit invalid slugs accompany existing lookup inputs, then no lookup/mutation occurs.
+      await t.test(`memory ${Object.keys(explicit)[0]} id=${useId}`, async () => {
+        await assert.rejects(repository.writeDesiredProject(input), (error) => error.statusCode === 400);
+        assert.deepEqual(tenantState(repository.store), before);
+      });
+      await t.test(`Prisma ${Object.keys(explicit)[0]} id=${useId}`, async () => {
+        await assert.rejects(prisma.writeDesiredProject(input), (error) => error.statusCode === 400);
+        assert.deepEqual(calls, { lookups: 0, organizations: 0, projects: 0, audits: 0 });
+      });
+    }
+  }
+});
+
+test('given mixed and foreign Prisma memberships when one or two owners are demoted then the actual count query controls writes', async () => {
+  for (const storedRole of ['OWNER', 'owner']) {
+    for (const ownerCount of [1, 2]) {
+      for (const actorRole of [undefined, 'OWNER', 'VIEWER']) {
+        // Given real records filtered by the production query, including misleading foreign owners and local viewers.
+        const members = [
+          { organizationId: 'target-org', userId: 'target-user', role: storedRole },
+          { organizationId: 'target-org', userId: 'viewer', role: 'VIEWER' },
+          { organizationId: 'foreign-org', userId: 'foreign-upper', role: 'OWNER' },
+          { organizationId: 'foreign-org', userId: 'foreign-lower', role: 'owner' },
+          ...(ownerCount === 2 ? [{ organizationId: 'target-org', userId: 'second-owner', role: storedRole === 'OWNER' ? 'owner' : 'OWNER' }] : []),
+        ];
+        const before = structuredClone(members);
+        const counters = { counts: 0, upserts: 0, sessions: 0 };
+        const repository = new PrismaControlPlaneRepository({
+          $transaction: async (callback) => callback({
+            membership: {
+              findUnique: async ({ where }) => structuredClone(members.find((row) => row.organizationId === where.organizationId_userId.organizationId && row.userId === where.organizationId_userId.userId)),
+              count: async ({ where }) => {
+                counters.counts += 1;
+                return members.filter((row) => row.organizationId === where.organizationId && where.role.in.includes(row.role)).length;
+              },
+              upsert: async ({ where, update }) => {
+                counters.upserts += 1;
+                const row = members.find((item) => item.organizationId === where.organizationId_userId.organizationId && item.userId === where.organizationId_userId.userId);
+                Object.assign(row, update);
+                return row;
+              },
+            },
+            user: { update: async ({ where, data }) => {
+              assert.equal(where.id, 'target-user');
+              counters.sessions += data.sessionVersion.increment;
+              return {};
+            } },
+          }),
+        });
+        const input = { organizationId: 'target-org', userId: 'target-user', role: 'VIEWER', ...(actorRole === undefined ? {} : { actorRole }) };
+        // When the repository demotes the member, then only two owners plus an authorized/absent actor allow it.
+        const allowed = ownerCount === 2 && actorRole !== 'VIEWER';
+        if (allowed) {
+          assert.equal((await repository.addMember(input)).role, 'VIEWER');
+          assert.deepEqual(counters, { counts: 1, upserts: 1, sessions: 1 });
+          assert.deepEqual(members.slice(1), before.slice(1));
+        } else {
+          await assert.rejects(repository.addMember(input), (error) => error.statusCode === (ownerCount === 1 ? 409 : 403));
+          assert.deepEqual(counters, { counts: 1, upserts: 0, sessions: 0 });
+          assert.deepEqual(members, before);
+        }
+      }
+    }
+  }
+});
+
+test('given valid organization references when desired projects are written then existing IDs and derived names remain usable', async () => {
+  // Given a known organization plus a Prisma seam using normal generated IDs.
+  const memory = new InMemoryControlPlaneRepository();
+  const existing = memory.store.createOrganization({ name: 'Existing', slug: 'existing-org' });
+  const byId = await memory.writeDesiredProject({ organizationId: existing.id, project: { name: 'web' } });
+  assert.equal(byId.organization.id, existing.id);
+  const byName = await memory.writeDesiredProject({ organization: { name: 'Existing Org' }, project: { name: 'worker' } });
+  assert.equal(byName.organization.id, existing.id);
+  const prisma = new PrismaControlPlaneRepository({
+    $transaction: async (callback) => callback({
+      organization: {
+        findUnique: async ({ where }) => where.id === existing.id ? existing : null,
+        upsert: async ({ create }) => ({ id: 'generated-org-id', ...create }),
+      },
+      project: {
+        findUnique: async () => null,
+        upsert: async ({ create }) => ({ id: 'generated-project-id', ...create }),
+      },
+      auditLog: { create: async () => ({}) },
+    }),
+  });
+  // When valid ID or derived-name inputs are used, then they retain their prior resolution.
+  assert.equal((await prisma.writeDesiredProject({ organizationId: existing.id, project: { name: 'web' } })).organization.id, existing.id);
+  assert.equal((await prisma.writeDesiredProject({ organization: { name: 'Derived Org' }, project: { name: 'web' } })).organization.slug, 'derived-org');
+});
