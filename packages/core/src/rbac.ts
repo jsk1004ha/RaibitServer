@@ -4,6 +4,28 @@ export const TEAM_ROLES = Object.freeze([...ORGANIZATION_MEMBERSHIP_ROLES]);
 
 export type OrganizationMembershipRole = typeof ORGANIZATION_MEMBERSHIP_ROLES[number];
 
+const RESERVED_ORGANIZATION_ROUTE_SLUGS = new Set([
+  'app', 'api', 'admin', 'apps', 'preview', 'console', 'resources', 'logs', 'metrics',
+]);
+const ORGANIZATION_ROUTE_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+export type OrganizationRouteSlugResult =
+  | { readonly ok: true; readonly statusCode: 200; readonly slug: string }
+  | { readonly ok: false; readonly statusCode: 400; readonly code: 'organization_route_slug_invalid' | 'organization_route_slug_reserved' | 'organization_route_slug_too_long' };
+
+export function parseOrganizationRouteSlug(value: unknown): OrganizationRouteSlugResult {
+  if (typeof value !== 'string' || !ORGANIZATION_ROUTE_SLUG_PATTERN.test(value)) {
+    return { ok: false, statusCode: 400, code: 'organization_route_slug_invalid' };
+  }
+  if (new TextEncoder().encode(value).byteLength > 63) {
+    return { ok: false, statusCode: 400, code: 'organization_route_slug_too_long' };
+  }
+  if (RESERVED_ORGANIZATION_ROUTE_SLUGS.has(value)) {
+    return { ok: false, statusCode: 400, code: 'organization_route_slug_reserved' };
+  }
+  return { ok: true, statusCode: 200, slug: value };
+}
+
 const ROLE_PERMISSIONS: Readonly<Record<OrganizationMembershipRole, readonly string[]>> = Object.freeze({
   OWNER: ['*'],
   ADMIN: ['project:read', 'project:create', 'project:update', 'project:delete', 'service:create', 'service:update', 'deploy:run', 'env:write', 'env:read', 'db:create', 'db:delete', 'db:schema:read', 'team:invite', 'audit:read', 'billing:read', 'logs:read', 'metrics:read'],

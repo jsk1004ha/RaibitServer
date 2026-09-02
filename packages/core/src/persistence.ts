@@ -14,7 +14,7 @@ import { redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
-import { membershipRoleTransition, parseOrganizationMembershipRoleForMutation } from './rbac.ts';
+import { membershipRoleTransition, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import { parseGitHubRepository } from './github-integration.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
@@ -333,10 +333,11 @@ export class PrismaControlPlaneRepository {
   }
 
   async createOrganization(input: Record<string, any>) {
+    const slug = organizationSlugForCreate(input);
     return this.prisma.organization.upsert({
-      where: { slug: input.slug || slugInput(input.name) },
+      where: { slug },
       update: { name: input.name, plan: input.plan || 'free' },
-      create: { name: input.name, slug: input.slug || slugInput(input.name), plan: input.plan || 'free' },
+      create: { name: input.name, slug, plan: input.plan || 'free' },
     });
   }
 
@@ -575,12 +576,13 @@ export class PrismaControlPlaneRepository {
         }
         const payload = record.payload || {};
         if (payload.kind !== 'signup') return { status: 'invalid' };
+        const organizationSlug = validatedOrganizationRouteSlug(payload.organizationSlug);
         const claimed = await transaction.emailVerificationCode.updateMany({
           where: { id: record.id, consumedAt: null, expiresAt: { gt: now }, attempts: { lt: maxAttempts } },
           data: { consumedAt: now },
         });
         if (Number(claimed.count || 0) !== 1) return { status: 'invalid' };
-        const existingOrganization = await transaction.organization.findUnique({ where: { slug: slugInput(payload.organizationSlug) } });
+        const existingOrganization = await transaction.organization.findUnique({ where: { slug: organizationSlug } });
         if (existingOrganization) throw conflictError('organization_slug_already_exists');
         const existingUser = await transaction.user.findUnique({ where: { email } });
         if (existingUser) throw conflictError('user_already_exists');
@@ -591,7 +593,7 @@ export class PrismaControlPlaneRepository {
         const organization = await transaction.organization.create({
           data: {
             name: payload.organizationName || payload.organizationSlug,
-            slug: slugInput(payload.organizationSlug),
+            slug: organizationSlug,
             plan: payload.plan || 'free',
           },
         });
@@ -2866,6 +2868,17 @@ function badRequestError(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 400;
   return error;
+}
+
+function organizationSlugForCreate(input: Record<string, any>) {
+  if (!Object.hasOwn(input, 'slug')) return slugInput(input.name);
+  return validatedOrganizationRouteSlug(input.slug);
+}
+
+function validatedOrganizationRouteSlug(value: unknown) {
+  const parsed = parseOrganizationRouteSlug(value);
+  if (parsed.ok === false) throw badRequestError(parsed.code);
+  return parsed.slug;
 }
 
 type MembershipOwnerCounter = {

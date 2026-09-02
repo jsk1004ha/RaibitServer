@@ -12,7 +12,7 @@ import { normalizeResourceEngine } from './catalog.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
-import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation } from './rbac.ts';
+import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import {
   boundedActivityRows,
   dateMs,
@@ -86,8 +86,10 @@ export class ControlPlaneStore {
     this.authRateLimits = new Map();
   }
 
-  createOrganization({ name, slug, plan = 'free' }: Record<string, any>) {
-    const org = { id: stableId('org', slug || name), name, slug: slugify(slug || name), plan, createdAt: nowIso() };
+  createOrganization(input: Record<string, any>) {
+    const { name, plan = 'free' } = input;
+    const slug = organizationSlugForCreate(input);
+    const org = { id: stableId('org', slug || name), name, slug, plan, createdAt: nowIso() };
     this.organizations.set(org.id, org);
     this.audit('system', 'organization:create', 'organization', org.id, { slug: org.slug, plan });
     return deepClone(org);
@@ -1010,8 +1012,9 @@ export class ControlPlaneStore {
     }
     const payload = row.payload || {};
     if (payload.kind !== 'signup') return { status: 'invalid' };
+    const organizationSlug = organizationSlugForCreate({ slug: payload.organizationSlug });
     if (this.findUserByEmail(email)) throw conflict('user_already_exists');
-    if (this.findOrganizationBySlug(payload.organizationSlug)) throw conflict('organization_slug_already_exists');
+    if (this.findOrganizationBySlug(organizationSlug)) throw conflict('organization_slug_already_exists');
     const firstUser = this.users.size === 0;
     const policy = typeof input.resolvePolicy === 'function'
       ? input.resolvePolicy(payload, { firstUser })
@@ -1700,6 +1703,13 @@ function badRequest(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 400;
   return error;
+}
+
+function organizationSlugForCreate(input: Record<string, any>) {
+  if (!Object.hasOwn(input, 'slug')) return slugify(input.name);
+  const parsed = parseOrganizationRouteSlug(input.slug);
+  if (parsed.ok === false) throw badRequest(parsed.code);
+  return parsed.slug;
 }
 
 function forbidden(message: string) {
