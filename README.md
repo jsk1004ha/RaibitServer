@@ -321,8 +321,11 @@ private 저장소 빌드용 App ID와 RSA private key는 API 환경변수에 넣
    pnpm install --frozen-lockfile
    pnpm prisma:validate
    pnpm prisma:generate
+   node scripts/check-migration-contract.mjs
    pnpm exec prisma migrate deploy --schema prisma/schema.prisma
    ```
+   - `prisma/migration-contract.json`은 순서가 있는 migration ID와 LF 정규화 SHA-256, 애플리케이션 호환성 하한(`000008`), `forward-fix` 복구 방식을 기록합니다. 기존 migration은 수정하지 않고 새 항목을 추가합니다. migration을 먼저 적용한 뒤 reader, writer를 배포하며 애플리케이션 롤백 시 확장된 스키마를 유지합니다. 새 migration은 nullable 컬럼·테이블·인덱스만 허용하며 down migration, DROP, rename, 필수 컬럼 전환은 거부합니다.
+   - `node --test tests/migration-compatibility.test.js tests/postgres-integration.test.js`는 `RAIBITSERVER_TEST_DATABASE_URL`을 지정하면 별도 임시 schema에서 fresh install, `000008` 업그레이드, 실제 N−1 Prisma client 읽기·쓰기 및 forward-fix를 검증합니다. URL이 없으면 DB 시나리오는 건너뛰며 오프라인 계약 검증만 수행합니다. CRD 게이트는 `test-fixtures/contracts/crd-schema-v1.json` 대비 기존 served/storage 버전과 필드를 보존하고 새 optional 필드만 허용합니다. CRD 적용 전에는 별도 로컬 클러스터에서 `kubectl apply --dry-run=server`로 CRD와 구형·확장 객체를 검증해야 합니다.
 3. **Secret 준비**
    - `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, GitHub/registry/provider secret을 secret manager에 저장합니다.
    - 회원가입 요청은 이메일 코드만 발송하고, 코드 인증이 성공해야 user/organization을 생성하고 세션 토큰을 발급합니다. 로컬 첫 verified auth 사용자는 `ADMIN / NON_CLUB / APPROVED`가 되고, 운영 첫 admin은 `ADMIN_EMAILS` + bootstrap token으로 제한됩니다. 인증 완료된 신규 회원가입은 먼저 `NON_CLUB`으로 시작하며, 운영자는 어드민 화면에서 `CLUB_MEMBER`/`NON_CLUB`을 전환합니다.
