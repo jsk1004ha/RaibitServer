@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
-import { LIFECYCLE_CONTRACT, terminalLifecycleInputs } from '../../schemas/src/lifecycle.ts';
+import { LIFECYCLE_CONTRACT, terminalLifecycleInputs } from './lifecycle.ts';
 import { AUTH_RETENTION_PRUNE_BATCH_SIZE, ControlPlaneStore } from './store.ts';
 import { deepClone, stableId } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';

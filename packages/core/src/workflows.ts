@@ -2,7 +2,7 @@ import { deepClone, nowIso, stableId } from './ids.ts';
 import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { sanitizeLogRecord } from './security.ts';
 import { normalizeInfrastructureError } from './error-spec.ts';
-import { LIFECYCLE_CONTRACT, WorkflowStatusSchema, parseWorkflowStatus } from '../../schemas/src/lifecycle.ts';
+import { LIFECYCLE_CONTRACT, parseWorkflowStatus } from './lifecycle.ts';
 
 export const WORKFLOW_TYPES = Object.freeze({
   BUILD_AND_DEPLOY: 'build-and-deploy',
@@ -12,11 +12,11 @@ export const WORKFLOW_TYPES = Object.freeze({
 });
 
 export const WORKFLOW_STATUSES = Object.freeze({
-  QUEUED: WorkflowStatusSchema.enum.queued,
-  RUNNING: WorkflowStatusSchema.enum.running,
-  SUCCEEDED: WorkflowStatusSchema.enum.succeeded,
-  FAILED: WorkflowStatusSchema.enum.failed,
-  CANCELLED: WorkflowStatusSchema.enum.cancelled,
+  QUEUED: 'queued',
+  RUNNING: 'running',
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  CANCELLED: 'cancelled',
 });
 
 const READY_STATUSES = new Set<string>([WORKFLOW_STATUSES.QUEUED]);

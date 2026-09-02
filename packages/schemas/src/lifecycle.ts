@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import fixture from '../../../test-fixtures/contracts/lifecycle-v1.json' with { type: 'json' };
+import fixture from './lifecycle-v1.json' with { type: 'json' };
 
 // Literal enums keep the public types closed; the exhaustive records below bind
 // their membership to the shared fixture without duplicating transition policy.

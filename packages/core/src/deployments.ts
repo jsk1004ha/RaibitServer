@@ -1,18 +1,18 @@
-import { DeploymentStatusSchema, LIFECYCLE_CONTRACT, parseDeploymentStatus } from '../../schemas/src/lifecycle.ts';
-import type { DeploymentStatus } from '../../schemas/src/lifecycle.ts';
+import { LIFECYCLE_CONTRACT, parseDeploymentStatus } from './lifecycle.ts';
+import type { DeploymentStatus } from './lifecycle.ts';
 
 export const DEPLOYMENT_STATUSES = Object.freeze({
-  QUEUED: DeploymentStatusSchema.enum.queued,
-  BUILDING: DeploymentStatusSchema.enum.BUILDING,
-  IMAGE_READY: DeploymentStatusSchema.enum.IMAGE_READY,
-  DEPLOYING: DeploymentStatusSchema.enum.DEPLOYING,
-  READY: DeploymentStatusSchema.enum.READY,
-  BUILD_FAILED: DeploymentStatusSchema.enum.BUILD_FAILED,
-  FAILED: DeploymentStatusSchema.enum.FAILED,
-  CANCELLED: DeploymentStatusSchema.enum.CANCELLED,
-  PREVIEW_CLEANUP_REQUESTED: DeploymentStatusSchema.enum.PREVIEW_CLEANUP_REQUESTED,
-  ROLLBACK_REQUESTED: DeploymentStatusSchema.enum.ROLLBACK_REQUESTED,
-  CLEANED_UP: DeploymentStatusSchema.enum.CLEANED_UP,
+  QUEUED: 'queued',
+  BUILDING: 'BUILDING',
+  IMAGE_READY: 'IMAGE_READY',
+  DEPLOYING: 'DEPLOYING',
+  READY: 'READY',
+  BUILD_FAILED: 'BUILD_FAILED',
+  FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
+  PREVIEW_CLEANUP_REQUESTED: 'PREVIEW_CLEANUP_REQUESTED',
+  ROLLBACK_REQUESTED: 'ROLLBACK_REQUESTED',
+  CLEANED_UP: 'CLEANED_UP',
 });
 
 export const normalizeDeploymentStatus = parseDeploymentStatus;

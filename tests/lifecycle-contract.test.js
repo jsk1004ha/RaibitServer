@@ -95,15 +95,17 @@ test('Given legacy and hostile boundary values, when parsed, then only canonical
 test('Given the public DeploymentStatus type, when TypeScript compiles assignments, then arbitrary strings are rejected', () => {
   const virtualPath = path.resolve('lifecycle-contract-probe.ts');
   const options = { strict: true, skipLibCheck: true, noEmit: true, allowImportingTsExtensions: true, resolveJsonModule: true, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext };
-  for (const [value, expected] of [['IMAGE_READY', 0], ['not-a-deployment-status', 1]]) {
-    const source = `import type { DeploymentStatus } from './packages/schemas/src/index.ts'; const value: DeploymentStatus = '${value}';`;
-    const host = ts.createCompilerHost(options);
-    const original = host.getSourceFile.bind(host);
-    host.getSourceFile = (filename, languageVersion, ...args) => path.resolve(filename) === virtualPath ? ts.createSourceFile(filename, source, languageVersion) : original(filename, languageVersion, ...args);
-    const program = ts.createProgram([virtualPath], options, host);
-    const diagnostics = ts.getPreEmitDiagnostics(program);
-    assert.equal(diagnostics.length, expected, ts.formatDiagnosticsWithColorAndContext(diagnostics, { getCurrentDirectory: () => process.cwd(), getCanonicalFileName: name => name, getNewLine: () => '\n' }));
-    if (expected) assert.equal(diagnostics[0].code, 2322);
+  for (const entrypoint of ['./packages/schemas/src/index.ts', './packages/core/src/lifecycle.ts']) {
+    for (const [value, expected] of [['IMAGE_READY', 0], ['not-a-deployment-status', 1]]) {
+      const source = `import type { DeploymentStatus } from '${entrypoint}'; const value: DeploymentStatus = '${value}';`;
+      const host = ts.createCompilerHost(options);
+      const original = host.getSourceFile.bind(host);
+      host.getSourceFile = (filename, languageVersion, ...args) => path.resolve(filename) === virtualPath ? ts.createSourceFile(filename, source, languageVersion) : original(filename, languageVersion, ...args);
+      const program = ts.createProgram([virtualPath], options, host);
+      const diagnostics = ts.getPreEmitDiagnostics(program);
+      assert.equal(diagnostics.length, expected, ts.formatDiagnosticsWithColorAndContext(diagnostics, { getCurrentDirectory: () => process.cwd(), getCanonicalFileName: name => name, getNewLine: () => '\n' }));
+      if (expected) assert.equal(diagnostics[0].code, 2322);
+    }
   }
 });
 
