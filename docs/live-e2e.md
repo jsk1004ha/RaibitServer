@@ -50,7 +50,79 @@ In short, the remaining Builder gate needs an external registry, signing infrast
 
 이 누락 범위는 전체 애플리케이션 lifecycle Closed Beta gate의 잔여 조건입니다. 현재 `pnpm e2e:live` 성공은 Helm control-plane reconciliation gate 통과를 뜻하며, source build → registry push → workload deploy → HTTP 200 → runtime log → preview cleanup 전체 통과를 뜻하지 않습니다.
 
-## CI
+## Production evidence contract (L1 / L2 / L3)
+
+`raibitserver.production-evidence/v1` keeps local (`local`, L1), disposable kind
+(`cluster`, L2), and credentialed (`lifecycle`, `resources`, `operations`, L3)
+observations separate. `train-a` requires all five; `final` additionally requires
+`domains` L3. Neither legacy script creates L3 fragments. Every observation must
+bind the same UUIDv4 run, environment fingerprint, source commit, migration,
+operator-input fingerprint, approved input digest, operator-contract digest and
+tenant identifiers. PASS assertions and cleanup are mandatory. Four-hour expiry,
+future observations, mixed identities, reused directories/fragments, missing or
+modified artifacts, raw secrets, FAIL and NOT_RUN all fail closed.
+
+```sh
+node scripts/production-evidence/preflight.mjs --contract
+node scripts/verify-production-evidence.mjs --profile train-a /run/UUID/manifest.json
+node scripts/verify-production-evidence.mjs --profile final /run/UUID/manifest.json
+node scripts/verify-production-evidence.mjs --fragment resources /run/UUID/manifest.json
+```
+
+`--fragment resources|domains` and `component` profile can succeed only as
+component validation; the JSON result always has `releaseEligible=false`.
+An eligible full manifest is a contract decision, not proof that this repository
+has already completed a credentialed release. No L3 execution is claimed by the
+tests. Artifact producers must be trusted and the evidence directory access
+controlled; hashes detect drift, not deliberate fabrication by its owner.
+
+The committed `test-fixtures/contracts/operator-inputs-v1.json` contains exactly
+the eight approved non-secret selector names and typed reference bindings, never
+selector values or Secret contents. Existing Helm bindings use
+`kind=helm-existingSecret`, `namespace`, `existingSecret`, and `keys`. Planned
+scanner/backup worker bindings use `kind=worker-secretKeyRef`, `namespace`, and
+`secretKeyRef={name,key,optional:false}`; they are **not existing Helm wiring**.
+Unbound/missing credentials yield NOT_RUN. `preflight.mjs` exports the same parser
+used locally and in CI. A metadata-only adapter may check Secret UID and key
+availability; no Secret values are returned. The scaffold performs no provider
+operations and cannot produce live PASS. Future resource/domain runners own
+their actual probes and cleanup, not a generic mega-script.
+
+Runtime needs only the committed contract, not `.omo` or the source draft.
+Offline approval parity (before any Secret adapter call) is explicit:
+
+```sh
+node scripts/production-evidence/preflight.mjs --approved-input /approved/approved-draft-input-v1.md
+```
+
+Both Gate A and Gate B bind the literal approved snapshot SHA-256
+`0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2`.
+Digest checking occurs on bytes before decoding; no mutable-draft fallback exists.
+
+The committed happy sample is timestamped component-only fixture evidence:
+
+```sh
+node scripts/verify-production-evidence.mjs tests/fixtures/production-evidence/pass-v1/manifest.json
+node scripts/verify-production-evidence.mjs tests/fixtures/production-evidence/fail-identity-mismatch/manifest.json
+```
+
+The happy sample intentionally expires after four hours and then exits 1 with
+`stale_state`; the identity-mismatch sample exits 1 with only `identity_mismatch`.
+Create a fresh sample in an **existing, operator-owned scratch parent** (the command
+creates a new UUID child and refuses reuse), then verify the printed manifest path:
+
+```sh
+node scripts/production-evidence/run-component.mjs --sample resources /owned/scratch
+node scripts/verify-production-evidence.mjs /owned/scratch/PRINTED-UUID/manifest.json
+```
+
+To repeat the exact committed-sample happy command after expiry, replace only
+`pass-v1/manifest.json` and `pass-v1/assertions.json` with that generated pair and
+record the regeneration separately. Never relabel it as live evidence. Unit tests
+generate fresh specimens independently; no path exception or fixture clock bypass
+exists in the verifier. Test scratch directories are removed in test cleanup.
+
+## Existing kind CI
 
 - `.github/workflows/ci.yml`의 `live-helm-e2e` job이 일반 CI에서 pinned kind/kubectl/Helm/Go 도구로 같은 스크립트를 실행합니다.
 - `.github/workflows/live-e2e.yml`은 `workflow_dispatch`로 같은 public command인 `pnpm e2e:live`를 수동 실행합니다.

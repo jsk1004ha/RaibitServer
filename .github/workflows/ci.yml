@@ -22,6 +22,8 @@ jobs:
           node-version: '24'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Verify committed operator-input contract (no local approval files)
+        run: node scripts/production-evidence/preflight.mjs --contract
       - run: pnpm test
       - run: pnpm typecheck
       - run: node scripts/check-structure.js
