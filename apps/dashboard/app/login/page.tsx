@@ -78,21 +78,19 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               {error ? <Alert className="auth-message border-destructive/40 bg-destructive/10 text-foreground [&_[data-slot=alert-description]]:text-foreground" id="auth-message" variant="destructive"><AlertTitle>확인해 주세요</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
               {notice ? <Alert className="auth-message" id="auth-message" role="status" variant="notice"><AlertTitle>안내</AlertTitle><AlertDescription>{notice}</AlertDescription></Alert> : null}
 
-              {mode === 'login' ? <div className="flex flex-col gap-5">
-                <form method="post" action={apiAction('/auth/login')} className="auth-form">
-                  <input name="_returnTo" type="hidden" value={next} />
-                  <FieldGroup>
-                    <Field><FieldLabel htmlFor="login-email">이메일</FieldLabel><Input aria-describedby={messageId} autoComplete="email" defaultValue={email} id="login-email" name="email" required type="email" /></Field>
-                    <Field><FieldLabel htmlFor="login-password">비밀번호</FieldLabel><Input aria-describedby={messageId} id="login-password" name="password" type="password" autoComplete="current-password" required /></Field>
-                    <Button type="submit">콘솔에 로그인</Button>
-                  </FieldGroup>
-                </form>
+              {mode === 'login' ? <form method="post" action={apiAction('/auth/login')} className="auth-form">
+                <input name="_returnTo" type="hidden" value={next} />
+                <FieldGroup>
+                  <Field><FieldLabel htmlFor="login-email">이메일</FieldLabel><Input aria-describedby={messageId} autoComplete="email" defaultValue={email} id="login-email" name="email" required type="email" /></Field>
+                  <Field><FieldLabel htmlFor="login-password">비밀번호</FieldLabel><Input aria-describedby={messageId} id="login-password" name="password" type="password" autoComplete="current-password" required /></Field>
+                  <Button type="submit">콘솔에 로그인</Button>
+                </FieldGroup>
                 <div aria-hidden="true" className="flex items-center gap-3 text-xs text-muted-foreground"><span className="h-px flex-1 bg-border" /><span>또는</span><span className="h-px flex-1 bg-border" /></div>
                 <div className="flex flex-col gap-2">
                   <a className={buttonVariants({ variant: 'outline', className: 'w-full' })} href={apiAction('/auth/github/login')}><GitBranch aria-hidden="true" />GitHub로 로그인</a>
                   <p className="text-xs leading-relaxed text-muted-foreground break-keep">가입 승인된 계정과 GitHub의 인증 이메일이 같으면 프로필 사진도 함께 연결됩니다.</p>
                 </div>
-              </div> : null}
+              </form> : null}
 
               {mode === 'signup' ? <form method="post" action={apiAction('/auth/signup')} className="auth-form">
                 <input name="_returnTo" type="hidden" value="/login?mode=verify" />

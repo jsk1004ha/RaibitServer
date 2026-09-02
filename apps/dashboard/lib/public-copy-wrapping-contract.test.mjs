@@ -6,7 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const dashboardRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const contributorArrayHash = "dc4aaa7958372be428e4c0101841eed21d1285b837a94b4115323f8ea37f6177";
+const contributorArrayHash = "a76d72e95ef26048a3e396e09d096a9841838c3b25b8631a334a61c1a2fcc3f6";
 const keepWords = "break-keep [overflow-wrap:anywhere]";
 
 async function read(relativePath) {
@@ -49,7 +49,7 @@ test("Given public technical strings When short-copy wrapping is added Then URLs
   assert.doesNotMatch(privacy, /<p className="mt-raibit-md max-w-4xl text-body-md text-pretty break-keep/);
 });
 
-test("Given the fresh origin contributor list When responsive classes change Then contributor content and ordering remain byte-identical", async () => {
+test("Given the approved contributor list When responsive classes change Then contributor content and ordering remain byte-identical", async () => {
   const source = await read("app/contributors/page.tsx");
   const contributorArray = source.match(/const contributors = \[[\s\S]*?\] as const;/)?.[0];
 
