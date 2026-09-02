@@ -14,6 +14,7 @@ import { redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
+import { membershipRoleTransition, parseOrganizationMembershipRoleForMutation } from './rbac.ts';
 import { parseGitHubRepository } from './github-integration.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
@@ -659,10 +660,23 @@ export class PrismaControlPlaneRepository {
   }
 
   async addMember(input: Record<string, any>) {
-    const role = input.role || 'developer';
+    const roleResult = parseOrganizationMembershipRoleForMutation(input.role || 'DEVELOPER');
+    if (roleResult.ok === false) throw badRequestError(roleResult.code);
+    const role = typeof input.role === 'string' && input.role === input.role.toLowerCase() ? input.role : roleResult.role;
     const where = { organizationId_userId: { organizationId: input.organizationId, userId: input.userId } };
     return this.prisma.$transaction(async (transaction: any) => {
       const existing = await transaction.membership.findUnique({ where });
+      const protectCanonicalOwner = existing?.role === 'OWNER' && roleResult.role !== 'OWNER';
+      const ownerCount = protectCanonicalOwner || input.actorRole !== undefined
+        ? await organizationOwnerCount(transaction, input.organizationId)
+        : 0;
+      if (input.actorRole !== undefined) {
+        const transition = membershipRoleTransition({ actorRole: input.actorRole, targetRole: roleResult.role, currentRole: existing?.role || 'VIEWER', ownerCount });
+        if (transition.statusCode === 400) throw badRequestError(transition.code);
+        if (transition.statusCode === 403) throw forbiddenError(transition.code);
+        if (transition.statusCode === 409) throw conflictError(transition.code);
+      }
+      if (protectCanonicalOwner && ownerCount <= 1) throw conflictError('membership_last_owner');
       const membership = await transaction.membership.upsert({
         where,
         update: { role },
@@ -672,7 +686,7 @@ export class PrismaControlPlaneRepository {
         await transaction.user.update({ where: { id: input.userId }, data: { sessionVersion: { increment: 1 } } });
       }
       return membership;
-    });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async removeMember(input: Record<string, any>) {
@@ -680,10 +694,14 @@ export class PrismaControlPlaneRepository {
     return this.prisma.$transaction(async (transaction: any) => {
       const existing = await transaction.membership.findUnique({ where });
       if (!existing) return null;
+      const isOwner = existing.role === 'OWNER' || existing.role === 'owner';
+      const canCountOwners = typeof transaction.membership.count === 'function';
+      const ownerCount = isOwner && canCountOwners ? await organizationOwnerCount(transaction, input.organizationId) : 0;
+      if (isOwner && canCountOwners && ownerCount <= 1) throw conflictError('membership_last_owner');
       const membership = await transaction.membership.delete({ where });
       await transaction.user.update({ where: { id: input.userId }, data: { sessionVersion: { increment: 1 } } });
       return membership;
-    });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async listMembershipsForUser(userId: string) {
@@ -2848,6 +2866,21 @@ function badRequestError(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 400;
   return error;
+}
+
+type MembershipOwnerCounter = {
+  readonly membership: {
+    readonly count: (input: {
+      readonly where: {
+        readonly organizationId: string;
+        readonly role: { readonly in: readonly string[] };
+      };
+    }) => Promise<number>;
+  };
+};
+
+async function organizationOwnerCount(transaction: MembershipOwnerCounter, organizationId: string) {
+  return transaction.membership.count({ where: { organizationId, role: { in: ['OWNER', 'owner'] } } });
 }
 
 function conflictError(message: string) {

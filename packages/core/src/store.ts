@@ -12,6 +12,7 @@ import { normalizeResourceEngine } from './catalog.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
+import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation } from './rbac.ts';
 import {
   boundedActivityRows,
   dateMs,
@@ -329,28 +330,45 @@ export class ControlPlaneStore {
     return redactUser(deepClone(user));
   }
 
-  addMember({ organizationId, userId, role = 'developer' }: Record<string, any>) {
+  addMember({ organizationId, userId, role = 'DEVELOPER', actorRole }: Record<string, any>) {
+    const roleResult = parseOrganizationMembershipRoleForMutation(role);
+    if (roleResult.ok === false) throw badRequest(roleResult.code);
+    const storedRole = typeof role === 'string' && role === role.toLowerCase() ? role : roleResult.role;
     const existing = this.members.find((member) => member.organizationId === organizationId && member.userId === userId);
+    const currentCanonicalRole = normalizeOrganizationRoleForRead(existing?.role);
+    const protectCanonicalOwner = existing?.role === 'OWNER' && currentCanonicalRole === 'OWNER' && roleResult.role !== 'OWNER';
+    const ownerCount = protectCanonicalOwner || actorRole !== undefined
+      ? this.members.filter((member) => member.organizationId === organizationId && normalizeOrganizationRoleForRead(member.role) === 'OWNER').length
+      : 0;
+    if (actorRole !== undefined) {
+      const transition = membershipRoleTransition({ actorRole, targetRole: roleResult.role, currentRole: existing?.role || 'VIEWER', ownerCount });
+      if (transition.statusCode === 400) throw badRequest(transition.code);
+      if (transition.statusCode === 403) throw forbidden(transition.code);
+      if (transition.statusCode === 409) throw conflict(transition.code);
+    }
     if (existing) {
-      const nextRole = role || existing.role;
-      if (existing.role !== nextRole) {
-        existing.role = nextRole;
+      if (protectCanonicalOwner && ownerCount <= 1) throw conflict('membership_last_owner');
+      if (existing.role !== storedRole) {
+        existing.role = storedRole;
         existing.updatedAt = nowIso();
         if (this.users.has(userId)) this.incrementSessionVersion(userId);
-        this.audit(userId, 'organization.member:role-change', 'organization', organizationId, { role: nextRole });
+        this.audit(userId, 'organization.member:role-change', 'organization', organizationId, { role: storedRole });
       }
       return deepClone(existing);
     }
-    const member = { organizationId, userId, role, createdAt: nowIso() };
+    const member = { organizationId, userId, role: storedRole, createdAt: nowIso() };
     this.members.push(member);
-    this.audit(userId, 'organization.member:add', 'organization', organizationId, { role });
+    this.audit(userId, 'organization.member:add', 'organization', organizationId, { role: storedRole });
     return deepClone(member);
   }
 
   removeMember({ organizationId, userId }: Record<string, any>) {
     const index = this.members.findIndex((member) => member.organizationId === organizationId && member.userId === userId);
     if (index < 0) return null;
-    const [member] = this.members.splice(index, 1);
+    const member = this.members[index];
+    const ownerCount = this.members.filter((candidate) => candidate.organizationId === organizationId && normalizeOrganizationRoleForRead(candidate.role) === 'OWNER').length;
+    if (normalizeOrganizationRoleForRead(member.role) === 'OWNER' && ownerCount <= 1) throw conflict('membership_last_owner');
+    this.members.splice(index, 1);
     if (this.users.has(userId)) this.incrementSessionVersion(userId);
     this.audit(userId, 'organization.member:remove', 'organization', organizationId, { role: member.role });
     return deepClone(member);

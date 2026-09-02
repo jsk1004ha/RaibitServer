@@ -1,11 +1,24 @@
 import { z } from 'zod';
 import type { DeploymentStatus } from './lifecycle.ts';
 export * from './lifecycle.ts';
+import { OrganizationRouteSlugSchema } from './organization-role.ts';
+
+export {
+  LEGACY_ORGANIZATION_ROLE_ALIASES,
+  MembershipRoleMutationSchema,
+  MembershipRoleReadSchema,
+  ORGANIZATION_MEMBERSHIP_ROLES,
+  OrganizationRouteSlugSchema,
+  normalizeOrganizationRoleForRead,
+  parseOrganizationMembershipRoleForMutation,
+  parseOrganizationRouteSlug,
+} from './organization-role.ts';
+export type { OrganizationMembershipReadRole, OrganizationMembershipRole, OrganizationRouteSlugResult } from './organization-role.ts';
 
 export const AccountTypeSchema = z.enum(['CLUB_MEMBER', 'NON_CLUB']);
 export const ApprovalStatusSchema = z.enum(['APPROVED', 'PENDING', 'REJECTED']);
 export const UserRoleSchema = z.enum(['ADMIN', 'USER']);
-export const MembershipRoleSchema = z.enum(['OWNER', 'ADMIN', 'DEVELOPER', 'VIEWER']);
+export const MembershipRoleSchema = z.enum(['OWNER', 'ADMIN', 'MAINTAINER', 'DEVELOPER', 'DB_ADMIN', 'VIEWER']);
 export const OrganizationTypeSchema = z.enum(['CLUB', 'PERSONAL', 'SCHOOL']);
 export const ServiceTypeSchema = z.enum(['web', 'private', 'worker', 'cron', 'job', 'WEB', 'PRIVATE', 'WORKER', 'CRON', 'JOB']).transform((v) => v.toLowerCase() as ServiceType);
 export const SourceTypeSchema = z.enum(['github', 'gitlab', 'zip', 'image', 'local', 'GITHUB', 'GITLAB', 'ZIP', 'IMAGE', 'LOCAL']).transform((v) => v.toLowerCase() as SourceType);
@@ -18,7 +31,7 @@ export const ResourceEngineSchema = z.enum([
 
 export const OrganizationCreateSchema = z.object({
   name: z.string().min(1),
-  slug: z.string().min(1).optional(),
+  slug: OrganizationRouteSlugSchema.optional(),
   type: OrganizationTypeSchema.optional(),
   plan: z.enum(['free', 'club', 'pro', 'school', 'enterprise']).optional(),
 });
@@ -67,7 +80,7 @@ export const ResourceCreateSchema = z.object({
 
 export const ProjectCreateSchema = z.object({
   organizationId: z.string().optional(),
-  organizationSlug: z.string().optional(),
+  organizationSlug: OrganizationRouteSlugSchema.optional(),
   organization: OrganizationCreateSchema.partial().optional(),
   name: z.string().min(1),
   slug: z.string().optional(),

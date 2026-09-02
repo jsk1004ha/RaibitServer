@@ -12,9 +12,9 @@ export { connectionEnvForResource, injectResourceEnv } from './env-injection.ts'
 export { parseDotEnv, normalizeEnvEntries, maskEnvEntries } from './env-file.ts';
 export { assertEnvironmentWriteAllowed, secretEnvironmentKeys } from './env-policy.ts';
 export { validateServiceSecurity, guardDatabaseQuery, sanitizeLogRecord, safeAuthModeFromEnv, unsafeDisabledAuthAllowed, securityHeaders, createFixedWindowRateLimiter, assertRateLimit, enforceAuthAbuseLimits, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantDeploymentCreate, sanitizeDeploymentStatusInput, assertSystemDeploymentActor, redactDbConsoleStatement, normalizeTenantGitUrl } from './security.ts';
-export { can, assertCan, visibleEnvironment } from './rbac.ts';
+export { can, assertCan, membershipRoleTransition, visibleEnvironment } from './rbac.ts';
 export { checkQuota, quotaForPlan, usageMetricDefinitions, quotaUsageGauges, quotaWarnings } from './quota.ts';
-export { domainPlanForProject, serviceHostname, serviceConsoleHostname, resourceConsoleHostname } from './domain-router.ts';
+export { domainPlanForProject, organizationRouteTenantSegment, resourceConsoleHostname, serviceConsoleHostname, serviceHostname } from './domain-router.ts';
 export { sourceCheckoutPlan } from './source-control.ts';
 export { buildExecutionPlan, buildCachePlan } from './build-executor.ts';
 export { registryPushPlan } from './registry.ts';
