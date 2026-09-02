@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
 import fs from 'node:fs/promises';
-import YAML from 'yaml';
 import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
 import { PrismaControlPlaneRepository, resolveControlPlaneRepositoryConfig } from '../packages/core/src/persistence.ts';
 
@@ -35,115 +34,15 @@ test('api client uses project-scoped deployment route and keeps legacy fallback'
   assert.equal(requests[2].url, '/services/service%201/deployments');
 });
 
-test('OpenAPI and Nest controller surface expose client contract routes', async () => {
-  const openapi = YAML.parse(await fs.readFile(new URL('../openapi/raibitserver.yaml', import.meta.url), 'utf8'));
-  for (const route of [
-    '/health',
-    '/snapshot',
-    '/projects/{projectId}',
-    '/projects/{projectId}/overview',
-    '/services/{serviceId}',
-    '/projects/{projectId}/services/{serviceId}/deployments',
-    '/deployments/{deploymentId}',
-    '/deployments/{deploymentId}/status',
-    '/deployments/{deploymentId}/cancel',
-    '/deployments/{deploymentId}/rollback',
-    '/deployments/{deploymentId}/logs',
-    '/deployments/{deploymentId}/events',
-    '/deployments/{deploymentId}/stream',
-    '/projects/{projectId}/services/{serviceId}/env',
-    '/projects/{projectId}/services/{serviceId}/env-file',
-    '/services/{serviceId}/logs',
-    '/services/{serviceId}/logs/stream',
-    '/auth/github/login',
-    '/auth/github/callback',
-    '/auth/email/verify',
-    '/auth/email/resend',
-    '/github/install',
-    '/github/authorize',
-    '/github/callback',
-    '/github/installations',
-    '/integrations/github',
-    '/projects/{projectId}/services/{serviceId}/github',
-    '/github/installations/{installationId}/repositories',
-    '/github/webhooks',
-    '/github/repositories/import',
-    '/github/repositories/{repositoryId}/sync',
-    '/resources/{resourceId}/console/schema',
-    '/resources/{resourceId}/console/tables',
-    '/resources/{resourceId}/console/tables/{table}',
-    '/resources/{resourceId}/console/collections',
-    '/resources/{resourceId}/console/keys',
-    '/resources/{resourceId}/console/query',
-    '/resources/{resourceId}/console/command',
-    '/resources/{resourceId}/console/browse',
-    '/usage/me',
-  ]) {
-    assert.ok(openapi.paths[route], `${route} missing from OpenAPI`);
-  }
-  assert.deepEqual(openapi.paths['/health'].get.security, []);
-  assert.ok(openapi.paths['/deployments/{deploymentId}/cancel'].post.responses['200']);
-  assert.ok(openapi.paths['/deployments/{deploymentId}/cancel'].post.responses['409']);
-  assert.equal(openapi.paths['/deployments/{deploymentId}/cancel'].post.responses['202'], undefined);
-  assert.equal(openapi.paths['/deployments/{deploymentId}/rollback'].post.requestBody.content['application/json'].schema.required.includes('confirmed'), true);
-  assert.equal(openapi.paths['/admin/users/{userId}/reject'].post.requestBody.content['application/json'].schema.required.includes('confirmed'), true);
-  for (const route of ['/projects', '/services/{serviceId}/deployments', '/deployments/{deploymentId}/logs', '/deployments/{deploymentId}/events', '/services/{serviceId}/logs']) {
-    const parameters = openapi.paths[route].get.parameters || [];
-    assert.equal(parameters.some((parameter) => parameter.$ref === '#/components/parameters/limit'), true, `${route} must document limit pagination`);
-    assert.equal(parameters.some((parameter) => parameter.$ref === '#/components/parameters/cursor'), true, `${route} must document cursor pagination`);
-  }
-
-  const appModule = await fs.readFile(new URL('../apps/api/src/app.module.ts', import.meta.url), 'utf8');
-  for (const moduleName of ['AuthModule', 'ProjectsModule', 'ServicesModule', 'DeploymentsModule', 'ResourcesModule', 'EnvironmentModule', 'IntegrationsModule', 'AdminModule', 'UsageModule']) {
-    assert.match(appModule, new RegExp(moduleName));
-  }
-
-  const servicesController = await fs.readFile(new URL('../apps/api/src/modules/services/services.controller.ts', import.meta.url), 'utf8');
-  const servicesModule = await fs.readFile(new URL('../apps/api/src/modules/services/services.module.ts', import.meta.url), 'utf8');
-  const servicesService = await fs.readFile(new URL('../apps/api/src/modules/services/services.service.ts', import.meta.url), 'utf8');
-  const projectsController = await fs.readFile(new URL('../apps/api/src/modules/projects/projects.controller.ts', import.meta.url), 'utf8');
-  const projectsService = await fs.readFile(new URL('../apps/api/src/modules/projects/projects.service.ts', import.meta.url), 'utf8');
-  const deploymentsController = await fs.readFile(new URL('../apps/api/src/modules/deployments/deployments.controller.ts', import.meta.url), 'utf8');
-  const deploymentsModule = await fs.readFile(new URL('../apps/api/src/modules/deployments/deployments.module.ts', import.meta.url), 'utf8');
-  const deploymentsService = await fs.readFile(new URL('../apps/api/src/modules/deployments/deployments.service.ts', import.meta.url), 'utf8');
-  const resourcesController = await fs.readFile(new URL('../apps/api/src/modules/resources/resources.controller.ts', import.meta.url), 'utf8');
-  const resourcesModule = await fs.readFile(new URL('../apps/api/src/modules/resources/resources.module.ts', import.meta.url), 'utf8');
-  const resourceConsoleController = await fs.readFile(new URL('../apps/api/src/modules/resources/resource-console.controller.ts', import.meta.url), 'utf8');
+test('security-sensitive persistence and auth boundary regressions remain enforced', async () => {
   const githubController = await fs.readFile(new URL('../apps/api/src/modules/integrations/github.controller.ts', import.meta.url), 'utf8');
   const authController = await fs.readFile(new URL('../apps/api/src/modules/auth/auth.controller.ts', import.meta.url), 'utf8');
   const rbacGuard = await fs.readFile(new URL('../apps/api/src/auth/rbac.guard.ts', import.meta.url), 'utf8');
   const apiMain = await fs.readFile(new URL('../apps/api/src/main.ts', import.meta.url), 'utf8');
   const raibitserverService = await fs.readFile(new URL('../apps/api/src/raibitserver.service.ts', import.meta.url), 'utf8');
   const coreApi = await fs.readFile(new URL('../packages/core/src/api.ts', import.meta.url), 'utf8');
-  const sseStream = await fs.readFile(new URL('../packages/core/src/sse.ts', import.meta.url), 'utf8');
   const envPolicy = await fs.readFile(new URL('../packages/core/src/env-policy.ts', import.meta.url), 'utf8');
   const persistence = await fs.readFile(new URL('../packages/core/src/persistence.ts', import.meta.url), 'utf8');
-  const apiClient = await fs.readFile(new URL('../packages/api-client/src/index.ts', import.meta.url), 'utf8');
-  assert.match(servicesController, /@Get\(\)/);
-  assert.match(servicesModule, /ServiceDeploymentsController|ServiceDetailController/);
-  assert.match(servicesModule, /providers: \[ServicesService\]/);
-  assert.match(servicesController, /constructor\(private readonly servicesService: ServicesService\)/);
-  assert.match(servicesService, /constructor\(private readonly controlPlane: RAIBITSERVERService\)/);
-  assert.match(projectsController, /@Get\(':projectId'\)/);
-  assert.match(projectsService, /createProject\(project: ProjectSpec/);
-  assert.match(projectsController, /@Patch\(':projectId'\)/);
-  assert.match(projectsController, /@Delete\(':projectId'\)/);
-  assert.match(servicesController, /ServiceDetailController/);
-  assert.match(servicesController, /@Patch\(\)/);
-  for (const marker of ["@Get('deployments/:deploymentId')", "@Patch('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/cancel')", "@Post('deployments/:deploymentId/rollback')", "@Get('deployments/:deploymentId/stream')", "@Get('services/:serviceId/logs/stream')"]) assert.ok(deploymentsController.includes(marker), `${marker} missing from Deployments controller`);
-  assert.match(deploymentsController, /@Post\('deployments\/:deploymentId\/cancel'\)\s*@HttpCode\(200\)/);
-  assert.match(deploymentsController, /startBoundedSseStream/, 'Nest SSE endpoints must use the bounded shared stream');
-  assert.match(sseStream, /setInterval\(/, 'SSE streams must remain open and poll for updates');
-  assert.match(sseStream, /req\?\.on\?\.\('close', onRequestClose\)/, 'SSE streams must release timers when clients disconnect');
-  assert.match(sseStream, /maxLifetimeMs/, 'SSE streams must have an explicit maximum lifetime');
-  assert.match(deploymentsModule, /ServiceDeploymentsController/);
-  assert.match(deploymentsModule, /DeploymentLogsController/);
-  assert.match(deploymentsModule, /providers: \[DeploymentsService\]/);
-  assert.match(deploymentsService, /updateDeploymentStatus/);
-  assert.match(resourcesController, /@Get\(\)/);
-  assert.match(resourcesModule, /ResourceConsoleController/);
-  for (const marker of ["@Get('schema')", "@Get('tables')", "@Get('tables/:table')", "@Get('collections')", "@Get('keys')", "@Post('query')", "@Post('command')", "@Post('browse')"]) assert.ok(resourceConsoleController.includes(marker), `${marker} missing from ResourceConsoleController`);
-  for (const marker of ["@Get('github/install')", "@Get('github/authorize')", "@Get('github/callback')", "@Get('github/installations')", "@Get('github/installations/:installationId/repositories')", "@Post('github/webhooks')", "@Post('github/repositories/import')", "@Post('github/repositories/:repositoryId/sync')"]) assert.ok(githubController.includes(marker), `${marker} missing from GitHub controller`);
   assert.ok(apiMain.includes('rawBody: true'), 'Nest bootstrap must keep raw webhook bytes for GitHub HMAC verification');
   assert.ok(githubController.includes('req.rawBody'), 'GitHub webhook controller must verify the original raw payload bytes');
   assert.ok(raibitserverService.includes('user: publicUser(result.user)'), 'Nest email verification response must not expose passwordHash');
@@ -166,11 +65,6 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.ok(persistence.includes("type: 'preview-deploy'"), 'Prisma GitHub webhook must enqueue preview deploy jobs');
   assert.ok(persistence.includes("type: 'preview-cleanup'"), 'Prisma GitHub webhook must enqueue preview cleanup jobs');
   assert.ok(persistence.includes('previewRuntimePlan'), 'GitHub preview jobs must carry deterministic Kubernetes preview workload plans');
-  assert.ok(authController.includes("@Get('github/login')"));
-  assert.ok(authController.includes("@Get('github/callback')"));
-  assert.ok(authController.includes("@Post('email/verify')"));
-  assert.ok(authController.includes("@Post('email/resend')"));
-  for (const method of ['getProject', 'updateProject', 'deleteProject', 'getService', 'updateService', 'deleteService', 'getDeployment', 'updateDeploymentStatus', 'cancelDeployment', 'rollbackDeployment', 'resourceSchema', 'resourceTables', 'resourceCollections', 'resourceKeys', 'commandResource', 'beginGitHubAppInstallation', 'beginGitHubAppAuthorization', 'completeGitHubAppInstallation', 'listGitHubInstallations', 'listGitHubInstallationRepositories', 'importGitHubRepository', 'syncGitHubRepository']) assert.match(apiClient, new RegExp(method));
 });
 
 test('production persistence defaults to Prisma and rejects unsafe memory/secret gaps', () => {

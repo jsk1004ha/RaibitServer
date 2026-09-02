@@ -1,156 +1,4602 @@
 openapi: 3.1.0
 info:
   title: RAIBITSERVER API
-  version: 0.3.0
-  description: Canonical desired-state contract shared by NestJS API, prototype handler, API client, CLI, and local E2E.
+  version: 0.4.0
+  description: Implemented Nest control-plane operations. Prototype-only and planned operations are not advertised. SSE returns snapshots/deltas; Last-Event-ID resume is not implemented.
 servers:
   - url: http://localhost:3000/api
-  - url: https://api.raibitserver.app
-security:
-  - bearerAuth: []
 paths:
-  /health: { get: { summary: Public control-plane health check, security: [], responses: { '200': { description: API process is healthy } } } }
-  /snapshot: { get: { summary: Return a bounded administrative overview, parameters: [ { $ref: '#/components/parameters/limit' } ], responses: { '200': { description: Bounded users, quotas, and recent audit logs }, '403': { description: Administrator permission required } } } }
-  /auth/github/login: { get: { summary: Start GitHub OAuth login, responses: { '302': { description: Redirect } } } }
-  /auth/github/callback: { get: { summary: Complete GitHub OAuth login, responses: { '302': { description: Session created } } } }
+  /health:
+    get:
+      operationId: health
+      parameters: []
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/healthResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
   /auth/signup:
     post:
-      summary: Start email/password signup without disclosing account state
-      security: []
+      operationId: auth-signup
+      parameters: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [email, password, name, studentId]
-              properties:
-                email: { type: string, format: email }
-                password: { type: string, format: password, minLength: 8 }
-                name: { type: string, minLength: 1 }
-                studentId: { type: string, minLength: 1 }
-                clubMemberClaim: { type: boolean, description: Self-declared RAIBIT club membership; administrators still approve the final account type }
-                organizationSlug: { type: string }
+              $ref: "#/components/schemas/SignupInput"
       responses:
-        '201': { description: Generic accepted response; account existence and delivery status are intentionally not disclosed }
-  /auth/email/verify: { post: { summary: Verify signup email code, create the account, and return scoped JWT, security: [], responses: { '200': { description: Created verified session } } } }
-  /auth/email/resend: { post: { summary: Request another signup verification code without disclosing account or pending-signup state, security: [], responses: { '200': { description: Generic accepted response; account existence and delivery status are intentionally not disclosed } } } }
-  /auth/login: { post: { summary: Log in and return scoped JWT, security: [], responses: { '200': { description: Session } } } }
-  /auth/logout: { post: { summary: Invalidate current session, responses: { '200': { description: Logged out } } } }
-  /auth/me: { get: { summary: Return current user/account/quota subject, responses: { '200': { description: Current user } } } }
-  /public/sites: { get: { summary: List up to five publicly operating web projects, security: [], responses: { '200': { description: Public sites } } } }
-  /organizations: { get: { summary: List visible organizations, responses: { '200': { description: Organizations } } }, post: { summary: Create organization, responses: { '201': { description: Created } } } }
-  /organizations/{organizationId}: { get: { summary: Get organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Organization } } }, patch: { summary: Update organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Updated } } } }
-  /organizations/{organizationId}/members: { get: { summary: List members, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Members } } }, post: { summary: Add member, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '201': { description: Added } } } }
-  /organizations/{organizationId}/projects: { get: { summary: List organization projects, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Projects } } }, post: { summary: Create project in organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '201': { description: Created } } } }
-  /projects: { get: { summary: List visible projects, parameters: [ { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated projects } } }, post: { summary: Create project using subject organization, responses: { '201': { description: Created } } } }
-  /projects/{projectId}: { get: { summary: Get project, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Project } } }, patch: { summary: Update project, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Updated } } }, delete: { summary: Delete project, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '204': { description: Deleted } } } }
-  /projects/{projectId}/overview: { get: { summary: Get bounded project console overview, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Project, services, deployments, resources, and recent activity in project scope }, '403': { description: Project access denied }, '404': { description: Project not found } } } }
-  /projects/{projectId}/services: { get: { summary: List services, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Services } } }, post: { summary: Create service desired state, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '201': { description: Created } } } }
-  /projects/{projectId}/services/{serviceId}/deployments: { get: { summary: List deployments for a service in a project, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Deployments } } }, post: { summary: Queue production/manual/preview deployment in project scope, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '202': { description: Deployment and workflow job queued with preview URL/workload metadata when requested } } } }
-  /projects/{projectId}/deployment-agent/plan: { post: { summary: Build a side-effect-free AI-assisted deployment plan with deterministic threat checks, parameters: [ { $ref: '#/components/parameters/projectId' } ], requestBody: { required: false, content: { application/json: { schema: { type: object, additionalProperties: false, properties: { serviceIds: { type: array, maxItems: 100, items: { type: string } } } } } } }, responses: { '200': { description: Sanitized deployment order and per-service threat assessment }, '403': { description: Project access denied } } } }
-  /projects/{projectId}/deployment-agent/apply: { post: { summary: Revalidate and queue every safe service in an AI-assisted deployment plan, parameters: [ { $ref: '#/components/parameters/projectId' } ], requestBody: { required: false, content: { application/json: { schema: { type: object, additionalProperties: false, properties: { serviceIds: { type: array, maxItems: 100, items: { type: string } }, deploymentType: { enum: [production, preview] }, branch: { type: string }, commitSha: { type: string } } } } } }, responses: { '202': { description: Safe deployments queued through the existing workflow }, '400': { description: No eligible services }, '403': { description: High or critical finding blocked the plan } } } }
-  /services/{serviceId}: { get: { summary: Get service, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Service } } }, patch: { summary: Update service, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Updated } } }, delete: { summary: Delete service, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '204': { description: Deleted } } } }
-  /services/{serviceId}/deployments: { get: { summary: List deployments, parameters: [ { $ref: '#/components/parameters/serviceId' }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated deployments } } }, post: { summary: Queue production/manual/preview deployment, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '202': { description: Deployment and workflow job queued } } } }
-  /deployments/{deploymentId}: { get: { summary: Get deployment, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Deployment } } } }
-  /deployments/{deploymentId}/status: { patch: { summary: Update deployment status/image/error fields, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Updated deployment } } }, post: { summary: Update deployment status/image/error fields from HTML forms, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Updated deployment } } } }
-  /deployments/{deploymentId}/cancel: { post: { summary: Cancel a deployment before runtime reconciliation starts, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Deployment cancelled atomically }, '409': { description: Deployment can no longer be cancelled safely } } } }
-  /deployments/{deploymentId}/rollback: { post: { summary: Roll back to previous READY image after explicit confirmation, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [confirmed], properties: { confirmed: { type: boolean, const: true }, previousDeploymentId: { type: string }, imageUrl: { type: string } } } } } }, responses: { '202': { description: Rollback queued }, '400': { description: Explicit confirmation is required } } } }
-  /deployments/{deploymentId}/logs: { get: { summary: List build logs, parameters: [ { $ref: '#/components/parameters/deploymentId' }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated build logs } } } }
-  /deployments/{deploymentId}/events: { get: { summary: List deployment events, parameters: [ { $ref: '#/components/parameters/deploymentId' }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated deployment events } } } }
-  /deployments/{deploymentId}/stream: { get: { summary: Stream deployment logs and events as Server-Sent Events, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: SSE deployment activity stream } } } }
-  /projects/{projectId}/services/{serviceId}/env: { get: { summary: List masked service environment, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Environment entries } } }, post: { summary: Upsert service environment, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Updated environment } } } }
-  /projects/{projectId}/services/{serviceId}/env-file: { post: { summary: Parse and upload service .env file, parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Parsed and stored environment } } } }
-  /services/{serviceId}/logs: { get: { summary: List runtime logs, parameters: [ { $ref: '#/components/parameters/serviceId' }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/cursor' } ], responses: { '200': { description: Keyset-paginated runtime logs } } } }
-  /services/{serviceId}/logs/stream: { get: { summary: Stream service runtime logs as Server-Sent Events, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: SSE runtime log stream } } } }
-  /projects/{projectId}/resources: { get: { summary: List resources, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Resources } } }, post: { summary: Create managed resource, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '201': { description: Created } } } }
-  /resources/{resourceId}: { get: { summary: Get resource, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Resource } } }, patch: { summary: Update resource, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Updated } } }, delete: { summary: Delete resource and provider-owned secrets, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Deleted } } } }
-  /resources/{resourceId}/attach: { post: { summary: Attach provider-owned resource env to service secrets, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Attached } } } }
-  /resources/{resourceId}/provision: { post: { summary: Build/apply resource provider plan and provider-owned connection secrets, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '202': { description: Provision result } } } }
-  /resources/{resourceId}/detach: { post: { summary: Detach resource env from service, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Detached } } } }
-  /resources/{resourceId}/connection: { get: { summary: Return masked connection info, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Connection } } } }
-  /resources/{resourceId}/rotate-credentials: { post: { summary: Rotate resource credentials, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '202': { description: Rotation queued } } } }
-  /resources/{resourceId}/backups: { get: { summary: List backups, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Backups } } }, post: { summary: Create backup, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '202': { description: Backup queued } } } }
-  /resources/{resourceId}/restore: { post: { summary: Restore backup, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '202': { description: Restore queued } } } }
-  /resources/{resourceId}/console/schema: { get: { summary: DB console schema, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Schema } } } }
-  /resources/{resourceId}/console/tables: { get: { summary: SQL table list, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Tables } } } }
-  /resources/{resourceId}/console/tables/{table}: { get: { summary: SQL table data grid rows, parameters: [ { $ref: '#/components/parameters/resourceId' }, { name: table, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Table rows } } } }
-  /resources/{resourceId}/console/collections: { get: { summary: Mongo/vector collection list, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Collections } } } }
-  /resources/{resourceId}/console/keys: { get: { summary: Redis/Valkey keys, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Keys } } } }
-  /resources/{resourceId}/console/query: { post: { summary: Guarded DB console query, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Query result }, '403': { description: Destructive/read-only guard blocked } } } }
-  /resources/{resourceId}/console/command: { post: { summary: Guarded provider command, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Command result } } } }
-  /resources/{resourceId}/console/browse: { post: { summary: Browse DB/object/queue resource, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Browse result } } } }
-  /services/{serviceId}/domains: { get: { summary: List domains, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Domains } } }, post: { summary: Add domain, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '201': { description: Created } } } }
-  /domains/{domainId}/verify: { post: { summary: Verify domain, parameters: [ { $ref: '#/components/parameters/domainId' } ], responses: { '202': { description: Verification queued } } } }
-  /domains/{domainId}: { delete: { summary: Delete domain, parameters: [ { $ref: '#/components/parameters/domainId' } ], responses: { '204': { description: Deleted } } } }
-  /github/install: { get: { summary: Start a session-scoped GitHub App installation, responses: { '200': { description: Signed GitHub App installation URL }, '503': { description: GitHub App is not configured } } } }
-  /github/authorize: { get: { summary: Verify the post-install state and start GitHub user authorization, parameters: [ { name: installation_id, in: query, required: true, schema: { type: string, pattern: '^[0-9]+$' } }, { name: setup_action, in: query, required: true, schema: { enum: [install, update] } }, { name: state, in: query, required: true, schema: { type: string } } ], responses: { '200': { description: Signed GitHub user authorization URL }, '400': { description: Invalid or expired installation state } } } }
-  /github/callback: { get: { summary: Prove installation access with a one-use OAuth code and replace the authoritative repository catalog, parameters: [ { name: code, in: query, required: true, schema: { type: string } }, { name: state, in: query, required: true, schema: { type: string } } ], responses: { '200': { description: Verified installation and synchronized repository count }, '403': { description: Installation is not accessible to the authorizing user } } } }
-  /github/installations: { get: { summary: List GitHub App installations, responses: { '200': { description: Installations } } } }
-  /integrations/github: { get: { summary: List stored GitHub integrations for an organization, parameters: [ { name: organizationId, in: query, required: false, schema: { type: string } } ], responses: { '200': { description: Integrations } } }, post: { summary: Create an unverified GitHub integration placeholder; repository access still requires a trusted App callback, responses: { '201': { description: Unverified integration created } } } }
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Signup"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
+  /auth/login:
+    post:
+      operationId: auth-login
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthInput"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
+  /auth/email/verify:
+    post:
+      operationId: auth-email-verify
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth-email-verifyBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
+  /auth/email/resend:
+    post:
+      operationId: auth-email-resend
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth-email-resendBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth-email-resendResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
+  /auth/github/login:
+    get:
+      operationId: auth-github-login
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: codeChallenge
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth-github-loginResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
+  /auth/github/callback:
+    get:
+      operationId: auth-github-callback
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: codeVerifier
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth-github-callbackResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
+  /auth/me:
+    get:
+      operationId: auth-me
+      parameters: []
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth-meResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+  /auth/logout:
+    post:
+      operationId: auth-logout
+      parameters: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Empty"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth-logoutResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+  /public/sites:
+    get:
+      operationId: public-sites
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 5
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/public-sitesResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
+  /projects:
+    get:
+      operationId: projects-list
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Projects"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    post:
+      operationId: projects-create
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectInput"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:create
+  /projects/{projectId}:
+    get:
+      operationId: projects-get
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    patch:
+      operationId: projects-update
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/projects-updateBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:update
+    delete:
+      operationId: projects-delete
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deletion"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:delete
+  /projects/{projectId}/overview:
+    get:
+      operationId: projects-overview
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/projects-overviewResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+  /projects/{projectId}/services:
+    get:
+      operationId: services-list
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Services"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    post:
+      operationId: services-create
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceInput"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Service"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: service:create
+  /services/{serviceId}:
+    get:
+      operationId: services-get
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Service"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    patch:
+      operationId: services-update
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/services-updateBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Service"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: service:update
+    delete:
+      operationId: services-delete
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deletion"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:delete
+  /projects/{projectId}/services/{serviceId}/deployments:
+    get:
+      operationId: project-deployments-list
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployments"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    post:
+      operationId: project-deployments-create
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeploymentInput"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployment"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /services/{serviceId}/deployments:
+    get:
+      operationId: deployments-list
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployments"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    post:
+      operationId: deployments-create
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeploymentInput"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployment"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /deployments/{deploymentId}:
+    get:
+      operationId: deployments-get
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployment"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+  /deployments/{deploymentId}/status:
+    patch:
+      operationId: deployments-status
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StatusInput"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployment"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+    post:
+      operationId: deployments-status-post
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StatusInput"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployment"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /deployments/{deploymentId}/cancel:
+    post:
+      operationId: deployments-cancel
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Empty"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/deployments-cancelResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /deployments/{deploymentId}/rollback:
+    post:
+      operationId: deployments-rollback
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/deployments-rollbackBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/deployments-rollbackResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /deployments/{deploymentId}/logs:
+    get:
+      operationId: deployments-logs
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Logs"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: logs:read
+  /deployments/{deploymentId}/events:
+    get:
+      operationId: deployments-events
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Events"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: logs:read
+  /deployments/{deploymentId}/stream:
+    get:
+      operationId: deployments-stream
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/DeploymentStream"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: logs:read
+      x-sse:
+        event: deployment.snapshot
+        resume: unsupported
+        reconnect: fresh-snapshot
+        error:
+          $ref: "#/components/schemas/StreamError"
+  /services/{serviceId}/logs:
+    get:
+      operationId: services-logs
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Logs"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: logs:read
+  /services/{serviceId}/logs/stream:
+    get:
+      operationId: services-logs-stream
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/ServiceStream"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: logs:read
+      x-sse:
+        event: service.logs.snapshot
+        resume: unsupported
+        reconnect: fresh-snapshot
+        error:
+          $ref: "#/components/schemas/StreamError"
+  /projects/{projectId}/deployment-agent/plan:
+    post:
+      operationId: agent-plan
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentInput"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentPlan"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+  /projects/{projectId}/deployment-agent/apply:
+    post:
+      operationId: agent-apply
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentInput"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/agent-applyResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /projects/{projectId}/resources:
+    get:
+      operationId: resources-list
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resources"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    post:
+      operationId: resources-create
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceInput"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:create
+  /resources/{resourceId}:
+    get:
+      operationId: resources-get
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    patch:
+      operationId: resources-update
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/resources-updateBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:create
+    delete:
+      operationId: resources-delete
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deletion"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:delete
+  /resources/{resourceId}/attach:
+    post:
+      operationId: resources-attach
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/resources-attachBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/resources-attachResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:create
+  /resources/{resourceId}/provision:
+    post:
+      operationId: resources-provision
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Empty"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/resources-provisionResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:create
+  /resources/{resourceId}/console/schema:
+    get:
+      operationId: console-schema
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            exclusiveMinimum: 0
+            maximum: 1000
+        - name: table
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: collection
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: prefix
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/console-schemaResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:schema:read
+  /resources/{resourceId}/console/tables:
+    get:
+      operationId: console-tables
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            exclusiveMinimum: 0
+            maximum: 1000
+        - name: table
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: collection
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: prefix
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/console-tablesResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:schema:read
+  /resources/{resourceId}/console/tables/{table}:
+    get:
+      operationId: console-table
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: table
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            exclusiveMinimum: 0
+            maximum: 1000
+        - name: table
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: collection
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: prefix
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/console-tableResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:data:read
+  /resources/{resourceId}/console/collections:
+    get:
+      operationId: console-collections
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            exclusiveMinimum: 0
+            maximum: 1000
+        - name: table
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: collection
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: prefix
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/console-collectionsResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:schema:read
+  /resources/{resourceId}/console/keys:
+    get:
+      operationId: console-keys
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            exclusiveMinimum: 0
+            maximum: 1000
+        - name: table
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: collection
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: prefix
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/console-keysResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:schema:read
+  /resources/{resourceId}/console/query:
+    post:
+      operationId: console-query
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/console-queryBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleResult"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:data:read
+  /resources/{resourceId}/console/command:
+    post:
+      operationId: console-command
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/console-commandBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleResult"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:query:write
+  /resources/{resourceId}/console/browse:
+    post:
+      operationId: console-browse
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrowseInput"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleResult"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: db:data:read
+  /projects/{projectId}/services/{serviceId}/env:
+    get:
+      operationId: environment-list
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: env:read
+    post:
+      operationId: environment-upsert
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/environment-upsertBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: env:write-limited
+  /projects/{projectId}/services/{serviceId}/env-file:
+    post:
+      operationId: environment-upload
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/environment-uploadBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: env:write-limited
+  /github/install:
+    get:
+      operationId: github-install
+      parameters: []
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GithubUrl"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: team:invite
+  /github/authorize:
+    get:
+      operationId: github-authorize
+      parameters:
+        - name: installation_id
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: ^[0-9]+$
+        - name: setup_action
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - install
+              - update
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GithubUrl"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: team:invite
+  /github/callback:
+    get:
+      operationId: github-callback
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-callbackResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: team:invite
+  /github/installations:
+    get:
+      operationId: github-installations
+      parameters:
+        - name: organizationId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-installationsResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+  /integrations/github:
+    post:
+      operationId: github-integrations-create
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/github-integrations-createBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Integration"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: team:invite
+    get:
+      operationId: github-integrations-list
+      parameters:
+        - name: organizationId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-integrations-listResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
   /projects/{projectId}/services/{serviceId}/github:
     post:
-      summary: Attach an authoritative repository from a verified same-organization GitHub App installation
-      parameters: [ { $ref: '#/components/parameters/projectId' }, { $ref: '#/components/parameters/serviceId' } ]
+      operationId: github-attach
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [integrationId, repositoryId]
-              additionalProperties: false
-              properties:
-                integrationId: { type: string }
-                repositoryId: { type: string, description: Immutable GitHub repository ID from the installation catalog }
-                branch: { type: string }
-      responses: { '200': { description: Repository attached } }
-  /github/installations/{installationId}/repositories: { get: { summary: List installation repositories, parameters: [ { name: installationId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Repositories } } } }
-  /github/webhooks: { post: { summary: GitHub webhook receiver with raw-body signature verification, delivery dedupe, push deploy, and PR preview/cleanup workflow planning, security: [], responses: { '202': { description: Accepted } } } }
+              $ref: "#/components/schemas/GithubAttach"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-attachResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /github/installations/{installationId}/repositories:
+    get:
+      operationId: github-repositories
+      parameters:
+        - name: installationId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-repositoriesResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+  /github/webhooks:
+    post:
+      operationId: github-webhooks
+      parameters: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/github-webhooksBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-webhooksResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - githubSignature: []
+      x-permission: null
+      x-signature-headers:
+        - x-github-event
+        - x-github-delivery
+        - x-hub-signature-256
   /github/repositories/import:
     post:
-      summary: Import an authoritative repository from a verified same-organization GitHub App installation
+      operationId: github-import
+      parameters: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [projectId, integrationId, repositoryId]
-              additionalProperties: false
-              properties:
-                projectId: { type: string }
-                integrationId: { type: string }
-                repositoryId: { type: string, description: GitHub repository ID from the installation catalog }
-                serviceName: { type: string }
-                branch: { type: string }
-      responses: { '201': { description: Imported } }
-  /github/repositories/{repositoryId}/sync: { post: { summary: Sync repository metadata, parameters: [ { name: repositoryId, in: path, required: true, schema: { type: string } } ], responses: { '202': { description: Sync queued } } } }
-  /usage/me: { get: { summary: Current user usage/quota, responses: { '200': { description: Usage } } } }
-  /organizations/{organizationId}/usage: { get: { summary: Organization usage, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Usage } } } }
-  /admin/users/{userId}/approve: { post: { summary: Approve user, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Approved } } } }
-  /admin/users/{userId}/reject: { post: { summary: Reject user after explicit confirmation, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [confirmed], properties: { confirmed: { type: boolean, const: true } } } } } }, responses: { '200': { description: Rejected }, '400': { description: Explicit confirmation is required } } } }
-  /admin/users/{userId}/ban: { post: { summary: Permanently or temporarily ban a user and revoke existing sessions, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reason], additionalProperties: false, properties: { reason: { type: string, minLength: 1, maxLength: 500 }, expiresAt: { type: string, format: date-time, description: Omit for a permanent ban } } } } } }, responses: { '200': { description: User banned and session version incremented }, '400': { description: Invalid reason, expiry, or self-ban attempt }, '403': { description: Administrator permission required } } } }
-  /admin/users/{userId}/unban: { post: { summary: Remove a user ban and revoke any token issued during the transition, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: User unbanned and session version incremented }, '403': { description: Administrator permission required } } } }
-  /admin/users/{userId}/quota: { patch: { summary: Update user quota, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Updated } } } }
-  /admin/usage: { get: { summary: Admin global usage, responses: { '200': { description: Usage } } } }
-  /admin/audit-logs: { get: { summary: Admin audit logs, responses: { '200': { description: Audit logs } } } }
-  /internal/plan/build: { post: { summary: Internal build planner, responses: { '200': { description: Plan } } } }
-  /internal/plan/compose: { post: { summary: Internal compose importer, responses: { '200': { description: Plan } } } }
-  /internal/plan/manifests: { post: { summary: Internal manifest compiler, responses: { '200': { description: Plan } } } }
-  /internal/validate: { post: { summary: Internal validator, responses: { '200': { description: Findings } } } }
+              $ref: "#/components/schemas/github-importBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-importResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /github/repositories/{repositoryId}/sync:
+    post:
+      operationId: github-sync
+      parameters:
+        - name: repositoryId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/github-syncBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-syncResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /admin/users/{userId}/approve:
+    post:
+      operationId: admin-approve
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/admin-approveBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: audit:read
+  /admin/users/{userId}/reject:
+    post:
+      operationId: admin-reject
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Confirmation"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: audit:read
+  /admin/users/{userId}/ban:
+    post:
+      operationId: admin-ban
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/admin-banBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: audit:read
+  /admin/users/{userId}/unban:
+    post:
+      operationId: admin-unban
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Empty"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: audit:read
+  /admin/users/{userId}/quota:
+    patch:
+      operationId: admin-quota
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JsonFields"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin-quotaResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: audit:read
+    post:
+      operationId: admin-quota-post
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JsonFields"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin-quota-postResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: audit:read
+  /snapshot:
+    get:
+      operationId: snapshot
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/snapshotResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: audit:read
+  /usage/me:
+    get:
+      operationId: usage-me
+      parameters: []
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/usage-meResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: metrics:read
 components:
-  parameters:
-    organizationId: { name: organizationId, in: path, required: true, schema: { type: string } }
-    projectId: { name: projectId, in: path, required: true, schema: { type: string } }
-    serviceId: { name: serviceId, in: path, required: true, schema: { type: string } }
-    deploymentId: { name: deploymentId, in: path, required: true, schema: { type: string } }
-    resourceId: { name: resourceId, in: path, required: true, schema: { type: string } }
-    domainId: { name: domainId, in: path, required: true, schema: { type: string } }
-    limit: { name: limit, in: query, required: false, description: Maximum rows per page, schema: { type: integer, minimum: 1, maximum: 1000, default: 200 } }
-    cursor: { name: cursor, in: query, required: false, description: Opaque versioned keyset cursor returned by the previous page, schema: { type: string, maxLength: 1024 } }
-  securitySchemes:
-    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   schemas:
-    ServiceType: { enum: [web, private, worker, cron, job] }
-    ResourceEngine: { enum: [postgresql, mysql, mariadb, mongodb, redis, valkey, sqlite, object-storage, qdrant, weaviate, milvus, nats, rabbitmq, kafka, redpanda, vector-db, message-queue] }
+    AgentInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        serviceIds:
+          maxItems: 100
+          type: array
+          items:
+            type: string
+            minLength: 1
+        deploymentType:
+          type: string
+          enum:
+            - production
+            - preview
+        branch:
+          type: string
+        commitSha:
+          type: string
+      additionalProperties: false
+    AgentPlan:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        version:
+          type: string
+          const: v1
+        projectId:
+          type: string
+          minLength: 1
+        generatedBy:
+          type: string
+          enum:
+            - deterministic
+            - external-ai
+        summary:
+          type: string
+        blocked:
+          type: boolean
+        canApply:
+          type: boolean
+        deploymentOrder:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        services:
+          type: array
+          items:
+            type: object
+            properties:
+              serviceId:
+                type: string
+                minLength: 1
+              name:
+                type: string
+              type:
+                type: string
+              eligible:
+                type: boolean
+              findings:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    severity:
+                      type: string
+                      enum:
+                        - critical
+                        - high
+                        - medium
+                        - low
+                    code:
+                      type: string
+                    message:
+                      type: string
+                    field:
+                      type: string
+                  required:
+                    - severity
+                    - code
+                    - message
+                  additionalProperties: false
+            required:
+              - serviceId
+              - name
+              - type
+              - eligible
+              - findings
+            additionalProperties: false
+        security:
+          type: object
+          properties:
+            highestSeverity:
+              type: string
+              enum:
+                - critical
+                - high
+                - medium
+                - low
+                - none
+            critical:
+              type: number
+            high:
+              type: number
+            medium:
+              type: number
+            low:
+              type: number
+          required:
+            - highestSeverity
+            - critical
+            - high
+            - medium
+            - low
+          additionalProperties: false
+      required:
+        - version
+        - projectId
+        - generatedBy
+        - summary
+        - blocked
+        - canApply
+        - deploymentOrder
+        - services
+        - security
+      additionalProperties: false
+    AuthInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          pattern: ^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+        password:
+          type: string
+          minLength: 1
+      required:
+        - email
+        - password
+      additionalProperties: false
+    BrowseInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        limit:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 1000
+        table:
+          type: string
+        collection:
+          type: string
+        prefix:
+          type: string
+        cursor:
+          type: string
+      additionalProperties: false
+    Confirmation:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        confirmed:
+          type: boolean
+          const: true
+      required:
+        - confirmed
+      additionalProperties: false
+    ConsoleResult:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        engine:
+          type: string
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        rowCount:
+          type: number
+        mode:
+          type: string
+        warning:
+          type: string
+      required:
+        - engine
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    Deletion:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      anyOf:
+        - type: object
+          properties:
+            deleted:
+              type: boolean
+              const: true
+          required:
+            - deleted
+          additionalProperties:
+            $ref: "#/components/schemas/JsonValue"
+        - type: object
+          properties:
+            deletionRequested:
+              type: boolean
+              const: true
+            status:
+              type: string
+          required:
+            - deletionRequested
+            - status
+          additionalProperties:
+            $ref: "#/components/schemas/JsonValue"
+    Deployment:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        serviceId:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - queued
+            - BUILDING
+            - IMAGE_READY
+            - DEPLOYING
+            - READY
+            - BUILD_FAILED
+            - FAILED
+            - CANCELLED
+            - PREVIEW_CLEANUP_REQUESTED
+            - ROLLBACK_REQUESTED
+            - CLEANED_UP
+        projectId:
+          type: string
+          minLength: 1
+        imageDigest:
+          anyOf:
+            - type: string
+            - type: "null"
+        errorCode:
+          anyOf:
+            - type: string
+            - type: "null"
+        errorMessage:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - id
+        - serviceId
+        - status
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    DeploymentInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        deploymentType:
+          type: string
+          enum:
+            - production
+            - preview
+            - manual
+        triggerType:
+          type: string
+        branch:
+          type: string
+        commitSha:
+          type: string
+        pullRequestNumber:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        imageUrl:
+          type: string
+      additionalProperties: false
+    DeploymentStream:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        deployment:
+          anyOf:
+            - $ref: "#/components/schemas/Deployment"
+            - type: "null"
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Log"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
+        deploymentCursor:
+          type: string
+        logCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+        eventCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+        stream:
+          $ref: "#/components/schemas/StreamConfig"
+      required:
+        - deployment
+        - logs
+        - events
+        - deploymentCursor
+        - logCursor
+        - eventCursor
+        - stream
+      additionalProperties: false
+    Deployments:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        deployments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Deployment"
+        nextCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - deployments
+        - nextCursor
+      additionalProperties: false
+    EmailVerification:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    Empty:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties: {}
+      additionalProperties: false
+    Environment:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        serviceId:
+          type: string
+          minLength: 1
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                anyOf:
+                  - type: string
+                  - type: "null"
+              isSecret:
+                type: boolean
+              valueMasked:
+                type: string
+            required:
+              - key
+              - value
+              - isSecret
+              - valueMasked
+            additionalProperties:
+              $ref: "#/components/schemas/JsonValue"
+        plainCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        secretCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - serviceId
+        - entries
+        - plainCount
+        - secretCount
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    ErrorBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      anyOf:
+        - type: object
+          properties:
+            statusCode:
+              type: integer
+              minimum: 400
+              maximum: 599
+            message:
+              anyOf:
+                - type: string
+                - type: array
+                  items:
+                    type: string
+            error:
+              type: string
+          required:
+            - statusCode
+            - message
+          additionalProperties: false
+        - type: object
+          properties:
+            message:
+              type: string
+            plan:
+              $ref: "#/components/schemas/JsonFields"
+          required:
+            - message
+            - plan
+          additionalProperties: false
+    Event:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        timestamp:
+          type: string
+      required:
+        - id
+        - timestamp
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    Events:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
+        nextCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - events
+        - nextCursor
+      additionalProperties: false
+    GithubAttach:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        integrationId:
+          type: string
+          minLength: 1
+        repositoryId:
+          type: string
+          minLength: 1
+        branch:
+          type: string
+      required:
+        - integrationId
+        - repositoryId
+      additionalProperties: false
+    GithubUrl:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      anyOf:
+        - type: object
+          properties:
+            provider:
+              type: string
+              const: github
+            configured:
+              type: boolean
+              const: true
+            installUrl:
+              type: string
+              format: uri
+            mode:
+              type: string
+              const: github-app-install
+          required:
+            - provider
+            - configured
+            - installUrl
+            - mode
+          additionalProperties: false
+        - type: object
+          properties:
+            provider:
+              type: string
+              const: github
+            authorizationUrl:
+              type: string
+              format: uri
+          required:
+            - provider
+            - authorizationUrl
+          additionalProperties:
+            $ref: "#/components/schemas/JsonValue"
+    Integration:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        organizationId:
+          type: string
+          minLength: 1
+        verifiedAt:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - id
+        - organizationId
+        - verifiedAt
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    JsonFields:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      propertyNames:
+        type: string
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    JsonValue:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      anyOf:
+        - type: string
+        - type: number
+        - type: boolean
+        - type: "null"
+        - type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        - type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            $ref: "#/components/schemas/JsonValue"
+    Log:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        line:
+          type: string
+        timestamp:
+          type: string
+      required:
+        - id
+        - line
+        - timestamp
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    Logs:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Log"
+        nextCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - logs
+        - nextCursor
+      additionalProperties: false
+    Membership:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        userId:
+          type: string
+          minLength: 1
+        organizationId:
+          type: string
+          minLength: 1
+        role:
+          type: string
+      required:
+        - userId
+        - organizationId
+        - role
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    PageQuery:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        cursor:
+          type: string
+          maxLength: 1024
+        after:
+          type: string
+          maxLength: 1024
+      additionalProperties: false
+    Project:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+        organizationId:
+          type: string
+          minLength: 1
+        slug:
+          type: string
+      required:
+        - id
+        - name
+        - organizationId
+        - slug
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    ProjectInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        slug:
+          type: string
+        organizationId:
+          type: string
+          minLength: 1
+        organizationSlug:
+          type: string
+        description:
+          type: string
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonFields"
+        resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonFields"
+      required:
+        - name
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    Projects:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        nextCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - projects
+        - nextCursor
+      additionalProperties: false
+    Repository:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+      required:
+        - id
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    Resource:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        projectId:
+          type: string
+          minLength: 1
+        name:
+          type: string
+        engine:
+          type: string
+        status:
+          type: string
+      required:
+        - id
+        - projectId
+        - name
+        - engine
+        - status
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    ResourceInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        engine:
+          type: string
+          minLength: 1
+        provider:
+          type: string
+        plan:
+          type: string
+      required:
+        - name
+        - engine
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    Resources:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/Resource"
+        nextCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - resources
+        - nextCursor
+      additionalProperties: false
+    Service:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        projectId:
+          type: string
+          minLength: 1
+        name:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+      required:
+        - id
+        - projectId
+        - name
+        - type
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    ServiceInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          enum:
+            - web
+            - private
+            - worker
+            - cron
+            - job
+        image:
+          type: string
+        sourceType:
+          type: string
+        port:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+      required:
+        - name
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    ServiceStream:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        service:
+          anyOf:
+            - $ref: "#/components/schemas/Service"
+            - type: "null"
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Log"
+        serviceCursor:
+          type: string
+        logCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+        stream:
+          $ref: "#/components/schemas/StreamConfig"
+      required:
+        - service
+        - logs
+        - serviceCursor
+        - logCursor
+        - stream
+      additionalProperties: false
+    Services:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/Service"
+        nextCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - services
+        - nextCursor
+      additionalProperties: false
+    Session:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        memberships:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+        token:
+          type: string
+      required:
+        - user
+        - memberships
+        - token
+      additionalProperties: false
+    Signup:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        emailVerification:
+          $ref: "#/components/schemas/EmailVerification"
+        signup:
+          type: object
+          properties:
+            status:
+              type: string
+              const: verification_requested
+          required:
+            - status
+          additionalProperties: false
+      required:
+        - emailVerification
+        - signup
+      additionalProperties: false
+    SignupInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          pattern: ^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+        password:
+          type: string
+          minLength: 8
+        name:
+          type: string
+          minLength: 1
+        studentId:
+          type: string
+          minLength: 1
+        clubMemberClaim:
+          type: boolean
+        organizationSlug:
+          type: string
+      required:
+        - email
+        - password
+        - name
+        - studentId
+      additionalProperties: false
+    StatusInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - queued
+            - BUILDING
+            - IMAGE_READY
+            - DEPLOYING
+            - READY
+            - BUILD_FAILED
+            - FAILED
+            - CANCELLED
+            - PREVIEW_CLEANUP_REQUESTED
+            - ROLLBACK_REQUESTED
+            - CLEANED_UP
+        imageUrl:
+          type: string
+        imageDigest:
+          type: string
+        errorCode:
+          anyOf:
+            - type: string
+            - type: "null"
+        errorMessage:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - status
+      additionalProperties: false
+    StreamConfig:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        retryMs:
+          type: number
+        heartbeatMs:
+          type: number
+        maxLifetimeMs:
+          type: number
+        slowClientTimeoutMs:
+          type: number
+      required:
+        - retryMs
+        - heartbeatMs
+        - maxLifetimeMs
+        - slowClientTimeoutMs
+      additionalProperties: false
+    StreamError:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+      additionalProperties: false
+    User:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        email:
+          type: string
+        name:
+          anyOf:
+            - type: string
+            - type: "null"
+        role:
+          type: string
+        approvalStatus:
+          type: string
+      required:
+        - id
+        - email
+        - role
+        - approvalStatus
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    healthResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+          const: raibitserver-api
+        uptimeSeconds:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+      required:
+        - status
+        - service
+        - uptimeSeconds
+      additionalProperties: false
+    auth-email-verifyBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          pattern: ^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+        code:
+          type: string
+          minLength: 1
+      required:
+        - email
+        - code
+      additionalProperties: false
+    auth-email-resendResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        emailVerification:
+          $ref: "#/components/schemas/EmailVerification"
+      required:
+        - emailVerification
+      additionalProperties: false
+    auth-email-resendBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          pattern: ^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+      required:
+        - email
+      additionalProperties: false
+    auth-github-loginResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        provider:
+          type: string
+          const: github
+        configured:
+          type: boolean
+        oauthUrl:
+          anyOf:
+            - type: string
+            - type: "null"
+        state:
+          type: string
+        mode:
+          type: string
+          enum:
+            - redirect
+            - configuration-required
+      required:
+        - provider
+        - configured
+        - oauthUrl
+        - state
+        - mode
+      additionalProperties: false
+    auth-github-callbackResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      anyOf:
+        - type: object
+          properties:
+            user:
+              $ref: "#/components/schemas/User"
+            memberships:
+              type: array
+              items:
+                $ref: "#/components/schemas/Membership"
+            token:
+              type: string
+            provider:
+              type: string
+              const: github
+            linked:
+              type: boolean
+              const: true
+            codePresent:
+              type: boolean
+              const: true
+            received:
+              type: boolean
+              const: true
+            mode:
+              type: string
+              const: oauth-complete
+          required:
+            - user
+            - memberships
+            - token
+            - provider
+            - linked
+            - codePresent
+            - received
+            - mode
+          additionalProperties: false
+        - type: object
+          properties:
+            provider:
+              type: string
+              const: github
+            linked:
+              type: boolean
+              const: false
+            codePresent:
+              type: boolean
+              const: false
+            received:
+              type: boolean
+              const: true
+            state:
+              anyOf:
+                - type: string
+                - type: "null"
+            mode:
+              type: string
+              const: oauth-callback-pending
+          required:
+            - provider
+            - linked
+            - codePresent
+            - received
+            - state
+            - mode
+          additionalProperties: false
+    auth-meResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        user:
+          anyOf:
+            - $ref: "#/components/schemas/User"
+            - type: "null"
+        subject:
+          $ref: "#/components/schemas/JsonFields"
+        memberships:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+      required:
+        - user
+        - subject
+        - memberships
+      additionalProperties: false
+    auth-logoutResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        ok:
+          type: boolean
+          const: true
+      required:
+        - ok
+      additionalProperties: false
+    public-sitesResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        sites:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                minLength: 1
+              name:
+                type: string
+              owner:
+                type: string
+              status:
+                type: string
+                const: LIVE
+              url:
+                type: string
+                format: uri
+            required:
+              - id
+              - name
+              - owner
+              - status
+              - url
+            additionalProperties: false
+      required:
+        - sites
+      additionalProperties: false
+    projects-updateBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        slug:
+          type: string
+        organizationId:
+          type: string
+          minLength: 1
+        organizationSlug:
+          type: string
+        description:
+          type: string
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonFields"
+        resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonFields"
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    projects-overviewResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        project:
+          $ref: "#/components/schemas/Project"
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/Service"
+        resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/Resource"
+        deployments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Deployment"
+      required:
+        - project
+        - services
+        - resources
+        - deployments
+      additionalProperties: false
+    services-updateBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          enum:
+            - web
+            - private
+            - worker
+            - cron
+            - job
+        image:
+          type: string
+        sourceType:
+          type: string
+        port:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    deployments-cancelResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        deployment:
+          $ref: "#/components/schemas/Deployment"
+      required:
+        - deployment
+      additionalProperties: false
+    deployments-rollbackResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        deployment:
+          $ref: "#/components/schemas/Deployment"
+        rollbackOfDeploymentId:
+          type: string
+          minLength: 1
+        previousDeployment:
+          anyOf:
+            - $ref: "#/components/schemas/Deployment"
+            - type: "null"
+        workflowJob:
+          $ref: "#/components/schemas/JsonFields"
+      required:
+        - deployment
+        - rollbackOfDeploymentId
+        - previousDeployment
+        - workflowJob
+      additionalProperties: false
+    deployments-rollbackBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        confirmed:
+          type: boolean
+          const: true
+        previousDeploymentId:
+          type: string
+          minLength: 1
+        imageUrl:
+          type: string
+      required:
+        - confirmed
+      additionalProperties: false
+    agent-applyResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        accepted:
+          type: boolean
+          const: true
+        generatedBy:
+          type: string
+        summary:
+          type: string
+        deploymentOrder:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        deployments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Deployment"
+      required:
+        - accepted
+        - generatedBy
+        - summary
+        - deploymentOrder
+        - deployments
+      additionalProperties: false
+    resources-updateBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        engine:
+          type: string
+          minLength: 1
+        provider:
+          type: string
+        plan:
+          type: string
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    resources-attachResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        resourceId:
+          type: string
+          minLength: 1
+        serviceId:
+          type: string
+          minLength: 1
+      required:
+        - resourceId
+        - serviceId
+      additionalProperties:
+        $ref: "#/components/schemas/__shared#/$defs/schema0"
+    resources-attachBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        serviceId:
+          type: string
+          minLength: 1
+        envPrefix:
+          type: string
+      required:
+        - serviceId
+      additionalProperties: false
+    resources-provisionResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        resource:
+          $ref: "#/components/schemas/Resource"
+        result:
+          type: object
+          properties:
+            engine:
+              type: string
+            provider:
+              type: string
+            status:
+              type: string
+            dryRun:
+              type: boolean
+          required:
+            - engine
+            - provider
+            - status
+            - dryRun
+          additionalProperties:
+            $ref: "#/components/schemas/__shared#/$defs/schema1"
+      required:
+        - resource
+        - result
+      additionalProperties: false
+    console-schemaResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        engine:
+          type: string
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        rowCount:
+          type: number
+        mode:
+          type: string
+        warning:
+          type: string
+        schema:
+          $ref: "#/components/schemas/JsonFields"
+      required:
+        - engine
+        - schema
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    console-tablesResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        engine:
+          type: string
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        rowCount:
+          type: number
+        mode:
+          type: string
+        warning:
+          type: string
+        tables:
+          type: array
+          items:
+            $ref: "#/components/schemas/__shared#/$defs/schema2"
+      required:
+        - engine
+        - tables
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    console-tableResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        engine:
+          type: string
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/__shared#/$defs/schema3"
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        rowCount:
+          type: number
+        mode:
+          type: string
+        warning:
+          type: string
+      required:
+        - engine
+        - rows
+        - rowCount
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    console-collectionsResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        engine:
+          type: string
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        rowCount:
+          type: number
+        mode:
+          type: string
+        warning:
+          type: string
+        collections:
+          type: array
+          items:
+            $ref: "#/components/schemas/__shared#/$defs/schema4"
+      required:
+        - engine
+        - collections
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    console-keysResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        engine:
+          type: string
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        rowCount:
+          type: number
+        mode:
+          type: string
+        warning:
+          type: string
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/__shared#/$defs/schema5"
+      required:
+        - engine
+        - keys
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    console-queryBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        query:
+          type: string
+          minLength: 1
+        confirmed:
+          type: boolean
+        limit:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 1000
+      required:
+        - query
+      additionalProperties: false
+    console-commandBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        query:
+          type: string
+          minLength: 1
+        confirmed:
+          type: boolean
+        limit:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 1000
+        command:
+          type: string
+          minLength: 1
+      required:
+        - command
+      additionalProperties: false
+    environment-upsertBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+                minLength: 1
+              value:
+                type: string
+              isSecret:
+                type: boolean
+            required:
+              - key
+              - value
+            additionalProperties: false
+        source:
+          type: string
+      required:
+        - entries
+      additionalProperties: false
+    environment-uploadBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        filename:
+          type: string
+        content:
+          type: string
+      required:
+        - filename
+        - content
+      additionalProperties: false
+    github-callbackResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      anyOf:
+        - type: object
+          properties:
+            connected:
+              type: boolean
+              const: true
+            integration:
+              $ref: "#/components/schemas/JsonFields"
+            repositoryCount:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+          required:
+            - connected
+            - integration
+            - repositoryCount
+          additionalProperties: false
+        - type: object
+          properties:
+            connected:
+              type: boolean
+              const: false
+            resumeRequired:
+              type: boolean
+              const: true
+            authorizationUrl:
+              type: string
+              format: uri
+          required:
+            - connected
+            - resumeRequired
+            - authorizationUrl
+          additionalProperties: false
+    github-installationsResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        installations:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonFields"
+      required:
+        - installations
+      additionalProperties: false
+    github-integrations-createBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        organizationId:
+          type: string
+          minLength: 1
+        accountLogin:
+          type: string
+          minLength: 1
+        installationId:
+          type: string
+          minLength: 1
+      required:
+        - accountLogin
+      additionalProperties: false
+    github-integrations-listResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        integrations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Integration"
+      required:
+        - integrations
+      additionalProperties: false
+    github-attachResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        service:
+          $ref: "#/components/schemas/Service"
+        github:
+          $ref: "#/components/schemas/JsonFields"
+      required:
+        - service
+        - github
+      additionalProperties: false
+    github-repositoriesResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        installationId:
+          type: string
+          minLength: 1
+        repositories:
+          type: array
+          items:
+            $ref: "#/components/schemas/Repository"
+      required:
+        - installationId
+        - repositories
+      additionalProperties: false
+    github-webhooksResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        accepted:
+          type: boolean
+      required:
+        - accepted
+      additionalProperties:
+        $ref: "#/components/schemas/__shared#/$defs/schema6"
+    github-webhooksBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        action:
+          type: string
+        repository:
+          $ref: "#/components/schemas/JsonFields"
+        installation:
+          $ref: "#/components/schemas/JsonFields"
+      additionalProperties:
+        $ref: "#/components/schemas/__shared#/$defs/schema7"
+    github-importResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        service:
+          $ref: "#/components/schemas/Service"
+      required:
+        - service
+      additionalProperties:
+        $ref: "#/components/schemas/__shared#/$defs/schema8"
+    github-importBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        integrationId:
+          type: string
+          minLength: 1
+        repositoryId:
+          type: string
+          minLength: 1
+        branch:
+          type: string
+        projectId:
+          type: string
+          minLength: 1
+        serviceName:
+          type: string
+      required:
+        - integrationId
+        - repositoryId
+        - projectId
+      additionalProperties: false
+    github-syncResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        repository:
+          type: string
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/Service"
+        workflowJob:
+          $ref: "#/components/schemas/JsonFields"
+      required:
+        - repository
+        - services
+        - workflowJob
+      additionalProperties: false
+    github-syncBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        integrationId:
+          type: string
+          minLength: 1
+        branch:
+          type: string
+      additionalProperties: false
+    admin-approveBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        accountType:
+          type: string
+          enum:
+            - CLUB_MEMBER
+            - NON_CLUB
+        role:
+          type: string
+          enum:
+            - ADMIN
+            - USER
+      additionalProperties: false
+    admin-banBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+        expiresAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - reason
+      additionalProperties: false
+    admin-quotaResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        userId:
+          type: string
+          minLength: 1
+      required:
+        - userId
+      additionalProperties:
+        $ref: "#/components/schemas/__shared#/$defs/schema9"
+    admin-quota-postResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        userId:
+          type: string
+          minLength: 1
+      required:
+        - userId
+      additionalProperties:
+        $ref: "#/components/schemas/__shared#/$defs/schema10"
+    snapshotResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        quotas:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonFields"
+        auditLogs:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonFields"
+      required:
+        - users
+        - quotas
+        - auditLogs
+      additionalProperties:
+        $ref: "#/components/schemas/__shared#/$defs/schema11"
+    usage-meResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        unlimited:
+          type: boolean
+        quota:
+          $ref: "#/components/schemas/JsonFields"
+        usage:
+          $ref: "#/components/schemas/JsonFields"
+        current:
+          $ref: "#/components/schemas/JsonFields"
+        gauges:
+          type: array
+          items:
+            $ref: "#/components/schemas/JsonFields"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/__shared#/$defs/schema12"
+      required:
+        - unlimited
+        - quota
+        - usage
+        - current
+        - gauges
+        - warnings
+      additionalProperties:
+        $ref: "#/components/schemas/__shared#/$defs/schema13"
+    __shared:
+      $defs:
+        schema0:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a1
+                $ref: "#/components/schemas/__shared#/$defs/schema0"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a1
+        schema1:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a2
+                $ref: "#/components/schemas/__shared#/$defs/schema1"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a2
+        schema2:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a3
+                $ref: "#/components/schemas/__shared#/$defs/schema2"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a3
+        schema3:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a4
+                $ref: "#/components/schemas/__shared#/$defs/schema3"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a4
+        schema4:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a5
+                $ref: "#/components/schemas/__shared#/$defs/schema4"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a5
+        schema5:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a6
+                $ref: "#/components/schemas/__shared#/$defs/schema5"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a6
+        schema6:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a7
+                $ref: "#/components/schemas/__shared#/$defs/schema6"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a7
+        schema7:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a8
+                $ref: "#/components/schemas/__shared#/$defs/schema7"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a8
+        schema8:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a9
+                $ref: "#/components/schemas/__shared#/$defs/schema8"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a9
+        schema9:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a10
+                $ref: "#/components/schemas/__shared#/$defs/schema9"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a10
+        schema10:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a11
+                $ref: "#/components/schemas/__shared#/$defs/schema10"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a11
+        schema11:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a12
+                $ref: "#/components/schemas/__shared#/$defs/schema11"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a12
+        schema12:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a13
+                $ref: "#/components/schemas/__shared#/$defs/schema12"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a13
+        schema13:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a14
+                $ref: "#/components/schemas/__shared#/$defs/schema13"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a14
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    githubSignature:
+      type: apiKey
+      in: header
+      name: x-hub-signature-256

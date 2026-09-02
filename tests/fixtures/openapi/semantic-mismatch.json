@@ -1,0 +1,6 @@
+[
+  {"operation":"health","body":{"status":"broken","service":"raibitserver-api","uptimeSeconds":1}},
+  {"operation":"projects-list","body":{"projects":[],"nextCursor":123}},
+  {"operation":"deployments-get","body":{"id":"deployment","serviceId":"service","status":"invented-status"}},
+  {"operation":"services-logs-stream","body":{"service":null,"logs":"not-an-array","serviceCursor":"v1","logCursor":null,"stream":{"retryMs":3000,"heartbeatMs":15000,"maxLifetimeMs":900000,"slowClientTimeoutMs":5000}}}
+]
