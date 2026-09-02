@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { DeploymentStatus } from './lifecycle.ts';
+export * from './lifecycle.ts';
 
 export const AccountTypeSchema = z.enum(['CLUB_MEMBER', 'NON_CLUB']);
 export const ApprovalStatusSchema = z.enum(['APPROVED', 'PENDING', 'REJECTED']);
@@ -96,7 +98,6 @@ export type SourceType = 'github' | 'gitlab' | 'zip' | 'image' | 'local';
 export type BuildMode = 'auto' | 'dockerfile' | 'buildpack' | 'custom' | 'prebuilt-image' | 'generated' | 'framework';
 export type ResourceType = 'database' | 'cache' | 'storage' | 'vector' | 'queue';
 export type ResourceEngine = 'postgresql' | 'mysql' | 'mariadb' | 'mongodb' | 'redis' | 'valkey' | 'sqlite' | 'object-storage' | 'qdrant' | 'weaviate' | 'milvus' | 'nats' | 'rabbitmq' | 'kafka' | 'redpanda' | 'vector-db' | 'message-queue';
-export type DeploymentStatus = 'queued' | 'building' | 'deploying' | 'ready' | 'failed' | 'cancelled' | string;
 
 export type OrganizationCreate = z.input<typeof OrganizationCreateSchema>;
 export type ServiceSpec = z.input<typeof ServiceCreateSchema> & { id?: string; projectId?: string };

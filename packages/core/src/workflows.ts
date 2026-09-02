@@ -2,6 +2,7 @@ import { deepClone, nowIso, stableId } from './ids.ts';
 import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { sanitizeLogRecord } from './security.ts';
 import { normalizeInfrastructureError } from './error-spec.ts';
+import { LIFECYCLE_CONTRACT, WorkflowStatusSchema, parseWorkflowStatus } from '../../schemas/src/lifecycle.ts';
 
 export const WORKFLOW_TYPES = Object.freeze({
   BUILD_AND_DEPLOY: 'build-and-deploy',
@@ -11,15 +12,14 @@ export const WORKFLOW_TYPES = Object.freeze({
 });
 
 export const WORKFLOW_STATUSES = Object.freeze({
-  QUEUED: 'queued',
-  RUNNING: 'running',
-  SUCCEEDED: 'succeeded',
-  FAILED: 'failed',
-  CANCELLED: 'cancelled',
+  QUEUED: WorkflowStatusSchema.enum.queued,
+  RUNNING: WorkflowStatusSchema.enum.running,
+  SUCCEEDED: WorkflowStatusSchema.enum.succeeded,
+  FAILED: WorkflowStatusSchema.enum.failed,
+  CANCELLED: WorkflowStatusSchema.enum.cancelled,
 });
 
 const READY_STATUSES = new Set<string>([WORKFLOW_STATUSES.QUEUED]);
-const TERMINAL_STATUSES = new Set<string>([WORKFLOW_STATUSES.SUCCEEDED, WORKFLOW_STATUSES.FAILED, WORKFLOW_STATUSES.CANCELLED]);
 
 export function createWorkflowJobRecord(input: Record<string, any>) {
   const type = input.type || WORKFLOW_TYPES.BUILD_AND_DEPLOY;
@@ -44,15 +44,10 @@ export function createWorkflowJobRecord(input: Record<string, any>) {
   };
 }
 
-export function normalizeWorkflowStatus(status: any) {
-  const normalized = String(status || WORKFLOW_STATUSES.QUEUED).trim().toLowerCase();
-  if (normalized === 'completed' || normalized === 'complete' || normalized === 'success') return WORKFLOW_STATUSES.SUCCEEDED;
-  if (normalized === 'pending' || normalized === 'retrying') return WORKFLOW_STATUSES.QUEUED;
-  return normalized;
-}
+export const normalizeWorkflowStatus = parseWorkflowStatus;
 
 export function isWorkflowTerminal(job: Record<string, any>) {
-  return TERMINAL_STATUSES.has(normalizeWorkflowStatus(job.status));
+  return LIFECYCLE_CONTRACT.machines.workflow.states[normalizeWorkflowStatus(job.status)].terminal;
 }
 
 export function isWorkflowJobReady(job: Record<string, any>, options: Record<string, any> = {}) {

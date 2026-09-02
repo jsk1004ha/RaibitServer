@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { LIFECYCLE_CONTRACT, terminalLifecycleInputs } from '../../schemas/src/lifecycle.ts';
 import { AUTH_RETENTION_PRUNE_BATCH_SIZE, ControlPlaneStore } from './store.ts';
 import { deepClone, stableId } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
@@ -1964,8 +1965,8 @@ export async function createControlPlaneRepository(options: Record<string, any> 
 
 const deletionRequestedStatus = 'DELETE_REQUESTED';
 const deletionStatuses = [deletionRequestedStatus, 'DELETING'];
-const terminalDeploymentStatuses = ['READY', 'FAILED', 'CANCELLED', 'CLEANED_UP'];
-const terminalWorkflowStatuses = ['succeeded', 'completed', 'failed', 'cancelled'];
+const terminalDeploymentStatuses = terminalLifecycleInputs(LIFECYCLE_CONTRACT.machines.deployment.states, LIFECYCLE_CONTRACT.machines.deployment.aliases);
+const terminalWorkflowStatuses = terminalLifecycleInputs(LIFECYCLE_CONTRACT.machines.workflow.states, LIFECYCLE_CONTRACT.machines.workflow.aliases);
 
 function isDeleting(row: Record<string, any> | null | undefined) {
   return deletionStatuses.includes(String(row?.status || '').toUpperCase());
