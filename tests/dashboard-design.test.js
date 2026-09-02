@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import ts from 'typescript';
+import { RESOURCE_CAPABILITIES } from '../packages/core/src/resource-capabilities.ts';
 
 // allow: SIZE_OK — this is the plan-required route/form behavior ledger, not one production unit.
 const read = (path) => fs.readFile(new URL(path, import.meta.url), 'utf8');
@@ -391,10 +394,32 @@ test('project workflow controls derive tenant scope server-side and expose acces
   for (const option of [
     "['web', '웹']", "['private', '비공개 서비스']",
     "['worker', '워커']", "['cron', '예약 작업']",
-    "['job', '일회성 작업']", "['object-storage', '객체 저장소']",
+    "['job', '일회성 작업']",
   ]) {
     assert.ok(projectFeatures.includes(option), `${option} localized enum label missing`);
   }
+  const dashboardRequire = createRequire(new URL('../apps/dashboard/package.json', import.meta.url));
+  const React = dashboardRequire('react');
+  const { renderToStaticMarkup } = dashboardRequire('react-dom/server');
+  const ast = ts.createSourceFile('operations.tsx', operations, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let projection;
+  function visit(node) {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(ast) === 'Select') {
+      projection = node.children.find(child => ts.isJsxExpression(child) && child.expression)?.expression.getText(ast);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert.ok(projection, 'resource selector must have a generated option projection');
+  const compiled = ts.transpileModule(`const result = (${projection});`, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const options = new Function('React', 'RESOURCE_CAPABILITIES', `${compiled}\nreturn result;`)(React, RESOURCE_CAPABILITIES);
+  assert.deepEqual(options.map(option => option.props.value), RESOURCE_CAPABILITIES.map(entry => entry.engine));
+  for (const option of options) {
+    const supported = ['postgresql', 'mysql', 'mariadb', 'mongodb', 'sqlite', 'redis', 'valkey'].includes(option.props.value);
+    assert.equal(option.props.disabled, !supported, option.props.value);
+    assert.ok(renderToStaticMarkup(option).includes(supported ? '로컬 전용' : '준비 중'));
+  }
+  assert.match(renderToStaticMarkup(options.find(option => option.props.value === 'object-storage')), /객체 저장소 · 준비 중/);
 });
 
 test('deployment detail awaits route params and keeps operational controls on a compact Korean surface', async () => {

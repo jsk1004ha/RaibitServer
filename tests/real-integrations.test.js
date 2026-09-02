@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { once } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { commandExists, runCommand } from '../packages/core/src/command-runner.ts';
 import { cloneRepository, sourceCheckoutPlan } from '../packages/core/src/source-control.ts';
 import { buildExecutionPlan, executeBuildWorkflow } from '../packages/core/src/build-executor.ts';
@@ -14,6 +15,7 @@ import { compileProjectProvisioning, provisionProjectResources } from '../packag
 import { signJwtHs256, verifyJwtHs256 } from '../packages/core/src/auth.ts';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
+import { RESOURCE_CAPABILITIES } from '../packages/core/src/resource-capabilities.ts';
 
 const service = {
   name: 'web',
@@ -44,8 +46,11 @@ test('source checkout plans real git clone without leaking tokens', () => {
 });
 
 test('git clone adapter can execute a real local clone when git is available', async (t) => {
-  if (!(await commandExists('git'))) t.skip('git executable unavailable');
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'raibitserver-git-'));
+  if (!(await commandExists('git'))) return t.skip('git executable unavailable');
+  const root = path.join(os.tmpdir(), `raibitserver-git-${randomUUID()}`);
+  console.log(`INTEGRATION_TEMP ${root}`);
+  await fs.mkdir(root);
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo');
   const dest = path.join(root, 'clone');
   await fs.mkdir(repo, { recursive: true });
@@ -112,8 +117,12 @@ test('tenant service metadataFile is ignored by the TypeScript build executor', 
   assert.doesNotMatch(buildStep.command, /attacker-controlled-buildx-metadata/);
 });
 
-test('kubectl apply and DB provisioning paths create executable dry-run artifacts', async () => {
-  const apply = await applyProject(project, { web: { Dockerfile: 'FROM scratch' } });
+test('kubectl apply and DB provisioning paths create executable dry-run artifacts', async (t) => {
+  const outputDir = path.join(os.tmpdir(), `raibit-H1-integration-${randomUUID()}`);
+  console.log(`INTEGRATION_TEMP ${outputDir}`);
+  await fs.mkdir(outputDir);
+  t.after(() => fs.rm(outputDir, { recursive: true, force: true }));
+  const apply = await applyProject(project, { web: { Dockerfile: 'FROM scratch' } }, { outputDir, fileName: 'project.json' });
   assert.equal(apply.apply.dryRun, true);
   assert.match(apply.apply.command, /kubectl apply/);
   const written = JSON.parse(await fs.readFile(apply.apply.manifestFile, 'utf8'));
@@ -123,9 +132,12 @@ test('kubectl apply and DB provisioning paths create executable dry-run artifact
 
   const provisioning = compileProjectProvisioning(project);
   assert.equal(provisioning.manifests.some((manifest) => manifest.kind === 'ManagedDatabase'), true);
-  const storageProvisioning = compileProjectProvisioning({ ...project, resources: [{ name: 'assets', engine: 'object-storage' }] });
-  assert.equal(storageProvisioning.manifests.some((manifest) => manifest.kind === 'ManagedObjectStorage'), true);
-  const provision = await provisionProjectResources(project);
+  for (const entry of RESOURCE_CAPABILITIES) {
+    const compile = () => compileProjectProvisioning({ ...project, resources: [{ name: 'resource', engine: entry.engine }] });
+    if (entry.local.provision) assert.equal(compile().manifests[0].spec.engine, entry.engine);
+    else assert.throws(compile, error => error.statusCode === 400 && error.code === 'RESOURCE_CAPABILITY_UNAVAILABLE' && error.reasonCode === entry.reasonCode);
+  }
+  const provision = await provisionProjectResources(project, { outputDir, fileName: 'resources.json' });
   assert.equal(provision.apply.dryRun, true);
   assert.match(provision.apply.command, /kubectl apply/);
 });
