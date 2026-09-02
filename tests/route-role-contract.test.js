@@ -69,6 +69,11 @@ test('adversarial role and route matrix', async () => {
     assert.equal(result.statusCode, 400, slug);
     assert.deepEqual(rbac.parseOrganizationRouteSlug(slug), result, slug);
   }
+  for (const slug of ['valid-route', 'a'.repeat(63)]) {
+    const result = roles.parseOrganizationRouteSlug(slug);
+    assert.equal(result.statusCode, 200, slug);
+    assert.deepEqual(rbac.parseOrganizationRouteSlug(slug), result, slug);
+  }
   assert.equal(rbac.membershipRoleTransition({ actorRole: 'ADMIN', targetRole: 'OWNER', currentRole: 'VIEWER', ownerCount: 2 }).statusCode, 403);
   assert.equal(rbac.membershipRoleTransition({ actorRole: 'OWNER', targetRole: 'VIEWER', currentRole: 'OWNER', ownerCount: 1 }).statusCode, 409);
   assert.equal(rbac.membershipRoleTransition({ actorRole: 'VIEWER', targetRole: 'DEVELOPER', currentRole: 'VIEWER', ownerCount: 2 }).statusCode, 403);
