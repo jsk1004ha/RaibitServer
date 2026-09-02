@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { DeploymentStatusSchema } from './lifecycle.ts';
+// Generated package-local mirror; scripts/generate-resource-capabilities.mjs checks canonical byte parity.
+import resourceCapabilities from './resource-capabilities-v1.json' with { type: 'json' };
 
 const id = z.string().min(1);
 export const JsonValue = z.json();
@@ -51,7 +53,8 @@ export const AuthInput = z.object({ email: z.email(), password: z.string().min(1
 export const SignupInput = AuthInput.extend({ password: z.string().min(8), name: z.string().min(1), studentId: z.string().min(1), clubMemberClaim: z.boolean().optional(), organizationSlug: z.string().optional() });
 export const ProjectInput = z.object({ name: z.string().min(1), slug: z.string().optional(), organizationId: id.optional(), organizationSlug: z.string().optional(), description: z.string().optional(), services: z.array(JsonFields).optional(), resources: z.array(JsonFields).optional() }).catchall(json);
 export const ServiceInput = z.object({ name: z.string().min(1), type: z.enum(['web', 'private', 'worker', 'cron', 'job']).optional(), image: z.string().optional(), sourceType: z.string().optional(), port: z.number().int().positive().optional() }).catchall(json);
-export const ResourceInput = z.object({ name: z.string().min(1), engine: z.string().min(1), provider: z.string().optional(), plan: z.string().optional() }).catchall(json);
+export const LocalResourceEngine = z.enum(resourceCapabilities.engines.filter(entry => entry.local.provision).map(entry => entry.engine));
+export const ResourceInput = z.object({ name: z.string().min(1), engine: LocalResourceEngine, provider: z.string().optional(), plan: z.string().optional() }).catchall(json);
 export const DeploymentInput = z.object({ deploymentType: z.enum(['production', 'preview', 'manual']).optional(), triggerType: z.string().optional(), branch: z.string().optional(), commitSha: z.string().optional(), pullRequestNumber: z.number().int().positive().optional(), imageUrl: z.string().optional() });
 export const StatusInput = z.object({ status: DeploymentStatusSchema, imageUrl: z.string().optional(), imageDigest: z.string().optional(), errorCode: z.string().nullable().optional(), errorMessage: z.string().nullable().optional() });
 export const Confirmation = z.object({ confirmed: z.literal(true) });

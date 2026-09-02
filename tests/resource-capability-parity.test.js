@@ -15,12 +15,65 @@ import { buildResourceProviderPlan } from '../packages/core/src/resource-provide
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { assertCapabilityParity, capabilitySource, capabilityCopies } from '../scripts/generate-resource-capabilities.mjs';
+import { apiOperations, createOpenApiDocument, z } from '../packages/schemas/src/api-contract.ts';
+import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
 
 const supported = ['postgresql', 'mysql', 'mariadb', 'mongodb', 'sqlite', 'redis', 'valkey'];
 const canonicalBytes = await readFile(capabilitySource);
 const canonical = JSON.parse(canonicalBytes);
 const hash = createHash('sha256').update(canonicalBytes).digest('hex');
 console.log(`RESOURCE_CAPABILITY_SHA256=${hash}`);
+
+test('Given schema capability crossing, when canonical inputs are parsed, then generated OpenAPI and Zod accept only the seven local engines', () => {
+  const document = createOpenApiDocument();
+  for (const operationId of ['resources-create', 'resources-update']) {
+    const contract = apiOperations[operationId];
+    const schema = document.paths[contract.path][contract.method].requestBody.content['application/json'].schema;
+    const wire = z.fromJSONSchema(JSON.parse(JSON.stringify({ ...schema, $defs: document.components.schemas }).replaceAll('#/components/schemas/', '#/$defs/')));
+    for (const engine of [...supported, ...canonical.engines.filter(entry => !entry.local.provision).map(entry => entry.engine), 'pg', 'postgres', 'unknown']) {
+      const body = { name: 'crossing', engine };
+      const input = { path: operationId === 'resources-create' ? { projectId: 'crossing' } : { resourceId: 'crossing' }, query: {}, body };
+      assert.equal(contract.input.safeParse(input).success, supported.includes(engine), `${operationId}: ${engine}`);
+      assert.equal(wire.safeParse(body).success, supported.includes(engine), `OpenAPI ${operationId}: ${engine}`);
+    }
+  }
+  assert.equal(apiOperations['resources-get'].response.safeParse({ id: 'legacy', projectId: 'crossing', name: 'legacy', engine: 'qdrant', status: 'FAILED' }).success, true);
+});
+
+test('Given schema capability crossing, when generated contracts are inspected, then the fifth mirror and create error are explicit', () => {
+  const document = createOpenApiDocument();
+  assert.deepEqual(Object.keys(capabilityCopies).sort(), ['CLI', 'Go', 'Helm', 'Schemas', 'TypeScript']);
+  assert.deepEqual(document.components.schemas.LocalResourceEngine.enum, supported);
+  assert.equal(document['x-resource-capability-source'], 'test-fixtures/contracts/resource-capabilities-v1.json');
+  assert.equal(document.paths['/projects/{projectId}/resources'].post.responses['400'].content['application/json'].schema.$ref, '#/components/schemas/ErrorBody');
+});
+
+test('Given schema capability crossing, when the actual typed client submits engines, then unsupported and alias inputs never reach HTTP', async () => {
+  const observed = [];
+  const server = http.createServer(async (request, response) => {
+    let content = '';
+    for await (const chunk of request) content += chunk;
+    const body = JSON.parse(content);
+    observed.push(body.engine);
+    response.writeHead(201, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ id: 'desired', projectId: 'crossing', ...body, status: 'PENDING' }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const client = new RAIBITSERVERClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    for (const engine of [...supported, ...canonical.engines.filter(entry => !entry.local.provision).map(entry => entry.engine), 'pg', 'postgres']) {
+      const invoke = () => client.operations['resources-create']({ path: { projectId: 'crossing' }, query: {}, body: { name: 'crossing', engine } });
+      if (supported.includes(engine)) assert.equal((await invoke()).status, 'PENDING');
+      else await assert.rejects(invoke, error => error.name === 'ZodError', engine);
+    }
+    assert.deepEqual(observed, supported);
+    console.log(`TYPED_CAPABILITY_WIRE=${JSON.stringify(observed)}`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
 
 test('Given unsupported engines, when API input is parsed, then provisioning is rejected', () => {
   for (const engine of ['object-storage', 'qdrant', 'nats', 'vector-db', 'message-queue']) {

@@ -1,4 +1,5 @@
 openapi: 3.1.0
+x-resource-capability-source: test-fixtures/contracts/resource-capabilities-v1.json
 info:
   title: RAIBITSERVER API
   version: 0.4.0
@@ -1263,17 +1264,29 @@ paths:
               $ref: "#/components/schemas/ResourceInput"
       responses:
         "201":
-          description: Successful response
+          description: Resource desired state created; this does not confirm runtime
+            readiness or release support.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Resource"
+        "400":
+          description: Unsupported engine or managed backup/restore request rejected
+            before desired-state persistence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         default:
           description: Typed error response
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorBody"
+      description: Creates desired state for canonical local engines only.
+        Dedicated-local databases/cache and local SQLite are implemented;
+        unsupported catalog engines remain disabled. No release readiness or
+        managed backup/restore workflow is claimed.
       security:
         - bearerAuth: []
       x-permission: db:create
@@ -3040,6 +3053,17 @@ components:
             type: string
           additionalProperties:
             $ref: "#/components/schemas/JsonValue"
+    LocalResourceEngine:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: string
+      enum:
+        - postgresql
+        - mysql
+        - mariadb
+        - mongodb
+        - sqlite
+        - redis
+        - valkey
     Log:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -3349,8 +3373,7 @@ components:
           type: string
           minLength: 1
         engine:
-          type: string
-          minLength: 1
+          $ref: "#/components/schemas/LocalResourceEngine"
         provider:
           type: string
         plan:
@@ -3980,8 +4003,7 @@ components:
           type: string
           minLength: 1
         engine:
-          type: string
-          minLength: 1
+          $ref: "#/components/schemas/LocalResourceEngine"
         provider:
           type: string
         plan:
