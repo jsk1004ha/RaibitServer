@@ -87,8 +87,8 @@ export const apiOperations = {
   'admin-reject': operation({ method: 'post', path: '/admin/users/{userId}/reject', status: 201, permission: 'audit:read', input: input(user, M.Empty, M.Confirmation), response: M.User }),
   'admin-ban': operation({ method: 'post', path: '/admin/users/{userId}/ban', status: 201, permission: 'audit:read', input: input(user, M.Empty, z.object({ reason: z.string().min(1).max(500), expiresAt: z.iso.datetime().optional() })), response: M.User }),
   'admin-unban': operation({ method: 'post', path: '/admin/users/{userId}/unban', status: 201, permission: 'audit:read', input: input(user, M.Empty, M.Empty), response: M.User }),
-  'admin-quota': operation({ method: 'patch', path: '/admin/users/{userId}/quota', status: 200, permission: 'audit:read', input: input(user, M.Empty, M.JsonFields), response: z.object({ userId: id }).catchall(z.json()) }),
-  'admin-quota-post': operation({ method: 'post', path: '/admin/users/{userId}/quota', status: 201, permission: 'audit:read', input: input(user, M.Empty, M.JsonFields), response: z.object({ userId: id }).catchall(z.json()) }),
+  'admin-quota': operation({ method: 'patch', path: '/admin/users/{userId}/quota', status: 200, permission: 'audit:read', input: input(user, M.Empty, M.QuotaInput), response: M.Quota }),
+  'admin-quota-post': operation({ method: 'post', path: '/admin/users/{userId}/quota', status: 201, permission: 'audit:read', input: input(user, M.Empty, M.QuotaInput), response: M.Quota }),
   'snapshot': operation({ method: 'get', path: '/snapshot', status: 200, permission: 'audit:read', input: input(M.Empty, M.PageQuery.pick({ limit: true }), M.Empty), response: z.object({ users: z.array(M.User), quotas: z.array(M.JsonFields), auditLogs: z.array(M.JsonFields) }).catchall(z.json()) }),
   'usage-me': operation({ method: 'get', path: '/usage/me', status: 200, permission: 'metrics:read', input: noInput, response: z.object({ unlimited: z.boolean(), quota: M.JsonFields, usage: M.JsonFields, current: M.JsonFields, gauges: z.array(M.JsonFields), warnings: z.array(z.json()) }).catchall(z.json()) }),
 } as const;

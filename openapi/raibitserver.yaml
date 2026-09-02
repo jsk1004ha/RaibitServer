@@ -2,7 +2,9 @@ openapi: 3.1.0
 info:
   title: RAIBITSERVER API
   version: 0.4.0
-  description: Implemented Nest control-plane operations. Prototype-only and planned operations are not advertised. SSE returns snapshots/deltas; Last-Event-ID resume is not implemented.
+  description: Implemented Nest control-plane operations. Prototype-only and
+    planned operations are not advertised. SSE returns snapshots/deltas;
+    Last-Event-ID resume is not implemented.
 servers:
   - url: http://localhost:3000/api
 paths:
@@ -2388,14 +2390,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/JsonFields"
+              $ref: "#/components/schemas/QuotaInput"
       responses:
         "200":
           description: Successful response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/admin-quotaResponse"
+                $ref: "#/components/schemas/Quota"
         default:
           description: Typed error response
           content:
@@ -2420,14 +2422,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/JsonFields"
+              $ref: "#/components/schemas/QuotaInput"
       responses:
         "201":
           description: Successful response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/admin-quota-postResponse"
+                $ref: "#/components/schemas/Quota"
         default:
           description: Typed error response
           content:
@@ -3171,6 +3173,136 @@ components:
       required:
         - projects
         - nextCursor
+      additionalProperties: false
+    Quota:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        accountType:
+          type: string
+          enum:
+            - CLUB_MEMBER
+            - NON_CLUB
+        maxProjects:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxServices:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxDeploymentsPerDay:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxPreviewDeployments:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxCpuMillicores:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxMemoryMb:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxDbStorageMb:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxObjectStorageMb:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxBuildMinutesPerMonth:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxRuntimeHoursPerMonth:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        id:
+          type: string
+          minLength: 1
+        userId:
+          type: string
+          minLength: 1
+        createdAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        updatedAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - accountType
+        - maxProjects
+        - maxServices
+        - maxDeploymentsPerDay
+        - maxPreviewDeployments
+        - maxCpuMillicores
+        - maxMemoryMb
+        - maxDbStorageMb
+        - maxObjectStorageMb
+        - maxBuildMinutesPerMonth
+        - maxRuntimeHoursPerMonth
+        - id
+        - userId
+        - createdAt
+        - updatedAt
+      additionalProperties: false
+    QuotaInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        accountType:
+          type: string
+          enum:
+            - CLUB_MEMBER
+            - NON_CLUB
+        maxProjects:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxServices:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxDeploymentsPerDay:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxPreviewDeployments:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxCpuMillicores:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxMemoryMb:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxDbStorageMb:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxObjectStorageMb:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxBuildMinutesPerMonth:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        maxRuntimeHoursPerMonth:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
       additionalProperties: false
     Repository:
       $schema: https://json-schema.org/draft/2020-12/schema
@@ -4334,28 +4466,6 @@ components:
       required:
         - reason
       additionalProperties: false
-    admin-quotaResponse:
-      $schema: https://json-schema.org/draft/2020-12/schema
-      type: object
-      properties:
-        userId:
-          type: string
-          minLength: 1
-      required:
-        - userId
-      additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema9"
-    admin-quota-postResponse:
-      $schema: https://json-schema.org/draft/2020-12/schema
-      type: object
-      properties:
-        userId:
-          type: string
-          minLength: 1
-      required:
-        - userId
-      additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema10"
     snapshotResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4377,7 +4487,7 @@ components:
         - quotas
         - auditLogs
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema11"
+        $ref: "#/components/schemas/__shared#/$defs/schema9"
     usage-meResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4397,7 +4507,7 @@ components:
         warnings:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema12"
+            $ref: "#/components/schemas/__shared#/$defs/schema10"
       required:
         - unlimited
         - quota
@@ -4406,7 +4516,7 @@ components:
         - gauges
         - warnings
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema13"
+        $ref: "#/components/schemas/__shared#/$defs/schema11"
     __shared:
       $defs:
         schema0:
@@ -4565,32 +4675,6 @@ components:
               propertyNames:
                 type: string
               additionalProperties: *a12
-        schema12:
-          anyOf:
-            - type: string
-            - type: number
-            - type: boolean
-            - type: "null"
-            - type: array
-              items: &a13
-                $ref: "#/components/schemas/__shared#/$defs/schema12"
-            - type: object
-              propertyNames:
-                type: string
-              additionalProperties: *a13
-        schema13:
-          anyOf:
-            - type: string
-            - type: number
-            - type: boolean
-            - type: "null"
-            - type: array
-              items: &a14
-                $ref: "#/components/schemas/__shared#/$defs/schema13"
-            - type: object
-              propertyNames:
-                type: string
-              additionalProperties: *a14
   securitySchemes:
     bearerAuth:
       type: http

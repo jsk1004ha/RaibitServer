@@ -153,10 +153,12 @@ test('Given the running Nest graph, when contracts and HTTP are exercised, then 
     wire.closeAllConnections();
     await once(wire, 'close');
     report.cleanup = true;
-    const reportPath = process.env.RAIBIT_API_PARITY_REPORT || path.resolve('.omo/evidence/api-operation-parity.json');
-    await fs.mkdir(path.dirname(reportPath), { recursive: true });
-    await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
-    console.log(`Operation parity report: ${reportPath}; checked=${report.operations.length}; HTTP=${report.http.length}; cleanup=${report.cleanup}`);
+    const reportPath = process.env.RAIBIT_API_PARITY_REPORT;
+    if (reportPath) {
+      await fs.mkdir(path.dirname(reportPath), { recursive: true });
+      await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
+    } else console.log(JSON.stringify({ apiOperationParity: report }));
+    console.log(`Operation parity report: ${reportPath || 'stdout'}; checked=${report.operations.length}; HTTP=${report.http.length}; cleanup=${report.cleanup}`);
   }
 });
 

@@ -19,7 +19,9 @@
     "github-attach": {"integrationId":"integration","repositoryId":"123"},
     "github-import": {"integrationId":"integration","repositoryId":"123","projectId":"project"},
     "admin-reject": {"confirmed":true},
-    "admin-ban": {"reason":"parity test"}
+    "admin-ban": {"reason":"parity test"},
+    "admin-quota": {"maxProjects":3,"accountType":"CLUB_MEMBER"},
+    "admin-quota-post": {"maxServices":4,"accountType":"NON_CLUB"}
   },
   "wireQueries": {
     "github-authorize":{"installation_id":"123","setup_action":"install","state":"state +/?"},

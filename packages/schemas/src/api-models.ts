@@ -6,6 +6,16 @@ export const JsonValue = z.json();
 const json = JsonValue;
 export const Empty = z.object({}).strict();
 export const JsonFields = z.record(z.string(), json);
+const quotaLimit = z.number().int().min(0).max(2147483647);
+const quotaFields = {
+  accountType: z.enum(['CLUB_MEMBER', 'NON_CLUB']),
+  maxProjects: quotaLimit, maxServices: quotaLimit, maxDeploymentsPerDay: quotaLimit,
+  maxPreviewDeployments: quotaLimit, maxCpuMillicores: quotaLimit, maxMemoryMb: quotaLimit,
+  maxDbStorageMb: quotaLimit, maxObjectStorageMb: quotaLimit,
+  maxBuildMinutesPerMonth: quotaLimit, maxRuntimeHoursPerMonth: quotaLimit,
+};
+export const QuotaInput = z.strictObject(quotaFields).partial();
+export const Quota = z.strictObject({ ...quotaFields, id, userId: id, createdAt: z.iso.datetime(), updatedAt: z.iso.datetime() });
 export const PageQuery = z.object({ limit: z.number().int().min(1).max(1000).optional(), cursor: z.string().max(1024).optional(), after: z.string().max(1024).optional() }).strict();
 export const ErrorBody = z.union([
   z.object({ statusCode: z.number().int().min(400).max(599), message: z.union([z.string(), z.array(z.string())]), error: z.string().optional() }),
