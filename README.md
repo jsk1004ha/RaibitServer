@@ -325,6 +325,7 @@ private 저장소 빌드용 App ID와 RSA private key는 API 환경변수에 넣
    pnpm exec prisma migrate deploy --schema prisma/schema.prisma
    ```
    - `prisma/migration-contract.json`은 순서가 있는 migration ID와 LF 정규화 SHA-256, 애플리케이션 호환성 하한(`000008`), `forward-fix` 복구 방식을 기록합니다. 기존 migration은 수정하지 않고 새 항목을 추가합니다. migration을 먼저 적용한 뒤 reader, writer를 배포하며 애플리케이션 롤백 시 확장된 스키마를 유지합니다. 새 migration은 nullable 컬럼·테이블·인덱스만 허용하며 down migration, DROP, rename, 필수 컬럼 전환은 거부합니다.
+   - 인덱스 허용 문법은 `CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON table (column, ...) [WHERE column IS NOT NULL [AND ...]]`입니다. 이름은 schema 접두사 없는 일반 식별자 또는 큰따옴표 식별자이며, 함수·표현식·추가 옵션·알 수 없는 접미사는 거부합니다. 기존 테이블에는 non-unique 인덱스만 허용합니다. UNIQUE 인덱스는 같은 migration에서 앞서 `CREATE TABLE`로 만든 테이블에만 허용해 N−1 writer가 허용하던 중복 쓰기를 제한하지 않습니다. 새 테이블 정의의 PK·UNIQUE·NOT NULL·DEFAULT는 기존 writer를 제한하지 않으므로 유지합니다. 이 게이트는 전체 PostgreSQL 문법 검증기가 아니며, 실제 migration 적용 검증도 필요합니다.
    - `node --test tests/migration-compatibility.test.js tests/postgres-integration.test.js`는 `RAIBITSERVER_TEST_DATABASE_URL`을 지정하면 별도 임시 schema에서 fresh install, `000008` 업그레이드, 실제 N−1 Prisma client 읽기·쓰기 및 forward-fix를 검증합니다. URL이 없으면 DB 시나리오는 건너뛰며 오프라인 계약 검증만 수행합니다. CRD 게이트는 `test-fixtures/contracts/crd-schema-v1.json` 대비 기존 served/storage 버전과 필드를 보존하고 새 optional 필드만 허용합니다. CRD 적용 전에는 별도 로컬 클러스터에서 `kubectl apply --dry-run=server`로 CRD와 구형·확장 객체를 검증해야 합니다.
 3. **Secret 준비**
    - `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, GitHub/registry/provider secret을 secret manager에 저장합니다.

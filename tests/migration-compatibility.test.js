@@ -110,6 +110,36 @@ test('accept nullable forward expansion and optional CRD fields in the current v
   }
 });
 
+test('index gate rejects N-1 uniqueness restrictions and unsupported index grammar', async (t) => {
+  // Given digest-valid future migrations, when the gate/CLI runs, then unsafe indexes never reach apply.
+  for (const sql of [
+    'CREATE UNIQUE INDEX "User_name_unique" ON "User"("name");',
+    'CREATE UNIQUE INDEX "User_name_unique" ON "User"("name") WHERE "name" IS NOT NULL;',
+    'CREATE INDEX "User_email_idx" ON "User"(lower("email"));',
+    'CREATE INDEX "User_email_idx" ON "User"("email") UNSUPPORTED;',
+    'CREATE INDEX "User_email_idx" ON "User"("email") WHERE arbitrary_function();',
+    'CREATE INDEX "User_email_idx" ON "User";',
+  ]) {
+    await t.test(sql, (child) => {
+      const root = fixture(child);
+      const next = structuredClone(manifest);
+      const id = '000011_index_fixture';
+      mkdirSync(join(root, 'prisma/migrations', id));
+      writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
+      next.migrations.push({ id, sha256: digest(sql) });
+      writeFileSync(join(root, 'prisma/migration-contract.json'), JSON.stringify(next));
+      assert.equal(spawnSync(process.execPath, [join(projectRoot, 'scripts/check-migration-contract.mjs'), root], { encoding: 'utf8' }).status, 1);
+      assert.throws(() => checkMigrationContract(root));
+    });
+  }
+});
+
+test('index gate preserves additive non-unique indexes and new-table uniqueness', () => {
+  // Given old tables and a new table, when checked, then only the new table gains uniqueness constraints.
+  checkAdditiveSql('CREATE INDEX IF NOT EXISTS "User_name_idx" ON "User"("name", "email") WHERE "name" IS NOT NULL AND "email" IS NOT NULL;');
+  checkAdditiveSql('CREATE TABLE "Environments" ("id" TEXT NOT NULL, "name" TEXT NOT NULL DEFAULT \'\', CONSTRAINT "Environments_pkey" PRIMARY KEY ("id"), CONSTRAINT "Environments_name_key" UNIQUE ("name")); CREATE UNIQUE INDEX "Environments_id_name_key" ON "Environments"("id", "name");');
+});
+
 test('fresh install and 000008 upgrade preserve N-1 Prisma readers/writers through forward-fix', { skip: !process.env.RAIBITSERVER_TEST_DATABASE_URL }, async (t) => {
   // Given an explicitly supplied disposable DB, isolate every scenario in owned schemas.
   const { PrismaClient } = await import('@prisma/client');

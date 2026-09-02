@@ -17,9 +17,19 @@ export function checkAdditiveSql(sql) {
   const identifier = '(?:"[A-Za-z_][A-Za-z_0-9]*"|[A-Za-z_][A-Za-z_0-9]*)';
   const column = `${identifier}\\s+(?:TEXT|INTEGER|BIGINT|BOOLEAN|JSONB|TIMESTAMP(?:\\(\\d+\\))?|DOUBLE PRECISION)(?:\\s+DEFAULT\\s+(?:''|NULL|true|false|[0-9]+|CURRENT_TIMESTAMP))?`;
   const add = new RegExp(`^ALTER\\s+TABLE\\s+${identifier}\\s+ADD\\s+COLUMN\\s+${column}(?:\\s*,\\s*ADD\\s+COLUMN\\s+${column})*$`, 'i');
+  const createTable = new RegExp(`^CREATE\\s+TABLE\\s+(${identifier})\\s*\\([\\s\\S]+\\)$`, 'i');
+  const columns = `${identifier}(?:\\s*,\\s*${identifier})*`;
+  const predicate = `${identifier}\\s+IS\\s+NOT\\s+NULL`;
+  const createIndex = new RegExp(`^CREATE\\s+(UNIQUE\\s+)?INDEX\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${identifier}\\s+ON\\s+(${identifier})\\s*\\(\\s*${columns}\\s*\\)(?:\\s+WHERE\\s+${predicate}(?:\\s+AND\\s+${predicate})*)?$`, 'i');
+  const tableIdentity = (name) => name.startsWith('"') ? name.slice(1, -1) : name.toLowerCase();
+  const createdTables = new Set();
   for (const statement of code.split(';').map((part) => part.trim()).filter(Boolean)) {
-    assert.ok(add.test(statement) || /^CREATE\s+TABLE\s+"?[A-Za-z_]\w*"?\s*\([\s\S]+\)$/i.test(statement)
-      || /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?"?[A-Za-z_]\w*"?\s+ON\s+/i.test(statement), 'migration must use additive nullable columns, tables or indexes');
+    const table = createTable.exec(statement);
+    const index = createIndex.exec(statement);
+    assert.ok(add.test(statement) || table || index, 'migration must use additive nullable columns, tables or supported indexes');
+    if (table) createdTables.add(tableIdentity(table[1]));
+    // A new table has no N-1 writers; an existing table can contain permitted duplicates.
+    if (index?.[1]) assert.ok(createdTables.has(tableIdentity(index[2])), 'UNIQUE index requires a table created earlier in this migration');
   }
   assert.ok(code.trim(), 'empty migration');
 }
