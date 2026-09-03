@@ -73,11 +73,11 @@ export function ResourceProvisionActions({ action, availability, resourceStatus 
 
   return (
     <Card id="provisioning">
-      <CardHeader><CardTitle><h2>프로비저닝</h2></CardTitle><CardDescription>계획 미리보기와 실제 실행 요청은 별도 작업입니다.</CardDescription></CardHeader>
+      <CardHeader><CardTitle><h2>프로비저닝</h2></CardTitle><CardDescription className="break-keep">계획 미리보기와 실제 실행 요청은 별도 작업입니다.</CardDescription></CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-raibit-lg">
-        <p className="text-sm text-muted-foreground">미리보기는 저장된 상태와 실행 대기열을 바꾸지 않습니다. 실제 실행 요청은 Go 공급자에 전달할 희망 상태를 저장하며, 연결 검증 전에는 준비 완료가 아닙니다.</p>
-        <Alert><AlertTitle>현재 서버: {allowed?.environment === 'local' ? '로컬 전용' : allowed?.environment === 'release' ? '운영 릴리스' : '설정 확인 필요'}</AlertTitle><AlertDescription>{canLive ? '로컬 검증용 실행 요청이 가능합니다. 운영 릴리스 지원을 의미하지 않습니다.' : '현재 엔진, 권한 또는 리소스 상태에서는 실제 실행을 요청할 수 없습니다.'}<span className="block break-all font-mono text-xs">{allowed?.reasonCode ?? 'RESOURCE_ENVIRONMENT_UNAVAILABLE'}</span></AlertDescription></Alert>
-        <div aria-live="polite" aria-atomic="true" className="min-w-0">
+        <p className="break-keep text-sm text-muted-foreground">미리보기는 저장된 상태와 실행 대기열을 바꾸지 않습니다. 실제 실행 요청은 Go 공급자에 전달할 희망 상태를 저장하며, 연결 검증 전에는 준비 완료가 아닙니다.</p>
+        <Alert className="break-keep"><AlertTitle>현재 서버: {allowed?.environment === 'local' ? '로컬 전용' : allowed?.environment === 'release' ? '운영 릴리스' : '설정 확인 필요'}</AlertTitle><AlertDescription>{canLive ? '로컬 검증용 실행 요청이 가능합니다. 운영 릴리스 지원을 의미하지 않습니다.' : '현재 엔진, 권한 또는 리소스 상태에서는 실제 실행을 요청할 수 없습니다.'}<span className="block break-all font-mono text-xs">{allowed?.reasonCode ?? 'RESOURCE_ENVIRONMENT_UNAVAILABLE'}</span></AlertDescription></Alert>
+        <div aria-live="polite" aria-atomic="true" className="min-w-0 break-keep">
           {busy ? <p role="status" className="text-sm">{state.intent === 'preview-plan' ? '계획을 확인하고 있습니다.' : '실제 실행을 요청하고 있습니다.'}</p> : null}
           {state.status === 'error' ? <Alert variant="destructive"><AlertTitle>요청 확인 필요</AlertTitle><AlertDescription>{state.message}</AlertDescription></Alert> : null}
           {state.status === 'result' ? <Alert><AlertTitle>{state.result.intent === 'preview-plan' ? '계획 미리보기 완료 · 실행하지 않음' : '실행 요청 접수 · 준비 완료 아님'}</AlertTitle><AlertDescription>{state.result.intent === 'preview-plan' ? '리소스 상태와 실행 대기열은 변경되지 않았습니다.' : '상태는 PROVISIONING입니다. 실제 준비 여부는 공급자의 연결 검증 후 확인하세요.'}</AlertDescription></Alert> : null}

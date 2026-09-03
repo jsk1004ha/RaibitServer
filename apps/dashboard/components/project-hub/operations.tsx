@@ -74,7 +74,7 @@ function NewResourceView({ data }: Readonly<{ data: ProjectHubData }>) {
               </option>)}
             </Select>
             <FieldDescription className="break-keep" id="resource-capability-help">추가하면 실제 실행 희망 상태가 저장됩니다. 준비 완료는 공급자 검증 후 표시됩니다. SQLite는 로컬 파일 전용이며 관리형 백업·복구는 아직 제공하지 않습니다.</FieldDescription>
-            {liveEngines.size === 0 ? <FieldDescription>서버 설정 또는 권한상 생성할 수 있는 엔진이 없습니다. 운영 릴리스 지원은 아직 검증되지 않았습니다.</FieldDescription> : null}
+            {liveEngines.size === 0 ? <FieldDescription className="break-keep">서버 설정 또는 권한상 생성할 수 있는 엔진이 없습니다. 운영 릴리스 지원은 아직 검증되지 않았습니다.</FieldDescription> : null}
           </Field>
           <Field>
             <FieldLabel>준비 중인 엔진</FieldLabel>
