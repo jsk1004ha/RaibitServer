@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/raibitserver/orchestrator/internal/command"
+	"github.com/raibitserver/orchestrator/internal/health"
 	"github.com/raibitserver/orchestrator/internal/kube"
 	"github.com/raibitserver/orchestrator/internal/store"
 )
@@ -35,21 +36,24 @@ type Config struct {
 }
 
 type ServiceReconciler struct {
-	config Config
-	store  store.ReconcileStore
-	runner command.Runner
+	checker health.Checker
+	now     func() time.Time
+	config  Config
+	store   store.ReconcileStore
+	runner  command.Runner
 }
 
 type ReconcileResult struct {
-	Processed    int      `json:"processed"`
-	ProjectID    string   `json:"projectId,omitempty"`
-	ServiceID    string   `json:"serviceId,omitempty"`
-	DeploymentID string   `json:"deploymentId,omitempty"`
-	Status       string   `json:"status,omitempty"`
-	ManifestFile string   `json:"manifestFile,omitempty"`
-	Commands     []string `json:"commands,omitempty"`
-	DryRun       bool     `json:"dryRun"`
-	Reason       string   `json:"reason,omitempty"`
+	PublicHealthStatus string   `json:"publicHealthStatus,omitempty"`
+	Processed          int      `json:"processed"`
+	ProjectID          string   `json:"projectId,omitempty"`
+	ServiceID          string   `json:"serviceId,omitempty"`
+	DeploymentID       string   `json:"deploymentId,omitempty"`
+	Status             string   `json:"status,omitempty"`
+	ManifestFile       string   `json:"manifestFile,omitempty"`
+	Commands           []string `json:"commands,omitempty"`
+	DryRun             bool     `json:"dryRun"`
+	Reason             string   `json:"reason,omitempty"`
 }
 
 type readinessContract struct {
@@ -92,7 +96,7 @@ func NewServiceReconcilerWithStore(config Config, state store.ReconcileStore, ru
 	if runner == nil {
 		runner = command.OSRunner{}
 	}
-	return &ServiceReconciler{config: config, store: state, runner: runner}
+	return &ServiceReconciler{config: config, store: state, runner: runner, checker: health.NewChecker(), now: time.Now}
 }
 
 func (r *ServiceReconciler) RunOnce(ctx context.Context) error {
@@ -124,6 +128,11 @@ func (r *ServiceReconciler) RunOnceResult(ctx context.Context) (*ReconcileResult
 	}
 	if project != nil {
 		return r.reconcileProjectDeletion(ctx, project)
+	}
+	if !r.config.DryRun {
+		if result, err := r.runNextHealth(ctx); result != nil || err != nil {
+			return result, err
+		}
 	}
 	deployment, err := r.store.ClaimNextDeployment(ctx, claimOptions)
 	if err != nil {
@@ -507,76 +516,6 @@ func (r *ServiceReconciler) reconcileDeployment(ctx context.Context, deployment 
 		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, &deployment, failure)
 	}
 	return r.applyAndWatch(ctx, project, service, &deployment, action == store.DeploymentActionRollback)
-}
-
-func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Project, service *store.Service, deployment *store.Deployment, rollback bool) (*ReconcileResult, error) {
-	if deployment.ImageURL == "" {
-		failure := errors.New("image-ready deployment is missing imageUrl")
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, failure)
-	}
-	image, err := kube.ResolveImageReference(firstNonEmpty(deployment.ImageURL, service.ImageURL), deployment.ImageDigest, r.config.DryRun)
-	if err != nil {
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err)
-	}
-	spec := kube.SpecFromState(project, service, deployment, r.config.BaseDomain)
-	spec.Image = image
-	plan := r.newDeploymentPlan(spec)
-	if !plan.Safe {
-		failure := errors.New(plan.Error)
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, failure, "workload.failed")
-	}
-	pruneSelector, err := productionPruneSelector(plan)
-	if err != nil {
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err, "workload.failed")
-	}
-	manifestFile, err := r.writeManifest(deployment.ID, plan.Manifests, "apply")
-	if err != nil {
-		return nil, err
-	}
-	_ = r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "orchestrator.apply.started", Message: "applying Kubernetes desired state", Metadata: map[string]any{"manifestFile": manifestFile, "rollback": rollback, "dryRun": r.config.DryRun, "workloadKind": plan.Kind, "workloadName": plan.WorkloadName}})
-	applyResult, err := r.runKubectl(ctx, []string{"apply", "--server-side", "-f", manifestFile})
-	commands := []string{applyResult.Command}
-	_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment.ID, "kubectl-apply", applyResult)
-	if err != nil {
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err)
-	}
-	if pruneSelector != "" {
-		pruneResult, pruneErr := r.runKubectl(ctx, []string{
-			"delete", productionReconcileResourceKinds,
-			"--namespace", plan.Service.Namespace,
-			"--selector", pruneSelector,
-			"--ignore-not-found=true", "--wait=true",
-		})
-		commands = append(commands, pruneResult.Command)
-		_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment.ID, "kubectl-prune", pruneResult)
-		if pruneErr != nil {
-			return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, pruneErr, "workload.failed")
-		}
-	}
-	readiness, err := readinessFor(plan, r.config.Timeout)
-	if err != nil {
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err, "workload.failed")
-	}
-	readinessResult, err := r.runKubectl(ctx, readiness.args)
-	commands = append(commands, readinessResult.Command)
-	_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment.ID, readiness.step, readinessResult)
-	if err != nil {
-		_ = r.collectDiagnostics(ctx, service, deployment, plan)
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err, readiness.failedEvent)
-	}
-	_ = r.collectDiagnostics(ctx, service, deployment, plan)
-	if result, err := r.abortIfParentDeleting(ctx, project, service, deployment, manifestFile, commands); result != nil || err != nil {
-		return result, err
-	}
-	_, err = r.store.TransitionDeployment(ctx, deployment.Lease(), map[string]any{"status": store.DeploymentStatusReady, "deployedAt": time.Now().UTC().Format(time.RFC3339Nano), "finishedAt": time.Now().UTC().Format(time.RFC3339Nano), "errorCode": nil, "errorMessage": nil})
-	if err != nil {
-		if result, parentErr := r.abortIfParentDeleting(ctx, project, service, deployment, manifestFile, commands); result != nil || parentErr != nil {
-			return result, parentErr
-		}
-		return nil, err
-	}
-	_ = r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: readiness.readyEvent, Message: readiness.readyMessage, Metadata: map[string]any{"namespace": plan.Service.Namespace, "service": plan.Service.Name, "host": plan.Service.Host, "rollback": rollback, "workloadKind": plan.Kind, "workloadName": plan.WorkloadName}})
-	return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, DryRun: r.config.DryRun, Status: store.DeploymentStatusReady}, nil
 }
 
 func productionPruneSelector(plan kube.DeploymentPlan) (string, error) {
