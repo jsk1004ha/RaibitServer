@@ -58,6 +58,21 @@ model EmailVerificationCode {
   @@index([expiresAt])
 }
 
+model OAuthTransaction {
+  id            String   @id @default(uuid())
+  stateHash     String   @unique
+  sourceHash    String
+  codeChallenge String
+  redirectUri   String
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  failureCode   String?
+  failedAt      DateTime?
+
+  @@index([expiresAt])
+}
+
 model AuthRateLimit {
   key             String   @id
   count           Int      @default(0)

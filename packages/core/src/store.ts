@@ -1,4 +1,6 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
+import { createMemoryOAuthTransaction, consumeMemoryOAuthTransaction, deleteMemoryOAuthTransactions } from './oauth-transaction.ts';
+import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput, OAuthTransactionRecord } from './oauth-transaction.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecord } from './security.ts';
 import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
@@ -58,6 +60,7 @@ export class ControlPlaneStore {
   emailVerificationCodes: any[];
   emailDeliveries: any[];
   authRateLimits: Map<string, any>;
+  oauthTransactions = new Map<string, OAuthTransactionRecord>();
 
   constructor() {
     this.organizations = new Map();
@@ -158,6 +161,10 @@ export class ControlPlaneStore {
     user.updatedAt = nowIso();
     return deepClone(redactUser(user));
   }
+
+  createOAuthTransaction(input: CreateOAuthTransactionInput) { return createMemoryOAuthTransaction(this.oauthTransactions, input); }
+  consumeOAuthTransaction(input: ConsumeOAuthTransactionInput) { return consumeMemoryOAuthTransaction(this.oauthTransactions, input); }
+  deleteExpiredOAuthTransactions(input: OAuthCleanupInput = {}) { return deleteMemoryOAuthTransactions(this.oauthTransactions, input); }
 
   consumeAuthRateLimit({ key, limit = 10, windowMs = 60_000, now = Date.now() }: Record<string, any>) {
     const normalizedKey = String(key || 'global');

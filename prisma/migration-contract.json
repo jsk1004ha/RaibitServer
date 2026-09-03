@@ -49,6 +49,10 @@
     {
       "id": "000010_user_bans",
       "sha256": "6256cfeb157622c42185f8bef86c1d8cb1db56361b9c3f8a9fc65e2f3b08cd05"
+    },
+    {
+      "id": "000011_oauth_transactions",
+      "sha256": "49d1eceacdb848782fe663a0c39cd82eefe3b21453eac6ae338d7babdfb1f893"
     }
   ]
 }

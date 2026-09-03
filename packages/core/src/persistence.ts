@@ -1,4 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
+import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput } from './oauth-transaction.ts';
+import { createPrismaOAuthTransaction, consumePrismaOAuthTransaction, deletePrismaOAuthTransactions } from './prisma-oauth-transaction.ts';
 import { LIFECYCLE_CONTRACT, terminalLifecycleInputs } from './lifecycle.ts';
 import { AUTH_RETENTION_PRUNE_BATCH_SIZE, ControlPlaneStore } from './store.ts';
 import { deepClone, stableId } from './ids.ts';
@@ -106,6 +108,9 @@ export class InMemoryControlPlaneRepository {
   async countUsers(limit = 1) { return this.store.countUsers(limit); }
   async findUserById(userId: string) { return this.store.findUserById(userId); }
   async incrementSessionVersion(userId: string) { return this.store.incrementSessionVersion(userId); }
+  async createOAuthTransaction(input: CreateOAuthTransactionInput) { return this.store.createOAuthTransaction(input); }
+  async consumeOAuthTransaction(input: ConsumeOAuthTransactionInput) { return this.store.consumeOAuthTransaction(input); }
+  async deleteExpiredOAuthTransactions(input: OAuthCleanupInput = {}) { return this.store.deleteExpiredOAuthTransactions(input); }
   async consumeAuthRateLimit(input: Record<string, any>) { return this.store.consumeAuthRateLimit(input); }
   async peekAuthRateLimit(input: Record<string, any>) { return this.store.peekAuthRateLimit(input); }
   async resetAuthRateLimit(key: string) { return this.store.resetAuthRateLimit(key); }
@@ -401,6 +406,10 @@ export class PrismaControlPlaneRepository {
     const user = await this.prisma.user.update({ where: { id: String(userId) }, data: { sessionVersion: { increment: 1 } } });
     return redactUser(user);
   }
+
+  async createOAuthTransaction(input: CreateOAuthTransactionInput) { return createPrismaOAuthTransaction(this.prisma, input); }
+  async consumeOAuthTransaction(input: ConsumeOAuthTransactionInput) { return consumePrismaOAuthTransaction(this.prisma, input); }
+  async deleteExpiredOAuthTransactions(input: OAuthCleanupInput = {}) { return deletePrismaOAuthTransactions(this.prisma, input); }
 
   async consumeAuthRateLimit(input: Record<string, any>) {
     const key = String(input.key || 'global');
