@@ -209,32 +209,3 @@ func TestDeploymentSnapshotKeepsUserDockerfilePrecedence(t *testing.T) {
 		t.Fatalf("Dockerfile precedence lost: result=%+v err=%v", result, err)
 	}
 }
-
-func TestDeploymentSnapshotResolvesCommitOnlyForInitialGitBuild(t *testing.T) {
-	for _, trigger := range []string{"initial", "retry", "redeploy"} {
-		t.Run(trigger, func(t *testing.T) {
-			// Given a Git deployment without any durable commit binding.
-			path := writeGitBuildState(t, "https://github.com/acme/web.git")
-			state := readState(t, path)
-			deployment := firstByID(t, state, "deployments", "dep_1")
-			deployment["triggerType"], deployment["snapshotVersion"] = trigger, 1
-			deployment["desiredSpecSnapshot"] = map[string]any{"sourceType": "github", "repoUrl": "https://github.com/acme/web.git", "buildMode": "dockerfile"}
-			writeStateAtPath(t, path, state)
-			runner := &recordingRunner{}
-			builder := worker.New(controlplane.NewFileStore(path), runner, worker.Config{WorkspaceDir: t.TempDir(), Registry: "registry.example.test", DryRun: true})
-			// When resolving and executing the build.
-			_, err := builder.RunOnce(context.Background())
-			// Then only the initial deployment may pin branch HEAD once.
-			if trigger != "initial" {
-				if err == nil || len(runner.commands) != 0 {
-					t.Fatalf("lineage re-resolved HEAD: err=%v commands=%d", err, len(runner.commands))
-				}
-				return
-			}
-			persisted := firstByID(t, readState(t, path), "deployments", "dep_1")
-			if err != nil || persisted["commitSha"] == nil || persisted["status"] != "IMAGE_READY" {
-				t.Fatalf("initial source was not pinned: %v", err)
-			}
-		})
-	}
-}

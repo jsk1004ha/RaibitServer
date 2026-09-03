@@ -95,14 +95,48 @@ func (d *Deployment) hasSnapshotLineage() bool {
 	return d.SourceDeploymentID != "" || d.RetryOfDeploymentID != "" || strings.EqualFold(trigger, "retry") || strings.EqualFold(trigger, "redeploy")
 }
 
+func (spec *DeploymentBuildSpec) usesGitSource(imageURL string) bool {
+	if strings.TrimSpace(spec.LocalPath) != "" {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(spec.SourceType))
+	mode := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(spec.BuildMode), "_", "-"))
+	if source == "image" {
+		return false
+	}
+	switch mode {
+	case "image", "prebuilt", "prebuilt-image":
+		return false
+	}
+	repository := coalesceString(spec.RepoURL, spec.RepositoryURL)
+	if repository == "" && strings.TrimSpace(imageURL) != "" {
+		return false
+	}
+	return repository != "" || source == "github" || source == "git"
+}
+
+func (d *Deployment) normalizeSnapshotGitPin() error {
+	commit, err := NormalizeGitCommitSHA(coalesceString(d.CommitSHA, d.CommitHash))
+	if err != nil || strings.Trim(commit, "0") == "" {
+		return fmt.Errorf("lineaged Git build requires a full nonzero commit: %w", ErrDeploymentSnapshot)
+	}
+	if strings.TrimSpace(d.CommitSHA) != "" && strings.TrimSpace(d.CommitHash) != "" && strings.ToLower(strings.TrimSpace(d.CommitHash)) != commit {
+		return fmt.Errorf("lineaged Git build has conflicting stored commits: %w", ErrDeploymentSnapshot)
+	}
+	d.CommitSHA, d.CommitHash = commit, commit
+	return nil
+}
+
 // BuildInputs overlays execution fields only; security authority stays live.
 func (d *Deployment) BuildInputs(live *Service, job *WorkflowJob) (*Service, *WorkflowJob, error) {
 	spec, err := d.BuildSpec()
 	if err != nil || spec == nil {
 		return live, job, err
 	}
-	if d.hasSnapshotLineage() && coalesceString(spec.RepoURL, spec.RepositoryURL) != "" && coalesceString(d.CommitSHA, d.CommitHash) == "" {
-		return nil, nil, fmt.Errorf("lineaged Git build requires a durable commit: %w", ErrDeploymentSnapshot)
+	if d.hasSnapshotLineage() && spec.usesGitSource(d.ImageURL) {
+		if err := d.normalizeSnapshotGitPin(); err != nil {
+			return nil, nil, err
+		}
 	}
 	for _, binding := range [][2]string{
 		{coalesceString(spec.GitHubIntegrationID, spec.GitHub.IntegrationID), live.GitHubIntegrationID},
@@ -115,7 +149,7 @@ func (d *Deployment) BuildInputs(live *Service, job *WorkflowJob) (*Service, *Wo
 		}
 	}
 	service := *live
-	service.SourceType, service.BuildMode = spec.SourceType, coalesceString(spec.BuildMode, "auto")
+	service.SourceType, service.BuildMode = strings.TrimSpace(spec.SourceType), coalesceString(strings.TrimSpace(spec.BuildMode), "auto")
 	service.RepoURL = coalesceString(spec.RepoURL, spec.RepositoryURL)
 	service.RootDirectory, service.BuildContext, service.DockerfilePath = spec.RootDirectory, spec.BuildContext, spec.DockerfilePath
 	service.InstallCommand, service.BuildCommand = spec.InstallCommand, coalesceString(spec.BuildCommand, spec.CustomBuildCommand)
