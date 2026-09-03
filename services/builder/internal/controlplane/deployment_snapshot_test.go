@@ -148,7 +148,7 @@ func (row snapshotScanRow) Scan(dest ...any) error {
 				return fmt.Errorf("column %d is not text", index)
 			}
 			*target = text
-		case *json.RawMessage:
+		case *[]byte:
 			data, ok := value.([]byte)
 			if !ok {
 				return fmt.Errorf("column %d is not JSON", index)

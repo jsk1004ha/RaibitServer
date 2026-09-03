@@ -444,7 +444,7 @@ UPDATE "Deployment"
 SET ` + strings.Join(append(assignments, `"updatedAt" = $`+strconv.Itoa(len(args)-1)), ", ") + `
 WHERE id = $` + strconv.Itoa(len(args)) + `
 RETURNING id, "serviceId", "projectId", status, "deploymentType", "triggerType", branch, "commitSha", "commitHash",
-          "pullRequestNumber", "previewUrl", "imageUrl", "imageDigest"`
+          "pullRequestNumber", "previewUrl", "imageUrl", "imageDigest", "desiredSpecSnapshot", "snapshotVersion", "sourceDeploymentId", "retryOfDeploymentId"`
 	deployment, err := scanDeployment(queryer.QueryRowContext(ctx, sqlText, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, notFound("deployment", deploymentID)
@@ -878,11 +878,12 @@ func scanDeployment(row scanner) (*Deployment, error) {
 	var commitSha, commitHash, previewURL, imageURL, imageDigest sql.NullString
 	var pr sql.NullInt64
 	var snapshotVersion sql.NullInt64
+	var desiredSpecSnapshot []byte
 	var sourceDeploymentID, retryOfDeploymentID sql.NullString
 	err := row.Scan(
 		&deployment.ID, &deployment.ServiceID, &deployment.ProjectID, &deployment.Status, &deployment.DeploymentType, &deployment.TriggerType,
 		&deployment.Branch, &commitSha, &commitHash, &pr, &previewURL, &imageURL, &imageDigest,
-		&deployment.DesiredSpecSnapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID,
+		&desiredSpecSnapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID,
 	)
 	if err != nil {
 		return nil, err
@@ -895,6 +896,7 @@ func scanDeployment(row scanner) (*Deployment, error) {
 	deployment.PreviewURL = nullString(previewURL)
 	deployment.ImageURL = nullString(imageURL)
 	deployment.ImageDigest = nullString(imageDigest)
+	deployment.DesiredSpecSnapshot = desiredSpecSnapshot
 	if snapshotVersion.Valid {
 		version := int(snapshotVersion.Int64)
 		deployment.SnapshotVersion = &version
