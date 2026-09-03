@@ -69,10 +69,22 @@ func (r *policyProcessRunner) Run(ctx context.Context, command worker.Command, o
 }
 
 func TestSupplyChainPolicyPublication(t *testing.T) {
-	for _, scenario := range []string{"success", "verify-failure", "digest-mismatch", "missing-key", "wrong-key", "severity-bypass", "cancel-after-verify", "lease-after-verify", "delete-after-verify"} {
+	for _, scenario := range []string{"success", "snapshot-composition", "verify-failure", "digest-mismatch", "missing-key", "wrong-key", "severity-bypass", "cancel-after-verify", "lease-after-verify", "delete-after-verify"} {
 		t.Run(scenario, func(t *testing.T) {
 			// Given: a local process fixture plus the real file-backed worker store.
 			workspace, stateFile := writeLocalDockerfileBuildState(t, nil)
+			if scenario == "snapshot-composition" {
+				state := readState(t, stateFile)
+				deployment := firstByID(t, state, "deployments", "dep_1")
+				deployment["snapshotVersion"], deployment["sourceDeploymentId"], deployment["triggerType"] = 1, "dep_source", "retry"
+				deployment["desiredSpecSnapshot"] = map[string]any{"sourceType": "local", "localPath": filepath.Join(workspace, "source"), "buildMode": "dockerfile", "dockerfilePath": "Dockerfile", "buildArgs": map[string]any{"PUBLIC_VERSION": "frozen"}}
+				service := firstByID(t, state, "services", "svc_1")
+				service["localPath"], service["buildMode"], service["dockerfilePath"] = filepath.Join(workspace, "live-source"), "generated", "live.Dockerfile"
+				payload := firstByID(t, state, "workflowJobs", "job_1")["payload"].(map[string]any)
+				payload["localPath"], payload["buildMode"], payload["dockerfilePath"] = filepath.Join(workspace, "job-source"), "generated", "job.Dockerfile"
+				payload["buildArgs"] = map[string]any{"PUBLIC_VERSION": "job"}
+				writeStateAtPath(t, stateFile, state)
+			}
 			digest := "sha256:" + strings.Repeat("a", 64)
 			fixture := filepath.Join(t.TempDir(), "policy-command")
 			if err := os.WriteFile(fixture, []byte(policyCommandFixture), 0o700); err != nil {
@@ -124,7 +136,7 @@ func TestSupplyChainPolicyPublication(t *testing.T) {
 			state := readState(t, stateFile)
 			deployment := firstByID(t, state, "deployments", "dep_1")
 			job := firstByID(t, state, "workflowJobs", "job_1")
-			if scenario == "success" {
+			if scenario == "success" || scenario == "snapshot-composition" {
 				if err != nil || deployment["status"] != "IMAGE_READY" || job["status"] != "succeeded" {
 					t.Fatalf("publication failed: %v %s", err, marshalString(t, state))
 				}
@@ -144,6 +156,13 @@ func TestSupplyChainPolicyPublication(t *testing.T) {
 				}
 				if !strings.Contains(marshalString(t, state["deploymentEvents"]), "build.image_verified") {
 					t.Fatal("missing verification event")
+				}
+				if scenario == "snapshot-composition" {
+					buildArgs := strings.Join(runner.commands[0].Args, " ")
+					if !strings.Contains(buildArgs, "PUBLIC_VERSION=frozen") || strings.Contains(buildArgs, "PUBLIC_VERSION=job") || result.Metadata["mode"] != "dockerfile" || result.Metadata["dockerfile"] != filepath.Join(workspace, "source", "Dockerfile") {
+						t.Fatalf("snapshot execution config lost: args=%s metadata=%s", buildArgs, marshalString(t, result.Metadata))
+					}
+					t.Logf("frozen-build-args=%s publication-events=%s", buildArgs, marshalString(t, state["deploymentEvents"]))
 				}
 			} else {
 				wantCommands := 4
