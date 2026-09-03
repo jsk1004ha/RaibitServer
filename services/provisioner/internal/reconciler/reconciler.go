@@ -253,11 +253,8 @@ func (r *Reconciler) RunOnce(ctx context.Context) (*Result, error) {
 		return &Result{Processed: 1, ResourceID: resource.ID, Status: store.StatusFailed, ManifestFile: manifestFile, Command: secretCommand, DryRun: false}, r.fail(ctx, resource, err)
 	}
 
-	applyCommand, err = runner.Run(ctx, "kubectl", []string{"apply", "--server-side", "-f", manifestFile}, false, r.config.Timeout)
-	if err != nil {
-		return &Result{Processed: 1, ResourceID: resource.ID, Status: store.StatusFailed, ManifestFile: manifestFile, Command: applyCommand, DryRun: false}, r.fail(ctx, resource, err)
-	}
-	waitCommand, err := waitForStatefulSetReady(ctx, runner, plan.Namespace, plan.Name, r.config.Timeout)
+	observer := providerImageObserver{plan: plan, runner: runner, timeout: r.config.Timeout}
+	waitCommand, provenance, err := observer.applyAndObserve(ctx, manifestFile)
 	if err != nil {
 		return &Result{Processed: 1, ResourceID: resource.ID, Status: store.StatusFailed, ManifestFile: manifestFile, Command: waitCommand, DryRun: false}, r.fail(ctx, resource, err)
 	}
@@ -268,11 +265,12 @@ func (r *Reconciler) RunOnce(ctx context.Context) (*Result, error) {
 	keys := append([]string(nil), plan.ConnectionKeys...)
 	sort.Strings(keys)
 	desiredState := mergeState(resource.DesiredState, map[string]any{
-		"providerResult":     publicProviderPlan(plan),
-		"reconciledAt":       time.Now().UTC().Format(time.RFC3339Nano),
-		"healthManaged":      true,
-		"healthStatus":       "HEALTHY",
-		"healthFailureCount": 0,
+		"providerImageProvenance": provenance,
+		"providerResult":          publicProviderPlan(plan),
+		"reconciledAt":            time.Now().UTC().Format(time.RFC3339Nano),
+		"healthManaged":           true,
+		"healthStatus":            "HEALTHY",
+		"healthFailureCount":      0,
 	})
 	if err := r.store.MarkResourceReady(ctx, resource, plan.Provider, plan.SecretName, plan.Endpoint, keys, desiredState); err != nil {
 		return nil, err

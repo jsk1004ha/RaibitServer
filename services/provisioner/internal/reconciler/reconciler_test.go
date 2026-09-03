@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,8 +15,10 @@ import (
 	"github.com/raibitserver/provisioner/internal/store"
 )
 
-const testCredentialSecretUID = "5c0c1aa2-e18f-43be-9dc7-3dfbf158cd21"
-const testCredentialSecretGeneration = "dGhpcy1pcy1hLTMyaWJ5dGUtcmFuZG9tLW5vbmNlMDA"
+const (
+	testCredentialSecretUID        = "5c0c1aa2-e18f-43be-9dc7-3dfbf158cd21"
+	testCredentialSecretGeneration = "dGhpcy1pcy1hLTMyaWJ5dGUtcmFuZG9tLW5vbmNlMDA"
+)
 
 func credentialState(updates map[string]any) map[string]any {
 	state := map[string]any{"credentialSecretUID": testCredentialSecretUID}
@@ -931,6 +934,7 @@ func cloneMap(input map[string]any) map[string]any {
 }
 
 type fakeRunner struct {
+	appliedWorkload        []byte
 	calls                  []string
 	inputs                 []string
 	failure                error
@@ -977,7 +981,35 @@ func (r *fakeRunner) RunInput(_ context.Context, name string, args []string, inp
 func (r *fakeRunner) RunSensitiveOutput(_ context.Context, name string, args []string, _ time.Duration) (string, []byte, error) {
 	call := name + " " + strings.Join(args, " ")
 	r.calls = append(r.calls, call)
+	if strings.Contains(call, "kubectl apply") && strings.Contains(call, "--output=json") {
+		payload, err := os.ReadFile(args[3])
+		if err != nil {
+			return call, nil, err
+		}
+		var manifest struct {
+			Items []map[string]any `json:"items"`
+		}
+		if err := json.Unmarshal(payload, &manifest); err != nil {
+			return call, nil, err
+		}
+		for _, item := range manifest.Items {
+			if item["kind"] != "StatefulSet" {
+				continue
+			}
+			item["metadata"].(map[string]any)["uid"] = provenanceUID
+			item["metadata"].(map[string]any)["generation"] = 1
+			item["status"] = map[string]any{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1, "currentRevision": "revision-1", "updateRevision": "revision-1"}
+			r.appliedWorkload, err = json.Marshal(item)
+			if err != nil {
+				return call, nil, err
+			}
+		}
+		return call, r.appliedWorkload, r.callError(call)
+	}
 	if strings.Contains(call, "kubectl get statefulset/") && strings.Contains(call, "--output=json") {
+		if r.appliedWorkload != nil {
+			return call, r.appliedWorkload, r.callError(call)
+		}
 		return call, []byte(`{"metadata":{"generation":1},"spec":{"replicas":1},"status":{"observedGeneration":1,"replicas":1,"readyReplicas":1,"updatedReplicas":1,"currentRevision":"revision-1","updateRevision":"revision-1"}}`), r.callError(call)
 	}
 	if strings.Contains(call, "kubectl get namespace/") {

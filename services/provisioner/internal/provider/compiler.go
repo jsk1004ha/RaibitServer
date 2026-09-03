@@ -22,6 +22,7 @@ var (
 )
 
 type Plan struct {
+	Image           string
 	Engine          string
 	Provider        string
 	Name            string
@@ -55,7 +56,8 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	if region != "" && region != "local" {
 		return nil, fmt.Errorf("provider region %q is not served by the dedicated local reconciler", resource.Region)
 	}
-	if !digestImagePattern.MatchString(strings.TrimSpace(image)) {
+	image = strings.TrimSpace(image)
+	if !digestImagePattern.MatchString(image) {
 		return nil, fmt.Errorf("provider image for %s must be configured and pinned by sha256 digest", engine)
 	}
 	name, namespace, secretName, pvcName, err := ObjectNames(resource)
@@ -101,6 +103,7 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	}
 	storage := storageSize(resource.DesiredSpec)
 	plan := &Plan{
+		Image:  image,
 		Engine: engine, Provider: "raibitserver-local-" + engine, Name: name, Namespace: namespace,
 		SecretName: secretName, PVCName: pvcName, Endpoint: endpoint, ConnectionKeys: connectionKeys, ProbeCommand: container.ProbeCommand, SecretData: data, Labels: labels,
 	}
