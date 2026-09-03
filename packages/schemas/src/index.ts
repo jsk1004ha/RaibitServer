@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { ServiceHealthFields, refineServiceHealth, type DeploymentHealth } from './deployment-health.ts';
+export * from './deployment-health.ts';
 export * from './deployment-operation.ts';
 import type { DeploymentStatus } from './lifecycle.ts';
 export * from './lifecycle.ts';
@@ -43,6 +45,7 @@ export const OrganizationCreateSchema = z.object({
 });
 
 export const ServiceCreateSchema = z.object({
+  ...ServiceHealthFields,
   name: z.string().min(1),
   slug: z.string().min(1).optional(),
   type: ServiceTypeSchema.default('web'),
@@ -69,7 +72,7 @@ export const ServiceCreateSchema = z.object({
   resources: z.object({ requests: z.record(z.string(), z.string()).optional(), limits: z.record(z.string(), z.string()).optional() }).optional(),
   scaling: z.record(z.string(), z.unknown()).optional(),
   desiredSpec: z.record(z.string(), z.unknown()).optional(),
-}).passthrough();
+}).passthrough().superRefine(refineServiceHealth);
 
 export const ResourceCreateSchema = z.object({
   name: z.string().min(1),
@@ -123,7 +126,7 @@ export type ServiceSpec = z.input<typeof ServiceCreateSchema> & { id?: string; p
 export type ResourceSpec = z.input<typeof ResourceCreateSchema> & { id?: string; projectId?: string };
 export type ProjectSpec = z.input<typeof ProjectCreateSchema> & { id?: string };
 export type DeploymentRequest = z.input<typeof DeploymentCreateSchema> & { projectId?: string; serviceId?: string };
-export interface DeploymentSpec extends DeploymentRequest { id?: string; projectId?: string; serviceId: string; status?: DeploymentStatus; imageDigest?: string | null; errorCode?: string | null; errorMessage?: string | null; previewUrl?: string | null; workflowJob?: Record<string, unknown>; readonly sourceDeploymentId?: string | null; readonly retryOfDeploymentId?: string | null; readonly requestIdempotencyKey?: string | null; readonly requestedByUserId?: string | null; readonly snapshotVersion?: number | null; readonly desiredSpecSnapshot?: Readonly<Record<string, unknown>> | null; }
+export interface DeploymentSpec extends DeploymentRequest, Partial<DeploymentHealth> { id?: string; projectId?: string; serviceId: string; status?: DeploymentStatus; imageDigest?: string | null; errorCode?: string | null; errorMessage?: string | null; previewUrl?: string | null; workflowJob?: Record<string, unknown>; readonly sourceDeploymentId?: string | null; readonly retryOfDeploymentId?: string | null; readonly requestIdempotencyKey?: string | null; readonly requestedByUserId?: string | null; readonly snapshotVersion?: number | null; readonly desiredSpecSnapshot?: Readonly<Record<string, unknown>> | null; }
 export interface ProjectListResponse { projects: ProjectSpec[]; nextCursor?: string | null; }
 export interface ServiceListResponse { services: ServiceSpec[]; nextCursor?: string | null; }
 export interface ResourceListResponse { resources: ResourceSpec[]; nextCursor?: string | null; }

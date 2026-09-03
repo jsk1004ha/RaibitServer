@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { HEALTH_PATH_FIELDS, serviceHealthInput } from './deployment-health.ts';
 import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { can } from './rbac.ts';
 import { canonicalizeProviderDesiredSpec, sanitizeResourceValue } from './resource-sanitizer.ts';
@@ -40,6 +41,7 @@ const SAFE_SERVICE_KEYS = new Set([
   'resources',
   'scaling',
   'healthCheck',
+  ...HEALTH_PATH_FIELDS,
   'schedule',
   'concurrencyPolicy',
   'backoffLimit',
@@ -322,7 +324,7 @@ function boundedPositiveInteger(value: any, fallback: number, minimum: number, m
 
 export function sanitizeTenantServiceInput(input: AnyRecord = {}, options: AnyRecord = {}) {
   if (options.allowGitHubBinding !== true) assertNoTenantGitHubBinding(input);
-  const output = pickKnown(input, SAFE_SERVICE_KEYS);
+  const output = pickKnown({ ...input, ...serviceHealthInput(input) }, SAFE_SERVICE_KEYS);
 
   sanitizeRuntimeCommandFields(output);
   if (output.name !== undefined) output.name = String(output.name || '').trim();

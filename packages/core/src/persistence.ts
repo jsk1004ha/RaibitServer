@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { HEALTH_PATH_FIELDS, INITIAL_DEPLOYMENT_HEALTH, parseHealthPaths, publicDeploymentHealth } from './deployment-health.ts';
 import { assertOperationReplay, captureDeploymentSnapshot, deploymentSuccessor, DeploymentOperationError, eligibleDeploymentSource, successorWorkflow, type DeploymentOperation } from './deployment-operations.ts';
 import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
 import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput } from './oauth-transaction.ts';
@@ -11,7 +12,7 @@ import { openSecret, sealSecret } from './secret-vault.ts';
 import { secretEncryptionConfigured } from './config.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 import { buildResourceProviderPlan, publicResourceProviderPlan } from './resource-providers.ts';
-import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
+import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob, WORKFLOW_TYPES } from './workflows.ts';
 import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, resourceNameFallback, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
 import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate } from './security.ts';
@@ -208,7 +209,7 @@ export class InMemoryControlPlaneRepository {
   async getProject(projectId: string) { return this.store.getProject(projectId); }
   async getService(serviceId: string) { return deepClone(this.store.services.get(serviceId) || null); }
   async getResource(resourceId: string) { return deepClone(this.store.resources.get(resourceId) || null); }
-  async getDeployment(deploymentId: string) { return deepClone(this.store.deployments.get(deploymentId) || null); }
+  async getDeployment(deploymentId: string) { return this.store.getDeployment(deploymentId); }
   async listProjectsForOrganizations(organizationIds?: string[], options: Record<string, any> = {}) {
     const allowed = organizationIds ? new Set(organizationIds.map(String)) : null;
     const projects = boundedKeysetRows([...this.store.projects.values()].filter((project) => !allowed || allowed.has(String(project.organizationId))), options);
@@ -241,10 +242,10 @@ export class InMemoryControlPlaneRepository {
   }
   async listServicesForProject(projectId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.services.values()].filter((service) => String(service.projectId) === String(projectId)), options)); }
   async listResourcesForProject(projectId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId)), options)); }
-  async listDeploymentsForService(serviceId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId)), options)); }
+  async listDeploymentsForService(serviceId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId)), options)).map(publicDeploymentHealth); }
   async listDeploymentsForProject(projectId: string, options: Record<string, any> = {}) {
     return deepClone(boundedKeysetRows([...this.store.deployments.values()]
-      .filter((deployment) => String(deployment.projectId) === String(projectId)), options));
+      .filter((deployment) => String(deployment.projectId) === String(projectId)), options)).map(publicDeploymentHealth);
   }
   async upsertServiceEnvironment(input: Record<string, any>) { return this.store.upsertServiceEnvironment(input); }
   async importServiceEnvFile(input: Record<string, any>) { return this.store.importServiceEnvFile(input); }
@@ -937,7 +938,7 @@ export class PrismaControlPlaneRepository {
       const safeUpdates = trusted ? parsed : serviceMutationState(current, parsed, { deployed, quota });
       return tx.service.update({
         where: { id: serviceId },
-        data: serviceUpdateData(safeUpdates, { ...options, currentDesiredState: current.desiredState }),
+        data: serviceUpdateData(safeUpdates, { ...options, currentDesiredState: current.desiredState, currentDesiredSpec: current.desiredSpec }),
       });
     }, { isolationLevel: 'Serializable' });
   }
@@ -1141,7 +1142,8 @@ export class PrismaControlPlaneRepository {
   }
 
   async getDeployment(deploymentId: string) {
-    return this.prisma.deployment.findUnique({ where: { id: deploymentId } });
+    const row = await this.prisma.deployment.findUnique({ where: { id: deploymentId } });
+    return row ? publicDeploymentHealth(row) : null;
   }
 
   async listProjectsForOrganizations(organizationIds?: string[], options: Record<string, any> = {}) {
@@ -1240,11 +1242,11 @@ export class PrismaControlPlaneRepository {
   }
 
   async listDeploymentsForService(serviceId: string, options: Record<string, any> = {}) {
-    return findKeysetRows(this.prisma.deployment, { serviceId }, options);
+    return (await findKeysetRows(this.prisma.deployment, { serviceId }, options)).map(publicDeploymentHealth);
   }
 
   async listDeploymentsForProject(projectId: string, options: Record<string, any> = {}) {
-    return findKeysetRows(this.prisma.deployment, { projectId }, options);
+    return (await findKeysetRows(this.prisma.deployment, { projectId }, options)).map(publicDeploymentHealth);
   }
 
   async upsertServiceEnvironment(input: Record<string, any>) {
@@ -1567,6 +1569,7 @@ export class PrismaControlPlaneRepository {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const job = await this.prisma.workflowJob.findFirst({
         where: {
+          type: { not: WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE },
           status: 'queued',
           runAfter: { lte: now },
           OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
@@ -1577,6 +1580,7 @@ export class PrismaControlPlaneRepository {
       const updated = await this.prisma.workflowJob.updateMany({
         where: {
           id: job.id,
+          type: { not: WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE },
           status: 'queued',
           runAfter: { lte: now },
           OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
@@ -2259,6 +2263,7 @@ function serviceData(input: Record<string, any>, options: Record<string, any> = 
     image: safe.image || null,
     imageUrl: safe.imageUrl || safe.image || null,
     port: safe.port ? Number(safe.port) : null,
+    ...Object.fromEntries(HEALTH_PATH_FIELDS.map(field => [field, safe[field] ?? null])),
     status: 'created',
     desiredSpec: sanitizeJson(safe.desiredSpec || safe),
     desiredState: sanitizeJson(desiredState),
@@ -2292,7 +2297,7 @@ function resourceData(input: Record<string, any>, options: Record<string, any> =
 
 function serviceUpdateData(input: Record<string, any> = {}, options: Record<string, any> = {}) {
   const inputSafe = sanitizeTenantServiceUpdate(input, options);
-  const allowed = ['name', 'type', 'runtimeType', 'sourceType', 'buildMode', 'repoUrl', 'githubRepositoryId', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'image', 'imageUrl', 'port'];
+  const allowed = ['name', 'type', 'runtimeType', 'sourceType', 'buildMode', 'repoUrl', 'githubRepositoryId', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'image', 'imageUrl', 'port', ...HEALTH_PATH_FIELDS];
   const data: Record<string, any> = {};
   if (options.mutation === INTERNAL_SERVICE_MUTATION && input.status !== undefined) data.status = input.status;
   for (const key of allowed) {
@@ -2304,6 +2309,8 @@ function serviceUpdateData(input: Record<string, any> = {}, options: Record<stri
   if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'image') && !Object.prototype.hasOwnProperty.call(inputSafe || {}, 'imageUrl')) data.imageUrl = data.image;
   if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'imageUrl') && !Object.prototype.hasOwnProperty.call(inputSafe || {}, 'image')) data.image = data.imageUrl;
   if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'desiredSpec')) data.desiredSpec = sanitizeJson(inputSafe.desiredSpec || {});
+  const health = parseHealthPaths(inputSafe);
+  if (Object.keys(health).length) data.desiredSpec = sanitizeJson({ ...(options.currentDesiredSpec || {}), ...health });
   if (Object.keys(inputSafe || {}).length && !data.desiredState) {
     const currentDesiredState = options.currentDesiredState && typeof options.currentDesiredState === 'object' && !Array.isArray(options.currentDesiredState)
       ? options.currentDesiredState
@@ -2348,6 +2355,7 @@ function deploymentData(input: Record<string, any>) {
   if (!input.projectId) throw new Error('projectId is required for deployment persistence');
   return compactData({
     id: input.id,
+    ...INITIAL_DEPLOYMENT_HEALTH,
     serviceId: input.serviceId,
     projectId: input.projectId,
     commitSha: input.commitSha || input.commitHash || null,

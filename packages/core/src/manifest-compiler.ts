@@ -1,4 +1,5 @@
 import { DEFAULT_CONTAINER_SECURITY_CONTEXT, DEFAULT_POD_SECURITY_CONTEXT, secureContainerDefaults, splitEnvForSecret, validateServiceSecurity } from './security.ts';
+import { serviceHealthProbes } from './deployment-health.ts';
 import { connectionEnvForResource, injectResourceEnv } from './env-injection.ts';
 import { resolveBuildStrategy } from './build-strategy.ts';
 import { DEFAULT_DOMAIN, DEFAULT_PORT, SERVICE_TYPES, trustedIngressGatewayNamespace } from './constants.ts';
@@ -173,8 +174,7 @@ function containerFor(service: AnyRecord, image: string, port: number, plain: An
     },
     volumeMounts: [{ name: 'tmp', mountPath: '/tmp' }],
     securityContext: secureContainerDefaults(service),
-    readinessProbe: service.healthCheck?.path ? httpProbe(service.healthCheck.path, port) : undefined,
-    livenessProbe: service.healthCheck?.path ? httpProbe(service.healthCheck.path, port) : undefined,
+    ...serviceHealthProbes(service, port),
   };
 }
 
@@ -369,16 +369,6 @@ function configMapManifest(namespace: string, name: string, labels: AnyRecord, d
     kind: 'ConfigMap',
     metadata: { name, namespace, labels },
     data,
-  };
-}
-
-function httpProbe(path: string, port: number): AnyRecord {
-  return {
-    httpGet: { path, port: 'http' },
-    initialDelaySeconds: 10,
-    periodSeconds: 10,
-    timeoutSeconds: 2,
-    failureThreshold: 3,
   };
 }
 

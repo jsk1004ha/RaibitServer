@@ -49,3 +49,4 @@ export { createControlPlaneRepository, resolveControlPlaneRepositoryConfig, InMe
 export { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 export type * from './types.ts';
 export { oauthAttempt, publicOAuthError, OAuthPublicError } from './oauth-security.ts';
+export * from './deployment-health.ts';

@@ -155,6 +155,10 @@ model Service {
   image              String?
   imageUrl           String?
   port               Int?
+  healthCheckPath    String?
+  livenessPath       String?
+  readinessPath      String?
+  publicHealthPath   String?
   desiredSpec        Json         @default("{}")
   desiredState       Json         @default("{}")
   status             String       @default("CREATED")
@@ -185,6 +189,10 @@ model Deployment {
   desiredSpecSnapshot Json?
   requestedByUserId String?
   snapshotVersion Int?
+  publicHealthStatus String? @default("UNKNOWN")
+  healthCheckedAt DateTime?
+  healthFailureCode String?
+  observedGeneration Int?
   status            String    @default("QUEUED")
   deploymentType    String    @default("PRODUCTION")
   triggerType       String    @default("MANUAL")

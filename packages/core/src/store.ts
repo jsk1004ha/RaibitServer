@@ -1,4 +1,5 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
+import { INITIAL_DEPLOYMENT_HEALTH, parseHealthPaths, serviceHealthInput, publicDeploymentHealth } from './deployment-health.ts';
 import { captureDeploymentSnapshot } from './deployment-operations.ts';
 import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
 import { createMemoryOAuthTransaction, consumeMemoryOAuthTransaction, deleteMemoryOAuthTransactions } from './oauth-transaction.ts';
@@ -446,6 +447,7 @@ export class ControlPlaneStore {
   }
 
   createService({ projectId, name, type = 'web', runtimeType = 'container', sourceType = 'github', image = null, imageUrl = null, ...rest }: Record<string, any>, options: Record<string, any> = {}) {
+    Object.assign(rest, serviceHealthInput({ ...rest, type }));
     if (options.allowGitHubBinding !== true) assertNoTenantGitHubBinding(rest);
     delete rest.id;
     delete rest.projectId;
@@ -491,7 +493,8 @@ export class ControlPlaneStore {
     if (normalized.slug) normalized.slug = slugify(normalized.slug);
     if (normalized.image && !normalized.imageUrl) normalized.imageUrl = normalized.image;
     if (normalized.imageUrl && !normalized.image) normalized.image = normalized.imageUrl;
-    const next = { ...current, ...normalized, updatedAt: nowIso() };
+    const health = parseHealthPaths(normalized);
+    const next = { ...current, ...normalized, ...(Object.keys(health).length ? { desiredSpec: { ...current.desiredSpec, ...health }, desiredState: { ...current.desiredState, ...health } } : {}), updatedAt: nowIso() };
     this.services.set(serviceId, next);
     this.audit('system', 'service:update', 'service', serviceId, maskSecrets(updates));
     return deepClone(next);
@@ -646,6 +649,7 @@ export class ControlPlaneStore {
       updatedAt: nowIso(),
       finishedAt: null,
       ...maskSecrets(rest),
+      ...INITIAL_DEPLOYMENT_HEALTH,
       desiredSpecSnapshot: rest.desiredSpecSnapshot ? deepClone(rest.desiredSpecSnapshot) : captureDeploymentSnapshot(service || {}),
       snapshotVersion: rest.snapshotVersion ?? 1,
     };
@@ -656,7 +660,8 @@ export class ControlPlaneStore {
   }
 
   getDeployment(deploymentId: string) {
-    return deepClone(this.deployments.get(deploymentId) || null);
+    const row = this.deployments.get(deploymentId);
+    return row ? publicDeploymentHealth(deepClone(row)) : null;
   }
 
 
@@ -664,7 +669,7 @@ export class ControlPlaneStore {
   updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
     const current = this.deployments.get(deploymentId);
     if (!current) return null;
-    if (['desiredSpecSnapshot', 'snapshotVersion', 'sourceDeploymentId', 'retryOfDeploymentId', 'requestIdempotencyKey', 'requestedByUserId'].some(key => Object.hasOwn(updates, key))) throw conflict('deployment lineage is immutable');
+    if (['desiredSpecSnapshot', 'snapshotVersion', 'sourceDeploymentId', 'retryOfDeploymentId', 'requestIdempotencyKey', 'requestedByUserId', ...Object.keys(INITIAL_DEPLOYMENT_HEALTH)].some(key => Object.hasOwn(updates, key))) throw conflict('deployment lineage and observations are immutable');
     const safeUpdates = maskSecrets(updates || {});
     const nextUpdates = normalizeDeploymentUpdates(safeUpdates, current);
     if (Object.prototype.hasOwnProperty.call(nextUpdates, 'status')) {

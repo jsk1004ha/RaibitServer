@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { ServiceHealthFields, refineServiceHealth } from './deployment-health.ts';
+import { HealthPathError } from '../../core/src/deployment-health.ts';
 import { DesiredStateMutationError, parseServiceMutation } from '../../core/src/desired-state-mutations.ts';
 
 const label = z.string().min(1).max(128).regex(/^[^\u0000-\u001f\u007f]+$/);
@@ -17,11 +19,11 @@ export const ServiceUpdateSchema = z.object({
   rootDirectory: sourcePath.optional(), buildContext: sourcePath.optional(), dockerfilePath: sourcePath.optional(), outputDirectory: sourcePath.optional(),
   installCommand: command.optional(), buildCommand: command.optional(), startCommand: command.optional(),
   port: z.number().int().min(1).max(65535).optional(),
-  healthCheck: z.object({ path: z.string().min(1).max(1024).regex(/^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$/) }).strict().optional(),
+  ...ServiceHealthFields,
   resources: z.object({ requests: quantities.optional(), limits: quantities.optional() }).strict().optional(),
-}).strict().superRefine((input, context) => {
+}).strict().superRefine(refineServiceHealth).superRefine((input, context) => {
   try { parseServiceMutation(input); } catch (error) {
-    if (!(error instanceof DesiredStateMutationError)) throw error;
+    if (!(error instanceof DesiredStateMutationError) && !(error instanceof HealthPathError)) throw error;
     context.addIssue({ code: 'custom', path: error.field.split('.'), message: error.code });
   }
 });

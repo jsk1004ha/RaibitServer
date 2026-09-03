@@ -1,4 +1,5 @@
 import { RAIBITSERVERControlPlane } from './control-plane.ts';
+import { publicDeploymentHealth } from './deployment-health.ts';
 import { InMemoryControlPlaneRepository } from './persistence.ts';
 import { DeploymentOperationError, parseDeploymentOperationBody } from './deployment-operations.ts';
 import { oauthAttempt, publicOAuthError, OAuthPublicError } from './oauth-security.ts';
@@ -416,7 +417,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'project:read', auth);
         await assertProjectAccess(controlPlane.store, service.projectId, subject);
         const deployments = boundedKeysetRows([...controlPlane.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId)), pageOptions(url));
-        return send(res, 200, keysetPage('deployments', deployments, 'createdAt'));
+        return send(res, 200, keysetPage('deployments', deployments.map(publicDeploymentHealth), 'createdAt'));
       }
       if (serviceDeploymentsMatch && method === 'POST') {
         const serviceId = decodeURIComponent(serviceDeploymentsMatch[1]);
@@ -441,7 +442,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'project:read', auth);
         await assertServiceAccess(controlPlane.store, projectId, serviceId, subject);
         const deployments = boundedKeysetRows([...controlPlane.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId)), pageOptions(url));
-        return send(res, 200, keysetPage('deployments', deployments, 'createdAt'));
+        return send(res, 200, keysetPage('deployments', deployments.map(publicDeploymentHealth), 'createdAt'));
       }
       if (projectServiceDeploymentsMatch && method === 'POST') {
         const [projectId, serviceId] = projectServiceDeploymentsMatch.slice(1).map(decodeURIComponent);

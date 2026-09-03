@@ -2918,10 +2918,52 @@ components:
               exclusiveMinimum: 0
               maximum: 9007199254740991
             - type: "null"
+        publicHealthStatus:
+          default: UNKNOWN
+          type: string
+          enum:
+            - UNKNOWN
+            - CHECKING
+            - HEALTHY
+            - DEGRADED
+        healthCheckedAt:
+          default: null
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        healthFailureCode:
+          default: null
+          anyOf:
+            - type: string
+              enum:
+                - PUBLIC_HEALTH_INVALID_TARGET
+                - PUBLIC_HEALTH_DNS_FAILED
+                - PUBLIC_HEALTH_UNSAFE_ADDRESS
+                - PUBLIC_HEALTH_CONNECT_FAILED
+                - PUBLIC_HEALTH_TLS_FAILED
+                - PUBLIC_HEALTH_TIMEOUT
+                - PUBLIC_HEALTH_REDIRECT
+                - PUBLIC_HEALTH_HTTP_STATUS
+                - PUBLIC_HEALTH_RESPONSE_TOO_LARGE
+                - PUBLIC_HEALTH_CANCELLED
+            - type: "null"
+        observedGeneration:
+          default: null
+          anyOf:
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+            - type: "null"
       required:
         - id
         - serviceId
         - status
+        - publicHealthStatus
+        - healthCheckedAt
+        - healthFailureCode
+        - observedGeneration
       additionalProperties:
         $ref: "#/components/schemas/JsonValue"
     DeploymentInput:
@@ -3708,6 +3750,52 @@ components:
           type: string
         status:
           type: string
+        healthCheckPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        livenessPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        readinessPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        publicHealthPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        healthCheck:
+          anyOf:
+            - type: object
+              properties:
+                path:
+                  type: string
+                  maxLength: 1024
+                  pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+                  description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                    segments or encoded separators/controls
+              required:
+                - path
+              additionalProperties: false
+            - type: "null"
       required:
         - id
         - projectId
@@ -3738,6 +3826,52 @@ components:
           type: integer
           exclusiveMinimum: 0
           maximum: 9007199254740991
+        healthCheckPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        livenessPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        readinessPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        publicHealthPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        healthCheck:
+          anyOf:
+            - type: object
+              properties:
+                path:
+                  type: string
+                  maxLength: 1024
+                  pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+                  description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                    segments or encoded separators/controls
+              required:
+                - path
+              additionalProperties: false
+            - type: "null"
       required:
         - name
       additionalProperties:
@@ -4223,17 +4357,52 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
-        healthCheck:
-          type: object
-          properties:
-            path:
-              type: string
-              minLength: 1
+        healthCheckPath:
+          anyOf:
+            - type: string
               maxLength: 1024
               pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
-          required:
-            - path
-          additionalProperties: false
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        livenessPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        readinessPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        publicHealthPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        healthCheck:
+          anyOf:
+            - type: object
+              properties:
+                path:
+                  type: string
+                  maxLength: 1024
+                  pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+                  description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                    segments or encoded separators/controls
+              required:
+                - path
+              additionalProperties: false
+            - type: "null"
         resources:
           type: object
           properties:
