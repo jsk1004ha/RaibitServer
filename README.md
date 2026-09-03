@@ -8,6 +8,8 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 
 ## 주요 기능
 
+리소스 화면은 **계획 미리보기**(저장·실행 없음)와 **실제 실행 요청**(Go가 처리할 PROVISIONING 희망 상태)을 구분합니다. API/worker의 `RAIBITSERVER_RESOURCE_ENVIRONMENT`와 digest-pinned 이미지가 지원 범위를 결정하며, production Helm은 현재 미검증인 `release` 모드에서 생성을 거부합니다. [설정과 명시적 intent 계약](docs/provisioning.md#계획-미리보기와-실제-실행-요청)을 확인하세요.
+
 - **멀티 서비스 프로젝트**: `web`, `private`, `worker`, `cron`, `job` 서비스를 한 프로젝트에서 관리합니다.
 - **컨테이너 우선 빌드**: 사용자 Dockerfile을 최우선으로 사용하고, 없을 때만 프레임워크 감지/생성 Dockerfile fallback을 사용합니다.
 - **BuildKit 캐시 경로**: builder는 inline cache와 선택적 registry cache(`cache-from/cache-to`) 및 패키지 매니저 cache mount를 계획해 반복 배포 시간을 줄입니다.

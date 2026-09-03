@@ -10,9 +10,10 @@ import { secretEncryptionConfigured } from './config.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 import { buildResourceProviderPlan, publicResourceProviderPlan } from './resource-providers.ts';
 import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
-import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
+import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, resourceNameFallback, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
 import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate } from './security.ts';
+import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
@@ -144,6 +145,7 @@ export class InMemoryControlPlaneRepository {
   async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateService(serviceId, updates, options); }
   async deleteService(serviceId: string) { return this.store.deleteService(serviceId); }
   async createResource(input: Record<string, any>) {
+    requireResourceExecution(normalizeResourceEngine(input.engine || input.type));
     const existing = [...this.store.resources.values()].find((resource) => String(resource.projectId) === String(input.projectId) && String(resource.name) === String(input.name));
     return this.runQuotaMutation(input.actorUserId, 'resource:create', resourceQuotaRequirements(existing, input), () => this.store.createResource(input));
   }
@@ -249,6 +251,7 @@ export class InMemoryControlPlaneRepository {
   async setQuota(input: Record<string, any>) { return this.store.setQuota(input); }
   async enforceUserCan(input: Record<string, any>) { return this.store.enforceUserCan(input); }
   async writeDesiredProject(projectSpec: Record<string, any>) {
+    for (const resource of projectSpec.resources || []) requireResourceExecution(normalizeResourceEngine(resource.engine || resource.type));
     const orgInput = projectSpec.organization || null;
     if (Object.hasOwn(projectSpec, 'organizationSlug')) validatedOrganizationRouteSlug(projectSpec.organizationSlug);
     if (orgInput && Object.hasOwn(orgInput, 'slug')) validatedOrganizationRouteSlug(orgInput.slug);
@@ -795,6 +798,7 @@ export class PrismaControlPlaneRepository {
   }
 
   async createResource(input: Record<string, any>) {
+    requireResourceExecution(normalizeResourceEngine(input.engine || input.type));
     const row = await serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       await requireMutableProject(tx, input.projectId);
       const existing = await tx.resource.findUnique({ where: { projectId_name: { projectId: input.projectId, name: input.name } } });
@@ -803,7 +807,7 @@ export class PrismaControlPlaneRepository {
       await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'resource:create', resourceQuotaRequirements(existing, input));
       return tx.resource.upsert({
         where: { projectId_name: { projectId: input.projectId, name: input.name } },
-        update: resourceData(input, { connectionSecretName: existing?.connectionSecretName || null, baseDesiredSpec: existing?.desiredSpec || {}, currentDesiredState: existing?.desiredState || {} }),
+        update: resourceData({ ...input, slug: input.slug || existing?.slug }, { connectionSecretName: existing?.connectionSecretName || null, baseDesiredSpec: existing?.desiredSpec || {}, currentDesiredState: existing?.desiredState || {} }),
         create: { projectId: input.projectId, name: input.name, slug: input.slug || slugInput(input.name), ...resourceData(input) },
       });
     });
@@ -843,21 +847,24 @@ export class PrismaControlPlaneRepository {
   }
 
   async provisionResourceProvider({ resourceId, actorUserId = 'provider', ...options }: Record<string, any>) {
-      if (options.execute === true || options.dryRun === false) throw forbiddenError('live provider execution is handled exclusively by the authoritative Go provisioner');
+      const intent = parseResourceIntent(options);
       return this.prisma.$transaction(async (tx: any) => {
         const resource = await tx.resource.findUnique({ where: { id: resourceId } });
         if (!resource) throw notFoundError(`resource not found: ${resourceId}`);
-        assertMutable(resource, 'resource');
-        if (String(resource.status || '').toUpperCase() === 'READY') throw conflictError('READY managed resources cannot be reprovisioned or rotate credentials through the planning endpoint');
-        await requireMutableProject(tx, resource.projectId);
         const plan = buildResourceProviderPlan(resource, providerPlanPlaceholders());
         const publicPlan = publicResourceProviderPlan(plan);
-        const result = { engine: plan.engine, provider: plan.provider, status: 'PROVISIONING', dryRun: true, connectionSecret: plan.connectionSecret, plan: publicPlan };
+        if (intent === 'preview-plan') return { resource, result: { intent, engine: plan.engine, provider: plan.provider, status: 'PLAN_ONLY', dryRun: true, plan: publicPlan } };
+        const resourceExecution = requireResourceExecution(resource.engine);
+        assertMutable(resource, 'resource');
+        if (['READY', 'RECONCILING'].includes(String(resource.status).toUpperCase())) throw conflictError('Active managed resources cannot be reprovisioned');
+        await requireMutableProject(tx, resource.projectId);
+        // Persist a request only; the authoritative Go provisioner owns execution.
+        const result = { intent, engine: plan.engine, provider: plan.provider, status: 'PROVISIONING', dryRun: false };
         const updated = await tx.resource.update({
           where: { id: resourceId },
-          data: { status: 'PROVISIONING', connectionSecretName: null, desiredState: maskSecrets({ ...(resource.desiredState || {}), providerPlan: publicPlan }) },
+          data: { status: 'PROVISIONING', desiredState: maskSecrets({ ...(resource.desiredState || {}), resourceExecution }) },
         });
-        await tx.auditLog.create({ data: { actorUserId, action: 'resource.provider:plan', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ engine: result.engine, provider: result.provider, dryRun: true, executor: 'go-provisioner' }) } });
+        await tx.auditLog.create({ data: { actorUserId, action: 'resource.provider:requested', targetType: 'resource', targetId: resourceId, metadata: { engine: result.engine, executor: 'go-provisioner' } } });
         return { resource: updated, result: maskSecrets(result) };
       }, { isolationLevel: 'Serializable' });
   }
@@ -1758,6 +1765,7 @@ export class PrismaControlPlaneRepository {
   }
 
   async writeDesiredProject(projectSpec: Record<string, any>) {
+    for (const resource of projectSpec.resources || []) requireResourceExecution(normalizeResourceEngine(resource.engine || resource.type));
     const orgInput = projectSpec.organization || null;
     if (Object.hasOwn(projectSpec, 'organizationSlug')) validatedOrganizationRouteSlug(projectSpec.organizationSlug);
     if (orgInput && Object.hasOwn(orgInput, 'slug')) validatedOrganizationRouteSlug(orgInput.slug);
@@ -1813,7 +1821,7 @@ export class PrismaControlPlaneRepository {
         const existing = typeof tx.resource.findUnique === 'function'
           ? await tx.resource.findUnique({
             where: { projectId_name: { projectId: project.id, name: resource.name } },
-            select: { connectionSecretName: true, status: true, deletionRequestedAt: true },
+            select: { connectionSecretName: true, status: true, deletionRequestedAt: true, slug: true, desiredSpec: true },
           }).catch(() => null)
           : null;
         assertMutable(existing, 'resource');
@@ -1823,7 +1831,7 @@ export class PrismaControlPlaneRepository {
         }
         resources.push(await tx.resource.upsert({
           where: { projectId_name: { projectId: project.id, name: resource.name } },
-          update: resourceData({ ...resource, projectId: project.id }, { connectionSecretName: existing?.connectionSecretName || null }),
+          update: resourceData({ ...resource, projectId: project.id, slug: resource.slug || existing?.slug }, { connectionSecretName: existing?.connectionSecretName || null, baseDesiredSpec: existing?.desiredSpec || {} }),
           create: { projectId: project.id, name: resource.name, ...resourceData({ ...resource, projectId: project.id }) },
         }));
       }
@@ -2203,13 +2211,14 @@ function serviceData(input: Record<string, any>, options: Record<string, any> = 
 function resourceData(input: Record<string, any>, options: Record<string, any> = {}) {
   const safe = sanitizeTenantResourceInput(input);
   const engine = normalizeResourceEngine(safe.engine || input.engine || safe.type);
-  const id = input.id || stableId('res', safe.projectId, safe.name);
-  const sqlitePath = engine === 'sqlite' ? (input.sqlitePath || input.desiredSpec?.sqlitePath || providerOwnedSqlitePath(id)) : null;
+  const resourceExecution = requireResourceExecution(engine);
+  const id = input.id || stableId('res', safe.projectId, resourceNameFallback(safe.name) || safe.name);
+  const sqlitePath = engine === 'sqlite' ? (input.sqlitePath || input.desiredSpec?.sqlitePath || options.baseDesiredSpec?.sqlitePath || providerOwnedSqlitePath(id)) : null;
   const canonicalSpec = canonicalizeProviderDesiredSpec(safe, { baseSpec: options.baseDesiredSpec || {}, rejectUnknown: false });
   const desiredSpec = sqlitePath ? { ...canonicalSpec, sqlitePath } : canonicalSpec;
-  const desiredState = { ...(options.currentDesiredState || {}), ...safe, engine, desiredSpec, sqlitePath: sqlitePath || undefined };
+  const desiredState = { ...(options.currentDesiredState || {}), ...safe, engine, desiredSpec, sqlitePath: sqlitePath || undefined, resourceExecution };
   return {
-    slug: safe.slug || slugInput(safe.name),
+    slug: safe.slug || resourceNameFallback(safe.name) || slugInput(safe.name),
     type: safe.type || resourceTypeForEngine(engine),
     engine,
     provider: safe.provider || 'shared-provider',

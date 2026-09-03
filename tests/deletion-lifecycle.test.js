@@ -102,7 +102,7 @@ test('Prisma rejects new or mutating work beneath deletion tombstones', async ()
   fake.state.resources[0].status = 'DELETE_REQUESTED';
   await assert.rejects(() => repository.updateResource('resource-1', { plan: 'larger' }), conflict);
   await assert.rejects(() => repository.attachResource({ resourceId: 'resource-1', serviceId: 'service-1' }), conflict);
-  await assert.rejects(() => repository.provisionResourceProvider({ resourceId: 'resource-1' }), conflict);
+  await assert.rejects(() => repository.provisionResourceProvider({ resourceId: 'resource-1', intent: 'live-provision' }), conflict);
 });
 
 test('desired-project upserts cannot resurrect a deleting project', async () => {

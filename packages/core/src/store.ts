@@ -10,8 +10,9 @@ import { githubIntegrationSummary, githubWebhookActionPlan, githubWebhookOutboun
 import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 import { buildResourceProviderPlan, publicResourceProviderPlan } from './resource-providers.ts';
-import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
+import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, resourceNameFallback, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
+import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
@@ -510,19 +511,20 @@ export class ControlPlaneStore {
   createResource({ projectId, name, type = 'database', engine, provider = 'shared-provider', plan = 'shared-small', region = 'local', status = 'provisioning', ...rest }: Record<string, any>) {
     const safe = sanitizeTenantResourceInput({ projectId, name, type, engine, provider, plan, region, status, ...rest });
     const normalizedEngine = normalizeResourceEngine(safe.engine || safe.type);
-    const id = stableId('res', safe.projectId, safe.name);
-      const existing = this.resources.get(id);
+    const resourceExecution = requireResourceExecution(normalizedEngine);
+    const existing = [...this.resources.values()].find(resource => resource.projectId === safe.projectId && resource.name === safe.name);
+    const id = existing?.id || stableId('res', safe.projectId, resourceNameFallback(safe.name) || safe.name);
       if (String(existing?.status || '').toUpperCase() === 'READY') return deepClone(existing);
-    const sqlitePath = normalizedEngine === 'sqlite' ? providerOwnedSqlitePath(id) : null;
+    const sqlitePath = normalizedEngine === 'sqlite' ? existing?.sqlitePath || existing?.desiredSpec?.sqlitePath || providerOwnedSqlitePath(id) : null;
   const canonicalSpec = canonicalizeProviderDesiredSpec(safe, { rejectUnknown: false });
   const desiredSpec = sqlitePath ? { ...canonicalSpec, sqlitePath } : canonicalSpec;
-    const desiredState = { ...safe, engine: normalizedEngine, desiredSpec, sqlitePath: sqlitePath || undefined };
+    const desiredState = { ...safe, engine: normalizedEngine, desiredSpec, sqlitePath: sqlitePath || undefined, resourceExecution };
     const resource = {
       id,
       projectId: safe.projectId,
       type: safe.type || resourceTypeForEngine(normalizedEngine),
       name: safe.name,
-      slug: slugify(safe.slug || safe.name),
+      slug: safe.slug || existing?.slug || resourceNameFallback(safe.name) || slugify(safe.name),
       engine: normalizedEngine,
       provider: safe.provider || provider,
       status: safe.status || status,
@@ -552,6 +554,7 @@ export class ControlPlaneStore {
   if (String(current.status || '').toUpperCase() === 'RECONCILING' && Object.keys(updates).length > 0) throw conflict('RECONCILING managed resources cannot be updated while the provisioner claim is active');
     const safe = sanitizeTenantResourceInput({ ...updates, projectId: current.projectId, name: updates.name || current.name, engine: updates.engine || current.engine, type: updates.type || current.type });
     const engine = normalizeResourceEngine(safe.engine || current.engine);
+    const resourceExecution = requireResourceExecution(engine);
     const sqlitePath = engine === 'sqlite' ? (current.sqlitePath || providerOwnedSqlitePath(resourceId)) : undefined;
   const canonicalSpec = canonicalizeProviderDesiredSpec(safe, { baseSpec: current.desiredSpec || {}, rejectUnknown: false });
   const desiredSpec = sqlitePath ? { ...canonicalSpec, sqlitePath } : canonicalSpec;
@@ -561,7 +564,7 @@ export class ControlPlaneStore {
       engine,
       slug: safe.slug ? slugify(safe.slug) : (safe.name ? slugify(safe.name) : current.slug),
       desiredSpec,
-      desiredState: { ...(current.desiredState || {}), ...safe, desiredSpec, sqlitePath },
+      desiredState: { ...(current.desiredState || {}), ...safe, desiredSpec, sqlitePath, resourceExecution },
       sqlitePath,
       updatedAt: nowIso(),
     };
@@ -836,14 +839,16 @@ export class ControlPlaneStore {
   async provisionResourceProvider({ resourceId, actorUserId = 'provider', ...options }: Record<string, any>) {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
-      if (options.execute === true || options.dryRun === false) throw conflict('live provider execution is handled exclusively by the authoritative Go provisioner');
-      if (String(resource.status || '').toUpperCase() === 'READY') throw conflict('READY managed resources cannot be reprovisioned or rotate credentials through the planning endpoint');
+      const intent = parseResourceIntent(options);
       const plan = buildResourceProviderPlan(resource, providerPlanPlaceholders());
       const publicPlan = publicResourceProviderPlan(plan);
-      const result = { engine: plan.engine, provider: plan.provider, status: 'provisioning', dryRun: true, connectionSecret: plan.connectionSecret, plan: publicPlan };
-      const planned = { ...resource, status: 'provisioning', connectionSecretName: resource.connectionSecretName, desiredState: { ...(resource.desiredState || {}), providerPlan: publicPlan }, updatedAt: nowIso() };
+      if (intent === 'preview-plan') return { resource: deepClone(resource), result: { intent, engine: plan.engine, provider: plan.provider, status: 'PLAN_ONLY', dryRun: true, plan: publicPlan } };
+      const resourceExecution = requireResourceExecution(resource.engine);
+      if (['READY', 'RECONCILING', 'DELETE_REQUESTED', 'DELETING', 'DELETED'].includes(String(resource.status).toUpperCase())) throw conflict('Active or deleting managed resources cannot be reprovisioned');
+      const result = { intent, engine: plan.engine, provider: plan.provider, status: 'PROVISIONING', dryRun: false };
+      const planned = { ...resource, status: 'PROVISIONING', desiredState: { ...(resource.desiredState || {}), resourceExecution }, updatedAt: nowIso() };
       this.resources.set(resourceId, planned);
-      this.audit(actorUserId, 'resource.provider:plan', 'resource', resourceId, { engine: result.engine, provider: result.provider, dryRun: true, executor: 'go-provisioner' });
+      this.audit(actorUserId, 'resource.provider:requested', 'resource', resourceId, { engine: result.engine, provider: result.provider, executor: 'go-provisioner' });
       return { resource: deepClone(planned), result: maskSecrets(result) };
   }
 

@@ -96,6 +96,9 @@ export function compileProjectProvisioning(projectSpec: Record<string, any>) {
 }
 
 export async function provisionProjectResources(projectSpec: Record<string, any>, options: Record<string, any> = {}) {
+  if (options.dryRun === false || options.execute === true) {
+    throw new Error('Live resource provisioning must be requested through the API and reconciled by the authoritative Go provisioner.');
+  }
   const provisioning = compileProjectProvisioning(projectSpec);
   const apply = await applyManifests(provisioning.manifests, options);
   const providerResults = [];

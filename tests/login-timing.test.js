@@ -7,6 +7,7 @@ import test from 'node:test';
 import ts from 'typescript';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
+import { ResourceCapabilityUnavailable, ResourceIntentInvalid } from '../packages/core/src/index.ts';
 import { createSessionToken, hashPassword, normalizeEmail, shouldPromoteFirstLogin, verifyPasswordAsync } from '../packages/core/src/identity.ts';
 
 test('compatibility API login runs one async scrypt for every account state', async () => {
@@ -235,6 +236,8 @@ async function loadNestService(repository) {
     UnauthorizedException: TestHttpException,
   };
   const core = new Proxy({
+    ResourceCapabilityUnavailable,
+    ResourceIntentInvalid,
     createSessionToken,
     createControlPlaneRepository: () => Promise.resolve(repository),
     enforceAuthAbuseLimits: async () => {},

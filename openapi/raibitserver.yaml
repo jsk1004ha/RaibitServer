@@ -1431,11 +1431,11 @@ paths:
             type: string
             minLength: 1
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Empty"
+              $ref: "#/components/schemas/ResourceProvisionInput"
       responses:
         "201":
           description: Successful response
@@ -2926,6 +2926,10 @@ components:
                     type: string
             error:
               type: string
+            code:
+              type: string
+            reasonCode:
+              type: string
           required:
             - statusCode
             - message
@@ -3394,6 +3398,72 @@ components:
         - engine
       additionalProperties:
         $ref: "#/components/schemas/JsonValue"
+    ResourceProvisionInput:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        intent:
+          type: string
+          enum:
+            - preview-plan
+            - live-provision
+      required:
+        - intent
+      additionalProperties: false
+    ResourceProvisionResult:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      oneOf:
+        - type: object
+          properties:
+            intent:
+              type: string
+              const: preview-plan
+            engine:
+              type: string
+            provider:
+              type: string
+            status:
+              type: string
+              const: PLAN_ONLY
+            dryRun:
+              type: boolean
+              const: true
+            plan:
+              type: object
+              propertyNames:
+                type: string
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema0"
+          required:
+            - intent
+            - engine
+            - provider
+            - status
+            - dryRun
+            - plan
+          additionalProperties: false
+        - type: object
+          properties:
+            intent:
+              type: string
+              const: live-provision
+            engine:
+              type: string
+            provider:
+              type: string
+            status:
+              type: string
+              const: PROVISIONING
+            dryRun:
+              type: boolean
+              const: false
+          required:
+            - intent
+            - engine
+            - provider
+            - status
+            - dryRun
+          additionalProperties: false
     Resources:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -3406,6 +3476,31 @@ components:
           anyOf:
             - type: string
             - type: "null"
+        resourceOptions:
+          type: array
+          items:
+            type: object
+            properties:
+              environment:
+                type: string
+              live:
+                type: boolean
+              preview:
+                type: boolean
+              reasonCode:
+                type: string
+              permitted:
+                type: boolean
+              engine:
+                type: string
+            required:
+              - environment
+              - live
+              - preview
+              - reasonCode
+              - permitted
+              - engine
+            additionalProperties: false
       required:
         - resources
         - nextCursor
@@ -4121,7 +4216,7 @@ components:
         - resourceId
         - serviceId
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema0"
+        $ref: "#/components/schemas/__shared#/$defs/schema1"
     resources-attachBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4141,23 +4236,7 @@ components:
         resource:
           $ref: "#/components/schemas/Resource"
         result:
-          type: object
-          properties:
-            engine:
-              type: string
-            provider:
-              type: string
-            status:
-              type: string
-            dryRun:
-              type: boolean
-          required:
-            - engine
-            - provider
-            - status
-            - dryRun
-          additionalProperties:
-            $ref: "#/components/schemas/__shared#/$defs/schema1"
+          $ref: "#/components/schemas/ResourceProvisionResult"
       required:
         - resource
         - result

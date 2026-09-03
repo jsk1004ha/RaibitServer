@@ -14,6 +14,9 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
   const [{ orgSlug, projectId }, query] = await Promise.all([params, searchParams]);
   const view = projectView(queryText(query.view) || 'overview');
   const state = await loadProjectConsole(projectId);
+  const resourceOptions = view === 'new-resource'
+    ? await getJson(`/projects/${encodeURIComponent(projectId)}/resources`, { resourceOptions: [] }, state.context)
+    : null;
   const selectedServiceId = queryText(query.serviceId);
   const selectedService = state.services.find((service: ServiceRecord) => service.id === selectedServiceId) || null;
   const serviceSettings = selectedService ? { ...selectedService.desiredState, ...selectedService.desiredSpec, ...selectedService } : null;
@@ -36,6 +39,7 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
   const runtimeLogs: readonly RuntimeLog[] = runtimeLogsResult?.body?.logs || [];
   const loadErrors = [
     ...state.loadErrors,
+    ...(resourceOptions ? collectLoadIssues([['리소스 지원 상태', resourceOptions]]) : []),
     ...(runtimeLogsResult ? collectLoadIssues([['런타임 로그', runtimeLogsResult]]) : []),
     ...(environment ? collectLoadIssues([['환경 변수', environment]]) : []),
     ...(agentPlanResult ? collectLoadIssues([['AI 배포 계획', agentPlanResult]]) : []),
@@ -65,6 +69,7 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
     projectName,
     previewDeployments: state.previewDeployments,
     resources: state.resources,
+    resourceOptions: resourceOptions?.body?.resourceOptions || [],
     runtimeLogs,
     selectedService,
     serviceSettings,

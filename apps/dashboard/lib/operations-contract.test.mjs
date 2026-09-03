@@ -85,10 +85,13 @@ test('resource operations keep seven views, engine defaults, and exact mutation 
   for (const endpoint of ['/console/query', '/console/command', '/provision', '/attach']) {
     assert.ok(mutationSource.includes(endpoint), `missing resource endpoint ${endpoint}`);
   }
-  for (const field of ['query', 'command', 'confirmed', 'dryRun', 'serviceId', 'envPrefix', '_returnTo']) {
+  for (const field of ['query', 'command', 'confirmed', 'serviceId', 'envPrefix', '_returnTo']) {
     assert.ok(mutationSource.includes(`name="${field}"`), `missing resource field ${field}`);
   }
   assert.equal(mutationSource.match(/name="confirmed"/g)?.length, 2);
+  const provisioning = await read('../components/resource-provision-actions.tsx');
+  for (const marker of ['preview-plan', 'live-provision', 'ResourceProvisionResultSchema', 'JSON.stringify({ intent })', 'aria-busy', 'aria-live="polite"']) assert.ok(provisioning.includes(marker), marker);
+  assert.doesNotMatch(source, /name="dryRun"/);
   assert.match(source, /id="provider-command"[\s\S]*name="confirmed"[\s\S]*required/);
   assert.match(queryConsole, /name="query"[\s\S]*name="confirmed"[\s\S]*value="true"(?![\s\S]*required)/);
   assert.match(queryConsole, /fetch\(action,[\s\S]*'content-type': 'application\/json'/);

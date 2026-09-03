@@ -10,11 +10,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/raibitserver/provisioner/internal/provider"
 	"github.com/raibitserver/provisioner/internal/reconciler"
 	"github.com/raibitserver/provisioner/internal/store"
 )
 
 func main() {
+	resourceEnvironment := os.Getenv("RAIBITSERVER_RESOURCE_ENVIRONMENT")
+	eligibleImages, err := provider.EligibleResourceImages(resourceEnvironment, providerImages())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "provisioner resource configuration failed: %v\n", err)
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	databaseURL := firstNonEmpty(os.Getenv("RAIBITSERVER_CONTROL_PLANE_DATABASE_URL"), os.Getenv("DATABASE_URL"))
@@ -24,6 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeStore()
+	state.ConfigureResourceClaims(resourceEnvironment, eligibleImages)
 	dryRun := os.Getenv("RAIBITSERVER_DRY_RUN") != "0" && os.Getenv("RAIBITSERVER_EXECUTE") != "1"
 	interval := secondsEnv("RAIBITSERVER_RECONCILE_INTERVAL_SECONDS", 5*time.Second)
 	worker := reconciler.New(reconciler.Config{

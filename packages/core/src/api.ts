@@ -359,7 +359,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const resource = controlPlane.store.getResource(resourceId);
         if (!resource) return send(res, 404, { error: 'resource_not_found' });
         await assertProjectAccess(controlPlane.store, resource.projectId, subject);
-        return send(res, 200, controlPlane.store.updateResource(resourceId, sanitizeTenantResourceApiUpdate(await readJson(req))));
+        return send(res, 200, controlPlane.store.updateResource(resourceId, sanitizeTenantResourceApiUpdate(await readJson(req), resource.engine)));
       }
       if (resourceMatch && method === 'DELETE') {
         const subject = authorizeAction(req, 'db:delete', auth);
@@ -764,7 +764,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const message = error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : 'github_oauth_failed';
         return send(res, statusCode, { statusCode, message, error: message });
       }
-      return send(res, error.statusCode || 500, { error: error.message || 'internal_error' });
+      return send(res, error.statusCode || 500, { error: error.message || 'internal_error', ...(error.code ? { code: error.code } : {}), ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) });
     }
   };
 }

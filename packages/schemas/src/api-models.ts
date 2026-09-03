@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { DeploymentStatusSchema } from './lifecycle.ts';
+import { ResourceAvailabilitySchema } from './resource-execution.ts';
 // Generated package-local mirror; scripts/generate-resource-capabilities.mjs checks canonical byte parity.
 import resourceCapabilities from './resource-capabilities-v1.json' with { type: 'json' };
+export { ResourceProvisionInputSchema as ResourceProvisionInput, ResourceProvisionResultSchema as ResourceProvisionResult } from './resource-execution.ts';
 
 const id = z.string().min(1);
 export const JsonValue = z.json();
@@ -20,7 +22,7 @@ export const QuotaInput = z.strictObject(quotaFields).partial();
 export const Quota = z.strictObject({ ...quotaFields, id, userId: id, createdAt: z.iso.datetime(), updatedAt: z.iso.datetime() });
 export const PageQuery = z.object({ limit: z.number().int().min(1).max(1000).optional(), cursor: z.string().max(1024).optional(), after: z.string().max(1024).optional() }).strict();
 export const ErrorBody = z.union([
-  z.object({ statusCode: z.number().int().min(400).max(599), message: z.union([z.string(), z.array(z.string())]), error: z.string().optional() }),
+  z.object({ statusCode: z.number().int().min(400).max(599), message: z.union([z.string(), z.array(z.string())]), error: z.string().optional(), code: z.string().optional(), reasonCode: z.string().optional() }),
   z.object({ message: z.string(), plan: JsonFields }),
 ]);
 export const Project = z.object({ id, name: z.string(), organizationId: id, slug: z.string() }).catchall(json);
@@ -36,7 +38,7 @@ export const Log = z.object({ id, line: z.string(), timestamp: z.string() }).cat
 export const Event = z.object({ id, timestamp: z.string() }).catchall(json);
 export const Projects = z.object({ projects: z.array(Project), nextCursor: z.string().nullable() });
 export const Services = z.object({ services: z.array(Service), nextCursor: z.string().nullable() });
-export const Resources = z.object({ resources: z.array(Resource), nextCursor: z.string().nullable() });
+export const Resources = z.object({ resources: z.array(Resource), nextCursor: z.string().nullable(), resourceOptions: z.array(ResourceAvailabilitySchema.extend({ engine: z.string() })).optional() });
 export const Deployments = z.object({ deployments: z.array(Deployment), nextCursor: z.string().nullable() });
 export const Logs = z.object({ logs: z.array(Log), nextCursor: z.string().nullable() });
 export const Events = z.object({ events: z.array(Event), nextCursor: z.string().nullable() });

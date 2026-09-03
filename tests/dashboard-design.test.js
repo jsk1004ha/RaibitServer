@@ -51,7 +51,7 @@ test('native POST contracts preserve return targets, override fields, and confir
   assert.ok(resourceQuery.includes('<input name="_returnTo" type="hidden" value={returnTo} />'), 'query fallback return target missing');
   for (const marker of [
     'name="_returnTo" value={`${base}?view=provider`}',
-    'name="confirmed" value="true"', 'name="dryRun" value="true"', 'name="serviceId"', 'name="envPrefix"',
+    'name="confirmed" value="true"', 'ResourceProvisionActions', 'name="serviceId"', 'name="envPrefix"',
   ]) assert.ok(resource.includes(marker), `${marker} resource mutation contract missing`);
   for (const marker of [
     'name="_returnTo" value="/github?step=attach"', 'name="_returnTo" value="/github?step=sync"',
@@ -405,14 +405,18 @@ test('project workflow controls derive tenant scope server-side and expose acces
   let projection;
   function visit(node) {
     if (ts.isJsxElement(node) && node.openingElement.tagName.getText(ast) === 'Select') {
-      projection = node.children.find(child => ts.isJsxExpression(child) && child.expression)?.expression.getText(ast);
+      projection = node.children.find(child => ts.isJsxExpression(child) && child.expression?.getText(ast).startsWith('RESOURCE_CAPABILITIES.map'))?.expression.getText(ast);
     }
     ts.forEachChild(node, visit);
   }
   visit(ast);
   assert.ok(projection, 'resource selector must have a generated option projection');
   const compiled = ts.transpileModule(`const result = (${projection});`, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const options = new Function('React', 'RESOURCE_CAPABILITIES', `${compiled}\nreturn result;`)(React, RESOURCE_CAPABILITIES);
+  const renderOptions = new Function('React', 'RESOURCE_CAPABILITIES', 'liveEngines', `${compiled}\nreturn result;`);
+  const options = renderOptions(React, RESOURCE_CAPABILITIES, new Set(RESOURCE_CAPABILITIES.filter(entry => entry.local.provision).map(entry => entry.engine)));
+  const releaseOptions = renderOptions(React, RESOURCE_CAPABILITIES, new Set());
+  assert.ok(releaseOptions.every(option => option.props.disabled), 'server-unavailable engines must all remain disabled');
+  assert.match(operations, /entry\.live && entry\.permitted/);
   assert.deepEqual(options.map(option => option.props.value), RESOURCE_CAPABILITIES.map(entry => entry.engine));
   for (const option of options) {
     const supported = ['postgresql', 'mysql', 'mariadb', 'mongodb', 'sqlite', 'redis', 'valkey'].includes(option.props.value);
@@ -509,12 +513,15 @@ test('resource console awaits route params and links localized tabs to real oper
   }
   for (const marker of [
     '리소스 콘솔', '쿼리 실행', '공급자 명령 실행',
-    '계획 만들기', '서비스에 연결', 'provider-owned-secret',
+    'ResourceProvisionActions', '서비스에 연결', 'provider-owned-secret',
   ]) {
     assert.ok(resource.includes(marker), `${marker} resource marker missing`);
   }
   assert.ok(resource.includes('<ResourceQueryConsole action={apiAction(`/resources/${resourceId}/console/query`, state.context)}'));
-  for (const field of ['query', 'command', 'confirmed', 'dryRun', 'serviceId', 'envPrefix']) {
+  const provisioning = await read('../apps/dashboard/components/resource-provision-actions.tsx');
+  for (const marker of ['계획 미리보기', '실제 실행 요청', 'preview-plan', 'live-provision', 'ResourceAvailabilitySchema.safeParse', 'ResourceProvisionResultSchema', 'aria-busy', 'aria-live="polite"']) assert.ok(provisioning.includes(marker), marker);
+  assert.doesNotMatch(resource, /name="dryRun"/);
+  for (const field of ['query', 'command', 'confirmed', 'serviceId', 'envPrefix']) {
     assert.ok(resourceContract.includes(`name="${field}"`), `${field} resource field missing`);
   }
   assert.equal(resourceContract.match(/name="confirmed"/g)?.length, 2);
@@ -528,8 +535,9 @@ test('resource console awaits route params and links localized tabs to real oper
   assert.ok(backupSection.includes('복구 지점 준비 중'));
   assert.doesNotMatch(backupSection, /\/provision|apiAction\(/);
   assert.doesNotMatch(resource, /<form[^>]*id="backups"/);
-  assert.match(resource, /<form id="provisioning"[^>]*action=\{apiAction\(`\/resources\/\$\{resourceId\}\/provision`/);
-  assert.ok(resource.includes('<h2>프로비저닝</h2>'));
+  assert.match(resource, /<ResourceProvisionActions action=\{apiAction\(`\/resources\/\$\{resourceId\}\/provision`/);
+  assert.match(provisioning, /id="provisioning"/);
+  assert.ok(provisioning.includes('<h2>프로비저닝</h2>'));
   for (const marker of ['MetricStrip', 'resource-overview-grid', '리소스 정보', '빠른 시작', '보안 연결', '/guide?topic=resources']) {
     assert.ok(resource.includes(marker), `${marker} beginner resource overview marker missing`);
   }

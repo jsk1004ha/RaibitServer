@@ -6,6 +6,16 @@
 
 이 문서는 resource catalog, provider-neutral desired-state plan, dry-run/live provider mode, secret 처리 원칙을 설명합니다.
 
+## 계획 미리보기와 실제 실행 요청
+
+기존 리소스의 `POST /resources/:resourceId/provision`은 `{ "intent": "preview-plan" }` 또는 `{ "intent": "live-provision" }`만 받습니다. `dryRun`, `execute`, 빈 본문은 허용하지 않습니다. 미리보기는 `PLAN_ONLY`와 마스킹된 계획을 반환하며 리소스·타임스탬프·감사 로그·작업 대기열을 변경하지 않습니다. 생성 및 실제 실행 요청은 서버가 `desiredState.resourceExecution`에 live intent, 환경과 이미지 digest를 기록하고 `PROVISIONING`으로 유지합니다. API는 외부 공급자를 실행하거나 READY를 만들지 않습니다.
+
+API와 Go worker의 신뢰된 운영 설정은 `RAIBITSERVER_RESOURCE_ENVIRONMENT=local|release`입니다. 미설정·잘못된 값은 실제 쓰기를 거부합니다. production Helm은 항상 `release`를 설정하므로 현재 매트릭스에서는 생성·실행이 차단됩니다. 호출자의 environment/region/provider 값으로 승격할 수 없습니다. 로컬 6개 엔진은 각각 `RAIBITSERVER_PROVIDER_<ENGINE>_IMAGE=repository@sha256:<64 lowercase hex>`가 있어야 저장·claim할 수 있습니다. SQLite는 로컬 파일 전용이며 Go claim 대상이 아닙니다.
+
+Go는 실제 SQL claim의 UPDATE 전에 환경·지원 엔진·일치하는 digest·live intent를 필터링합니다. legacy pending 행에 intent가 없으면 자동 실행하지 않습니다. 운영자가 기존 행을 재검토하고 지원되는 로컬 환경에서 명시적으로 실행 요청해야 합니다. 이 안전성 검증은 실제 엔진 lifecycle의 release 증거를 대신하지 않습니다.
+
+CLI: `raibitserver resources provision --resource-id ID --intent preview-plan` 또는 `--intent live-provision`. 로컬 `node src/cli.js provision-plan project.json`은 컴파일 전용이고, TypeScript의 `provision --execute`는 Go 전용 실행 경계에서 거부됩니다.
+
 ## 지원 catalog
 
 지원 여부의 유일한 원본은 `test-fixtures/contracts/resource-capabilities-v1.json`입니다. `local`은 구현된 로컬 기능, `release`는 운영 릴리스 기능이며 현재 release 기능은 모두 false입니다. `planOnly`의 명령 계획과 `liveEvidence: not-recorded`는 실행 성공이 아닙니다. MySQL/MariaDB/MongoDB/Redis/Valkey의 query/schema는 아직 계획 전용이고, 모든 엔진의 관리형 backup/restore는 미제공입니다.
@@ -32,7 +42,7 @@
 - storage, version, credential secret 이름 (자동 backup policy 없음)
 - connection environment variable용 Secret manifest
 
-`provisionProjectResources`는 workload Kubernetes apply와 같은 dry-run/execute command surface로 이 manifest를 적용합니다.
+`provisionProjectResources`는 이 manifest의 dry-run 계획만 반환합니다. 실제 공급자 실행은 Go provisioner가 담당하며 TypeScript의 execute 요청은 거부됩니다.
 
 ## 목표 Shared provider model
 

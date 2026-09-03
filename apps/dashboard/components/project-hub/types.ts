@@ -1,4 +1,5 @@
 import type { DashboardLoadIssue } from '@/lib/api';
+import type { ResourceAvailability } from '@raibitserver/schemas';
 
 export const projectViews = ['overview', 'services', 'new-service', 'edit-service', 'deployments', 'agent', 'resources', 'new-resource', 'environment', 'logs', 'settings'] as const;
 export type ProjectView = (typeof projectViews)[number];
@@ -111,6 +112,7 @@ export type ProjectHubData = Readonly<{
   projectName: string;
   previewDeployments: readonly DeploymentRecord[];
   resources: readonly ResourceRecord[];
+  resourceOptions?: readonly (ResourceAvailability & { engine: string })[];
   runtimeLogs: readonly RuntimeLog[];
   selectedService: ServiceRecord | null;
   serviceSettings: ServiceRecord | null;

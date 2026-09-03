@@ -3,6 +3,7 @@ import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { can } from './rbac.ts';
 import { canonicalizeProviderDesiredSpec, sanitizeResourceValue } from './resource-sanitizer.ts';
 import { INTERNAL_SERVICE_MUTATION, parseResourceMutation, parseServiceMutation } from './desired-state-mutations.ts';
+import { requireResourceCapability } from './resource-capabilities.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -73,7 +74,6 @@ const SAFE_RESOURCE_API_KEYS = new Set([
 ]);
 
 const RESOURCE_TYPES = new Set(['database', 'cache', 'storage', 'vector', 'queue']);
-const RESOURCE_ENGINES = new Set(['postgresql', 'postgres', 'pg', 'mysql', 'mariadb', 'mongodb', 'mongo', 'redis', 'valkey', 'sqlite', 'sqlite3', 'object-storage', 's3', 'minio', 'qdrant', 'vector-db', 'weaviate', 'milvus', 'nats', 'message-queue', 'rabbitmq', 'kafka', 'redpanda']);
 const RESOURCE_PLANS = new Set(['shared-small', 'dedicated-local']);
 
 const SAFE_DEPLOYMENT_CREATE_KEYS = new Set([
@@ -396,7 +396,7 @@ export function sanitizeTenantResourceApiInput(input: AnyRecord = {}) {
 function validateManagedResourceRouteFields(input: AnyRecord) {
   if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 128)) badRequest('resource name must be a non-empty string of at most 128 characters');
   if (input.type !== undefined && !RESOURCE_TYPES.has(String(input.type).toLowerCase())) badRequest(`unsupported managed resource type: ${input.type}`);
-  if (input.engine !== undefined && !RESOURCE_ENGINES.has(String(input.engine).toLowerCase())) badRequest(`unsupported managed resource engine: ${input.engine}`);
+  if (input.engine !== undefined) requireResourceCapability(String(input.engine), 'provision');
   if (input.plan !== undefined && !RESOURCE_PLANS.has(String(input.plan).toLowerCase())) badRequest(`unsupported managed resource plan: ${input.plan}`);
   if (input.region !== undefined && String(input.region).trim().toLowerCase() !== 'local') badRequest(`unsupported managed resource region: ${input.region}`);
   if (input.version !== undefined && String(input.version).trim() !== '') badRequest('managed resource version selection is not implemented');
@@ -409,8 +409,9 @@ function validateManagedResourceRouteFields(input: AnyRecord) {
   }
 }
 
-export function sanitizeTenantResourceApiUpdate(input: AnyRecord = {}) {
-  const output = sanitizeTenantResourceApiInput(parseResourceMutation(input));
+export function sanitizeTenantResourceApiUpdate(input: AnyRecord = {}, currentEngine?: unknown) {
+  const mutation = parseResourceMutation(input);
+  const output = sanitizeTenantResourceApiInput(currentEngine !== undefined && !Object.hasOwn(mutation, 'engine') ? { ...mutation, engine: currentEngine } : mutation);
   delete output.projectId;
   return output;
 }

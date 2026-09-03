@@ -55,6 +55,13 @@ func (e *CapabilityUnavailableError) Error() string {
 }
 
 func requireLocalCapability(engine string) error {
+	return requireEnvironmentCapability(engine, "local")
+}
+
+func requireEnvironmentCapability(engine, environment string) error {
+	if environment != "local" && environment != "release" {
+		return &CapabilityUnavailableError{Engine: engine, ReasonCode: "RESOURCE_ENVIRONMENT_UNAVAILABLE"}
+	}
 	entries, err := loadCapabilities()
 	if err != nil {
 		return err
@@ -63,10 +70,32 @@ func requireLocalCapability(engine string) error {
 		if entry.Engine != engine {
 			continue
 		}
-		if entry.Runtime == "dedicated-local" && entry.Local.Provision && entry.Local.AuthenticatedHealth {
+		operations := entry.Local
+		if environment == "release" {
+			operations = entry.Release
+		}
+		if entry.Runtime == "dedicated-local" && operations.Provision && operations.AuthenticatedHealth {
 			return nil
 		}
 		return &CapabilityUnavailableError{Engine: engine, ReasonCode: entry.ReasonCode}
 	}
 	return &CapabilityUnavailableError{Engine: engine, ReasonCode: "ENGINE_NOT_IMPLEMENTED"}
+}
+
+// EligibleResourceImages projects the canonical contract into the atomic claim filter.
+func EligibleResourceImages(environment string, images map[string]string) (map[string]string, error) {
+	if environment != "local" && environment != "release" {
+		return nil, &CapabilityUnavailableError{ReasonCode: "RESOURCE_ENVIRONMENT_UNAVAILABLE"}
+	}
+	entries, err := loadCapabilities()
+	if err != nil {
+		return nil, err
+	}
+	eligible := make(map[string]string)
+	for _, entry := range entries {
+		if requireEnvironmentCapability(entry.Engine, environment) == nil && digestImagePattern.MatchString(images[entry.Engine]) {
+			eligible[entry.Engine] = images[entry.Engine]
+		}
+	}
+	return eligible, nil
 }

@@ -17,6 +17,7 @@ import { RESOURCE_CAPABILITIES } from '../packages/core/src/resource-capabilitie
 
 const e2eOptions = parseE2EOptions(process.argv.slice(2), process.env);
 if (e2eOptions.requestedMode === 'live') assertLegacyDevE2EDryRun({ dryRun: false });
+await import('../tests/fixtures/resource-runtime.mjs');
 const invocationCwd = process.cwd();
 const repositoryRoot = fileURLToPath(new URL('../', import.meta.url));
 const outputDir = path.resolve(process.env.RAIBITSERVER_E2E_OUTPUT_DIR || '.raibitserver-work');
@@ -100,7 +101,7 @@ try {
   if (!consoleRows.body.rows.some((row) => row.status === 'ok')) throw new Error('sqlite console did not return inserted row');
 
   const postgresResource = controlPlane.store.createResource({ projectId: project.body.id, name: 'local-postgres', type: 'database', engine: 'postgresql', provider: 'postgresql-direct', databaseName: 'locale2e', username: 'locale2e_app' });
-  const postgresProvision = await controlPlane.store.provisionResourceProvider({ resourceId: postgresResource.id, dryRun: true, actorUserId: pendingVerified.body.user.id, password: 'local-e2e-postgres-secret' });
+  const postgresProvision = await controlPlane.store.provisionResourceProvider({ resourceId: postgresResource.id, intent: 'preview-plan', actorUserId: pendingVerified.body.user.id });
   const postgresEnv = injectResourceEnv({ ...service.body, attachedResources: ['local-postgres'] }, [postgresProvision.resource], 'local-e2e');
   if (!String(postgresEnv.DATABASE_URL || '').startsWith('postgresql://')) throw new Error('PostgreSQL DATABASE_URL was not injected');
 
@@ -257,7 +258,7 @@ async function createBetaResourceEvidence(projectId, serviceId, token) {
     if (!spec) throw new Error(`missing supported resource fixture: ${capability.engine}`);
     const created = await request('POST', `/projects/${projectId}/resources`, spec, token);
     assertStatus(created, 201, `${spec.engine} resource create`);
-    const provisioned = await request('POST', `/resources/${created.body.id}/provision`, { dryRun: true }, token);
+    const provisioned = await request('POST', `/resources/${created.body.id}/provision`, { intent: 'preview-plan' }, token);
     assertStatus(provisioned, 202, `${spec.engine} resource provision`);
     const attached = await request('POST', `/resources/${created.body.id}/attach`, { serviceId }, token);
     assertStatus(attached, 409, `${spec.engine} dry-run resource attach gate`);

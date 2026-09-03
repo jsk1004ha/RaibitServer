@@ -28,6 +28,11 @@ async function main(argv: string[]) {
   if (domain === 'deployments' && action === 'logs') return print(await client.listDeploymentLogs(required(args, '--deployment-id')));
   if (domain === 'resources' && action === 'create') return print(await client.createResource(required(args, '--project-id'), { name: value(args, '--name') || args[0], type: value(args, '--type') || 'database', engine: value(args, '--engine') || 'postgresql', plan: value(args, '--plan') || 'shared-small' } as any));
   if (domain === 'resources' && action === 'attach') return print({ error: 'Use API POST /resources/:resourceId/attach; CLI attach is reserved for provider-backed mode.' });
+  if (domain === 'resources' && action === 'provision') {
+    const intent = required(args, '--intent');
+    if (intent !== 'preview-plan' && intent !== 'live-provision') throw new Error('--intent must be preview-plan or live-provision');
+    return print(await client.provisionResource(required(args, '--resource-id'), { intent }));
+  }
   if (domain === 'db' && action === 'query') return print(await client.queryResource(required(args, '--resource-id'), { query: await queryText(args), confirmed: args.includes('--confirm') }));
   if (domain === 'usage') return print(await client.usageMe());
   if (domain === 'admin' && action === 'approve') return print(await raw(`/admin/users/${encodeURIComponent(required(args, '--user-id') || args[0])}/approve`, 'POST', { accountType: value(args, '--account-type') || 'NON_CLUB' }));
@@ -52,6 +57,6 @@ async function queryText(args: string[]) { const file = value(args, '--file'); i
 function* pairArgs(args: string[]) { for (let i = 0; i < args.length; i += 1) if (args[i].startsWith('--') && args[i] !== '--user-id') yield [args[i].slice(2), coerce(args[i + 1])]; }
 function coerce(v: string) { return /^\d+$/.test(String(v)) ? Number(v) : v; }
 function print(v: unknown) { process.stdout.write(`${JSON.stringify(v, null, 2)}\n`); }
-function help() { console.log(`RAIBITSERVER CLI\n  raibitserver login --email EMAIL --password PASS\n  raibitserver whoami\n  raibitserver projects list|create\n  raibitserver services create --project-id ID --name web --source-type image --image IMAGE@sha256:DIGEST\n  raibitserver deploy --project-id ID --service-id ID\n  raibitserver deployments logs --deployment-id ID\n  raibitserver resources create --project-id ID --engine postgresql\n  raibitserver db query --resource-id ID --query "SELECT 1"\n  raibitserver usage\n  raibitserver admin approve --user-id ID --account-type NON_CLUB|CLUB_MEMBER\n  raibitserver admin quota --user-id ID --maxProjects 3`); }
+function help() { console.log(`RAIBITSERVER CLI\n  raibitserver login --email EMAIL --password PASS\n  raibitserver whoami\n  raibitserver projects list|create\n  raibitserver services create --project-id ID --name web --source-type image --image IMAGE@sha256:DIGEST\n  raibitserver deploy --project-id ID --service-id ID\n  raibitserver deployments logs --deployment-id ID\n  raibitserver resources create --project-id ID --engine postgresql\n  raibitserver resources provision --resource-id ID --intent preview-plan|live-provision\n  raibitserver db query --resource-id ID --query "SELECT 1"\n  raibitserver usage\n  raibitserver admin approve --user-id ID --account-type NON_CLUB|CLUB_MEMBER\n  raibitserver admin quota --user-id ID --maxProjects 3`); }
 
 main(process.argv.slice(2)).catch((error) => { console.error(error.message); process.exit(1); });

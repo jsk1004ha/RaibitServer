@@ -2,6 +2,8 @@ import { z } from 'zod';
 import type { DeploymentStatus } from './lifecycle.ts';
 export * from './lifecycle.ts';
 import { OrganizationRouteSlugSchema } from './organization-role.ts';
+import { SupportedResourceEngineSchema } from './resource-execution.ts';
+export * from './resource-execution.ts';
 
 export {
   LEGACY_ORGANIZATION_ROLE_ALIASES,
@@ -72,7 +74,7 @@ export const ResourceCreateSchema = z.object({
   name: z.string().min(1),
   slug: z.string().optional(),
   type: ResourceTypeSchema.default('database'),
-  engine: ResourceEngineSchema,
+  engine: SupportedResourceEngineSchema,
   provider: z.string().default('local'),
   plan: z.string().default('shared-small'),
   region: z.string().default('local'),

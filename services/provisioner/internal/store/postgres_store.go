@@ -21,6 +21,10 @@ JOIN "Project" p ON p.id = r."projectId"
 WHERE UPPER(p.status) NOT IN ('DELETE_REQUESTED', 'DELETING')
 	AND p."deletionRequestedAt" IS NULL
 	AND r."deletionRequestedAt" IS NULL
+  AND r."desiredState"->'resourceExecution'->>'intent' = 'live-provision'
+  AND r."desiredState"->'resourceExecution'->>'environment' = $5
+  AND ($6::jsonb ->> LOWER(r.engine)) IS NOT NULL
+  AND r."desiredState"->'resourceExecution'->>'image' = ($6::jsonb ->> LOWER(r.engine))
   AND ((UPPER(r.status) = $1 AND (
         $4::numeric <= 0
         OR NOT (COALESCE(r."desiredState", '{}'::jsonb) ? 'lastDryRunAt')
@@ -205,7 +209,19 @@ WHERE id = $2
   )
 RETURNING id`
 
-type PostgresStore struct{ db *sql.DB }
+type PostgresStore struct {
+	db                  *sql.DB
+	resourceEnvironment string
+	resourceImages      map[string]string
+}
+
+func (s *PostgresStore) ConfigureResourceClaims(environment string, images map[string]string) {
+	s.resourceEnvironment = environment
+	s.resourceImages = make(map[string]string, len(images))
+	for engine, image := range images {
+		s.resourceImages[engine] = image
+	}
+}
 
 func OpenPostgresStore(ctx context.Context, dsn string) (*PostgresStore, func() error, error) {
 	if strings.TrimSpace(dsn) == "" {
@@ -260,6 +276,13 @@ func (s *PostgresStore) ClaimNextResourceDeletion(ctx context.Context, staleAfte
 }
 
 func (s *PostgresStore) ClaimNextResource(ctx context.Context, staleAfter, dryRunRecheck time.Duration) (*Resource, error) {
+	if s.resourceEnvironment != "local" && s.resourceEnvironment != "release" {
+		return nil, errors.New("RESOURCE_CAPABILITY_UNAVAILABLE: RESOURCE_ENVIRONMENT_UNAVAILABLE")
+	}
+	images, err := json.Marshal(s.resourceImages)
+	if err != nil {
+		return nil, fmt.Errorf("encode resource claim images: %w", err)
+	}
 	if staleAfter <= 0 {
 		staleAfter = 15 * time.Minute
 	}
@@ -268,7 +291,7 @@ func (s *PostgresStore) ClaimNextResource(ctx context.Context, staleAfter, dryRu
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	resource, err := scanResource(tx.QueryRowContext(ctx, claimResourceSQL, StatusProvisioning, StatusReconciling, staleAfter.Milliseconds(), dryRunRecheck.Milliseconds()))
+	resource, err := scanResource(tx.QueryRowContext(ctx, claimResourceSQL, StatusProvisioning, StatusReconciling, staleAfter.Milliseconds(), dryRunRecheck.Milliseconds(), s.resourceEnvironment, images))
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return nil, err

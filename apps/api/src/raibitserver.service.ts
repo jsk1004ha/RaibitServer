@@ -3,6 +3,7 @@ import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schem
 import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth } from '@raibitserver/core';
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { ResourceCapabilityUnavailable, ResourceIntentInvalid, resourceAvailability, can, listCatalog } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -229,14 +230,13 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
     const resources = repository.listResourcesForProject ? await paginationRead(() => repository.listResourcesForProject(projectId, options)) : (await repository.snapshot()).resources.filter((resource: Record<string, any>) => String(resource.projectId) === String(projectId));
-    return keysetPage('resources', resources, 'createdAt');
+    return { ...keysetPage('resources', resources, 'createdAt'), resourceOptions: listCatalog().map(entry => ({ engine: entry.key, ...resourceAvailability(entry.key), permitted: can(subject.role, 'db:create') })) };
   }
 
   async addResource(projectId: string, resource: ResourceSpec, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
-    const safeResource = sanitizeTenantResourceApiInput(resource);
-    return repositoryMutation(() => repository.createResource({ ...safeResource, projectId, actorUserId: subject.id }));
+    return repositoryMutation(() => repository.createResource({ ...sanitizeTenantResourceApiInput(resource), projectId, actorUserId: subject.id }));
   }
 
   async getResource(resourceId: string, subject: Record<string, any>) {
@@ -244,14 +244,14 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const resource = repository.getResource ? await repository.getResource(resourceId) : (await repository.snapshot()).resources.find((candidate: Record<string, any>) => String(candidate.id) === String(resourceId));
     if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
     await assertProjectAccess(repository, resource.projectId, subject);
-    return resource;
+    return { ...resource, availability: { ...resourceAvailability(resource.engine), permitted: can(subject.role, 'db:create') } };
   }
 
   async updateResource(resourceId: string, updates: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     const current = await this.getResource(resourceId, subject);
     const resource = await repositoryMutation(() => {
-      const safeUpdates = sanitizeTenantResourceApiUpdate(updates);
+      const safeUpdates = sanitizeTenantResourceApiUpdate(updates, current.engine);
       return repository.updateResource ? repository.updateResource(resourceId, safeUpdates) : repository.store.updateResource(resourceId, safeUpdates);
     });
     if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
@@ -904,6 +904,8 @@ async function repositoryMutation<T>(operation: () => T | Promise<T>): Promise<T
 }
 
 function nestAuthError(error: any) {
+  if (error instanceof ResourceCapabilityUnavailable) return new BadRequestException({ statusCode: 400, code: error.code, reasonCode: error.reasonCode, message: error.message });
+  if (error instanceof ResourceIntentInvalid) return new BadRequestException({ statusCode: 400, code: error.code, message: error.message });
   const message = error instanceof Error ? error.message : 'auth_error';
   if (error?.statusCode === 400) return new BadRequestException(message);
   if (error?.statusCode === 403) return new ForbiddenException(message);

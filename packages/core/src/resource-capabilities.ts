@@ -22,9 +22,9 @@ export class ResourceCapabilityUnavailable extends Error {
   readonly code = 'RESOURCE_CAPABILITY_UNAVAILABLE';
   readonly reasonCode: string;
 
-  constructor(engine: string, operation: ResourceOperation, environment: ResourceEnvironment) {
+  constructor(engine: string, operation: ResourceOperation, environment: ResourceEnvironment, reason?: string) {
     const capability = resourceCapability(engine);
-    const reasonCode = capability?.reasonCode ?? 'ENGINE_NOT_IMPLEMENTED';
+    const reasonCode = reason ?? capability?.reasonCode ?? 'ENGINE_NOT_IMPLEMENTED';
     super(`RESOURCE_CAPABILITY_UNAVAILABLE: ${engine}/${environment}/${operation}: ${reasonCode} — ${capability?.reasonKo ?? '준비 중 · 지원하지 않는 엔진'}`);
     this.reasonCode = reasonCode;
   }

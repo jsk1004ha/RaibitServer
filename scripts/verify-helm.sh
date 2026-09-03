@@ -40,6 +40,8 @@ trap 'rm -rf "$OUTPUT_DIR"' EXIT HUP INT TERM
   --set-string hostedErrors.fallbackIngress.tls.existingSecret= >"$OUTPUT_DIR/production-with-shared-ingress-tls.yaml"
 
 grep -q 'helm.sh/hook: pre-install,pre-upgrade' "$OUTPUT_DIR/production.yaml"
+test "$(grep -A 1 'name: RAIBITSERVER_RESOURCE_ENVIRONMENT' "$OUTPUT_DIR/default.yaml" | grep -c 'value: "local"')" -eq 2
+test "$(grep -A 1 'name: RAIBITSERVER_RESOURCE_ENVIRONMENT' "$OUTPUT_DIR/production.yaml" | grep -c 'value: "release"')" -eq 2
 grep -q 'kind: ValidatingAdmissionPolicy' "$OUTPUT_DIR/production.yaml"
 grep -q 'kind: CustomResourceDefinition' "$OUTPUT_DIR/production.yaml"
 grep -q 'app.kubernetes.io/name: raibitserver-dashboard' "$OUTPUT_DIR/production.yaml"

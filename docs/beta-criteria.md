@@ -653,6 +653,7 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 구현 계약과 아직 필요한 검증 증거:
 
 - Resource lifecycle API: `GET/PATCH/DELETE /resources/:resourceId`, `POST /resources/:resourceId/attach`, `POST /resources/:resourceId/provision`.
+- Provision intent: `preview-plan`은 상태·대기열을 변경하지 않는 `PLAN_ONLY`, `live-provision`은 지원 환경/이미지 검증 후 `PROVISIONING` 요청 저장이다. Go claim도 live intent/환경/digest를 쓰기 전에 검사한다. 이 경계의 PostgreSQL 테스트는 실제 엔진 release lifecycle 성공을 의미하지 않는다.
 - Deterministic contract: `packages/core/src/resource-providers.ts`와 로컬 테스트가 provider env, 명령 plan, masking, console response shape를 검증한다. 이는 외부 provider 명령의 실제 성공 증거가 아니다.
 - Go adapter contract: `services/provisioner/internal/provider`가 지원 엔진의 digest-pinned dedicated-local manifest와 인증 probe를 컴파일한다. Object Storage/Qdrant/NATS는 capability 검사에서 typed error로 거부한다.
 - Local proof: `tests/db-resource-beta.test.js`, `tests/db-console.test.js`, `tests/resource-providers.test.js`, `pnpm e2e:dry`의 `betaResourceEvidence`.

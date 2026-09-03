@@ -71,7 +71,7 @@ VALUES ($1, $2, 'UID health project', $1, 'ACTIVE', CURRENT_TIMESTAMP)`, project
   "desiredSpec", "desiredState", "connectionSecretName", "updatedAt")
 VALUES ($1, $2, 'UID health database', 'uid-health-database', 'database', 'postgresql', 'raibitserver',
   'shared-small', 'local', 'READY', '{"databaseName":"uid_health","storageGb":1}'::jsonb, $3::jsonb,
-  $4, CURRENT_TIMESTAMP - interval '1 minute')`, resourceID, projectID, desiredState, providerName+"-connection"); err != nil {
+  $4, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - interval '1 minute')`, resourceID, projectID, desiredState, providerName+"-connection"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,6 +85,7 @@ VALUES ($1, $2, 'UID health database', 'uid-health-database', 'database', 'postg
 		}
 	})
 	config := postgresqlLiveConfig(t.TempDir())
+	state.ConfigureResourceClaims("local", config.Images)
 	config.HealthInterval = time.Millisecond
 	result, reconcileErr := New(config, state, &fakeRunner{secretExists: true, replacementUIDMismatch: true}).RunOnce(ctx)
 	if !errors.Is(reconcileErr, command.ErrSecretUIDMismatch) || result == nil || result.Status != store.StatusFailed {

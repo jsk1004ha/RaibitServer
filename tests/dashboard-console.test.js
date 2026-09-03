@@ -78,7 +78,10 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
   assert.doesNotMatch(deployment, /\/deployments\/\$\{deploymentId\}\/status/, 'tenant dashboard must not expose worker-owned deployment status mutation');
   assert.match(deployment, /cancellationAllowed[\s\S]*?QUEUED[\s\S]*?BUILDING[\s\S]*?IMAGE_READY/);
   assert.match(deployment, /실행 중이거나 완료된 배포는 롤백 또는 서비스 삭제를 사용하세요/);
-  for (const marker of ['/console/query', '/console/command', '/provision', '/attach', 'confirmed', '리소스 콘솔', '데이터 구조', '쿼리', '백업', '연결', '공급자 명령 실행', '계획 만들기', '서비스에 연결']) {
+  const provisioning = await fs.readFile(new URL('../apps/dashboard/components/resource-provision-actions.tsx', import.meta.url), 'utf8');
+  assert.ok(provisioning.includes('계획 미리보기'));
+  assert.ok(provisioning.includes('실제 실행 요청'));
+  for (const marker of ['/console/query', '/console/command', '/provision', '/attach', 'confirmed', '리소스 콘솔', '데이터 구조', '쿼리', '백업', '연결', '공급자 명령 실행', 'ResourceProvisionActions', '서비스에 연결']) {
     assert.ok(resource.includes(marker), `${marker} missing from resource screen`);
   }
   for (const marker of ['2309', '김준서', 'teacher', '최희진']) assert.ok(contributors.includes(marker));

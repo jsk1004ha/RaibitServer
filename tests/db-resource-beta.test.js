@@ -22,7 +22,9 @@ test('beta resource lifecycle plans through the API and attaches only Go-provisi
       assert.equal(created.body.engine, engine);
         assert.equal(created.body.connectionSecretName ?? null, null, `${engine} has no control-plane credential secret`);
       resources.push(created.body);
-      const provisioned = await request(server.port, 'POST', `/resources/${created.body.id}/provision`, { dryRun: true });
+      const before = controlPlane.store.snapshot();
+      const provisioned = await request(server.port, 'POST', `/resources/${created.body.id}/provision`, { intent: 'preview-plan' });
+      assert.deepEqual(controlPlane.store.snapshot(), before);
       assert.equal(provisioned.statusCode, 202, `${engine} provision`);
       assert.equal(provisioned.body.resource.status, 'provisioning');
       assert.equal(provisioned.body.result.dryRun, true);

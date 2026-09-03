@@ -57,21 +57,24 @@ export function ResourcesView({ data }: Readonly<{ data: ProjectHubData }>) {
 }
 
 function NewResourceView({ data }: Readonly<{ data: ProjectHubData }>) {
+  const liveEngines = new Set((data.resourceOptions || []).filter((entry) => entry.live && entry.permitted).map((entry) => entry.engine));
   return (
     <Card className="mx-auto w-full max-w-3xl">
-      <CardHeader><CardTitle><h2>리소스 추가</h2></CardTitle><CardDescription>로컬 전용 데이터 계층 · 운영 릴리스 검증 전</CardDescription></CardHeader>
+      <CardHeader><CardTitle><h2>리소스 추가</h2></CardTitle><CardDescription>실제 실행 요청 생성 · 로컬 전용 · 운영 릴리스 검증 전</CardDescription></CardHeader>
       <form action={apiAction(`/projects/${data.projectId}/resources`)} method="post">
         <input name="_returnTo" type="hidden" value={`${data.base}?view=resources`} />
         <CardContent><FieldGroup>
           <Field><FieldLabel htmlFor="resource-name">리소스 이름</FieldLabel><Input id="resource-name" name="name" placeholder="예: postgres" required /></Field>
           <Field>
             <FieldLabel htmlFor="resource-engine">엔진</FieldLabel>
-            <Select defaultValue="postgresql" id="resource-engine" name="engine" aria-describedby="resource-capability-help">
-              {RESOURCE_CAPABILITIES.map((entry) => <option key={entry.engine} value={entry.engine} disabled={!entry.local.provision}>
-                {entry.displayName} · {entry.local.provision ? '로컬 전용' : '준비 중'}
+            <Select defaultValue={[...liveEngines][0] || ''} id="resource-engine" name="engine" required disabled={liveEngines.size === 0} aria-describedby="resource-capability-help">
+              {liveEngines.size === 0 ? <option value="">실행 가능한 엔진 없음</option> : null}
+              {RESOURCE_CAPABILITIES.map((entry) => <option key={entry.engine} value={entry.engine} disabled={!liveEngines.has(entry.engine)}>
+                {entry.displayName} · {liveEngines.has(entry.engine) ? '로컬 전용' : entry.local.provision ? '사용 불가' : '준비 중'}
               </option>)}
             </Select>
-            <FieldDescription className="break-keep" id="resource-capability-help">SQLite는 로컬 파일 전용입니다. 관리형 백업·복구는 아직 제공하지 않습니다.</FieldDescription>
+            <FieldDescription className="break-keep" id="resource-capability-help">추가하면 실제 실행 희망 상태가 저장됩니다. 준비 완료는 공급자 검증 후 표시됩니다. SQLite는 로컬 파일 전용이며 관리형 백업·복구는 아직 제공하지 않습니다.</FieldDescription>
+            {liveEngines.size === 0 ? <FieldDescription>서버 설정 또는 권한상 생성할 수 있는 엔진이 없습니다. 운영 릴리스 지원은 아직 검증되지 않았습니다.</FieldDescription> : null}
           </Field>
           <Field>
             <FieldLabel>준비 중인 엔진</FieldLabel>
@@ -80,7 +83,7 @@ function NewResourceView({ data }: Readonly<{ data: ProjectHubData }>) {
             </FieldDescription>)}
           </Field>
         </FieldGroup></CardContent>
-        <CardFooter className="mt-raibit-xl justify-end gap-raibit-sm"><a className={buttonVariants({ variant: 'ghost' })} href={`${data.base}?view=resources`}>취소</a><button className={buttonVariants()} type="submit">리소스 추가</button></CardFooter>
+        <CardFooter className="mt-raibit-xl justify-end gap-raibit-sm"><a className={buttonVariants({ variant: 'ghost' })} href={`${data.base}?view=resources`}>취소</a><button className={buttonVariants()} type="submit" disabled={liveEngines.size === 0}>리소스 추가 · 실제 실행 요청</button></CardFooter>
       </form>
     </Card>
   );
