@@ -517,15 +517,17 @@ func scanPostgresDeployment(row rowScanner) (*Deployment, error) {
 	var reconcileLockedAt sql.NullTime
 	var pullRequestNumber sql.NullInt64
 	var snapshotVersion sql.NullInt64
+	var snapshot []byte
 	var sourceDeploymentID, retryOfDeploymentID sql.NullString
 	err := row.Scan(&deployment.ID, &deployment.ServiceID, &deployment.ProjectID, &deployment.Status, &deployment.DeploymentType,
 		&deployment.TriggerType, &deployment.Branch, &commitSHA, &imageURL, &imageDigest, &previewURL, &pullRequestNumber,
 		&reconcileAction, &reconcileLockedBy, &reconcileLockedAt, &deployment.ReconcileAttempts,
-		&deployment.DesiredSpecSnapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID)
+		&snapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID)
 	if err != nil {
 		return nil, err
 	}
 	deployment.CommitSHA = nullString(commitSHA)
+	deployment.DesiredSpecSnapshot = snapshot
 	if snapshotVersion.Valid {
 		deployment.SnapshotVersion = int(snapshotVersion.Int64)
 		if deployment.SnapshotVersion < 1 {
