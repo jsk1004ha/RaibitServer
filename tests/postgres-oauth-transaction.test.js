@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 
 const require = createRequire(import.meta.url);
+const postgresOptions = { skip: !process.env.RAIBITSERVER_TEST_DATABASE_URL && process.env.RAIBITSERVER_REQUIRE_POSTGRES_TESTS !== '1' ? 'NOT_RUN: disposable PostgreSQL URL not configured' : false };
 const input = { state: 'postgres-state-'.repeat(4), source: '198.51.100.82', sourceSecret: 'postgres-source-key-'.repeat(3), codeVerifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk', codeChallenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM', redirectUri: 'https://console.example.test/callback', now: 1_000_000, ttlMs: 60_000 };
 
 async function fixture(t) {
@@ -41,7 +42,7 @@ async function fixture(t) {
   return repositories;
 }
 
-test('consume matching OAuth transaction once in durable PostgreSQL', async (t) => {
+test('consume matching OAuth transaction once in durable PostgreSQL', postgresOptions, async (t) => {
   const repositories = await fixture(t);
   assert.equal(typeof repositories[0].createOAuthTransaction, 'function');
   const created = await repositories[0].createOAuthTransaction(input);
@@ -56,7 +57,7 @@ test('consume matching OAuth transaction once in durable PostgreSQL', async (t) 
   assert.equal(consumed.consumedAt, input.now);
 });
 
-test('OAuth transaction adversarial matrix in PostgreSQL', async (t) => {
+test('OAuth transaction adversarial matrix in PostgreSQL', postgresOptions, async (t) => {
   const repositories = await fixture(t);
   const repository = repositories[0];
   assert.equal(typeof repository.createOAuthTransaction, 'function');

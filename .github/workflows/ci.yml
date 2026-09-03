@@ -80,6 +80,10 @@ jobs:
       - run: pnpm prisma:generate
       - run: pnpm exec prisma migrate deploy --schema prisma/schema.prisma
       - run: node --test tests/postgres-integration.test.js
+      - name: Require OAuth transaction PostgreSQL verification
+        run: node --test tests/postgres-oauth-transaction.test.js
+        env:
+          RAIBITSERVER_REQUIRE_POSTGRES_TESTS: '1'
       - run: (cd services/builder && go test -count=1 -run '^TestPostgres' ./internal/controlplane)
       - run: (cd services/orchestrator && go test -count=1 -run '^TestPostgres' ./internal/store)
       - run: (cd services/provisioner && go test -count=1 -run '^TestPostgres' ./internal/reconciler)
