@@ -1,4 +1,5 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
+import { emptyRecoveryState, assertRecoveryPins, assertRecoveryTargetPublished, retireMemoryRecovery } from './resource-recovery-memory.ts';
 import { INITIAL_DEPLOYMENT_HEALTH, parseHealthPaths, serviceHealthInput, publicDeploymentHealth } from './deployment-health.ts';
 import { captureDeploymentSnapshot } from './deployment-operations.ts';
 import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
@@ -41,6 +42,7 @@ import {
 export const AUTH_RETENTION_PRUNE_BATCH_SIZE = 256;
 
 export class ControlPlaneStore {
+  readonly recoveryState = emptyRecoveryState();
   organizations: Map<string, any>;
   users: Map<string, any>;
   members: any[];
@@ -437,6 +439,7 @@ export class ControlPlaneStore {
   }
 
   deleteProject(projectId: string) {
+    assertRecoveryPins(this.recoveryState, [...this.resources.values()].filter(row => row.projectId === projectId).map(row => row.id));
     const current = this.projects.get(projectId);
     if (!current) return null;
     for (const service of [...this.services.values()].filter((service) => String(service.projectId) === String(projectId))) this.deleteService(service.id);
@@ -583,6 +586,8 @@ export class ControlPlaneStore {
   }
 
   deleteResource(resourceId: string) {
+    assertRecoveryPins(this.recoveryState, [resourceId]);
+    retireMemoryRecovery(this.recoveryState, resourceId);
     const current = this.resources.get(resourceId);
     if (!current) return null;
     const attachments = this.resourceAttachments.filter((row) => String(row.resourceId) === String(resourceId));
@@ -597,6 +602,7 @@ export class ControlPlaneStore {
   }
 
   attachResource({ resourceId, serviceId, envPrefix = null, actorUserId = 'system' }: Record<string, any>) {
+    assertRecoveryTargetPublished(this.recoveryState, resourceId);
     const resource = this.resources.get(resourceId);
     const service = this.services.get(serviceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
@@ -1583,6 +1589,7 @@ export class ControlPlaneStore {
   }
 
   resourceForConsole(resource: Record<string, any>) {
+    assertRecoveryTargetPublished(this.recoveryState, resource.id);
     const env: Record<string, string> = {};
     let live = false;
     for (const secret of this.secrets.values()) {

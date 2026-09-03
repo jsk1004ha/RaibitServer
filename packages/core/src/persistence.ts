@@ -1,4 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
+import { ResourceRecoveryRepository, type RecoveryQuotaPolicy } from './resource-recovery.ts';
+import { MemoryRecoveryTransaction } from './resource-recovery-memory.ts';
+import { PostgresRecoveryTransaction, lockRecoveryDeletion, assertPostgresRecoveryPublished } from './resource-recovery-postgres.ts';
 import { HEALTH_PATH_FIELDS, INITIAL_DEPLOYMENT_HEALTH, parseHealthPaths, publicDeploymentHealth } from './deployment-health.ts';
 import { assertOperationReplay, captureDeploymentSnapshot, deploymentSuccessor, DeploymentOperationError, eligibleDeploymentSource, successorWorkflow, type DeploymentOperation } from './deployment-operations.ts';
 import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
@@ -100,6 +103,7 @@ function restoreInMemoryStore(store: ControlPlaneStore, snapshot: Record<string,
 }
 
 export class InMemoryControlPlaneRepository {
+  resourceRecovery(enforceQuota: RecoveryQuotaPolicy) { return new ResourceRecoveryRepository(new MemoryRecoveryTransaction(this.store.recoveryState, this.store), enforceQuota); }
   store: ControlPlaneStore;
 
   constructor(store = new ControlPlaneStore()) {
@@ -353,6 +357,7 @@ export class InMemoryControlPlaneRepository {
 }
 
 export class PrismaControlPlaneRepository {
+  resourceRecovery(enforceQuota: RecoveryQuotaPolicy) { return new ResourceRecoveryRepository(new PostgresRecoveryTransaction(this.prisma), enforceQuota); }
   readonly prisma: PrismaClient;
 
   constructor(prisma: PrismaClient) {
@@ -780,6 +785,7 @@ export class PrismaControlPlaneRepository {
 
   async deleteProject(projectId: string) {
     return this.prisma.$transaction(async (tx: any) => {
+      await lockRecoveryDeletion(tx, { projectId });
       const current = await tx.project.findUnique({ where: { id: projectId } });
       if (!current) return null;
       const requestedAt = current.deletionRequestedAt || new Date();
@@ -862,6 +868,7 @@ export class PrismaControlPlaneRepository {
 
   async deleteResource(resourceId: string) {
     return this.prisma.$transaction(async (tx: any) => {
+      await lockRecoveryDeletion(tx, { resourceId });
       const current = await tx.resource.findUnique({ where: { id: resourceId } });
       if (!current) return null;
       const attachmentsRevoked = await revokeResourceAttachments(tx, [resourceId]);
@@ -1569,7 +1576,7 @@ export class PrismaControlPlaneRepository {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const job = await this.prisma.workflowJob.findFirst({
         where: {
-          type: { not: WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE },
+          type: { notIn: [WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE, WORKFLOW_TYPES.RESOURCE_BACKUP, WORKFLOW_TYPES.RESOURCE_RESTORE] },
           status: 'queued',
           runAfter: { lte: now },
           OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
@@ -1580,7 +1587,7 @@ export class PrismaControlPlaneRepository {
       const updated = await this.prisma.workflowJob.updateMany({
         where: {
           id: job.id,
-          type: { not: WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE },
+          type: { notIn: [WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE, WORKFLOW_TYPES.RESOURCE_BACKUP, WORKFLOW_TYPES.RESOURCE_RESTORE] },
           status: 'queued',
           runAfter: { lte: now },
           OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
@@ -1773,11 +1780,13 @@ export class PrismaControlPlaneRepository {
   }
 
   async resourceForConsole(resource: Record<string, any>) {
+    await assertPostgresRecoveryPublished(this.prisma, resource.id);
     return resourceForConsoleWithDb(this.prisma, resource);
   }
 
   async attachResource({ resourceId, serviceId, envPrefix = null, actorUserId = 'system' }: Record<string, any>) {
     return this.prisma.$transaction(async (tx: any) => {
+      await assertPostgresRecoveryPublished(tx, resourceId);
       const [resource, service] = await Promise.all([
         tx.resource.findUnique({ where: { id: resourceId } }),
         tx.service.findUnique({ where: { id: serviceId } }),
