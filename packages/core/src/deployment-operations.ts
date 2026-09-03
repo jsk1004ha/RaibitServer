@@ -68,18 +68,42 @@ export function eligibleDeploymentSource(source: LineageSource) {
   return ['BUILD_FAILED', 'FAILED', 'READY'].includes(normalizeDeploymentStatus(source.status));
 }
 
-function immutableGitCommit(source: LineageSource, spec: DesiredSpecSnapshot): string | null {
+function sourceKind(source: LineageSource, spec: DesiredSpecSnapshot): 'local' | 'image' | 'git' | 'other' {
   const text = (value: Json | undefined) => typeof value === 'string' ? value.trim() : '';
   const repo = text(spec.repoUrl) || text(spec.repositoryUrl);
   const sourceType = text(spec.sourceType).toLowerCase();
   const mode = text(spec.buildMode).toLowerCase().replaceAll('_', '-');
-  if (text(spec.localPath) || sourceType === 'image' || ['image', 'prebuilt', 'prebuilt-image'].includes(mode) || (!repo && source.imageUrl?.trim())) return null;
-  if (!repo && !['git', 'github'].includes(sourceType)) return null;
+  if (text(spec.localPath)) return 'local';
+  if (sourceType === 'image' || ['image', 'prebuilt', 'prebuilt-image'].includes(mode) || (!repo && source.imageUrl?.trim())) return 'image';
+  return repo || ['git', 'github'].includes(sourceType) ? 'git' : 'other';
+}
+
+function immutableGitCommit(source: LineageSource): string {
   const sha = source.commitSha?.trim().toLowerCase() || '';
   const hash = source.commitHash?.trim().toLowerCase() || '';
   const commit = sha || hash;
   if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit) || /^0+$/.test(commit) || (sha && hash && sha !== hash)) throw new DeploymentOperationError('SOURCE_INELIGIBLE');
   return commit;
+}
+
+function immutableImage(source: LineageSource) {
+  const reference = source.imageUrl?.trim() || '';
+  const parts = reference.split('@');
+  const named = parts[0] || '';
+  const tagOffset = named.lastIndexOf(':') > named.lastIndexOf('/') ? named.lastIndexOf(':') : -1;
+  const repository = tagOffset < 0 ? named : named.slice(0, tagOffset);
+  const tag = tagOffset < 0 ? null : named.slice(tagOffset + 1);
+  const embedded = parts.length === 2 ? parts[1].toLowerCase() : '';
+  const separate = source.imageDigest?.trim().toLowerCase() || '';
+  const validDigest = (value: string) => /^sha256:[0-9a-f]{64}$/.test(value) && !/^sha256:0+$/.test(value);
+  const digest = embedded || separate;
+  const segments = repository.split('/');
+  const registry = segments.length > 1 && /[.:]/.test(segments[0]) ? segments.shift() : null;
+  const validRepository = segments.every(segment => /^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$/.test(segment));
+  const validRegistry = registry === null || (/^[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?$/.test(registry) && (!registry.includes(':') || Number(registry.split(':')[1]) <= 65535));
+  if (parts.length > 2 || !validRepository || !validRegistry || (tag !== null && !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(tag)) ||
+      !validDigest(digest) || (parts.length === 2 && !validDigest(embedded)) || (separate && !validDigest(separate)) || (embedded && separate && embedded !== separate)) throw new DeploymentOperationError('SOURCE_INELIGIBLE');
+  return { imageUrl: `${repository}@${digest}`, imageDigest: digest };
 }
 
 export function deploymentSuccessor(source: LineageSource | null, input: DeploymentOperation) {
@@ -88,7 +112,9 @@ export function deploymentSuccessor(source: LineageSource | null, input: Deploym
   if (!eligible) throw new DeploymentOperationError('SOURCE_INELIGIBLE');
   if (!source.snapshotVersion || !source.desiredSpecSnapshot || typeof source.desiredSpecSnapshot !== 'object' || Array.isArray(source.desiredSpecSnapshot)) throw new DeploymentOperationError('SNAPSHOT_UNAVAILABLE');
   if (source.snapshotVersion !== 1 || input.snapshotVersion !== source.snapshotVersion) throw new DeploymentOperationError('STALE_SNAPSHOT');
-  const commit = immutableGitCommit(source, source.desiredSpecSnapshot);
+  const kind = sourceKind(source, source.desiredSpecSnapshot);
+  const commit = kind === 'git' ? immutableGitCommit(source) : null;
+  const image = kind === 'image' ? immutableImage(source) : { imageUrl: source.imageUrl ?? null, imageDigest: source.imageDigest ?? null };
   return {
     id: `dep_${crypto.randomUUID()}`, serviceId: source.serviceId, projectId: source.projectId,
     status: normalizeDeploymentStatus('QUEUED'), sourceDeploymentId: source.id,
@@ -96,7 +122,7 @@ export function deploymentSuccessor(source: LineageSource | null, input: Deploym
     requestIdempotencyKey: input.requestIdempotencyKey, requestedByUserId: input.requestedByUserId,
     snapshotVersion: source.snapshotVersion, desiredSpecSnapshot: structuredClone(source.desiredSpecSnapshot),
     commitSha: commit ?? source.commitSha ?? source.commitHash ?? null, commitHash: commit ?? source.commitHash ?? source.commitSha ?? null,
-    imageUrl: source.imageUrl ?? null, imageDigest: source.imageDigest ?? null,
+    ...image,
     branch: source.branch ?? 'main', deploymentType: source.deploymentType ?? 'production', triggerType: input.operation,
     pullRequestNumber: source.pullRequestNumber ?? null, previewUrl: source.previewUrl ?? null,
   };

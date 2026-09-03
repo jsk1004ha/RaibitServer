@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryControlPlaneRepository } from '../packages/core/src/persistence.ts';
-import { bootLineageApi } from './fixtures/deployment-retry-runtime.mjs';
+import { bootLineageApi, imageIdentityRegression } from './fixtures/deployment-retry-runtime.mjs';
 import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
 import { apiOperations, createOpenApiDocument } from '../packages/schemas/src/api-contract.ts';
 import { deploymentSuccessor, parseDeploymentOperationBody } from '../packages/core/src/deployment-operations.ts';
@@ -11,7 +11,7 @@ async function fixture() {
   const org = await repository.createOrganization({ name: 'Lineage', slug: 'lineage' });
   const project = await repository.createProject({ organizationId: org.id, name: 'App', slug: 'app' });
   const service = await repository.createService({ projectId: project.id, name: 'Web', type: 'web', sourceType: 'image', image: 'example/app:v1', desiredSpec: { image: 'example/app:v1', port: 3000 } });
-  const source = await repository.createDeployment({ id: 'source', serviceId: service.id, projectId: project.id, commitSha: 'a'.repeat(40), imageUrl: 'example/app:v1', status: 'FAILED' });
+  const source = await repository.createDeployment({ id: 'source', serviceId: service.id, projectId: project.id, commitSha: 'a'.repeat(40), imageUrl: `example/app@sha256:${'a'.repeat(64)}`, status: 'FAILED' });
   return { repository, service, source };
 }
 
@@ -68,7 +68,7 @@ for (const transport of ['core', 'nest']) {
     // Given: a captured failed source and a later mutable service configuration.
     const runtime = await bootLineageApi(t, transport);
     const { repository, service, project } = runtime;
-    const source = await repository.createDeployment({ id: 'http-source', serviceId: service.id, projectId: project.id, status: 'FAILED', commitSha: 'b'.repeat(40), imageUrl: 'example/app:v1' });
+    const source = await repository.createDeployment({ id: 'http-source', serviceId: service.id, projectId: project.id, status: 'FAILED', commitSha: 'b'.repeat(40), imageUrl: `example/app@sha256:${'a'.repeat(64)}` });
     const before = JSON.stringify(repository.store.getDeployment(source.id));
     const events = JSON.stringify(repository.store.listDeploymentEvents(source.id));
     repository.store.services.get(service.id).port = 9999;
@@ -91,7 +91,7 @@ for (const transport of ['core', 'nest']) {
     // Given: a terminal source; current service config differs from the capture.
     const runtime = await bootLineageApi(t, transport);
     const { repository, service, project } = runtime;
-    const first = await repository.createDeployment({ id: 'old-ready', serviceId: service.id, projectId: project.id, status: 'READY', imageUrl: 'example/app:old' });
+    const first = await repository.createDeployment({ id: 'old-ready', serviceId: service.id, projectId: project.id, status: 'READY', imageUrl: `example/app@sha256:${'a'.repeat(64)}` });
     repository.store.deployments.get(first.id).createdAt = '2020-01-01T00:00:00.000Z';
     const latest = await repository.createDeployment({ id: 'latest-ready', serviceId: service.id, projectId: project.id, status: 'READY', imageUrl: 'example/app:latest', imageDigest: `sha256:${'c'.repeat(64)}` });
     // When: redeploy resolves the latest eligible snapshot once.
@@ -101,7 +101,7 @@ for (const transport of ['core', 'nest']) {
     assert.equal(result.body.deployment.sourceDeploymentId, latest.id);
     assert.equal(result.body.deployment.retryOfDeploymentId, null);
     assert.equal(result.body.deployment.imageDigest, `sha256:${'c'.repeat(64)}`);
-    await repository.createDeployment({ id: 'later-ready', serviceId: service.id, projectId: project.id, status: 'READY', imageUrl: 'example/app:later' });
+    await repository.createDeployment({ id: 'later-ready', serviceId: service.id, projectId: project.id, status: 'READY', imageUrl: `example/app@sha256:${'b'.repeat(64)}` });
     const replay = await runtime.post(`/services/${service.id}/redeploy`, { requestIdempotencyKey: 'redeploy-key', snapshotVersion: 1 });
     assert.deepEqual(replay, result);
     assert.equal(apiOperations['services-redeploy'].response.safeParse(result.body).success, true);
@@ -207,6 +207,7 @@ test('C15-1 Git lineage accepts only an unambiguous complete durable revision', 
 });
 
 for (const transport of ['core', 'nest']) {
+  test(`B2 image identity over ${transport} HTTP`, t => imageIdentityRegression(t, transport));
   test(`C15-1 unresolved Git source rejects retry and selected latest redeploy before writes over ${transport} HTTP`, async t => {
     // Given: a pinned older Git source and newer sources whose initial clone never pinned a revision.
     const runtime = await bootLineageApi(t, transport);
@@ -242,3 +243,23 @@ for (const transport of ['core', 'nest']) {
     t.diagnostic(JSON.stringify({ transport, rejectedRequests: 6, noWriteOnRejection: true, initialUnpinnedAllowed: true, pinnedLatestAccepted: true, replayStable: true }));
   });
 }
+
+test('B2 image identity requires an unambiguous nonzero sha256 and repository', () => {
+  // Given: explicit image/prebuilt and implicit Deployment-bound image classifications.
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const source = { id: 'image', serviceId: 'service', projectId: 'project', status: 'FAILED', snapshotVersion: 1 };
+  for (const desiredSpecSnapshot of [{ sourceType: 'image', image: `snapshot@${digest}` }, { buildMode: 'prebuilt_image' }, { sourceType: 'github' }]) {
+    for (const operation of ['retry', 'redeploy']) {
+      const input = { operation, serviceId: 'service', sourceDeploymentId: 'image', requestedByUserId: 'system', requestIdempotencyKey: operation, snapshotVersion: 1 };
+      // When / Then: malformed identities never produce successors; valid forms canonicalize identically.
+      for (const imageUrl of ['app:latest', `app@sha256:${'0'.repeat(64)}`, 'app@sha256:abc', `app@@${digest}`, `https://registry/app@${digest}`, `user:password@registry/app@${digest}`, `@${digest}`, `../app@${digest}`]) {
+        assert.throws(() => deploymentSuccessor({ ...source, desiredSpecSnapshot, imageUrl }, input), error => error.statusCode === 409);
+      }
+      for (const identity of [{ imageUrl: `team/app@${digest}` }, { imageUrl: 'team/app:v1', imageDigest: digest }]) {
+        const successor = deploymentSuccessor({ ...source, desiredSpecSnapshot, ...identity }, input);
+        assert.equal(successor.imageUrl, `team/app@${digest}`);
+        assert.equal(successor.imageDigest, digest);
+      }
+    }
+  }
+});
