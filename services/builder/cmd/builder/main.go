@@ -21,6 +21,12 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if len(os.Args) > 1 && os.Args[1] == "github-credential-helper" {
+		if err := worker.RunGitCredentialHelper(ctx, os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	env := environment()
 	if err := validateRoleEnvironment(env); err != nil {
 		fmt.Fprintf(os.Stderr, "builder role configuration failed: %v\n", err)

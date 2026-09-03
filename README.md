@@ -309,7 +309,8 @@ private 저장소 빌드용 App ID와 RSA private key는 API 환경변수에 넣
 - `RAIBITSERVER_DRY_RUN=1` 또는 `RAIBITSERVER_EXECUTE` 미설정 상태에서는 worker가 실제 apply/push/provision을 수행하지 않습니다.
 - builder는 `localPath`, `buildContext`, `dockerfilePath`를 workspace/source 경계 안으로만 해석합니다. 상위 디렉터리(`..`) 또는 절대 경로로 경계를 벗어나는 빌드 입력은 거부됩니다.
 - production의 익명 Git clone은 기본 차단됩니다. 공개 GitHub 저장소가 꼭 필요할 때만 Helm `builder.anonymousGit.enabled=true`를 명시하며, shared token이나 ambient Git credential은 사용하지 않습니다.
-- private GitHub source build는 verified installation/repository binding까지는 구현됐지만, Git clone용 exact-repository short-lived token broker가 연결되기 전까지 의도적으로 실패합니다. DB 연결 dispatcher와 tenant BuildKit executor의 Pod/NetworkPolicy 분리는 구현되어 있습니다.
+- private GitHub clone은 mTLS dispatcher가 PostgreSQL의 조직·프로젝트·서비스·배포·현재 WorkflowLease와 verified installation/repository catalog를 다시 확인한 뒤 해당 attempt에 한 번만 `contents:read` 토큰을 발급합니다. 토큰은 환경변수·명령 인자·파일에 넣지 않고 메모리 기반 Unix socket credential helper로 Git에 전달하며, helper 정리와 GitHub 취소 응답을 확인한 뒤에만 빌드를 진행합니다. 취소·실패·사용 기한 만료·lease 회수 시에도 토큰을 취소하고, 취소 확인 실패는 재발급과 게시를 차단합니다.
+- GitHub 설치 토큰의 실제 만료(`upstreamExpiresAt`)는 약 1시간입니다. dispatcher의 별도 clone 사용 기한(`useDeadline`)은 서버가 300초로 정하며 정책 범위는 60–900초입니다. 사용 기한을 upstream 만료로 바꾸어 표시하지 않습니다. dispatcher 중단이나 네트워크 단절로 취소할 수 없으면 upstream 토큰이 900초 이내에 무효화된다는 보장은 없으며, 이를 credentialed release gate의 명시적 제한으로 검토해야 합니다. DB 연결 dispatcher와 tenant BuildKit executor의 Pod/NetworkPolicy 분리는 유지합니다.
 
 ### 5. 처음 서버 올리는 순서
 

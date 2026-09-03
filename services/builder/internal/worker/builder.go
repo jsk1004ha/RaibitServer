@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -30,6 +29,7 @@ const (
 )
 
 type Config struct {
+	GitCredentialHelperExecutable      string
 	WorkerID                           string
 	WorkspaceDir                       string
 	Registry                           string
@@ -115,6 +115,8 @@ type prebuiltImageAuthorizer interface {
 
 type gitHubRepositoryCredentialStore interface {
 	IssueGitHubRepositoryCredential(context.Context, controlplane.GitHubRepositoryCredentialRequest) (*controlplane.GitHubRepositoryCredential, error)
+	ReleaseGitHubRepositoryCredential(context.Context, bool) error
+	CheckGitHubRepositoryCredential(context.Context) error
 }
 
 func New(store controlplane.Store, runner CommandRunner, config Config) *Builder {
@@ -250,7 +252,7 @@ func (b *Builder) leaseHeartbeat(ctx context.Context, lease controlplane.Workflo
 	}
 }
 
-func (b *Builder) processClaimedJob(ctx context.Context, job *controlplane.WorkflowJob) (*Result, error) {
+func (b *Builder) processClaimedJob(ctx context.Context, job *controlplane.WorkflowJob) (result *Result, err error) {
 	state, err := b.resolveState(ctx, job)
 	if err != nil {
 		return &Result{Processed: true, JobID: job.ID, DryRun: b.Config.DryRun}, err
@@ -258,11 +260,11 @@ func (b *Builder) processClaimedJob(ctx context.Context, job *controlplane.Workf
 	if err := validateBuildOwnership(state); err != nil {
 		return &Result{Processed: true, JobID: job.ID, DryRun: b.Config.DryRun}, err
 	}
-	result := &Result{Processed: true, JobID: job.ID, DeploymentID: state.Deployment.ID, ServiceID: state.Service.ID, ProjectID: state.Project.ID, DryRun: b.Config.DryRun}
+	result = &Result{Processed: true, JobID: job.ID, DeploymentID: state.Deployment.ID, ServiceID: state.Service.ID, ProjectID: state.Project.ID, DryRun: b.Config.DryRun}
 	if err := b.prepareJobArtifacts(state); err != nil {
 		return result, b.failClaimedBuild(ctx, state, err)
 	}
-	defer b.cleanupJobArtifacts(state)
+	defer func() { err = errors.Join(err, b.cleanupJobArtifacts(state)) }()
 	if err := currentTargetDeletionError(state); err != nil {
 		result.Reason = "build_target_deleting"
 		b.recordDeletionCancellation(ctx, state)
@@ -331,6 +333,11 @@ func (b *Builder) processClaimedJob(ctx context.Context, job *controlplane.Workf
 		return result, err
 	}
 	supplyChain := map[string]any{"scan": state.ScanEvidence, "signing": state.SignEvidence}
+	if strings.EqualFold(state.Service.GitHubRepositoryVisibility, "private") {
+		if err := b.cleanupJobArtifacts(state); err != nil {
+			return result, b.failClaimedBuild(ctx, state, err)
+		}
+	}
 	if err := b.Store.PublishImageReady(ctx, controlplane.ImagePublicationInput{
 		Lease:           job.Lease(),
 		DeploymentID:    state.Deployment.ID,
@@ -470,40 +477,44 @@ func (b *Builder) prepareJobArtifacts(state *buildContext) error {
 	}
 	state.WorkspaceDir = workspaceDir
 	if err := os.Chmod(workspaceDir, 0o700); err != nil {
-		b.cleanupJobArtifacts(state)
-		return err
+		return errors.Join(err, b.cleanupJobArtifacts(state))
 	}
 	metadataRoot := b.metadataDir()
 	if err := os.MkdirAll(metadataRoot, 0o700); err != nil {
-		b.cleanupJobArtifacts(state)
-		return err
+		return errors.Join(err, b.cleanupJobArtifacts(state))
 	}
 	metadataDir, err := os.MkdirTemp(metadataRoot, prefix)
 	if err != nil {
-		b.cleanupJobArtifacts(state)
-		return err
+		return errors.Join(err, b.cleanupJobArtifacts(state))
 	}
 	state.MetadataDir = metadataDir
 	if err := os.Chmod(metadataDir, 0o700); err != nil {
-		b.cleanupJobArtifacts(state)
-		return err
+		return errors.Join(err, b.cleanupJobArtifacts(state))
 	}
 	return nil
 }
 
-func (b *Builder) cleanupJobArtifacts(state *buildContext) {
+func (b *Builder) cleanupJobArtifacts(state *buildContext) error {
 	if state == nil {
-		return
+		return nil
 	}
+	var cleanupErr error
 	for _, path := range state.Generated {
-		_ = os.Remove(path)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanupErr = errors.New("build artifact cleanup failed")
+		}
 	}
 	if state.MetadataDir != "" {
-		_ = os.RemoveAll(state.MetadataDir)
+		if err := os.RemoveAll(state.MetadataDir); err != nil {
+			cleanupErr = errors.New("build metadata cleanup failed")
+		}
 	}
 	if state.WorkspaceDir != "" {
-		_ = os.RemoveAll(state.WorkspaceDir)
+		if err := os.RemoveAll(state.WorkspaceDir); err != nil {
+			cleanupErr = errors.New("build workspace cleanup failed")
+		}
 	}
+	return cleanupErr
 }
 
 func buildIdentityHash(state *buildContext) string {
@@ -557,30 +568,19 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 	}
 	privateRepository := bound && strings.EqualFold(state.Service.GitHubRepositoryVisibility, "private")
 	gitEnv := isolatedGitEnvironment(workspace)
-	if privateRepository {
-		credentialStore, ok := b.Store.(gitHubRepositoryCredentialStore)
-		if !ok {
-			return errors.New("private GitHub repository builds require an exact-repository short-lived credential from a per-build credential broker")
-		}
-		credential, credentialErr := credentialStore.IssueGitHubRepositoryCredential(ctx, controlplane.GitHubRepositoryCredentialRequest{
-			ServiceID:      state.Service.ID,
-			InstallationID: state.Service.GitHubInstallationID,
-			RepositoryID:   state.Service.GitHubRepositoryID,
-		})
-		if credentialErr != nil {
-			return credentialErr
-		}
-		gitEnv["GIT_CONFIG_COUNT"] = "1"
-		gitEnv["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
-		gitEnv["GIT_CONFIG_VALUE_0"] = "AUTHORIZATION: basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+credential.Token))
-	} else if b.Config.Production && !b.Config.AllowAnonymousGit {
+	if !privateRepository && b.Config.Production && !b.Config.AllowAnonymousGit {
 		return errors.New("anonymous Git source policy is disabled for production builds")
 	}
 	branch := firstNonEmpty(state.Deployment.Branch, state.Service.Branch, "main")
 	destination := filepath.Join(workspace, "source")
 	args := []string{"clone", "--depth", "1", "--branch", branch, repoURL, destination}
 	command := Command{Name: "git", Args: args, Env: gitEnv, CleanGitEnv: true, Redacted: "git " + strings.Join(redactArgs(args), " ")}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout, Sensitive: privateRepository})
+	var result CommandResult
+	if privateRepository {
+		result, err = b.cloneWithGitHubCredential(ctx, state, command)
+	} else {
+		result, err = b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+	}
 	state.Steps = append(state.Steps, StepResult{Type: "git-clone", Command: result.Command, DryRun: result.DryRun})
 	_ = b.writeCommandLogs(ctx, state, "clone", result)
 	if err != nil {
@@ -1569,12 +1569,14 @@ func deterministicDigest(parts ...string) string {
 	return "sha256:" + hex.EncodeToString(hash[:])
 }
 
-var slugPattern = regexp.MustCompile(`[^a-z0-9._-]+`)
-var sha256DigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-var buildArgNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-var secretBuildArgPattern = regexp.MustCompile(`(?i)(secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)`)
-var secretQueryKeyPattern = regexp.MustCompile(`(?i)(secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)`)
-var githubRepositoryPartPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+var (
+	slugPattern                 = regexp.MustCompile(`[^a-z0-9._-]+`)
+	sha256DigestPattern         = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	buildArgNamePattern         = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	secretBuildArgPattern       = regexp.MustCompile(`(?i)(secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)`)
+	secretQueryKeyPattern       = regexp.MustCompile(`(?i)(secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)`)
+	githubRepositoryPartPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+)
 
 func slug(value string) string {
 	out := strings.ToLower(strings.TrimSpace(value))

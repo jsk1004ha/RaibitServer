@@ -970,13 +970,13 @@ type recordingRunner struct {
 	afterCommand   func(worker.Command)
 }
 
-func TestBuilderClonesPrivateRepositoryWithTransientSensitiveHeader(t *testing.T) {
+func TestBuilderClonesPrivateRepositoryWithTransientSensitiveHelper(t *testing.T) {
 	stateFile := writeBoundGitBuildState(t, true, nil)
 	credential := "ghs_private-clone-secret"
 	store := &githubCredentialFileStore{
 		FileStore: controlplane.NewFileStore(stateFile),
 		credential: &controlplane.GitHubRepositoryCredential{
-			Token: credential, InstallationID: "installation-a", RepositoryID: "101", ExpiresAt: time.Now().UTC().Add(time.Hour),
+			Token: credential, InstallationID: "installation-a", RepositoryID: "101", UpstreamExpiresAt: time.Now().UTC().Add(time.Hour), UseDeadline: time.Now().Add(5 * time.Minute),
 		},
 	}
 	runner := &recordingRunner{}
@@ -998,9 +998,13 @@ func TestBuilderClonesPrivateRepositoryWithTransientSensitiveHeader(t *testing.T
 	if strings.Contains(strings.Join(clone.Args, " "), credential) || strings.Contains(clone.Redacted, credential) {
 		t.Fatalf("credential leaked into clone argv or printable command: %#v", clone)
 	}
-	header := clone.Env["GIT_CONFIG_VALUE_0"]
-	if clone.Env["GIT_CONFIG_COUNT"] != "1" || clone.Env["GIT_CONFIG_KEY_0"] != "http.https://github.com/.extraheader" || !strings.HasPrefix(header, "AUTHORIZATION: basic ") {
-		t.Fatalf("clone did not receive a transient Git config header: %#v", clone.Env)
+	if clone.Env["GIT_CONFIG_COUNT"] != "5" || !strings.Contains(clone.Env["GIT_CONFIG_VALUE_1"], "github-credential-helper") {
+		t.Fatal("clone did not receive a transient credential helper")
+	}
+	for _, value := range clone.Env {
+		if strings.Contains(value, credential) {
+			t.Fatal("credential entered clone environment")
+		}
 	}
 	for _, command := range runner.commands[1:] {
 		if command.Env["GIT_CONFIG_VALUE_0"] != "" {
@@ -1008,14 +1012,22 @@ func TestBuilderClonesPrivateRepositoryWithTransientSensitiveHeader(t *testing.T
 		}
 	}
 	serialized := marshalString(t, readState(t, stateFile))
-	if strings.Contains(serialized, credential) || strings.Contains(serialized, strings.TrimPrefix(header, "AUTHORIZATION: basic ")) {
-		t.Fatalf("private clone credential leaked into persisted state: %s", serialized)
+	if strings.Contains(serialized, credential) {
+		t.Fatal("private clone credential leaked into persisted state")
 	}
 }
 
 type githubCredentialFileStore struct {
 	*controlplane.FileStore
 	credential *controlplane.GitHubRepositoryCredential
+}
+
+func (s *githubCredentialFileStore) ReleaseGitHubRepositoryCredential(context.Context, bool) error {
+	return nil
+}
+
+func (s *githubCredentialFileStore) CheckGitHubRepositoryCredential(context.Context) error {
+	return nil
 }
 
 func (s *githubCredentialFileStore) IssueGitHubRepositoryCredential(_ context.Context, request controlplane.GitHubRepositoryCredentialRequest) (*controlplane.GitHubRepositoryCredential, error) {

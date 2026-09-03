@@ -25,14 +25,16 @@ import (
 const defaultGitHubAPIURL = "https://api.github.com"
 
 type GitHubRepositoryCredential struct {
-	Token          string    `json:"token"`
-	InstallationID string    `json:"installationId"`
-	RepositoryID   string    `json:"repositoryId"`
-	ExpiresAt      time.Time `json:"expiresAt"`
+	Token             string    `json:"token"`
+	InstallationID    string    `json:"installationId"`
+	RepositoryID      string    `json:"repositoryId"`
+	UpstreamExpiresAt time.Time `json:"upstreamExpiresAt"`
+	UseDeadline       time.Time `json:"useDeadline"`
 }
 
 type GitHubCredentialIssuer interface {
 	IssueRepositoryCredential(context.Context, string, string) (*GitHubRepositoryCredential, error)
+	RevokeRepositoryCredential(context.Context, string) error
 }
 
 type GitHubAppCredentialIssuerConfig struct {
@@ -83,11 +85,13 @@ func NewGitHubAppCredentialIssuer(config GitHubAppCredentialIssuerConfig) (GitHu
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
+	clientCopy := *client
+	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	now := config.Now
 	if now == nil {
 		now = time.Now
 	}
-	return &gitHubAppCredentialIssuer{appID: appID, privateKey: privateKey, apiURL: apiURL, client: client, now: now}, nil
+	return &gitHubAppCredentialIssuer{appID: appID, privateKey: privateKey, apiURL: apiURL, client: &clientCopy, now: now}, nil
 }
 
 func (i *gitHubAppCredentialIssuer) IssueRepositoryCredential(ctx context.Context, installationID, repositoryID string) (*GitHubRepositoryCredential, error) {
@@ -143,16 +147,34 @@ func (i *gitHubAppCredentialIssuer) IssueRepositoryCredential(ctx context.Contex
 	if err := json.Unmarshal(responseBody, &payload); err != nil {
 		return nil, errors.New("GitHub installation token response is invalid")
 	}
-	if strings.TrimSpace(payload.Token) == "" {
+	if strings.TrimSpace(payload.Token) == "" || len(payload.Token) > 4096 || strings.ContainsAny(payload.Token, "\r\n\x00") {
 		return nil, errors.New("GitHub installation token response contains no token")
 	}
 	if !payload.ExpiresAt.After(now.Add(time.Minute)) || payload.ExpiresAt.After(now.Add(65*time.Minute)) {
-		return nil, errors.New("GitHub installation token expiry is outside the allowed short-lived window")
+		return nil, errors.Join(errors.New("GitHub installation token expiry is outside the allowed short-lived window"), revokeGitHubToken(ctx, i, payload.Token))
 	}
 	if len(payload.Repositories) != 1 || payload.Repositories[0].ID != numericRepositoryID {
-		return nil, errors.New("GitHub installation token response does not prove exact-repository scope")
+		return nil, errors.Join(errors.New("GitHub installation token response does not prove exact-repository scope"), revokeGitHubToken(ctx, i, payload.Token))
 	}
-	return &GitHubRepositoryCredential{Token: payload.Token, InstallationID: installationID, RepositoryID: repositoryID, ExpiresAt: payload.ExpiresAt.UTC()}, nil
+	return &GitHubRepositoryCredential{Token: payload.Token, InstallationID: installationID, RepositoryID: repositoryID, UpstreamExpiresAt: payload.ExpiresAt.UTC()}, nil
+}
+
+func (i *gitHubAppCredentialIssuer) RevokeRepositoryCredential(ctx context.Context, token string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, i.apiURL+"/installation/token", nil)
+	if err != nil {
+		return errors.New("create GitHub token revocation request")
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Accept", "application/vnd.github+json")
+	response, err := i.client.Do(request)
+	if err != nil {
+		return errors.New("GitHub token revocation transport failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		return errors.New("GitHub token revocation was not acknowledged")
+	}
+	return nil
 }
 
 func (i *gitHubAppCredentialIssuer) signJWT(now time.Time) (string, error) {

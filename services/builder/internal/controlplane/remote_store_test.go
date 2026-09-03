@@ -25,6 +25,7 @@ import (
 )
 
 type dispatchFixtureStore struct {
+	credentialReserved bool
 	Store
 	job               *WorkflowJob
 	deployment        *Deployment
@@ -51,6 +52,34 @@ type recordingGitHubCredentialIssuer struct {
 	installationID string
 	repositoryID   string
 	calls          int
+	revokeCalls    int
+	revokeError    error
+}
+
+func TestGitHubCredentialFailureMatrixStaleLease(t *testing.T) {
+	// Given a valid claimed private repository and a still-live mTLS session.
+	fixture := newDispatchFixtureStore()
+	fixture.service.GitHubInstallationID = "202"
+	fixture.service.GitHubRepositoryID = "101"
+	fixture.service.GitHubRepositoryVisibility = "private"
+	issuer := &recordingGitHubCredentialIssuer{credential: &GitHubRepositoryCredential{
+		Token: "ghs_red_fixture", InstallationID: "202", RepositoryID: "101", UpstreamExpiresAt: time.Now().Add(time.Hour),
+	}}
+	handler := NewDispatchHandlerWithGitHubCredentials(fixture, 15*time.Minute, issuer)
+	claim := sendDispatchRPCRequest(t, handler, "", map[string]any{"operation": "claim", "claimOptions": map[string]any{"workerId": "executor-one"}})
+	var claimed dispatchRPCResponse
+	if err := json.Unmarshal(claim.Body.Bytes(), &claimed); err != nil || claim.Code != http.StatusOK {
+		t.Fatal("fixture claim failed")
+	}
+	fixture.job.Attempts++
+	// When a reclaimed attempt asks for the old credential.
+	response := sendDispatchRPCRequest(t, handler, claimed.Token, map[string]any{
+		"operation": "issueGitHubCredential", "githubCredential": map[string]any{"serviceId": "service-1", "installationId": "202", "repositoryId": "101"},
+	})
+	// Then it is denied before any token issuance, without printing credentials.
+	if response.Code == http.StatusOK || issuer.calls != 0 {
+		t.Fatalf("stale lease issued credential: status=%d calls=%d", response.Code, issuer.calls)
+	}
 }
 
 func (i *recordingGitHubCredentialIssuer) IssueRepositoryCredential(_ context.Context, installationID, repositoryID string) (*GitHubRepositoryCredential, error) {
@@ -58,6 +87,24 @@ func (i *recordingGitHubCredentialIssuer) IssueRepositoryCredential(_ context.Co
 	i.installationID = installationID
 	i.repositoryID = repositoryID
 	return i.credential, nil
+}
+
+func (i *recordingGitHubCredentialIssuer) RevokeRepositoryCredential(context.Context, string) error {
+	i.revokeCalls++
+	return i.revokeError
+}
+
+func (s *dispatchFixtureStore) authorizeGitHubCredential(_ context.Context, binding githubCredentialBinding, reserve bool) error {
+	if binding.Lease != s.job.Lease() || s.job.Status != WorkflowRunning {
+		return ErrWorkflowLeaseLost
+	}
+	if reserve && s.credentialReserved {
+		return errGitHubCredentialScope
+	}
+	if reserve {
+		s.credentialReserved = true
+	}
+	return nil
 }
 
 func TestRemoteStoreLeaseFencedUpdateRejectsEmptyLease(t *testing.T) {
@@ -254,7 +301,7 @@ func TestDispatchHandlerIssuesCredentialOnlyForClaimedAuthoritativeService(t *te
 	fixture.service.GitHubRepositoryID = "101"
 	fixture.service.GitHubRepositoryVisibility = "private"
 	issuer := &recordingGitHubCredentialIssuer{credential: &GitHubRepositoryCredential{
-		Token: "ghs_dispatch-secret", InstallationID: "202", RepositoryID: "101", ExpiresAt: time.Now().UTC().Add(time.Hour),
+		Token: "ghs_dispatch-secret", InstallationID: "202", RepositoryID: "101", UpstreamExpiresAt: time.Now().UTC().Add(time.Hour),
 	}}
 	handler := NewDispatchHandlerWithGitHubCredentials(fixture, 15*time.Minute, issuer)
 	claim := sendDispatchRPCRequest(t, handler, "", map[string]any{"operation": "claim", "claimOptions": map[string]any{"workerId": "executor-1"}})
@@ -287,6 +334,10 @@ func TestDispatchHandlerIssuesCredentialOnlyForClaimedAuthoritativeService(t *te
 	if !strings.Contains(response.Body.String(), "ghs_dispatch-secret") {
 		t.Fatalf("credential response missing from protected RPC: %s", response.Body.String())
 	}
+	release := sendDispatchRPCRequest(t, handler, claimed.Token, map[string]any{"operation": "releaseGitHubCredential", "cloneSucceeded": true})
+	if release.Code != http.StatusOK {
+		t.Fatal("fixture credential release failed")
+	}
 }
 
 func TestDispatchHandlerRejectsIssuerRepositoryAndExpiryMismatch(t *testing.T) {
@@ -294,8 +345,8 @@ func TestDispatchHandlerRejectsIssuerRepositoryAndExpiryMismatch(t *testing.T) {
 		name       string
 		credential *GitHubRepositoryCredential
 	}{
-		{name: "repository mismatch", credential: &GitHubRepositoryCredential{Token: "ghs_secret", InstallationID: "202", RepositoryID: "999", ExpiresAt: time.Now().UTC().Add(time.Hour)}},
-		{name: "expiry too short", credential: &GitHubRepositoryCredential{Token: "ghs_secret", InstallationID: "202", RepositoryID: "101", ExpiresAt: time.Now().UTC().Add(10 * time.Second)}},
+		{name: "repository mismatch", credential: &GitHubRepositoryCredential{Token: "ghs_secret", InstallationID: "202", RepositoryID: "999", UpstreamExpiresAt: time.Now().UTC().Add(time.Hour)}},
+		{name: "expiry too short", credential: &GitHubRepositoryCredential{Token: "ghs_secret", InstallationID: "202", RepositoryID: "101", UpstreamExpiresAt: time.Now().UTC().Add(10 * time.Second)}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			fixture := newDispatchFixtureStore()
@@ -310,7 +361,7 @@ func TestDispatchHandlerRejectsIssuerRepositoryAndExpiryMismatch(t *testing.T) {
 				"operation":        "issueGitHubCredential",
 				"githubCredential": map[string]any{"serviceId": "service-1", "installationId": "202", "repositoryId": "101"},
 			})
-			if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "ghs_secret") {
+			if response.Code != http.StatusForbidden || strings.Contains(response.Body.String(), "ghs_secret") {
 				t.Fatalf("unsafe issuer response was not safely rejected: %d %s", response.Code, response.Body.String())
 			}
 		})
