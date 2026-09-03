@@ -46,7 +46,7 @@ CREATE TABLE "ResourceRestore" (
   "formatVersion" INTEGER NOT NULL DEFAULT 1 CHECK ("formatVersion" = 1),
   "organizationId" TEXT NOT NULL,
   "projectId" TEXT NOT NULL,
-  "backupId" TEXT NOT NULL REFERENCES "ResourceBackup"(id) ON DELETE RESTRICT,
+  "backupId" TEXT NOT NULL REFERENCES "ResourceBackup"(id) ON DELETE CASCADE,
   "sourceResourceId" TEXT NOT NULL,
   "targetResourceId" TEXT NOT NULL UNIQUE,
   engine TEXT NOT NULL,
@@ -86,7 +86,7 @@ CREATE UNIQUE INDEX "ResourceRecoveryPin_source" ON "ResourceRecoveryPin"("backu
 CREATE INDEX "ResourceRecoveryPin_resource" ON "ResourceRecoveryPin"("resourceId");
 
 CREATE TABLE "ResourceRecoveryAttempt" (
-  "backupId" TEXT NOT NULL REFERENCES "ResourceBackup"(id) ON DELETE RESTRICT,
+  "backupId" TEXT NOT NULL REFERENCES "ResourceBackup"(id) ON DELETE CASCADE,
   attempt INTEGER NOT NULL CHECK (attempt BETWEEN 1 AND 3),
   "objectKey" TEXT NOT NULL UNIQUE,
   "uploadId" TEXT,
@@ -111,6 +111,13 @@ CREATE TABLE "ResourceRecoveryAttempt" (
 
 CREATE FUNCTION recovery_backup_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF TG_OP='DELETE' THEN
+    IF OLD."formatVersion" IS NOT NULL AND (OLD.status <> 'DELETED'
+      OR EXISTS (SELECT 1 FROM "ResourceRecoveryAttempt" WHERE "backupId"=OLD.id AND ("cleanupPending" OR state<>'CLEANED'))
+      OR EXISTS (SELECT 1 FROM "ResourceRecoveryPin" WHERE "backupId"=OLD.id)
+      OR EXISTS (SELECT 1 FROM "WorkflowJob" WHERE "targetId"=OLD.id AND type='resource.backup' AND status IN ('queued','running'))) THEN RAISE EXCEPTION 'RECOVERY_CLEANUP_PENDING'; END IF;
+    RETURN OLD;
+  END IF;
   IF TG_OP = 'UPDATE' AND OLD."formatVersion" IS NOT NULL THEN
     IF ROW(NEW."formatVersion",NEW."organizationId",NEW."projectId",NEW."resourceId",NEW.engine,NEW.provider,NEW."sourceGeneration",NEW."sourceProvenance",NEW."sourceSpec",NEW."requestedByUserId",NEW."requestIdempotencyKey",NEW."requestFingerprint") IS DISTINCT FROM
        ROW(OLD."formatVersion",OLD."organizationId",OLD."projectId",OLD."resourceId",OLD.engine,OLD.provider,OLD."sourceGeneration",OLD."sourceProvenance",OLD."sourceSpec",OLD."requestedByUserId",OLD."requestIdempotencyKey",OLD."requestFingerprint") THEN RAISE EXCEPTION 'RECOVERY_PROVENANCE_IMMUTABLE'; END IF;
@@ -127,10 +134,15 @@ BEGIN
   IF NEW."formatVersion" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Resource" r JOIN "Project" p ON p.id=r."projectId" WHERE r.id=NEW."resourceId" AND p.id=NEW."projectId" AND p."organizationId"=NEW."organizationId" AND r.engine=NEW.engine AND r.provider=NEW.provider) THEN RAISE EXCEPTION 'RECOVERY_TENANT_INVALID'; END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER "ResourceBackup_guard" BEFORE INSERT OR UPDATE ON "ResourceBackup" FOR EACH ROW EXECUTE FUNCTION recovery_backup_guard();
+CREATE TRIGGER "ResourceBackup_guard" BEFORE INSERT OR UPDATE OR DELETE ON "ResourceBackup" FOR EACH ROW EXECUTE FUNCTION recovery_backup_guard();
 
 CREATE FUNCTION recovery_restore_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF TG_OP='DELETE' THEN
+    IF NOT (OLD.status='READY' OR (OLD.status IN ('FAILED','CANCELLED') AND OLD."targetCleanedAt" IS NOT NULL))
+      OR EXISTS (SELECT 1 FROM "WorkflowJob" WHERE "targetId"=OLD.id AND type='resource.restore' AND status IN ('queued','running')) THEN RAISE EXCEPTION 'RECOVERY_CLEANUP_PENDING'; END IF;
+    RETURN OLD;
+  END IF;
   IF TG_OP = 'UPDATE' THEN
     IF ROW(NEW."formatVersion",NEW."organizationId",NEW."projectId",NEW."backupId",NEW."sourceResourceId",NEW."targetResourceId",NEW.engine,NEW.provider,NEW."sourceGeneration",NEW."requestedByUserId",NEW."requestIdempotencyKey",NEW."requestFingerprint") IS DISTINCT FROM ROW(OLD."formatVersion",OLD."organizationId",OLD."projectId",OLD."backupId",OLD."sourceResourceId",OLD."targetResourceId",OLD.engine,OLD.provider,OLD."sourceGeneration",OLD."requestedByUserId",OLD."requestIdempotencyKey",OLD."requestFingerprint") THEN RAISE EXCEPTION 'RECOVERY_PROVENANCE_IMMUTABLE'; END IF;
     IF OLD.status <> NEW.status AND NOT (
@@ -141,7 +153,7 @@ BEGIN
   IF TG_OP = 'INSERT' AND NOT EXISTS (SELECT 1 FROM "ResourceBackup" b JOIN "Resource" t ON t.id=NEW."targetResourceId" WHERE b.id=NEW."backupId" AND b."formatVersion"=1 AND b."organizationId"=NEW."organizationId" AND b."projectId"=NEW."projectId" AND b."resourceId"=NEW."sourceResourceId" AND b.engine=NEW.engine AND b.provider=NEW.provider AND b."sourceGeneration"=NEW."sourceGeneration" AND t."projectId"=b."projectId" AND t.engine=b.engine AND t.provider=b.provider) THEN RAISE EXCEPTION 'RECOVERY_TENANT_INVALID'; END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER "ResourceRestore_guard" BEFORE INSERT OR UPDATE ON "ResourceRestore" FOR EACH ROW EXECUTE FUNCTION recovery_restore_guard();
+CREATE TRIGGER "ResourceRestore_guard" BEFORE INSERT OR UPDATE OR DELETE ON "ResourceRestore" FOR EACH ROW EXECUTE FUNCTION recovery_restore_guard();
 
 CREATE FUNCTION recovery_pin_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

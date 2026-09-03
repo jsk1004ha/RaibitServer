@@ -416,7 +416,7 @@ model ResourceRestore {
   cleanupToken String?
   cleanupWorker String?
   cleanupLeaseUntil DateTime?
-  backup ResourceBackup @relation(fields: [backupId], references: [id], onDelete: Restrict)
+  backup ResourceBackup @relation(fields: [backupId], references: [id], onDelete: Cascade)
   recoveryPins ResourceRecoveryPin[]
 
   @@unique([organizationId, backupId, requestIdempotencyKey])
@@ -450,7 +450,7 @@ model ResourceRecoveryAttempt {
   cleanupPending Boolean @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime
-  backup ResourceBackup @relation(fields: [backupId], references: [id], onDelete: Restrict)
+  backup ResourceBackup @relation(fields: [backupId], references: [id], onDelete: Cascade)
 
   @@id([backupId, attempt])
 }
