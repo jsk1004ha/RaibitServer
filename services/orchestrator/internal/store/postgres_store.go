@@ -19,7 +19,8 @@ const postgresDriverName = "pgx"
 const claimDeploymentSQL = `
 SELECT d.id, d."serviceId", d."projectId", d.status, d."deploymentType", d."triggerType", d.branch,
        d."commitSha", d."imageUrl", d."imageDigest", d."previewUrl", d."pullRequestNumber",
-       d."reconcileAction", d."reconcileLockedBy", d."reconcileLockedAt", d."reconcileAttempts"
+       d."reconcileAction", d."reconcileLockedBy", d."reconcileLockedAt", d."reconcileAttempts",
+       d."desiredSpecSnapshot", d."snapshotVersion", d."sourceDeploymentId", d."retryOfDeploymentId"
 FROM "Deployment" d
 JOIN "Service" s ON s.id = d."serviceId"
 JOIN "Project" p ON p.id = d."projectId"
@@ -404,7 +405,8 @@ func (s *PostgresStore) TransitionDeployment(ctx context.Context, lease Deployme
 		` WHERE id = $` + strconv.Itoa(idArg) + ` AND ` + predicate +
 		` RETURNING id, "serviceId", "projectId", status, "deploymentType", "triggerType", branch,
           "commitSha", "imageUrl", "imageDigest", "previewUrl", "pullRequestNumber",
-          "reconcileAction", "reconcileLockedBy", "reconcileLockedAt", "reconcileAttempts"`
+          "reconcileAction", "reconcileLockedBy", "reconcileLockedAt", "reconcileAttempts",
+          "desiredSpecSnapshot", "snapshotVersion", "sourceDeploymentId", "retryOfDeploymentId"`
 	deployment, err := scanPostgresDeployment(s.db.QueryRowContext(ctx, query, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrDeploymentLeaseLost
@@ -514,13 +516,24 @@ func scanPostgresDeployment(row rowScanner) (*Deployment, error) {
 	var commitSHA, imageURL, imageDigest, previewURL, reconcileAction, reconcileLockedBy sql.NullString
 	var reconcileLockedAt sql.NullTime
 	var pullRequestNumber sql.NullInt64
+	var snapshotVersion sql.NullInt64
+	var sourceDeploymentID, retryOfDeploymentID sql.NullString
 	err := row.Scan(&deployment.ID, &deployment.ServiceID, &deployment.ProjectID, &deployment.Status, &deployment.DeploymentType,
 		&deployment.TriggerType, &deployment.Branch, &commitSHA, &imageURL, &imageDigest, &previewURL, &pullRequestNumber,
-		&reconcileAction, &reconcileLockedBy, &reconcileLockedAt, &deployment.ReconcileAttempts)
+		&reconcileAction, &reconcileLockedBy, &reconcileLockedAt, &deployment.ReconcileAttempts,
+		&deployment.DesiredSpecSnapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID)
 	if err != nil {
 		return nil, err
 	}
 	deployment.CommitSHA = nullString(commitSHA)
+	if snapshotVersion.Valid {
+		deployment.SnapshotVersion = int(snapshotVersion.Int64)
+		if deployment.SnapshotVersion < 1 {
+			deployment.SnapshotVersion = -1
+		}
+	}
+	deployment.SourceDeploymentID = nullString(sourceDeploymentID)
+	deployment.RetryOfDeploymentID = nullString(retryOfDeploymentID)
 	deployment.ImageURL = nullString(imageURL)
 	deployment.ImageDigest = nullString(imageDigest)
 	deployment.PreviewURL = nullString(previewURL)

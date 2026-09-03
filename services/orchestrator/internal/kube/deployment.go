@@ -166,6 +166,10 @@ func describeWorkload(spec AppServiceSpec) (workloadDescriptor, error) {
 }
 
 func SpecFromState(project *store.Project, service *store.Service, deployment *store.Deployment, baseDomain string) AppServiceSpec {
+	runtimeService, snapshotErr := deployment.RuntimeService(service)
+	if snapshotErr != nil {
+		return AppServiceSpec{ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID, InvalidReason: snapshotErr.Error()}
+	}
 	projectSlug := boundedDNSName(firstNonEmpty(project.Slug, project.Name, project.ID, "project"), project.ID, 63)
 	organizationSlug := boundedDNSName(firstNonEmpty(project.OrganizationSlug, project.OrganizationID, "org"), firstNonEmpty(project.OrganizationID, project.OrganizationSlug), 63)
 	serviceName := boundedDNSName(firstNonEmpty(service.Slug, service.Name, service.ID, "service"), service.ID, 63)
@@ -200,19 +204,19 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	if err != nil {
 		image = firstNonEmpty(deployment.ImageURL, service.ImageURL)
 	}
-	command, commandErr := runtimeStringArray(service, "command")
-	args, argsErr := runtimeStringArray(service, "args")
-	schedule, scheduleErr := runtimeSchedule(service)
-	environment, environmentErr := runtimeEnvironment(service, deployment)
-	secretEnv, secretEnvErr := runtimeSecretEnv(service)
+	command, commandErr := runtimeStringArray(runtimeService, "command")
+	args, argsErr := runtimeStringArray(runtimeService, "args")
+	schedule, scheduleErr := runtimeSchedule(runtimeService)
+	environment, environmentErr := runtimeEnvironment(runtimeService, deployment)
+	secretEnv, secretEnvErr := runtimeSecretEnv(runtimeService)
 	environmentConflictErr := runtimeEnvironmentConflict(environment, secretEnv)
 	invalidReason := firstError(commandErr, argsErr, scheduleErr, environmentErr, secretEnvErr, environmentConflictErr)
 	return AppServiceSpec{
-		Name: serviceName, Namespace: tenantLabel, Image: image, Port: service.Port, Replicas: service.Replicas, Host: host,
+		Name: serviceName, Namespace: tenantLabel, Image: image, Port: runtimeService.Port, Replicas: runtimeService.Replicas, Host: host,
 		ProjectID: project.ID, ServiceID: service.ID, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug,
-		ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Command: command, Args: args, Schedule: schedule, Env: environment, SecretEnv: secretEnv,
+		ServiceType: firstNonEmpty(runtimeService.Type, "web"), DeploymentID: deployment.ID, Command: command, Args: args, Schedule: schedule, Env: environment, SecretEnv: secretEnv,
 		Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName,
-		PublicEgress: servicePublicEgress(service), AllowTenantIngress: serviceTenantIngress(service), InvalidReason: invalidReason,
+		PublicEgress: servicePublicEgress(runtimeService), AllowTenantIngress: serviceTenantIngress(runtimeService), InvalidReason: invalidReason,
 	}
 }
 

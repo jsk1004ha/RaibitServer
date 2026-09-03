@@ -133,23 +133,27 @@ func (service *Service) DeletionLease() DeletionLease {
 }
 
 type Deployment struct {
-	ID                string
-	ServiceID         string
-	ProjectID         string
-	Status            string
-	DeploymentType    string
-	TriggerType       string
-	Branch            string
-	CommitSHA         string
-	ImageURL          string
-	ImageDigest       string
-	PreviewURL        string
-	PreviousImageURL  string
-	PullRequestNumber int
-	ReconcileAction   string
-	ReconcileLockedBy string
-	ReconcileLockedAt time.Time
-	ReconcileAttempts int
+	DesiredSpecSnapshot json.RawMessage
+	SnapshotVersion     int
+	SourceDeploymentID  string
+	RetryOfDeploymentID string
+	ID                  string
+	ServiceID           string
+	ProjectID           string
+	Status              string
+	DeploymentType      string
+	TriggerType         string
+	Branch              string
+	CommitSHA           string
+	ImageURL            string
+	ImageDigest         string
+	PreviewURL          string
+	PreviousImageURL    string
+	PullRequestNumber   int
+	ReconcileAction     string
+	ReconcileLockedBy   string
+	ReconcileLockedAt   time.Time
+	ReconcileAttempts   int
 }
 
 func (deployment *Deployment) Lease() DeploymentLease {
@@ -721,7 +725,7 @@ func serviceFromRecord(row record) *Service {
 }
 
 func deploymentFromRecord(row record) *Deployment {
-	return &Deployment{ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts")}
+	return &Deployment{ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts"), DesiredSpecSnapshot: snapshotJSONFromRecord(row), SnapshotVersion: snapshotVersionFromRecord(row), SourceDeploymentID: stringField(row, "sourceDeploymentId"), RetryOfDeploymentID: stringField(row, "retryOfDeploymentId")}
 }
 
 func deletionClaimClock(options ClaimOptions) (time.Time, time.Duration) {
