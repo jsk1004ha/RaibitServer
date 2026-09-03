@@ -102,20 +102,27 @@ type Journal interface {
 	RecordIntent(context.Context, Attempt) error
 	RecordUpload(context.Context, Upload) error
 	RecordCandidate(context.Context, Candidate) error
+	RecordRemoteCompletion(context.Context, RemoteCompletion) error
 	Fence(context.Context, Attempt) error
 }
 
 type CleanupRequest struct {
 	Attempt  Attempt
 	UploadID string
+	Remote   RemoteWriteState
 }
 
 // CleanupAuthorizer must fence publication and active restore pins before allowing
 // cleanup, including cleanup of an old attempt. Unlike an upload lease this may
 // authorize terminal-operation cleanup after the original deadline.
+// Authorization must also exclude future worker requests; it does NOT prove
+// remotely accepted requests finished. RecordRemoteCompletion durably compares
+// the exact PREPARED descriptor and records COMPLETE under the cleanup fence,
+// without publishing READY or releasing pins. Failure must preserve the witness.
 type (
 	CleanupAuthorizer interface {
 		AuthorizeCleanup(context.Context, Attempt) error
+		RecordRemoteCompletion(context.Context, RemoteCompletion) error
 	}
 	CleanupResult struct {
 		MultipartAbsent bool

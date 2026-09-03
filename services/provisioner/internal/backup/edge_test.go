@@ -106,13 +106,14 @@ func Test_ReadbackCancellation_when_sink_blocked(t *testing.T) {
 
 func Test_ControlResponse_when_close_fails(t *testing.T) {
 	// Given: actual TLS response whose close fails at the transport boundary.
-	s, _, _, a := fixture(t, "", Options{})
+	s, _, j, a := fixture(t, "", Options{})
+	uploadFixture(t, s, j, a, 12)
 	// Use the actual SDK signer with the fault inside the bounded HTTP transport.
 	options := s.client.Options()
 	options.HTTPClient = &http.Client{Transport: controlTransport{base: closeFaultTransport{base: s.transport}}}
 	// When: invoking cleanup through a new SDK client with response close fault.
 	s.client = s3.New(options)
-	_, err := s.Cleanup(context.Background(), CleanupRequest{Attempt: a}, &testJournal{})
+	_, err := s.Cleanup(context.Background(), CleanupRequest{Attempt: a, Remote: j.complete}, j)
 	// Then: the SDK cannot swallow the control body's Close failure.
 	if !errors.Is(err, ErrCleanupPending) {
 		t.Fatal("control response close failure accepted")

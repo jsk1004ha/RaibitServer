@@ -25,9 +25,10 @@ type wireStore struct {
 	signed       bool
 	readBytes    int
 	writeErrors  int
+	delay        *delayedWrite
 }
 
-func (w *wireStore) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+func (w *wireStore) serve(response http.ResponseWriter, request *http.Request) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if !strings.HasPrefix(request.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential=local-access/") || request.Header.Get("X-Amz-Date") == "" {
@@ -187,6 +188,7 @@ func (w *wireStore) ServeHTTP(response http.ResponseWriter, request *http.Reques
 		}
 		w.readBytes += n
 	case request.Method == "DELETE" && q.Has("uploadId"):
+		w.requireCompletion()
 		w.events = append(w.events, "abort")
 		if q.Get("uploadId") != "upload-1" {
 			w.t.Error("foreign multipart abort")
@@ -198,6 +200,7 @@ func (w *wireStore) ServeHTTP(response http.ResponseWriter, request *http.Reques
 		w.uploadActive = false
 		response.WriteHeader(204)
 	case request.Method == "DELETE":
+		w.requireCompletion()
 		w.events = append(w.events, "delete-"+q.Get("versionId"))
 		if q.Get("versionId") == "" || q.Get("versionId") == "foreign" {
 			w.t.Error("unqualified or foreign version deletion")
@@ -207,6 +210,10 @@ func (w *wireStore) ServeHTTP(response http.ResponseWriter, request *http.Reques
 			return
 		}
 		w.object = nil
+		if w.mode == "delete-unknown" {
+			w.fail(response, 500)
+			return
+		}
 		response.WriteHeader(204)
 	default:
 		w.t.Errorf("unexpected SDK operation %s", request.Method)

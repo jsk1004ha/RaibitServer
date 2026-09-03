@@ -83,6 +83,9 @@ func (s *Service) Upload(ctx context.Context, req UploadRequest, journal Journal
 			return Candidate{}, errors.Join(ErrCleanupPending, safeError(err), verifyErr)
 		}
 	}
+	if err := journal.RecordRemoteCompletion(opCtx, RemoteCompletion{record: record}); err != nil {
+		return Candidate{}, errors.Join(ErrCleanupPending, ErrFence)
+	}
 	if err := journal.Fence(opCtx, req.Attempt); err != nil {
 		return Candidate{}, errors.Join(ErrCleanupPending, ErrFence)
 	}

@@ -25,6 +25,9 @@ func (s *Service) Cleanup(ctx context.Context, req CleanupRequest, authorizer Cl
 	if err := authorizer.AuthorizeCleanup(bounded, req.Attempt); err != nil {
 		return result, ErrFence
 	}
+	if err := s.resolveCleanupCompletion(bounded, req, authorizer); err != nil {
+		return result, err
+	}
 	key := req.Attempt.ObjectKey()
 	uploads, err := s.client.ListMultipartUploads(bounded, &s3.ListMultipartUploadsInput{Bucket: aws.String(s.bucket), Prefix: aws.String(key), MaxUploads: aws.Int32(100)})
 	if err != nil {

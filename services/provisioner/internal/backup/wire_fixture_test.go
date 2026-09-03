@@ -19,6 +19,7 @@ type testJournal struct {
 	intent    bool
 	upload    bool
 	candidate Candidate
+	complete  RemoteCompletion
 	fail      string
 	fences    int
 }
@@ -60,6 +61,16 @@ func (j *testJournal) Fence(context.Context, Attempt) error {
 	if j.fail == "fence" || (j.fail == "final-fence" && j.fences >= 3) {
 		return ErrFence
 	}
+	return nil
+}
+
+func (j *testJournal) RecordRemoteCompletion(_ context.Context, completion RemoteCompletion) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.fail == "completion" || j.candidate.Record() != completion.Record() {
+		return ErrFence
+	}
+	j.complete = completion
 	return nil
 }
 
@@ -125,4 +136,12 @@ func (w *wireStore) eventSnapshot() []string {
 	events := append([]string(nil), w.events...)
 	sort.Strings(events)
 	return events
+}
+
+func (w *wireStore) requireCompletion() {
+	w.journal.mu.Lock()
+	defer w.journal.mu.Unlock()
+	if w.journal.complete.Record().StoredBytes == 0 {
+		w.t.Error("cleanup mutation preceded durable remote completion")
+	}
 }
