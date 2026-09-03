@@ -59,6 +59,7 @@ type Config struct {
 	Sign                               bool
 	Signer                             string
 	SigningKeyPath                     string
+	VerificationKeyPath                string
 }
 
 type Builder struct {
@@ -89,24 +90,25 @@ type StepResult struct {
 }
 
 type buildContext struct {
-	Job          *controlplane.WorkflowJob
-	Deployment   *controlplane.Deployment
-	Service      *controlplane.Service
-	Project      *controlplane.Project
-	Plan         buildplan.Plan
-	WorkspaceDir string
-	MetadataDir  string
-	SourceDir    string
-	Dockerfile   string
-	ContextDir   string
-	Image        string
-	Push         bool
-	MetadataFile string
-	RegistryEnv  map[string]string
-	Generated    []string
-	Steps        []StepResult
-	ScanEvidence map[string]any
-	SignEvidence map[string]any
+	Job            *controlplane.WorkflowJob
+	Deployment     *controlplane.Deployment
+	Service        *controlplane.Service
+	Project        *controlplane.Project
+	Plan           buildplan.Plan
+	WorkspaceDir   string
+	MetadataDir    string
+	SourceDir      string
+	Dockerfile     string
+	ContextDir     string
+	Image          string
+	Push           bool
+	MetadataFile   string
+	RegistryEnv    map[string]string
+	Generated      []string
+	Steps          []StepResult
+	ScanEvidence   map[string]any
+	SignEvidence   map[string]any
+	VerifyEvidence map[string]any
 }
 
 type prebuiltImageAuthorizer interface {
@@ -188,6 +190,9 @@ func New(store controlplane.Store, runner CommandRunner, config Config) *Builder
 	}
 	if config.Signer == "" {
 		config.Signer = "cosign"
+	}
+	if config.VerificationKeyPath == "" {
+		config.VerificationKeyPath = strings.TrimSpace(os.Getenv("RAIBITSERVER_VERIFICATION_KEY"))
 	}
 	return &Builder{Store: store, Runner: runner, Config: config}
 }
@@ -329,10 +334,18 @@ func (b *Builder) processClaimedJob(ctx context.Context, job *controlplane.Workf
 			return result, b.failClaimedBuild(ctx, state, err)
 		}
 	}
+	if err := b.verifyImage(ctx, state, digest); err != nil {
+		if errors.Is(err, controlplane.ErrBuildTargetDeleting) {
+			result.Reason = "build_target_deleting"
+			b.recordDeletionCancellation(ctx, state)
+			return result, err
+		}
+		return result, b.failClaimedBuild(ctx, state, err)
+	}
 	if err := b.Store.RenewWorkflowJobLease(ctx, job.Lease(), time.Now().UTC()); err != nil {
 		return result, err
 	}
-	supplyChain := map[string]any{"scan": state.ScanEvidence, "signing": state.SignEvidence}
+	supplyChain := map[string]any{"scan": state.ScanEvidence, "signing": state.SignEvidence, "verification": state.VerifyEvidence}
 	if strings.EqualFold(state.Service.GitHubRepositoryVisibility, "private") {
 		if err := b.cleanupJobArtifacts(state); err != nil {
 			return result, b.failClaimedBuild(ctx, state, err)
@@ -537,6 +550,8 @@ func buildIdentityHash(state *buildContext) string {
 }
 
 func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error {
+	ctx, cancel := context.WithTimeout(ctx, b.stageTimeout(sourceStageLimit))
+	defer cancel()
 	workspace := state.WorkspaceDir
 	localPath := firstNonEmpty(stringValue(state.Job.Payload["localPath"]), state.Service.LocalPath)
 	if localPath != "" {
@@ -583,7 +598,7 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 	if privateRepository {
 		result, err = b.cloneWithGitHubCredential(ctx, state, command)
 	} else {
-		result, err = b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+		result, err = b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(sourceStageLimit)})
 	}
 	state.Steps = append(state.Steps, StepResult{Type: "git-clone", Command: result.Command, DryRun: result.DryRun})
 	_ = b.writeCommandLogs(ctx, state, "clone", result)
@@ -594,7 +609,7 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 	commit := firstNonEmpty(state.Deployment.CommitSHA, state.Deployment.CommitHash)
 	if commit != "" {
 		checkout := Command{Name: "git", Args: []string{"checkout", commit}, Dir: destination, Env: gitEnv, CleanGitEnv: true}
-		checkoutResult, err := b.Runner.Run(ctx, checkout, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+		checkoutResult, err := b.Runner.Run(ctx, checkout, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(sourceStageLimit)})
 		state.Steps = append(state.Steps, StepResult{Type: "git-checkout", Command: checkoutResult.Command, DryRun: checkoutResult.DryRun})
 		_ = b.writeCommandLogs(ctx, state, "clone", checkoutResult)
 		if err != nil {
@@ -602,7 +617,7 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 		}
 	} else {
 		revision := Command{Name: "git", Args: []string{"rev-parse", "HEAD"}, Dir: destination, Env: gitEnv, CleanGitEnv: true}
-		revisionResult, err := b.Runner.Run(ctx, revision, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+		revisionResult, err := b.Runner.Run(ctx, revision, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(sourceStageLimit)})
 		state.Steps = append(state.Steps, StepResult{Type: "git-revision", Command: revisionResult.Command, DryRun: revisionResult.DryRun})
 		_ = b.writeCommandLogs(ctx, state, "clone", revisionResult)
 		if err != nil {
@@ -883,7 +898,7 @@ func (b *Builder) executeBuild(ctx context.Context, state *buildContext) error {
 		args = append(args, state.ContextDir)
 		command = Command{Name: "docker", Args: args, Env: state.RegistryEnv, Redacted: "docker " + strings.Join(redactArgs(args), " "), CleanRegistryEnv: true}
 	}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(registryStageLimit)})
 	state.Steps = append(state.Steps, StepResult{Type: "buildkit-build", Command: result.Command, DryRun: result.DryRun})
 	_ = b.writeCommandLogs(ctx, state, "build", result)
 	if err != nil {
@@ -903,8 +918,8 @@ func (b *Builder) scanImage(ctx context.Context, state *buildContext, digest str
 	if err != nil {
 		return err
 	}
-	command := Command{Name: b.Config.Scanner, Args: []string{"image", "--quiet", "--exit-code", "1", "--severity", b.Config.ScanSeverity, "--ignore-unfixed", image}, Env: state.RegistryEnv, CleanRegistryEnv: true}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout, Sensitive: true})
+	command := Command{Name: b.Config.Scanner, Args: []string{"image", "--quiet", "--exit-code", "1", "--scanners", "vuln", "--severity", b.Config.ScanSeverity, "--ignore-unfixed=false", image}, Env: state.RegistryEnv, CleanRegistryEnv: true}
+	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(registryStageLimit), Sensitive: true})
 	state.Steps = append(state.Steps, StepResult{Type: "image-scan", Command: result.Command, DryRun: result.DryRun})
 	if err != nil {
 		_ = b.Store.AppendDeploymentEvent(ctx, controlplane.DeploymentEventInput{DeploymentID: state.Deployment.ID, Type: "build.image_scan_failed", Message: "image vulnerability policy failed", Metadata: map[string]any{"tool": b.Config.Scanner, "digest": digest, "result": "failed", "dryRun": b.Config.DryRun}})
@@ -938,7 +953,7 @@ func (b *Builder) signImage(ctx context.Context, state *buildContext, digest str
 	}
 	args = append(args, image)
 	command := Command{Name: b.Config.Signer, Args: args, Env: state.RegistryEnv, CleanRegistryEnv: true}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout, Sensitive: true})
+	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(registryStageLimit), Sensitive: true})
 	state.Steps = append(state.Steps, StepResult{Type: "image-sign", Command: result.Command, DryRun: result.DryRun})
 	if err != nil {
 		_ = b.Store.AppendDeploymentEvent(ctx, controlplane.DeploymentEventInput{DeploymentID: state.Deployment.ID, Type: "build.image_sign_failed", Message: "image signing failed", Metadata: map[string]any{"tool": b.Config.Signer, "digest": digest, "result": "failed", "dryRun": b.Config.DryRun}})
@@ -953,7 +968,7 @@ func (b *Builder) signImage(ctx context.Context, state *buildContext, digest str
 
 func (b *Builder) runDockerPush(ctx context.Context, state *buildContext) error {
 	command := Command{Name: "docker", Args: []string{"push", state.Image}, Env: state.RegistryEnv, CleanRegistryEnv: true}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(registryStageLimit)})
 	state.Steps = append(state.Steps, StepResult{Type: "registry-push", Command: result.Command, DryRun: result.DryRun})
 	_ = b.writeCommandLogs(ctx, state, "push", result)
 	return err
@@ -1238,7 +1253,7 @@ func (b *Builder) validateRuntimeConfig() error {
 			return errors.New("configured live image signing requires a secret-backed signing key path")
 		}
 	}
-	return nil
+	return b.validateVerificationPolicy()
 }
 
 func validateBuildkitConnectionConfig(config Config) error {
@@ -1353,6 +1368,7 @@ func ConfigFromEnv() Config {
 		Sign:                              boolFromEnv("RAIBITSERVER_SIGN"),
 		Signer:                            envOr("RAIBITSERVER_SIGNER", "cosign"),
 		SigningKeyPath:                    os.Getenv("RAIBITSERVER_SIGNING_KEY"),
+		VerificationKeyPath:               strings.TrimSpace(os.Getenv("RAIBITSERVER_VERIFICATION_KEY")),
 	}
 }
 

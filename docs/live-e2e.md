@@ -48,6 +48,32 @@ Go Builder의 live 성공 경로는 현재 구조상 외부에서 접근 가능�
 
 In short, the remaining Builder gate needs an external registry, signing infrastructure, and scanner data that this disposable cluster does not provide.
 
+The live builder now verifies the same digest after signing with `cosign verify
+--new-bundle-format=false --check-claims=true --key <public-key-file> <image@digest>`
+before atomic IMAGE_READY publication. `RAIBITSERVER_VERIFICATION_KEY` must name
+an independent absolute public-key path, never the private signing key. Sign-only
+success is not verification. Verification failure, cancellation, deletion or lease
+loss prevents publication. Supply-chain results distinguish `signing: signed`
+from `verification: verified`; preauthorized imported images are verified without
+being signed as platform output. Scanner policy always includes HIGH and CRITICAL,
+uses the vulnerability scanner, and explicitly includes unfixed vulnerabilities.
+Clone/source preparation is capped at 15 minutes; combined build/push and each
+push, scan, sign and verify command are capped at 10 minutes, with tighter configured
+timeouts and parent deadlines preserved. The existing default remains 600 seconds.
+
+For Helm, `builder.verification.existingSecret` and `builder.verification.key`
+select a read-only public-key projection in the release namespace. If omitted,
+the builder reuses `security.imageVerification.trustRoot.existingSecret/key` only
+when `trustRoot.namespace` equals the release namespace. A foreign admission trust
+namespace requires an explicitly provisioned local projection; the chart does not
+copy Secrets. Operators must put the same approved public trust key in both
+locations. The chart does not prove their contents equal, derive a key from the
+signing key, or change admission/preflight authority or the frozen operator-input
+contract. Local command-fixture tests prove worker gating, not actual signature,
+registry or Kubernetes execution. The command flags follow the
+[pinned Cosign v3.0.6 options](https://github.com/sigstore/cosign/blob/v3.0.6/cmd/cosign/cli/options/verify.go)
+and [Sigstore verification contract](https://docs.sigstore.dev/cosign/verifying/verify/).
+
 이 누락 범위는 전체 애플리케이션 lifecycle Closed Beta gate의 잔여 조건입니다. 현재 `pnpm e2e:live` 성공은 Helm control-plane reconciliation gate 통과를 뜻하며, source build → registry push → workload deploy → HTTP 200 → runtime log → preview cleanup 전체 통과를 뜻하지 않습니다.
 
 ## Production evidence contract (L1 / L2 / L3)

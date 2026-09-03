@@ -136,6 +136,7 @@ func TestBuilderScansAndSignsDigestBeforeImageReady(t *testing.T) {
 		Sign:                  true,
 		Signer:                "cosign",
 		SigningKeyPath:        "/var/run/secrets/raibitserver/signing/cosign.key",
+		VerificationKeyPath:   "/var/run/secrets/raibitserver/verification/cosign.pub",
 	})
 
 	result, err := builder.RunOnce(context.Background())
@@ -145,10 +146,10 @@ func TestBuilderScansAndSignsDigestBeforeImageReady(t *testing.T) {
 	if result.ImageDigest != digest {
 		t.Fatalf("expected registry digest %q, got %q", digest, result.ImageDigest)
 	}
-	if got := runner.commandNames(); strings.Join(got, ",") != "buildctl,trivy,cosign" {
+	if got := runner.commandNames(); strings.Join(got, ",") != "buildctl,trivy,cosign,cosign" {
 		t.Fatalf("expected build, scan, sign ordering, got %#v", got)
 	}
-	signArgs := strings.Join(runner.commands[len(runner.commands)-1].Args, " ")
+	signArgs := strings.Join(runner.commands[2].Args, " ")
 	for _, required := range []string{
 		"--new-bundle-format=false",
 		"--use-signing-config=false",
@@ -276,16 +277,17 @@ func TestBuilderScanFailurePreventsSigningAndImageReady(t *testing.T) {
 	workspaceDir, stateFile := writeLocalDockerfileBuildState(t, nil)
 	runner := &recordingRunner{metadataDigest: "sha256:" + strings.Repeat("b", 64), failCommand: "trivy"}
 	builder := worker.New(controlplane.NewFileStore(stateFile), runner, worker.Config{
-		WorkspaceDir:   workspaceDir,
-		Registry:       "registry.example.test",
-		DryRun:         false,
-		Push:           true,
-		Builder:        "buildctl",
-		Scan:           true,
-		Scanner:        "trivy",
-		Sign:           true,
-		Signer:         "cosign",
-		SigningKeyPath: "/var/run/secrets/raibitserver/signing/cosign.key",
+		WorkspaceDir:        workspaceDir,
+		Registry:            "registry.example.test",
+		DryRun:              false,
+		Push:                true,
+		Builder:             "buildctl",
+		Scan:                true,
+		Scanner:             "trivy",
+		Sign:                true,
+		Signer:              "cosign",
+		SigningKeyPath:      "/var/run/secrets/raibitserver/signing/cosign.key",
+		VerificationKeyPath: "/var/run/secrets/raibitserver/verification/cosign.pub",
 	})
 
 	if _, err := builder.RunOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "simulated trivy failure") {
@@ -360,14 +362,15 @@ func TestBuilderLiveBuildRejectsDisabledScanOrSign(t *testing.T) {
 			workspaceDir, stateFile := writeLocalDockerfileBuildState(t, nil)
 			runner := &recordingRunner{}
 			builder := worker.New(controlplane.NewFileStore(stateFile), runner, worker.Config{
-				WorkspaceDir:   workspaceDir,
-				Registry:       "registry.example.test/team",
-				DryRun:         false,
-				Push:           true,
-				Builder:        "buildctl",
-				Scan:           testCase.scan,
-				Sign:           testCase.sign,
-				SigningKeyPath: "/var/run/secrets/raibitserver/signing/cosign.key",
+				WorkspaceDir:        workspaceDir,
+				Registry:            "registry.example.test/team",
+				DryRun:              false,
+				Push:                true,
+				Builder:             "buildctl",
+				Scan:                testCase.scan,
+				Sign:                testCase.sign,
+				SigningKeyPath:      "/var/run/secrets/raibitserver/signing/cosign.key",
+				VerificationKeyPath: "/var/run/secrets/raibitserver/verification/cosign.pub",
 			})
 			if _, err := builder.RunOnce(context.Background()); err == nil || !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("expected disabled %s policy to fail closed, got %v", testCase.name, err)
@@ -390,14 +393,15 @@ func TestBuilderSignFailurePreventsImageReady(t *testing.T) {
 	workspaceDir, stateFile := writeLocalDockerfileBuildState(t, nil)
 	runner := &recordingRunner{metadataDigest: "sha256:" + strings.Repeat("d", 64), failCommand: "cosign"}
 	builder := worker.New(controlplane.NewFileStore(stateFile), runner, worker.Config{
-		WorkspaceDir:   workspaceDir,
-		Registry:       "registry.example.test/team",
-		DryRun:         false,
-		Push:           true,
-		Builder:        "buildctl",
-		Scan:           true,
-		Sign:           true,
-		SigningKeyPath: "/var/run/secrets/raibitserver/signing/cosign.key",
+		WorkspaceDir:        workspaceDir,
+		Registry:            "registry.example.test/team",
+		DryRun:              false,
+		Push:                true,
+		Builder:             "buildctl",
+		Scan:                true,
+		Sign:                true,
+		SigningKeyPath:      "/var/run/secrets/raibitserver/signing/cosign.key",
+		VerificationKeyPath: "/var/run/secrets/raibitserver/verification/cosign.pub",
 	})
 	if _, err := builder.RunOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "simulated cosign failure") {
 		t.Fatalf("expected signing failure, got %v", err)
@@ -1165,6 +1169,7 @@ func liveSupplyChainConfig(workspaceDir, registry string) worker.Config {
 		Scan:                  true,
 		Sign:                  true,
 		SigningKeyPath:        "/var/run/secrets/raibitserver/signing/cosign.key",
+		VerificationKeyPath:   "/var/run/secrets/raibitserver/verification/cosign.pub",
 	}
 }
 

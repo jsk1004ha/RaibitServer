@@ -181,6 +181,12 @@ builder:
     existingSecret: ""
     keyKey: cosign.key
     passwordKey: cosign.password
+  verification:
+    # Local public-key Secret projection; must contain the same approved public
+    # trust key as security.imageVerification.trustRoot. No private key here.
+    # Empty reuses that trustRoot only when its namespace is the release namespace.
+    existingSecret: ""
+    key: cosign.pub
   nodeSelector:
     raibitserver.io/workload: build
   tolerations:
