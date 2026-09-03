@@ -128,7 +128,7 @@ for (const scenario of ['missing-start', 'missing-cookie', 'wrong-state', 'wrong
     const input: Record<string, string> = { state: scenario === 'wrong-state' ? crypto.randomBytes(32).toString('base64url') : flow.state, code };
     if (scenario === 'missing-code') delete input.code;
     if (scenario === 'redirect') input.redirectUri = 'https://attacker.example/callback';
-    if (scenario === 'denial') input.error = 'access_denied';
+    if (scenario === 'denial') { delete input.code; input.error = 'access_denied'; }
     if (scenario === 'replay') { await callback(page, input); await context.clearCookies(); await context.addCookies(flow.cookies); }
     const before = await management(request, 'counters');
     await callback(page, input);
@@ -137,7 +137,8 @@ for (const scenario of ['missing-start', 'missing-cookie', 'wrong-state', 'wrong
     const after = await management(request, 'counters');
     const expectedExchange = ['provider-unverified', 'exchange-failure', 'malformed-provider', 'missing-token', 'timeout', 'pending', 'local-unverified'].includes(scenario) ? 1 : 0;
     expect(after.token - before.token).toBe(expectedExchange);
-    if (['missing-cookie', 'wrong-state', 'missing-code', 'denial'].includes(scenario)) expect(after.apiCallback - before.apiCallback).toBe(0);
+    if (['missing-cookie', 'wrong-state', 'missing-code'].includes(scenario)) expect(after.apiCallback - before.apiCallback).toBe(0);
+    if (scenario === 'denial') { expect(after.apiCallback - before.apiCallback).toBe(1); expect(after.consumed - before.consumed).toBe(1); }
     outcomes.push({ scenario, noSession: true, transactionCookiesCleared: true, providerExchanges: after.token - before.token });
   });
 }

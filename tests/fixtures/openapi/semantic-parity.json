@@ -26,7 +26,7 @@
   },
   "wireQueries": {
     "auth-github-login":{"codeChallenge":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
-    "auth-github-callback":{"code":"parity-code","state":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","codeVerifier":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+    "auth-github-callback":{"state":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","codeVerifier":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","code":"parity-code"},
     "github-authorize":{"installation_id":"123","setup_action":"install","state":"state +/?"},
     "github-callback":{"code":"code +/?","state":"state +/?"},
     "projects-list":{"limit":2,"cursor":"cursor +/?"},

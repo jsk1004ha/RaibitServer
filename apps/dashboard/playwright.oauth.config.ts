@@ -8,7 +8,7 @@ const manifest: { readonly origin: string; readonly ready: boolean } = JSON.pars
 if (manifest.ready !== true) throw new Error('oauth_fixture_not_ready');
 
 export default defineConfig({
-  testDir: './tests/e2e/specs', testMatch: 'github-oauth-transaction.spec.ts',
+  testDir: './tests/e2e/specs', testMatch: ['github-oauth-transaction.spec.ts', 'github-oauth-abuse.spec.ts'],
   outputDir: path.join(evidence, 'browser'), fullyParallel: false, workers: 1, retries: 0, timeout: 45_000,
   reporter: [['line'], ['json', { outputFile: path.join(evidence, 'browser-results.json') }]],
   use: { baseURL: manifest.origin, browserName: 'chromium', viewport: { width: 1280, height: 900 }, ignoreHTTPSErrors: true,

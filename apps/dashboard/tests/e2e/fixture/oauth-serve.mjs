@@ -55,7 +55,8 @@ async function proxy(req, res) {
   if (url.pathname.startsWith('/__oauth/')) {
     try {
       if (!runtime) return json(res, 503, { ready: false });
-      if (url.pathname === '/__oauth/counters') return json(res, 200, { ...runtime.counters, ...counters });
+      if (url.pathname === '/__oauth/counters') return json(res, 200, { ...runtime.counters, ...counters,
+        consumed: [...runtime.nest.repository.store.oauthTransactions.values()].filter((row) => row.consumedAt !== null).length });
       let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 8192) return json(res, 400, {}); }
       const input = body ? JSON.parse(body) : {};
       if (url.pathname === '/__oauth/code') return json(res, 200, { code: runtime.issueCode(input) });
@@ -65,6 +66,7 @@ async function proxy(req, res) {
       }
       if (url.pathname === '/__oauth/reset-account') {
         delete process.env.RAIBITSERVER_AUTH_RATE_LIMIT_KEY_SECRET;
+        for (const surface of runtime.surfaces) surface.store.authRateLimits.clear();
         const user = [...runtime.nest.repository.store.users.values()][0];
         Object.assign(user, { approvalStatus: input.pending ? 'PENDING' : 'APPROVED', emailVerifiedAt: input.unverified ? null : new Date().toISOString() });
         return json(res, 200, { updated: true });

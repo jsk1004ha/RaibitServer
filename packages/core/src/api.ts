@@ -1,4 +1,5 @@
 import { RAIBITSERVERControlPlane } from './control-plane.ts';
+import { oauthAttempt, publicOAuthError } from './oauth-security.ts';
 import { maskSecrets } from './secrets.ts';
 import { authorizeRequest, authorizeSubject, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
 import { organizationScopeFromProjectInput } from './scope.ts';
@@ -82,13 +83,13 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       if (method === 'GET' && url.pathname === '/auth/github/login') {
         const input = Object.fromEntries([...url.searchParams.keys()].map((key) => [key, url.searchParams.getAll(key).length === 1 ? url.searchParams.get(key) : url.searchParams.getAll(key)]));
-        return send(res, 200, await startGitHubOAuth(controlPlane.store, input, {
+        return send(res, 200, await oauthAttempt(controlPlane.store, 'github-oauth-start', () => startGitHubOAuth(controlPlane.store, input, {
           source: req.socket?.remoteAddress || '', jwtSecret: auth.jwtSecret, provider: options.githubOAuth,
-        }));
+        })));
       }
       if (method === 'GET' && url.pathname === '/auth/github/callback') {
-        if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
         const input = Object.fromEntries([...url.searchParams.keys()].map((key) => [key, url.searchParams.getAll(key).length === 1 ? url.searchParams.get(key) : url.searchParams.getAll(key)]));
+        const response = await oauthAttempt(controlPlane.store, 'github-oauth-callback', async () => {
         const identity = await consumeGitHubOAuthIdentity(controlPlane.store, input, {
           source: req.socket?.remoteAddress || '', jwtSecret: auth.jwtSecret, provider: options.githubOAuth,
         });
@@ -105,7 +106,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         });
         const memberships = controlPlane.store.listMembershipsForUser(user.id);
         const token = createSessionToken(user, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth) });
-        return send(res, 200, {
+        return {
           provider: 'github',
           received: true,
           codePresent: true,
@@ -114,7 +115,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
           user: publicUser(user),
           memberships,
           token,
+        };
         });
+        return send(res, 200, response);
       }
       if (method === 'GET' && url.pathname === '/auth/me') {
         const subject = subjectFromRequest(req, auth);
@@ -760,9 +763,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       return send(res, 404, { error: 'not_found', path: url.pathname });
     } catch (error) {
       if (/^\/auth\/github\/(login|callback)(\?|$)/.test(req.url || '')) {
-        const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
-        const message = error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : 'github_oauth_failed';
-        return send(res, statusCode, { statusCode, message, error: message });
+        const safe = publicOAuthError(error);
+        if (safe.statusCode === 429) res.setHeader('Retry-After', String(safe.retryAfterSeconds));
+        return send(res, safe.statusCode, { statusCode: safe.statusCode, message: safe.code, error: safe.code });
       }
       return send(res, error.statusCode || 500, { error: error.message || 'internal_error', ...(error.code ? { code: error.code } : {}), ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) });
     }

@@ -163,12 +163,6 @@ paths:
     get:
       operationId: auth-github-callback
       parameters:
-        - name: code
-          in: query
-          required: true
-          schema:
-            type: string
-            pattern: ^[^\u0000-\u0020\u007f]{1,256}$
         - name: state
           in: query
           required: true
@@ -187,6 +181,18 @@ paths:
           schema:
             type: string
             maxLength: 2048
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^[^\u0000-\u0020\u007f]{1,256}$
+        - name: error
+          in: query
+          required: false
+          schema:
+            type: string
+            const: access_denied
       responses:
         "200":
           description: Successful response
@@ -200,6 +206,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorBody"
+      x-query-schema:
+        $schema: https://json-schema.org/draft/2020-12/schema
+        anyOf:
+          - type: object
+            properties:
+              state:
+                type: string
+                pattern: ^[A-Za-z0-9_-]{32,128}$
+              codeVerifier:
+                type: string
+                pattern: ^[A-Za-z0-9._~-]{43,128}$
+              redirectUri:
+                type: string
+                maxLength: 2048
+              code:
+                type: string
+                pattern: ^[^\u0000-\u0020\u007f]{1,256}$
+              error:
+                not: {}
+            required:
+              - state
+              - codeVerifier
+              - code
+            additionalProperties: false
+          - type: object
+            properties:
+              state:
+                type: string
+                pattern: ^[A-Za-z0-9_-]{32,128}$
+              codeVerifier:
+                type: string
+                pattern: ^[A-Za-z0-9._~-]{43,128}$
+              redirectUri:
+                type: string
+                maxLength: 2048
+              error:
+                type: string
+                const: access_denied
+              code:
+                not: {}
+            required:
+              - state
+              - codeVerifier
+              - error
+            additionalProperties: false
+      description: Exactly one of code or error=access_denied is required. Both variants require the same single-use state, verifier and exact redirect binding.
       security: []
       x-permission: null
   /auth/me:

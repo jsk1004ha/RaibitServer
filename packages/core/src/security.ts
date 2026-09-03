@@ -255,7 +255,7 @@ export function assertRateLimit(limiter: ReturnType<typeof createFixedWindowRate
   return result;
 }
 
-export async function enforceAuthAbuseLimits(repository: AnyRecord, input: AnyRecord = {}) {
+export async function enforceAuthAbuseLimits(repository: AnyRecord, input: AnyRecord & { readonly phase?: 'all' | 'request' | 'email' } = {}) {
   if (!repository || typeof repository.consumeAuthRateLimit !== 'function') {
     const error = new Error('durable_auth_rate_limiter_not_configured');
     (error as any).statusCode = 500;
@@ -272,23 +272,23 @@ export async function enforceAuthAbuseLimits(repository: AnyRecord, input: AnyRe
     limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_GLOBAL_RATE_LIMIT, 5_000, 1, 50_000),
     windowMs,
   };
-  if (typeof repository.peekAuthRateLimit === 'function') {
+  if (input.phase !== 'email' && typeof repository.peekAuthRateLimit === 'function') {
     const globalState = await repository.peekAuthRateLimit({ ...globalDimension, now });
     if (!globalState.allowed) throwAuthRateLimitExceeded(globalState, now);
   }
-  const dimensions = [
+  const dimensions = input.phase === 'email' ? [] : [
     { key: authRateLimitKey(`source:${action}`, source, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_SOURCE_RATE_LIMIT, 30, 1, 100_000), windowMs },
     { key: authRateLimitKey('flow-source', source, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_FLOW_SOURCE_RATE_LIMIT, 60, 1, 100_000), windowMs },
     globalDimension,
   ];
-  if (action === 'email-resend' && email) {
+  if (input.phase !== 'request' && action === 'email-resend' && email) {
     dimensions.push({
       key: authRateLimitKey('resend-cooldown', email, env),
       limit: 1,
       windowMs: boundedPositiveInteger(env.RAIBITSERVER_EMAIL_RESEND_COOLDOWN_MS, 60_000, 1_000, 24 * 60 * 60_000),
     });
   }
-  if (email) dimensions.push({ key: authRateLimitKey(`email:${action}`, email, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_EMAIL_RATE_LIMIT, 10, 1, 10_000), windowMs });
+  if (input.phase !== 'request' && email) dimensions.push({ key: authRateLimitKey(`email:${action}`, email, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_EMAIL_RATE_LIMIT, 10, 1, 10_000), windowMs });
   const results = [];
   for (const dimension of dimensions) {
     const result = await repository.consumeAuthRateLimit({ ...dimension, now });

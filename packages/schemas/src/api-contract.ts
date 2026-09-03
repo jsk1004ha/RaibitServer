@@ -14,7 +14,16 @@ const query = z.object({ query: z.string().min(1), confirmed: z.boolean().option
 function input<P extends z.ZodType, Q extends z.ZodType, B extends z.ZodType>(path: P, query: Q, body: B) { return z.object({ path, query, body }).strict(); }
 const noInput = input(M.Empty, M.Empty, M.Empty);
 export const GitHubOAuthStartInput = z.object({ codeChallenge: z.string().regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/), redirectUri: z.string().max(2048).optional() }).strict();
-export const GitHubOAuthCallbackInput = z.object({ code: z.string().regex(/^[^\u0000-\u0020\u007f]{1,256}$/), state: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/), codeVerifier: z.string().regex(/^[A-Za-z0-9._~-]{43,128}$/), redirectUri: z.string().max(2048).optional() }).strict();
+const GitHubOAuthBinding = z.object({ state: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/), codeVerifier: z.string().regex(/^[A-Za-z0-9._~-]{43,128}$/), redirectUri: z.string().max(2048).optional() });
+const GitHubOAuthCode = z.string().regex(/^[^\u0000-\u0020\u007f]{1,256}$/);
+export const GitHubOAuthCallbackInput = z.union([
+  GitHubOAuthBinding.extend({ code: GitHubOAuthCode, error: z.never().optional() }).strict(),
+  GitHubOAuthBinding.extend({ error: z.literal('access_denied'), code: z.never().optional() }).strict(),
+]);
+const GitHubOAuthCallbackParameters = GitHubOAuthBinding.extend({ code: GitHubOAuthCode.optional(), error: z.literal('access_denied').optional() });
+// Keep object-shaped wire metadata compatible with non-strict legacy consumers;
+// the canonical union still owns both runtime validation and the public input type.
+const GitHubOAuthCallbackWire = GitHubOAuthCallbackParameters.strict().refine((value) => GitHubOAuthCallbackInput.safeParse(value).success, 'github_oauth_input_invalid');
 export const GitHubOAuthStartResponse = z.object({ provider: z.literal('github'), configured: z.literal(true), oauthUrl: z.url(), state: z.string().regex(/^[A-Za-z0-9_-]{43}$/), mode: z.literal('redirect') });
 export const GitHubOAuthCallbackResponse = M.Session.extend({ provider: z.literal('github'), linked: z.literal(true), codePresent: z.literal(true), received: z.literal(true), mode: z.literal('oauth-complete') });
 function operation<I extends z.ZodType, O extends z.ZodType>(spec: { readonly method: 'get' | 'post' | 'patch' | 'delete'; readonly path: string; readonly status: number; readonly permission: string | null; readonly input: I; readonly response: O; readonly stream?: string }) { return { ...spec, error: M.ErrorBody }; }
@@ -28,7 +37,7 @@ export const apiOperations = {
   'auth-email-verify': operation({ method: 'post', path: '/auth/email/verify', status: 201, permission: null, input: input(M.Empty, M.Empty, z.object({ email: z.email(), code: z.string().min(1) })), response: M.Session }),
   'auth-email-resend': operation({ method: 'post', path: '/auth/email/resend', status: 201, permission: null, input: input(M.Empty, M.Empty, z.object({ email: z.email() })), response: z.object({ emailVerification: M.EmailVerification }) }),
   'auth-github-login': operation({ method: 'get', path: '/auth/github/login', status: 200, permission: null, input: input(M.Empty, GitHubOAuthStartInput, M.Empty), response: GitHubOAuthStartResponse }),
-  'auth-github-callback': operation({ method: 'get', path: '/auth/github/callback', status: 200, permission: null, input: input(M.Empty, GitHubOAuthCallbackInput, M.Empty), response: GitHubOAuthCallbackResponse }),
+  'auth-github-callback': operation({ method: 'get', path: '/auth/github/callback', status: 200, permission: null, input: input(M.Empty, GitHubOAuthCallbackWire, M.Empty), response: GitHubOAuthCallbackResponse }),
   'auth-me': operation({ method: 'get', path: '/auth/me', status: 200, permission: 'project:read', input: noInput, response: z.object({ user: M.User.nullable(), subject: M.JsonFields, memberships: z.array(M.Membership) }) }),
   'auth-logout': operation({ method: 'post', path: '/auth/logout', status: 200, permission: 'project:read', input: noInput, response: z.object({ ok: z.literal(true) }) }),
   'public-sites': operation({ method: 'get', path: '/public/sites', status: 200, permission: null, input: input(M.Empty, z.object({ limit: z.number().int().min(0).max(5).optional() }), M.Empty), response: z.object({ sites: z.array(z.object({ id, name: z.string(), owner: z.string(), status: z.literal('LIVE'), url: z.url() })) }) }),
@@ -99,7 +108,9 @@ export const apiOperations = {
 } as const;
 
 export type ApiOperationId = keyof typeof apiOperations;
-export type ApiInput<K extends ApiOperationId> = z.input<(typeof apiOperations)[K]['input']>;
+export type ApiInput<K extends ApiOperationId> = K extends 'auth-github-callback'
+  ? { readonly path: Record<string, never>; readonly query: z.input<typeof GitHubOAuthCallbackInput>; readonly body: Record<string, never> }
+  : z.input<(typeof apiOperations)[K]['input']>;
 export type ApiOutput<K extends ApiOperationId> = z.output<(typeof apiOperations)[K]['response']>;
 export { ErrorBody, StreamError } from './api-models.ts';
 export { z };
@@ -119,7 +130,7 @@ export function createOpenApiDocument() {
   for (const [operationId, contract] of Object.entries(apiOperations)) {
     const shape = contract.input.shape;
     const parameters: Array<{ name: string; in: string; required: boolean; schema: object | boolean }> = Object.entries(shape.path.shape).map(([name, schema]) => ({ name, in: 'path', required: true, schema: z.toJSONSchema(schema) }));
-    const querySchema = z.toJSONSchema(shape.query);
+    const querySchema = z.toJSONSchema(operationId === 'auth-github-callback' ? GitHubOAuthCallbackParameters : shape.query);
     for (const [name, schema] of Object.entries(querySchema.properties ?? {})) parameters.push({ name, in: 'query', required: querySchema.required?.includes(name) ?? false, schema });
     const stream = 'stream' in contract ? contract.stream : undefined;
     const resourceCreate = operationId === 'resources-create';
@@ -132,6 +143,7 @@ export function createOpenApiDocument() {
     paths[contract.path] ??= {};
     paths[contract.path][contract.method] = {
       operationId, parameters, requestBody, responses,
+      ...(operationId === 'auth-github-callback' ? { 'x-query-schema': z.toJSONSchema(GitHubOAuthCallbackInput), description: 'Exactly one of code or error=access_denied is required. Both variants require the same single-use state, verifier and exact redirect binding.' } : {}),
       ...(resourceCreate ? { description: 'Creates desired state for canonical local engines only. Dedicated-local databases/cache and local SQLite are implemented; unsupported catalog engines remain disabled. No release readiness or managed backup/restore workflow is claimed.' } : {}),
       security: webhook ? [{ githubSignature: [] }] : contract.permission ? [{ bearerAuth: [] }] : [],
       'x-permission': contract.permission,

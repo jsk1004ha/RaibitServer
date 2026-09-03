@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
-import { consumeGitHubOAuthIdentity, startGitHubOAuth } from '@raibitserver/core';
+import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt } from '@raibitserver/core';
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 import { ResourceCapabilityUnavailable, ResourceIntentInvalid, resourceAvailability, can, listCatalog } from '@raibitserver/core';
 
@@ -700,22 +700,17 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   }
 
   async githubLogin(input: Record<string, unknown>, request: IncomingMessage) {
-    try {
-      return await startGitHubOAuth(await this.repositoryPromise, input, {
+    const repository = await this.repositoryPromise;
+    return oauthAttempt(repository, 'github-oauth-start', () => startGitHubOAuth(repository, input, {
         source: request.socket.remoteAddress || '', jwtSecret: process.env.RAIBITSERVER_AUTH_JWT_SECRET,
-      });
-    } catch (error) { throw nestAuthError(error); }
+      }));
   }
 
   async githubCallback(input: Record<string, unknown>, request: IncomingMessage) {
     const repository = await this.repositoryPromise;
-    const jwtSecret = jwtSecretOrThrow();
-    let identity;
-    try {
-      identity = await consumeGitHubOAuthIdentity(repository, input, { source: request.socket.remoteAddress || '', jwtSecret });
-    } catch (error) {
-      throw nestAuthError(error);
-    }
+    return oauthAttempt(repository, 'github-oauth-callback', async () => {
+    const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET;
+    const identity = await consumeGitHubOAuthIdentity(repository, input, { source: request.socket.remoteAddress || '', jwtSecret });
     let user = await repository.findUserByGitHubId(identity.githubId);
     if (!user) user = await repository.findUserByEmail(identity.email);
     if (!user) throw new ForbiddenException('github_account_not_registered');
@@ -744,6 +739,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       memberships,
       token,
     };
+    });
   }
 
   async listGitHubInstallations(subject: Record<string, any>, organizationId?: string) {

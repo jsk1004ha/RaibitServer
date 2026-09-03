@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
 import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput } from './oauth-transaction.ts';
 import { createPrismaOAuthTransaction, consumePrismaOAuthTransaction, deletePrismaOAuthTransactions } from './prisma-oauth-transaction.ts';
 import { LIFECYCLE_CONTRACT, terminalLifecycleInputs } from './lifecycle.ts';
@@ -113,6 +114,7 @@ export class InMemoryControlPlaneRepository {
   async createOAuthTransaction(input: CreateOAuthTransactionInput) { return this.store.createOAuthTransaction(input); }
   async consumeOAuthTransaction(input: ConsumeOAuthTransactionInput) { return this.store.consumeOAuthTransaction(input); }
   async deleteExpiredOAuthTransactions(input: OAuthCleanupInput = {}) { return this.store.deleteExpiredOAuthTransactions(input); }
+  async recordOAuthAudit(event: OAuthAuditEvent) { return this.store.recordOAuthAudit(event); }
   async consumeAuthRateLimit(input: Record<string, any>) { return this.store.consumeAuthRateLimit(input); }
   async peekAuthRateLimit(input: Record<string, any>) { return this.store.peekAuthRateLimit(input); }
   async resetAuthRateLimit(key: string) { return this.store.resetAuthRateLimit(key); }
@@ -415,6 +417,7 @@ export class PrismaControlPlaneRepository {
   async createOAuthTransaction(input: CreateOAuthTransactionInput) { return createPrismaOAuthTransaction(this.prisma, input); }
   async consumeOAuthTransaction(input: ConsumeOAuthTransactionInput) { return consumePrismaOAuthTransaction(this.prisma, input); }
   async deleteExpiredOAuthTransactions(input: OAuthCleanupInput = {}) { return deletePrismaOAuthTransactions(this.prisma, input); }
+  async recordOAuthAudit(event: OAuthAuditEvent) { return this.prisma.auditLog.create({ data: oauthAuditData(event) }); }
 
   async consumeAuthRateLimit(input: Record<string, any>) {
     const key = String(input.key || 'global');

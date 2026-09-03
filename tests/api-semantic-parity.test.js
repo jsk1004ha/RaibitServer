@@ -5,10 +5,22 @@ import YAML from 'yaml';
 import http from 'node:http';
 import path from 'node:path';
 import { once } from 'node:events';
-import { apiOperations, createOpenApiDocument, ErrorBody, z } from '../packages/schemas/src/api-contract.ts';
+import { apiOperations, createOpenApiDocument, ErrorBody, GitHubOAuthCallbackInput, z } from '../packages/schemas/src/api-contract.ts';
 import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
 import { hashPassword } from '../packages/core/src/identity.ts';
 import { bootParityApi } from './fixtures/api-parity-runtime.mjs';
+
+test('OAuth callback contract represents exactly one bound code or fixed denial', () => {
+  // Given: the same binding is required for both callback variants.
+  const binding = { state: 'A'.repeat(43), codeVerifier: 'B'.repeat(43) };
+  // When: parse valid and ambiguous callback inputs through the client contract.
+  const valid = [{ ...binding, code: 'fixture-code' }, { ...binding, error: 'access_denied' }];
+  const invalid = [binding, { ...binding, code: 'fixture-code', error: 'access_denied' }, { error: 'access_denied' }, { ...binding, error: 'arbitrary' }];
+  // Then: strict union and generated query schema retain the cross-field rule.
+  assert.equal(valid.every((value) => GitHubOAuthCallbackInput.safeParse(value).success), true);
+  assert.equal(invalid.every((value) => !GitHubOAuthCallbackInput.safeParse(value).success), true);
+  assert.equal(createOpenApiDocument().paths['/auth/github/callback'].get['x-query-schema'].anyOf.length, 2);
+});
 
 test('Given advertised operations, when their success bodies are inspected, then each has a semantic contract', async () => {
   // Given

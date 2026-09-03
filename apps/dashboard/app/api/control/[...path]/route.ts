@@ -234,7 +234,7 @@ async function handleGitHubOAuthRequest(request: NextRequest, browserRequestUrl:
     const redirectUri = new URL('/api/control/auth/github/callback', browserRequestUrl).toString();
     const context = await dashboardApiContext();
     const result = await requestGitHubOAuthJson(context, path, new URLSearchParams({ redirectUri, codeChallenge }), request.signal);
-    if (!result.ok) return githubOAuthErrorRedirect(browserRequestUrl, result.error);
+    if (!result.ok) return githubOAuthUpstreamFailure(browserRequestUrl, result);
     const state = result.payload?.state;
     if (!isGitHubOAuthState(state)) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_configuration_invalid');
     const authorizeHref = githubOAuthAuthorizeHref(result.payload?.oauthUrl, { state, redirectUri, codeChallenge });
@@ -254,13 +254,19 @@ async function handleGitHubOAuthRequest(request: NextRequest, browserRequestUrl:
     || request.nextUrl.searchParams.getAll('redirectUri').length > 1 || !oauthStateMatches(expectedState, returnedState) || !isGitHubOAuthCodeVerifier(codeVerifier)) {
     return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_state_invalid', true);
   }
-  if (request.nextUrl.searchParams.has('error')) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_denied', true);
+  const denied = request.nextUrl.searchParams.has('error');
+  if (denied && (request.nextUrl.searchParams.getAll('error').length !== 1 || request.nextUrl.searchParams.get('error') !== 'access_denied' || request.nextUrl.searchParams.has('code'))) {
+    return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_input_invalid', true);
+  }
   const code = request.nextUrl.searchParams.get('code');
-  if (!validOAuthCode(code)) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_code_required', true);
+  if (!denied && !validOAuthCode(code)) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_code_required', true);
   const redirectUri = request.nextUrl.searchParams.get('redirectUri') ?? new URL('/api/control/auth/github/callback', browserRequestUrl).toString();
   const context = await dashboardApiContext();
-  const result = await requestGitHubOAuthJson(context, path, new URLSearchParams({ code, state: returnedState, codeVerifier, redirectUri }), request.signal);
-  if (!result.ok) return githubOAuthErrorRedirect(browserRequestUrl, result.error, true);
+  const query = new URLSearchParams({ state: returnedState, codeVerifier, redirectUri });
+  if (denied) query.set('error', 'access_denied');
+  else if (code !== null) query.set('code', code);
+  const result = await requestGitHubOAuthJson(context, path, query, request.signal);
+  if (!result.ok) return githubOAuthUpstreamFailure(browserRequestUrl, result, true);
   if (!extractSessionToken(result.payload)) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_session_invalid', true);
   const response = NextResponse.redirect(new URL('/console', browserRequestUrl), 302);
   applySessionCookie(response, path, result.payload);
@@ -287,11 +293,21 @@ async function requestGitHubOAuthJson(context: Awaited<ReturnType<typeof dashboa
     });
     const parsed = parseJson(new TextDecoder().decode(bytes));
     if (!parsed.valid || !parsed.payload || typeof parsed.payload !== 'object') return { ok: false as const, error: 'invalid_control_plane_response', payload: null };
-    if (!upstream.ok) return { ok: false as const, error: publicUpstreamErrorCode(parsed.payload, upstream.status), payload: null };
+    if (!upstream.ok) {
+      const retry = upstream.status === 429 ? upstream.headers.get('retry-after') : null;
+      const retryAfter = retry && /^[0-9]{1,4}$/.test(retry) && Number(retry) >= 1 && Number(retry) <= 3600 ? Number(retry) : null;
+      return { ok: false as const, error: publicUpstreamErrorCode(parsed.payload, upstream.status), payload: null, retryAfter };
+    }
     return { ok: true as const, error: '', payload: parsed.payload };
   } catch (error) {
     return { ok: false as const, error: boundaryErrorCode(error, 'control_plane_unavailable'), payload: null };
   }
+}
+
+function githubOAuthUpstreamFailure(url: string, result: Awaited<ReturnType<typeof requestGitHubOAuthJson>>, clearCookies = false) {
+  const response = githubOAuthErrorRedirect(url, result.error, clearCookies);
+  if ('retryAfter' in result && result.retryAfter) response.headers.set('Retry-After', String(result.retryAfter));
+  return response;
 }
 
 function oauthStateMatches(expected: string, actual: string) {

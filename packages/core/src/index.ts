@@ -46,3 +46,4 @@ export { previewKey, previewWorkloadName, previewRuntimePlan } from './preview-d
 export { createControlPlaneRepository, resolveControlPlaneRepositoryConfig, InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from './persistence.ts';
 export { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 export type * from './types.ts';
+export { oauthAttempt, publicOAuthError, OAuthPublicError } from './oauth-security.ts';

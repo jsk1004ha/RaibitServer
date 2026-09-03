@@ -63,6 +63,12 @@ export async function bootOAuthRuntime(options = {}) {
   delete process.env.RAIBITSERVER_AUTH_RATE_LIMIT_KEY_SECRET;
   delete process.env.RAIBITSERVER_TRUST_PROXY_HEADERS;
   delete process.env.RAIBITSERVER_AUTH_RATE_LIMIT_TRUST_PROXY;
+  for (const key of ['RAIBITSERVER_AUTH_SOURCE_RATE_LIMIT', 'RAIBITSERVER_AUTH_FLOW_SOURCE_RATE_LIMIT', 'RAIBITSERVER_AUTH_EMAIL_RATE_LIMIT', 'RAIBITSERVER_AUTH_GLOBAL_RATE_LIMIT', 'RAIBITSERVER_AUTH_RATE_WINDOW_MS']) delete process.env[key];
+  if (options.transactionBudgets === true) {
+    process.env.RAIBITSERVER_AUTH_SOURCE_RATE_LIMIT = '1000';
+    process.env.RAIBITSERVER_AUTH_FLOW_SOURCE_RATE_LIMIT = '2000';
+    process.env.RAIBITSERVER_AUTH_EMAIL_RATE_LIMIT = '1000';
+  }
   const nest = await bootParityApi();
   nest.app.getHttpServer().on('request', (req) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;

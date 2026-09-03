@@ -1,4 +1,5 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
+import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
 import { createMemoryOAuthTransaction, consumeMemoryOAuthTransaction, deleteMemoryOAuthTransactions } from './oauth-transaction.ts';
 import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput, OAuthTransactionRecord } from './oauth-transaction.ts';
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
@@ -167,6 +168,10 @@ export class ControlPlaneStore {
   createOAuthTransaction(input: CreateOAuthTransactionInput) { return createMemoryOAuthTransaction(this.oauthTransactions, input); }
   consumeOAuthTransaction(input: ConsumeOAuthTransactionInput) { return consumeMemoryOAuthTransaction(this.oauthTransactions, input); }
   deleteExpiredOAuthTransactions(input: OAuthCleanupInput = {}) { return deleteMemoryOAuthTransactions(this.oauthTransactions, input); }
+  recordOAuthAudit(event: OAuthAuditEvent) {
+    const row = oauthAuditData(event);
+    return this.audit(row.actorUserId, row.action, row.targetType, row.targetId, row.metadata);
+  }
 
   consumeAuthRateLimit({ key, limit = 10, windowMs = 60_000, now = Date.now() }: Record<string, any>) {
     const normalizedKey = String(key || 'global');

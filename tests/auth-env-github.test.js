@@ -34,7 +34,7 @@ test('email verification uses a sending-only sender from the configured domain',
 });
 
 test('first auth user bootstraps as admin non-club and unsolicited GitHub callback is rejected', async () => {
-  const secret = 'first-user-bootstrap-secret';
+  const secret = 'first-user-bootstrap-secret-test-only';
   const previousAdminEmails = process.env.ADMIN_EMAILS;
   const previousCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE;
   delete process.env.ADMIN_EMAILS;
@@ -286,7 +286,7 @@ test('signup replacement invalidates stale or malicious pending email verificati
 });
 
 test('signup/login tokens isolate hosted projects, service env upload, and GitHub integration', async () => {
-  const secret = 'auth-env-github-secret';
+  const secret = 'auth-env-github-secret-test-only-32';
   const previousAdminEmails = process.env.ADMIN_EMAILS;
   const previousCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE;
   process.env.ADMIN_EMAILS = 'alice@example.com';

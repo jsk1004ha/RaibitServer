@@ -1,7 +1,8 @@
-import { Body, Controller, Get, HttpCode, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, Post, Query, Req, Res } from '@nestjs/common';
+import { publicOAuthError } from '@raibitserver/core';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { AuthService } from './auth.service';
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
 @Controller('auth')
 export class AuthController {
@@ -28,13 +29,13 @@ export class AuthController {
   }
 
   @Get('github/login')
-  githubLogin(@Query() input: Record<string, unknown>, @Req() req: IncomingMessage) {
-    return this.authService.githubLogin(input || {}, req);
+  githubLogin(@Query() input: Record<string, unknown>, @Req() req: IncomingMessage, @Res({ passthrough: true }) response: ServerResponse) {
+    return oauthResponse(response, () => this.authService.githubLogin(input || {}, req));
   }
 
   @Get('github/callback')
-  githubCallback(@Query() input: Record<string, unknown>, @Req() req: IncomingMessage) {
-    return this.authService.githubCallback(input || {}, req);
+  githubCallback(@Query() input: Record<string, unknown>, @Req() req: IncomingMessage, @Res({ passthrough: true }) response: ServerResponse) {
+    return oauthResponse(response, () => this.authService.githubCallback(input || {}, req));
   }
 
   @RequirePermission('project:read')
@@ -48,5 +49,14 @@ export class AuthController {
   @HttpCode(200)
   logout(@Req() req: any) {
     return this.authService.logout(req.raibitSubject);
+  }
+}
+
+async function oauthResponse<T>(response: ServerResponse, work: () => Promise<T>): Promise<T> {
+  try { return await work(); }
+  catch (error) {
+    const safe = publicOAuthError(error);
+    if (safe.statusCode === 429) response.setHeader('Retry-After', String(safe.retryAfterSeconds));
+    throw new HttpException({ statusCode: safe.statusCode, message: safe.code, error: safe.code }, safe.statusCode);
   }
 }

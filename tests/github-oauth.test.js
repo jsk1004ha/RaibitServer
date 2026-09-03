@@ -26,7 +26,7 @@ for (const surfaceName of ['nest', 'core']) test(`reject callback without start 
 });
 
 for (const surfaceName of ['nest', 'core']) test(`OAuth transaction adversarial matrix on real ${surfaceName} routes`, async (t) => {
-  const runtime = await bootOAuthRuntime();
+  const runtime = await bootOAuthRuntime({ transactionBudgets: true });
   const surface = runtime.surfaces.find((entry) => entry.name === surfaceName);
   const request = (path, input) => oauthRequest(surface.baseUrl, path, input);
   async function start() {
