@@ -1,11 +1,61 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import crypto from 'node:crypto';
+import http from 'node:http';
+import { once } from 'node:events';
 import { bootOAuthRuntime, oauthRequest, verifierPair } from './fixtures/github-oauth-runtime.mjs';
 import { InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 import { publicOAuthError } from '../packages/core/src/oauth-security.ts';
 import { startGitHubOAuth } from '../packages/core/src/github-oauth-flow.ts';
 import { ControlPlaneStore } from '../packages/core/src/store.ts';
+import { createApiHandler } from '../packages/core/src/api.ts';
+
+for (const name of ['nest', 'core']) for (const configured of [true, false]) test(`OAuth session configuration on ${name}: ${configured ? 'configured control' : 'missing JWT with preferred key'}`, async () => {
+  // Given: actual HTTP adapters, approved account and a valid independent rate key.
+  const previousFetch = globalThis.fetch;
+  const previousEnv = JSON.stringify(process.env);
+  const runtime = await bootOAuthRuntime();
+  const surface = runtime.surfaces.find((item) => item.name === name);
+  process.env.RAIBITSERVER_AUTH_RATE_LIMIT_KEY_SECRET = crypto.randomBytes(32).toString('hex');
+  let server;
+  let baseUrl = surface.baseUrl;
+  try {
+    if (name === 'core') {
+      server = http.createServer(createApiHandler(runtime.plane, { auth: { mode: 'jwt', jwtSecret: configured ? process.env.RAIBITSERVER_AUTH_JWT_SECRET : undefined } }));
+      server.listen(0, '127.0.0.1'); await once(server, 'listening');
+      baseUrl = `http://127.0.0.1:${server.address().port}`;
+    } else if (!configured) delete process.env.RAIBITSERVER_AUTH_JWT_SECRET;
+    const pair = verifierPair();
+    const started = await oauthRequest(baseUrl, '/auth/github/login', { codeChallenge: pair.codeChallenge });
+    assert.equal(started.status, 200);
+    const accountBefore = JSON.stringify([...surface.store.users.values()]);
+    const rateBefore = JSON.stringify([...surface.store.authRateLimits]);
+    const cleanup = surface.store.deleteExpiredOAuthTransactions.bind(surface.store);
+    const sweeps = [];
+    surface.store.deleteExpiredOAuthTransactions = (input) => { sweeps.push(input.limit); return cleanup(input); };
+    // When: the callback reaches its audited boundary, with or without session configuration.
+    const response = await oauthRequest(baseUrl, '/auth/github/callback', { state: started.body.state, codeVerifier: pair.codeVerifier, code: runtime.issueCode({ challenge: pair.codeChallenge }) });
+    // Then: missing configuration refuses before consume/provider/account work; control still signs.
+    assert.equal(response.status, configured ? 200 : 503);
+    assert.equal(Boolean(response.body.token), configured);
+    assert.equal(runtime.counters.token, configured ? 1 : 0);
+    assert.equal([...surface.store.oauthTransactions.values()][0].consumedAt !== null, configured);
+    assert.deepEqual(sweeps, [256]);
+    const events = surface.store.auditLogs.filter((row) => row.action === 'auth.github-oauth-callback');
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0].metadata, { outcome: configured ? 'success' : 'denial', errorCode: configured ? 'none' : 'github_oauth_not_configured', cleanup: 'complete' });
+    if (!configured) {
+      assert.equal(response.body.message, 'github_oauth_not_configured');
+      assert.equal(JSON.stringify([...surface.store.users.values()]) === accountBefore, true);
+      assert.equal(JSON.stringify([...surface.store.authRateLimits]) === rateBefore, true);
+    }
+  } finally {
+    if (server) { server.closeAllConnections(); await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+    await runtime.close();
+    assert.equal(globalThis.fetch === previousFetch, true);
+    assert.equal(JSON.stringify(process.env) === previousEnv, true);
+  }
+});
 
 test('OAuth abuse adversarial matrix rejects secret-bearing status exceptions on real routes', async () => {
   // Given: fresh random sentinel and real HTTP surfaces; only repository failure injected.

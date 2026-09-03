@@ -1,5 +1,5 @@
 import { RAIBITSERVERControlPlane } from './control-plane.ts';
-import { oauthAttempt, publicOAuthError } from './oauth-security.ts';
+import { oauthAttempt, publicOAuthError, OAuthPublicError } from './oauth-security.ts';
 import { maskSecrets } from './secrets.ts';
 import { authorizeRequest, authorizeSubject, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
 import { organizationScopeFromProjectInput } from './scope.ts';
@@ -90,6 +90,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       if (method === 'GET' && url.pathname === '/auth/github/callback') {
         const input = Object.fromEntries([...url.searchParams.keys()].map((key) => [key, url.searchParams.getAll(key).length === 1 ? url.searchParams.get(key) : url.searchParams.getAll(key)]));
         const response = await oauthAttempt(controlPlane.store, 'github-oauth-callback', async () => {
+        if (!auth.jwtSecret) throw new OAuthPublicError('github_oauth_not_configured');
         const identity = await consumeGitHubOAuthIdentity(controlPlane.store, input, {
           source: req.socket?.remoteAddress || '', jwtSecret: auth.jwtSecret, provider: options.githubOAuth,
         });

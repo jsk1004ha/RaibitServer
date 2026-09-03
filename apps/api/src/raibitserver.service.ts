@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
-import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt } from '@raibitserver/core';
+import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 import { ResourceCapabilityUnavailable, ResourceIntentInvalid, resourceAvailability, can, listCatalog } from '@raibitserver/core';
 
@@ -710,6 +710,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository = await this.repositoryPromise;
     return oauthAttempt(repository, 'github-oauth-callback', async () => {
     const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET;
+    if (!jwtSecret) throw new OAuthPublicError('github_oauth_not_configured');
     const identity = await consumeGitHubOAuthIdentity(repository, input, { source: request.socket.remoteAddress || '', jwtSecret });
     let user = await repository.findUserByGitHubId(identity.githubId);
     if (!user) user = await repository.findUserByEmail(identity.email);
