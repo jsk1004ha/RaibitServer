@@ -37,6 +37,12 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 
 자세한 구성은 [아키텍처 문서](docs/architecture.md)를 참고하세요.
 
+## Desired-state 수정 경계
+
+프로젝트 PATCH는 이름·설명만 받습니다. 서비스 PATCH는 branch, 소스 내부 경로(rootDirectory/buildContext/dockerfilePath/outputDirectory), install/build/start 명령, port(1–65535), healthCheck.path, CPU·메모리 requests/limits를 받으며 이름·유형은 첫 배포 전만 바꿀 수 있습니다. CPU는 core 또는 millicore, 메모리는 Mi/Gi 양수로 지정하고 request는 limit 이하여야 합니다. 새 값·증가는 인증된 작업자의 숫자 쿼터를 따르며, 쿼터가 없으면 보수적 설정 기본 한도 500m/512Mi를 씁니다. 이는 전역 플랫폼 최대값이 아니며 기존 큰 값의 유지·축소는 허용됩니다. 다른 멤버의 쿼터는 사용하지 않습니다.
+
+조직·slug·ID·소스 바인딩·상태·삭제 필드나 숨겨진 desiredState/desiredSpec을 일반 PATCH로 보내면 요청 전체가 400/409로 거부됩니다. 소스 연결은 검증된 attach/import, 배포된 서비스 교체는 새 서비스 생성으로 분리합니다. READY 리소스의 제자리 수정과 RECONCILING 리소스 수정은 차단합니다. 저장소 Dockerfile은 buildMode 지정으로 우회할 수 없습니다. 이 경계의 로컬 HTTP/manifest 검증은 실환경 배포 성공을 뜻하지 않습니다.
+
 ## 사전 요구사항
 
 - Node.js **24+**

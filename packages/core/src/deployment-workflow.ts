@@ -1,5 +1,6 @@
 import { assertLegacyBuildDryRun, executeBuildWorkflow } from './build-executor.ts';
 import { deepClone, nowIso } from './ids.ts';
+import { INTERNAL_SERVICE_MUTATION } from './desired-state-mutations.ts';
 import { sanitizeLogRecord } from './security.ts';
 import { maskSecrets } from './secrets.ts';
 import { DEPLOYMENT_STATUSES, normalizeDeploymentStatus } from './deployments.ts';
@@ -250,8 +251,8 @@ async function updateDeployment(repository: any, deploymentId: string, updates: 
 }
 
 async function updateService(repository: any, serviceId: string, updates: AnyRecord) {
-  if (typeof repository.updateService === 'function') return repository.updateService(serviceId, updates);
-  if (repository.store && typeof repository.store.updateService === 'function') return repository.store.updateService(serviceId, updates);
+  if (typeof repository.updateService === 'function') return repository.updateService(serviceId, updates, { mutation: INTERNAL_SERVICE_MUTATION });
+  if (repository.store && typeof repository.store.updateService === 'function') return repository.store.updateService(serviceId, updates, { mutation: INTERNAL_SERVICE_MUTATION });
   throw new Error('repository must implement updateService');
 }
 

@@ -15,6 +15,7 @@ export {
 } from './organization-role.ts';
 export type { OrganizationMembershipReadRole, OrganizationMembershipRole, OrganizationRouteSlugResult } from './organization-role.ts';
 export * from './api-contract.ts';
+export * from './desired-state-mutations.ts';
 export * from './production-evidence.ts';
 
 export const AccountTypeSchema = z.enum(['CLUB_MEMBER', 'NON_CLUB']);

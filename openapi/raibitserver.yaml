@@ -3855,25 +3855,13 @@ components:
         name:
           type: string
           minLength: 1
-        slug:
-          type: string
-        organizationId:
-          type: string
-          minLength: 1
-        organizationSlug:
-          type: string
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
         description:
           type: string
-        services:
-          type: array
-          items:
-            $ref: "#/components/schemas/JsonFields"
-        resources:
-          type: array
-          items:
-            $ref: "#/components/schemas/JsonFields"
-      additionalProperties:
-        $ref: "#/components/schemas/JsonValue"
+          maxLength: 4096
+          pattern: ^[^\u0000-\u001f\u007f]*$
+      additionalProperties: false
     projects-overviewResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -3905,6 +3893,9 @@ components:
         name:
           type: string
           minLength: 1
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
+          description: Editable only before the first deployment
         type:
           type: string
           enum:
@@ -3913,16 +3904,92 @@ components:
             - worker
             - cron
             - job
-        image:
+          description: Editable only before the first deployment
+        branch:
           type: string
-        sourceType:
+          minLength: 1
+          maxLength: 1024
+          pattern: ^[^\u0000-\u001f\u007f]+$
+        rootDirectory:
           type: string
+          minLength: 1
+          maxLength: 1024
+          pattern: ^(?![\/\\])(?!.*:)(?!.*(?:^|[\/\\])\.\.(?:[\/\\]|$))[^\u0000-\u001f\u007f]+$
+        buildContext:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          pattern: ^(?![\/\\])(?!.*:)(?!.*(?:^|[\/\\])\.\.(?:[\/\\]|$))[^\u0000-\u001f\u007f]+$
+        dockerfilePath:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          pattern: ^(?![\/\\])(?!.*:)(?!.*(?:^|[\/\\])\.\.(?:[\/\\]|$))[^\u0000-\u001f\u007f]+$
+        outputDirectory:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          pattern: ^(?![\/\\])(?!.*:)(?!.*(?:^|[\/\\])\.\.(?:[\/\\]|$))[^\u0000-\u001f\u007f]+$
+        installCommand:
+          type: string
+          maxLength: 4096
+          pattern: ^[^\u0000-\u001f\u007f]*$
+        buildCommand:
+          type: string
+          maxLength: 4096
+          pattern: ^[^\u0000-\u001f\u007f]*$
+        startCommand:
+          type: string
+          maxLength: 4096
+          pattern: ^[^\u0000-\u001f\u007f]*$
         port:
           type: integer
-          exclusiveMinimum: 0
-          maximum: 9007199254740991
-      additionalProperties:
-        $ref: "#/components/schemas/JsonValue"
+          minimum: 1
+          maximum: 65535
+        healthCheck:
+          type: object
+          properties:
+            path:
+              type: string
+              minLength: 1
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+          required:
+            - path
+          additionalProperties: false
+        resources:
+          type: object
+          properties:
+            requests:
+              type: object
+              properties:
+                cpu:
+                  type: string
+                  pattern: ^(?:\d+(?:\.\d{1,3})?|\d+m)$
+                  description: Positive CPU quantity; increases require the authenticated actor
+                    quota (500m fallback)
+                memory:
+                  type: string
+                  pattern: ^\d+(?:Mi|Gi)$
+                  description: Positive memory quantity; increases require the authenticated actor
+                    quota (512Mi fallback)
+              additionalProperties: false
+            limits:
+              type: object
+              properties:
+                cpu:
+                  type: string
+                  pattern: ^(?:\d+(?:\.\d{1,3})?|\d+m)$
+                  description: Positive CPU quantity; increases require the authenticated actor
+                    quota (500m fallback)
+                memory:
+                  type: string
+                  pattern: ^\d+(?:Mi|Gi)$
+                  description: Positive memory quantity; increases require the authenticated actor
+                    quota (512Mi fallback)
+              additionalProperties: false
+          additionalProperties: false
+      additionalProperties: false
     deployments-cancelResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4002,14 +4069,64 @@ components:
         name:
           type: string
           minLength: 1
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
+        type:
+          type: string
         engine:
-          $ref: "#/components/schemas/LocalResourceEngine"
+          type: string
         provider:
           type: string
         plan:
           type: string
-      additionalProperties:
-        $ref: "#/components/schemas/JsonValue"
+        region:
+          type: string
+        version:
+          type: string
+        storageMb:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        storageGb:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        databaseName:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
+        database:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
+        username:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
+        bucket:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
+        collection:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
+        topic:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
+        desiredSpec:
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties: {}
+      additionalProperties: false
     resources-attachResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object

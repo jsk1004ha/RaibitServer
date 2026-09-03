@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { INTERNAL_SERVICE_MUTATION } from '../packages/core/src/desired-state-mutations.ts';
 
 import {
   ControlPlaneStore,
@@ -87,7 +88,7 @@ test('in-memory resource persistence consumes canonical provider fields and keep
 
   assert.deepEqual(resource.desiredSpec, { storageMb: 1024, databaseName: 'app', username: 'app_user' });
   assert.equal(resource.desiredState.desiredSpec.storageMb, 1024);
-  assert.equal(store.updateProject(project.id, { slug: 'Demo' }).slug, 'demo');
+  assert.throws(() => store.updateProject(project.id, { slug: 'Demo' }), (error) => error.statusCode === 409);
   assert.throws(
     () => store.updateProject(project.id, { slug: 'renamed' }),
     (error) => error?.statusCode === 409 && /immutable/i.test(error.message),
@@ -99,7 +100,7 @@ test('in-memory project updates persist only tenant-editable fields', () => {
   const organization = store.createOrganization({ name: 'Club', slug: 'project-update-club' });
   const project = store.createProject({ organizationId: organization.id, name: 'Demo', slug: 'project-update-demo', description: 'before' });
 
-  const updated = store.updateProject(project.id, {
+  assert.throws(() => store.updateProject(project.id, {
     name: 'Renamed',
     description: 'after',
     id: 'attacker-project',
@@ -107,10 +108,10 @@ test('in-memory project updates persist only tenant-editable fields', () => {
     status: 'DELETE_REQUESTED',
     slug: project.slug,
     unknown: 'attacker-controlled',
-  });
-
-  assert.equal(updated.name, 'Renamed');
-  assert.equal(updated.description, 'after');
+  }), (error) => error.statusCode === 409);
+  const updated = store.getProject(project.id);
+  assert.equal(updated.name, 'Demo');
+  assert.equal(updated.description, 'before');
   assert.equal(updated.id, project.id);
   assert.equal(updated.organizationId, project.organizationId);
   assert.equal(updated.status, project.status);
@@ -147,11 +148,11 @@ test('Prisma rejects tenant mutation while a provisioner claim is active', async
   assert.equal(fixture.updateCalls, 0);
 });
 
-test('Prisma permits an equivalent project slug but rejects identity changes', async () => {
+test('Prisma rejects project slug fields including equivalent identities', async () => {
   const fixture = projectPrisma();
   const repository = new PrismaControlPlaneRepository(fixture.prisma);
 
-  assert.equal((await repository.updateProject('project-1', { slug: 'Demo' })).slug, 'demo');
+  await assert.rejects(() => repository.updateProject('project-1', { slug: 'Demo' }), (error) => error.statusCode === 409);
   await assert.rejects(
     () => repository.updateProject('project-1', { slug: 'renamed' }),
     (error) => error?.statusCode === 409 && /immutable/i.test(error.message),
@@ -162,7 +163,7 @@ test('Prisma project updates persist only tenant-editable fields', async () => {
   const fixture = projectPrisma();
   const repository = new PrismaControlPlaneRepository(fixture.prisma);
 
-  const updated = await repository.updateProject('project-1', {
+  await assert.rejects(() => repository.updateProject('project-1', {
     name: 'Renamed',
     description: 'after',
     id: 'attacker-project',
@@ -170,10 +171,10 @@ test('Prisma project updates persist only tenant-editable fields', async () => {
     status: 'ATTACKER_CONTROLLED',
     slug: 'demo',
     unknown: 'attacker-controlled',
-  });
-
-  assert.equal(updated.name, 'Renamed');
-  assert.equal(updated.description, 'after');
+  }), (error) => error.statusCode === 409);
+  const updated = await fixture.prisma.project.findUnique({ where: { id: 'project-1' } });
+  assert.equal(updated.name, 'Demo');
+  assert.equal(updated.description, undefined);
   assert.equal(updated.id, 'project-1');
   assert.equal(updated.organizationId, 'org-1');
   assert.equal(updated.status, 'ACTIVE');
@@ -206,7 +207,7 @@ test('Prisma service updates preserve desired-state metadata and keep image alia
   };
   const repository = new PrismaControlPlaneRepository(prisma);
 
-  const updated = await repository.updateService('service-1', { branch: 'main', imageUrl: '' });
+  const updated = await repository.updateService('service-1', { branch: 'main', imageUrl: '' }, { mutation: INTERNAL_SERVICE_MUTATION });
 
   assert.deepEqual(updateData.desiredState.providerMetadata, { owner: 'builder' });
   assert.equal(updateData.desiredState.branch, 'main');

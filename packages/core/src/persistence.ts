@@ -12,12 +12,13 @@ import { buildResourceProviderPlan, publicResourceProviderPlan } from './resourc
 import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
-import { redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate } from './security.ts';
+import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate } from './security.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import { parseGitHubRepository } from './github-integration.ts';
+import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
   activityLimit,
@@ -263,6 +264,7 @@ export class InMemoryControlPlaneRepository {
       const existingService = existingProject
         ? [...this.store.services.values()].find((candidate) => String(candidate.projectId) === String(existingProject.id) && String(candidate.slug) === slugInput(service.slug || service.name))
         : null;
+      assertServiceReplacement(Boolean(existingService && [...this.store.deployments.values()].some((deployment) => deployment.serviceId === existingService.id)));
       requirements.push(...serviceQuotaRequirements(existingService, service));
     }
     for (const resource of projectSpec.resources || []) {
@@ -740,8 +742,7 @@ export class PrismaControlPlaneRepository {
       const current = await tx.project.findUnique({ where: { id: projectId } });
       if (!current) return null;
       assertMutable(current, 'project');
-      if (updates.slug !== undefined && slugInput(updates.slug) !== current.slug) throw conflictError('project slug is immutable after creation');
-      return tx.project.update({ where: { id: projectId }, data: projectUpdateData(updates) });
+      return tx.project.update({ where: { id: projectId }, data: projectUpdateData(parseProjectMutation(updates)) });
     }, { isolationLevel: 'Serializable' });
   }
 
@@ -783,6 +784,7 @@ export class PrismaControlPlaneRepository {
       await requireMutableProject(tx, input.projectId);
       const existing = await tx.service.findUnique({ where: { projectId_slug: { projectId: input.projectId, slug } } });
       assertMutable(existing, 'service');
+      assertServiceReplacement(Boolean(existing && await tx.deployment.findFirst({ where: { serviceId: existing.id }, select: { id: true } })));
       await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'service:create', serviceQuotaRequirements(existing, input));
       return tx.service.upsert({
         where: { projectId_slug: { projectId: input.projectId, slug } },
@@ -809,6 +811,7 @@ export class PrismaControlPlaneRepository {
   }
 
   async updateResource(resourceId: string, updates: Record<string, any>) {
+    parseResourceMutation(updates);
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const current = await tx.resource.findUnique({ where: { id: resourceId } });
       if (!current) return null;
@@ -889,9 +892,17 @@ export class PrismaControlPlaneRepository {
       assertMutable(current, 'service');
       assertPrismaGitHubBindingImmutable(current, updates);
       await requireMutableProject(tx, current.projectId);
+      const trusted = options.mutation === INTERNAL_SERVICE_MUTATION || options.allowGitHubBinding === true;
+      if (!trusted) assertNoTenantGitHubBinding(updates);
+      const parsed = trusted ? updates : parseServiceMutation(updates);
+      const deployed = !trusted && (Object.hasOwn(parsed, 'name') || Object.hasOwn(parsed, 'type'))
+        ? Boolean(await tx.deployment.findFirst({ where: { serviceId }, select: { id: true } })) : false;
+      const quota = !trusted && parsed.resources !== undefined && options.actorUserId
+        ? await tx.quota.findFirst({ where: { userId: options.actorUserId }, orderBy: { updatedAt: 'desc' } }) : undefined;
+      const safeUpdates = trusted ? parsed : serviceMutationState(current, parsed, { deployed, quota });
       return tx.service.update({
         where: { id: serviceId },
-        data: serviceUpdateData(updates, { ...options, currentDesiredState: current.desiredState }),
+        data: serviceUpdateData(safeUpdates, { ...options, currentDesiredState: current.desiredState }),
       });
     }, { isolationLevel: 'Serializable' });
   }
@@ -1302,22 +1313,25 @@ export class PrismaControlPlaneRepository {
   }
 
   async attachGitHubRepositoryToService(input: Record<string, any>) {
-    const serviceRow = await this.prisma.service.findUnique({ where: { id: input.serviceId }, include: { project: true } });
-    if (!serviceRow) throw notFoundError(`service not found: ${input.serviceId}`);
-    if (String(serviceRow.projectId) !== String(input.projectId)) throw forbiddenError('service does not belong to project');
-    const integration = await requireVerifiedPrismaGitHubIntegration(this.prisma, input.integrationId, serviceRow.project?.organizationId);
-    const repo = await resolvePrismaGitHubRepository(this.prisma, integration.installationId, input);
-    const branch = input.branch || repo.defaultBranch || integration.defaultBranch || 'main';
-    const binding = prismaGitHubServiceBinding(integration, repo);
-    assertPrismaGitHubBindingImmutable(serviceRow, { repoUrl: repo.repoUrl, githubRepositoryId: repo.githubRepoId, desiredState: binding });
-    const currentDesiredState = serviceRow.desiredState && typeof serviceRow.desiredState === 'object' && !Array.isArray(serviceRow.desiredState) ? serviceRow.desiredState as Record<string, any> : {};
-    const currentGitHub = currentDesiredState.github && typeof currentDesiredState.github === 'object' && !Array.isArray(currentDesiredState.github) ? currentDesiredState.github : {};
-    const service = await this.prisma.service.update({
-      where: { id: input.serviceId },
-      data: { sourceType: 'github', repoUrl: repo.repoUrl, githubRepositoryId: repo.githubRepoId, branch, desiredState: sanitizeJson({ ...currentDesiredState, ...binding, github: { ...currentGitHub, ...binding.github, attached: true } }) },
-    });
-    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:attach-repository', targetType: 'service', targetId: input.serviceId, metadata: { repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId } } });
-    return { service, github: { ...binding.github, branch } };
+    return this.prisma.$transaction(async (tx) => {
+      const serviceRow = await tx.service.findUnique({ where: { id: input.serviceId }, include: { project: true } });
+      if (!serviceRow) throw notFoundError(`service not found: ${input.serviceId}`);
+      if (String(serviceRow.projectId) !== String(input.projectId)) throw forbiddenError('service does not belong to project');
+      assertServiceReplacement(Boolean(await tx.deployment.findFirst({ where: { serviceId: input.serviceId }, select: { id: true } })));
+      const integration = await requireVerifiedPrismaGitHubIntegration(tx, input.integrationId, serviceRow.project?.organizationId);
+      const repo = await resolvePrismaGitHubRepository(tx, integration.installationId, input);
+      const branch = input.branch || repo.defaultBranch || integration.defaultBranch || 'main';
+      const binding = prismaGitHubServiceBinding(integration, repo);
+      assertPrismaGitHubBindingImmutable(serviceRow, { repoUrl: repo.repoUrl, githubRepositoryId: repo.githubRepoId, desiredState: binding });
+      const currentDesiredState = serviceRow.desiredState && typeof serviceRow.desiredState === 'object' && !Array.isArray(serviceRow.desiredState) ? serviceRow.desiredState as Record<string, any> : {};
+      const currentGitHub = currentDesiredState.github && typeof currentDesiredState.github === 'object' && !Array.isArray(currentDesiredState.github) ? currentDesiredState.github : {};
+      const service = await tx.service.update({
+        where: { id: input.serviceId },
+        data: { sourceType: 'github', repoUrl: repo.repoUrl, githubRepositoryId: repo.githubRepoId, branch, desiredState: sanitizeJson({ ...currentDesiredState, ...binding, github: { ...currentGitHub, ...binding.github, attached: true } }) },
+      });
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:attach-repository', targetType: 'service', targetId: input.serviceId, metadata: { repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId } } });
+      return { service, github: { ...binding.github, branch } };
+    }, { isolationLevel: 'Serializable' });
   }
 
   async listGitHubInstallations(input: Record<string, any>) {
@@ -1357,6 +1371,7 @@ export class PrismaControlPlaneRepository {
       const slug = slugInput(name);
       const existing = await tx.service.findUnique({ where: { projectId_slug: { projectId: input.projectId, slug } } });
       assertMutable(existing, 'service');
+      assertServiceReplacement(Boolean(existing && await tx.deployment.findFirst({ where: { serviceId: existing.id }, select: { id: true } })));
       const serviceInput = {
         projectId: input.projectId,
         name,
@@ -1786,6 +1801,7 @@ export class PrismaControlPlaneRepository {
           ? await tx.service.findUnique({ where: { projectId_slug: { projectId: project.id, slug: serviceSlug } } })
           : null;
         assertMutable(existingService, 'service');
+        assertServiceReplacement(Boolean(existingService && await tx.deployment.findFirst({ where: { serviceId: existingService.id }, select: { id: true } })));
         services.push(await tx.service.upsert({
           where: { projectId_slug: { projectId: project.id, slug: serviceSlug } },
           update: serviceData({ ...service, projectId: project.id }),
@@ -2209,9 +2225,10 @@ function resourceData(input: Record<string, any>, options: Record<string, any> =
 
 
 function serviceUpdateData(input: Record<string, any> = {}, options: Record<string, any> = {}) {
-  const inputSafe = sanitizeTenantServiceUpdate(input, { allowGitHubBinding: options.allowGitHubBinding === true });
+  const inputSafe = sanitizeTenantServiceUpdate(input, options);
   const allowed = ['name', 'type', 'runtimeType', 'sourceType', 'buildMode', 'repoUrl', 'githubRepositoryId', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'image', 'imageUrl', 'port'];
   const data: Record<string, any> = {};
+  if (options.mutation === INTERNAL_SERVICE_MUTATION && input.status !== undefined) data.status = input.status;
   for (const key of allowed) {
     if (!Object.prototype.hasOwnProperty.call(inputSafe || {}, key)) continue;
     const value = inputSafe[key] === '' ? null : inputSafe[key];

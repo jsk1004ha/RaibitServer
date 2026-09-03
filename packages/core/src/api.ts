@@ -321,7 +321,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const service = controlPlane.store.getService(serviceId);
         if (!service) return send(res, 404, { error: 'service_not_found' });
         await assertProjectAccess(controlPlane.store, service.projectId, subject);
-        return send(res, 200, controlPlane.store.updateService(serviceId, sanitizeTenantServiceUpdate(await readJson(req))));
+        return send(res, 200, controlPlane.store.updateService(serviceId, sanitizeTenantServiceUpdate(await readJson(req)), { actorUserId: subject.id }));
       }
       if (serviceMatch && method === 'DELETE') {
         const subject = authorizeAction(req, 'project:delete', auth);

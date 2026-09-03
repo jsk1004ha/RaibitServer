@@ -112,14 +112,8 @@ test('maintainer project updates cannot mutate deletion state or project identit
       slug: project.slug,
       unknown: 'attacker-controlled',
     }, token);
-    assert.equal(updated.statusCode, 200);
-    assert.equal(updated.body.name, 'After');
-    assert.equal(updated.body.description, 'after');
-    assert.equal(updated.body.id, project.id);
-    assert.equal(updated.body.organizationId, organization.id);
-    assert.equal(updated.body.status, project.status);
-    assert.equal(updated.body.slug, project.slug);
-    assert.equal(updated.body.unknown, undefined);
+    assert.equal(updated.statusCode, 409);
+    assert.deepEqual(controlPlane.store.getProject(project.id), { ...project, organizationSlug: organization.slug, organization: { id: organization.id, name: organization.name, slug: organization.slug } });
 
     const renamedSlug = await request(port, 'PATCH', `/projects/${project.id}`, { slug: 'attacker-slug' }, token);
     assert.equal(renamedSlug.statusCode, 409);

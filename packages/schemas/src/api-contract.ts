@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import * as M from './api-models.ts';
+import { ProjectUpdateSchema, ServiceUpdateSchema, ResourceUpdateSchema } from './desired-state-mutations.ts';
 
 const id = z.string().min(1);
 const project = z.object({ projectId: id });
@@ -30,13 +31,13 @@ export const apiOperations = {
   'projects-list': operation({ method: 'get', path: '/projects', status: 200, permission: 'project:read', input: input(M.Empty, M.PageQuery, M.Empty), response: M.Projects }),
   'projects-create': operation({ method: 'post', path: '/projects', status: 201, permission: 'project:create', input: input(M.Empty, M.Empty, M.ProjectInput), response: M.Project }),
   'projects-get': operation({ method: 'get', path: '/projects/{projectId}', status: 200, permission: 'project:read', input: input(project, M.Empty, M.Empty), response: M.Project }),
-  'projects-update': operation({ method: 'patch', path: '/projects/{projectId}', status: 200, permission: 'project:update', input: input(project, M.Empty, M.ProjectInput.partial()), response: M.Project }),
+  'projects-update': operation({ method: 'patch', path: '/projects/{projectId}', status: 200, permission: 'project:update', input: input(project, M.Empty, ProjectUpdateSchema), response: M.Project }),
   'projects-delete': operation({ method: 'delete', path: '/projects/{projectId}', status: 200, permission: 'project:delete', input: input(project, M.Empty, M.Empty), response: M.Deletion }),
   'projects-overview': operation({ method: 'get', path: '/projects/{projectId}/overview', status: 200, permission: 'project:read', input: input(project, M.Empty, M.Empty), response: z.object({ project: M.Project, services: z.array(M.Service), resources: z.array(M.Resource), deployments: z.array(M.Deployment) }) }),
   'services-list': operation({ method: 'get', path: '/projects/{projectId}/services', status: 200, permission: 'project:read', input: input(project, M.PageQuery, M.Empty), response: M.Services }),
   'services-create': operation({ method: 'post', path: '/projects/{projectId}/services', status: 201, permission: 'service:create', input: input(project, M.Empty, M.ServiceInput), response: M.Service }),
   'services-get': operation({ method: 'get', path: '/services/{serviceId}', status: 200, permission: 'project:read', input: input(service, M.Empty, M.Empty), response: M.Service }),
-  'services-update': operation({ method: 'patch', path: '/services/{serviceId}', status: 200, permission: 'service:update', input: input(service, M.Empty, M.ServiceInput.partial()), response: M.Service }),
+  'services-update': operation({ method: 'patch', path: '/services/{serviceId}', status: 200, permission: 'service:update', input: input(service, M.Empty, ServiceUpdateSchema), response: M.Service }),
   'services-delete': operation({ method: 'delete', path: '/services/{serviceId}', status: 200, permission: 'project:delete', input: input(service, M.Empty, M.Empty), response: M.Deletion }),
   'project-deployments-list': operation({ method: 'get', path: '/projects/{projectId}/services/{serviceId}/deployments', status: 200, permission: 'project:read', input: input(scopedService, M.PageQuery, M.Empty), response: M.Deployments }),
   'project-deployments-create': operation({ method: 'post', path: '/projects/{projectId}/services/{serviceId}/deployments', status: 202, permission: 'deploy:run', input: input(scopedService, M.Empty, M.DeploymentInput), response: M.Deployment }),
@@ -57,7 +58,7 @@ export const apiOperations = {
   'resources-list': operation({ method: 'get', path: '/projects/{projectId}/resources', status: 200, permission: 'project:read', input: input(project, M.PageQuery, M.Empty), response: M.Resources }),
   'resources-create': operation({ method: 'post', path: '/projects/{projectId}/resources', status: 201, permission: 'db:create', input: input(project, M.Empty, M.ResourceInput), response: M.Resource }),
   'resources-get': operation({ method: 'get', path: '/resources/{resourceId}', status: 200, permission: 'project:read', input: input(resource, M.Empty, M.Empty), response: M.Resource }),
-  'resources-update': operation({ method: 'patch', path: '/resources/{resourceId}', status: 200, permission: 'db:create', input: input(resource, M.Empty, M.ResourceInput.partial()), response: M.Resource }),
+  'resources-update': operation({ method: 'patch', path: '/resources/{resourceId}', status: 200, permission: 'db:create', input: input(resource, M.Empty, ResourceUpdateSchema), response: M.Resource }),
   'resources-delete': operation({ method: 'delete', path: '/resources/{resourceId}', status: 200, permission: 'db:delete', input: input(resource, M.Empty, M.Empty), response: M.Deletion }),
   'resources-attach': operation({ method: 'post', path: '/resources/{resourceId}/attach', status: 201, permission: 'db:create', input: input(resource, M.Empty, z.object({ serviceId: id, envPrefix: z.string().optional() })), response: z.object({ resourceId: id, serviceId: id }).catchall(z.json()) }),
   'resources-provision': operation({ method: 'post', path: '/resources/{resourceId}/provision', status: 201, permission: 'db:create', input: input(resource, M.Empty, M.Empty), response: z.object({ resource: M.Resource, result: z.object({ engine: z.string(), provider: z.string(), status: z.string(), dryRun: z.boolean() }).catchall(z.json()) }) }),

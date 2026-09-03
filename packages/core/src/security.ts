@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { can } from './rbac.ts';
 import { canonicalizeProviderDesiredSpec, sanitizeResourceValue } from './resource-sanitizer.ts';
+import { INTERNAL_SERVICE_MUTATION, parseResourceMutation, parseServiceMutation } from './desired-state-mutations.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -369,7 +370,7 @@ function sanitizeRuntimeCommandFields(output: AnyRecord) {
 }
 
 export function sanitizeTenantServiceUpdate(input: AnyRecord = {}, options: AnyRecord = {}) {
-  const output = sanitizeTenantServiceInput(input, options);
+  const output = sanitizeTenantServiceInput(options.mutation === INTERNAL_SERVICE_MUTATION || options.allowGitHubBinding === true ? input : parseServiceMutation(input), options);
   delete output.projectId;
   return output;
 }
@@ -409,7 +410,7 @@ function validateManagedResourceRouteFields(input: AnyRecord) {
 }
 
 export function sanitizeTenantResourceApiUpdate(input: AnyRecord = {}) {
-  const output = sanitizeTenantResourceApiInput(input);
+  const output = sanitizeTenantResourceApiInput(parseResourceMutation(input));
   delete output.projectId;
   return output;
 }

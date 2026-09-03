@@ -204,8 +204,10 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const current = await repository.getService(serviceId);
     if (!current) throw new NotFoundException(`service not found: ${serviceId}`);
     await assertProjectAccess(repository, current.projectId, subject);
-    const safeUpdates = sanitizeTenantServiceUpdate(updates || {});
-    const service = await repositoryMutation(() => repository.updateService ? repository.updateService(serviceId, safeUpdates) : repository.store.updateService(serviceId, safeUpdates));
+    const service = await repositoryMutation(() => {
+      const safeUpdates = sanitizeTenantServiceUpdate(updates || {});
+      return repository.updateService ? repository.updateService(serviceId, safeUpdates, { actorUserId: subject.id }) : repository.store.updateService(serviceId, safeUpdates, { actorUserId: subject.id });
+    });
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     return service;
   }
@@ -246,8 +248,10 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   async updateResource(resourceId: string, updates: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     const current = await this.getResource(resourceId, subject);
-    const safeUpdates = sanitizeTenantResourceApiUpdate(updates);
-    const resource = await repositoryMutation(() => repository.updateResource ? repository.updateResource(resourceId, safeUpdates) : repository.store.updateResource(resourceId, safeUpdates));
+    const resource = await repositoryMutation(() => {
+      const safeUpdates = sanitizeTenantResourceApiUpdate(updates);
+      return repository.updateResource ? repository.updateResource(resourceId, safeUpdates) : repository.store.updateResource(resourceId, safeUpdates);
+    });
     if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
     return resource;
   }

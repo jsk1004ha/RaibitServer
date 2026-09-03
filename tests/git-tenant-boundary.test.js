@@ -137,6 +137,8 @@ test('Prisma repository boundary enforces verified same-organization authoritati
   const repositories = [{ id: 'record-101', installationId: 'installation-a', githubRepoId: '101', fullName: 'Alice/Web', defaultBranch: 'trunk', private: true }];
   let updateData = null;
   const prisma = {
+    $transaction: async (callback) => callback(prisma),
+    deployment: { findFirst: async () => null },
     service: {
       findUnique: async () => service,
       update: async ({ data }) => {

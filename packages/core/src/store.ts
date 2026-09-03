@@ -1,6 +1,7 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
 import { createMemoryOAuthTransaction, consumeMemoryOAuthTransaction, deleteMemoryOAuthTransactions } from './oauth-transaction.ts';
 import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput, OAuthTransactionRecord } from './oauth-transaction.ts';
+import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecord } from './security.ts';
 import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
@@ -413,10 +414,10 @@ export class ControlPlaneStore {
   updateProject(projectId: string, updates: Record<string, any> = {}) {
     const current = this.projects.get(projectId);
     if (!current) return null;
-    if (updates.slug !== undefined && slugify(updates.slug) !== current.slug) throw conflict('project slug is immutable after creation');
+    const parsed = parseProjectMutation(updates);
     const mutableUpdates: Record<string, any> = {};
-    if (updates.name !== undefined) mutableUpdates.name = updates.name;
-    if (updates.description !== undefined) mutableUpdates.description = updates.description;
+    if (parsed.name !== undefined) mutableUpdates.name = parsed.name;
+    if (parsed.description !== undefined) mutableUpdates.description = parsed.description;
     const next = {
       ...current,
       ...maskSecrets(mutableUpdates),
@@ -457,6 +458,7 @@ export class ControlPlaneStore {
       createdAt: nowIso(),
       ...rest,
     };
+    assertServiceReplacement(this.services.has(service.id) && [...this.deployments.values()].some((deployment) => deployment.serviceId === service.id));
     this.services.set(service.id, service);
     this.audit('system', 'service:create', 'service', service.id, { projectId, type });
     return deepClone(service);
@@ -471,7 +473,11 @@ export class ControlPlaneStore {
     if (!current) return null;
     if (options.allowGitHubBinding !== true) assertNoTenantGitHubBinding(updates);
     assertImmutableGitHubRepositoryBinding(current, updates);
-    const normalized = maskSecrets({ ...updates });
+    const trusted = options.mutation === INTERNAL_SERVICE_MUTATION || options.allowGitHubBinding === true;
+    const normalized = maskSecrets(trusted ? { ...updates } : serviceMutationState(current, parseServiceMutation(updates), {
+      deployed: [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId),
+      quota: [...this.quotas.values()].find((quota) => quota.userId === options.actorUserId),
+    }));
     delete normalized.id;
     delete normalized.projectId;
     if (options.allowDesiredState !== true) delete normalized.desiredState;
@@ -541,6 +547,7 @@ export class ControlPlaneStore {
   updateResource(resourceId: string, updates: Record<string, any> = {}) {
     const current = this.resources.get(resourceId);
     if (!current) return null;
+    parseResourceMutation(updates);
       if (String(current.status || '').toUpperCase() === 'READY') throw conflict('READY managed resources cannot be updated in place; delete and recreate the resource');
   if (String(current.status || '').toUpperCase() === 'RECONCILING' && Object.keys(updates).length > 0) throw conflict('RECONCILING managed resources cannot be updated while the provisioner claim is active');
     const safe = sanitizeTenantResourceInput({ ...updates, projectId: current.projectId, name: updates.name || current.name, engine: updates.engine || current.engine, type: updates.type || current.type });
@@ -1066,6 +1073,7 @@ export class ControlPlaneStore {
     const service = this.services.get(serviceId);
     if (!service) throw notFound(`service not found: ${serviceId}`);
     if (String(service.projectId) !== String(projectId)) throw forbidden('service does not belong to project');
+    assertServiceReplacement([...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId));
     const project = this.projects.get(projectId);
     if (!project) throw notFound(`project not found: ${projectId}`);
     const integration = requireVerifiedGitHubIntegration(this.githubIntegrations, integrationId, project.organizationId);
