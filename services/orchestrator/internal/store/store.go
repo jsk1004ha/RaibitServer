@@ -47,6 +47,7 @@ type DesiredStateStore interface {
 }
 
 type ReconcileStore interface {
+	HealthStore
 	ClaimNextServiceDeletion(ctx context.Context, options ClaimOptions) (*Service, error)
 	ClaimNextProjectDeletion(ctx context.Context, options ClaimOptions) (*Project, error)
 	RenewServiceDeletionLease(ctx context.Context, lease DeletionLease, now time.Time) (DeletionLease, error)
@@ -109,6 +110,10 @@ func (project *Project) DeletionLease() DeletionLease {
 }
 
 type Service struct {
+	HealthCheckPath     string
+	LivenessPath        string
+	ReadinessPath       string
+	PublicHealthPath    string
 	ID                  string
 	ProjectID           string
 	Name                string
@@ -133,6 +138,10 @@ func (service *Service) DeletionLease() DeletionLease {
 }
 
 type Deployment struct {
+	PublicHealthStatus  string
+	HealthCheckedAt     time.Time
+	HealthFailureCode   string
+	ObservedGeneration  int
 	DesiredSpecSnapshot json.RawMessage
 	SnapshotVersion     int
 	SourceDeploymentID  string
@@ -365,6 +374,13 @@ func (s *FileStore) FinalizeProjectDeletion(ctx context.Context, lease DeletionL
 	}
 	projects = append(projects[:idx], projects[idx+1:]...)
 	setRecordSlice(state, "projects", projects)
+	for _, job := range recordSlice(state, "workflowJobs") {
+		if stringField(job, "type") == PublicHealthObserve && stringField(mapField(job, "payload"), "projectId") == lease.ID && (stringField(job, "status") == "queued" || stringField(job, "status") == "running") {
+			job["status"] = "cancelled"
+			job["lockedAt"] = nil
+			job["lockedBy"] = nil
+		}
+	}
 	return s.save(state)
 }
 
@@ -707,6 +723,7 @@ func serviceFromRecord(row record) *Service {
 	desiredSpec := mapField(row, "desiredSpec")
 	desiredState := mapField(row, "desiredState")
 	service := &Service{
+		HealthCheckPath: stringField(row, "healthCheckPath"), LivenessPath: stringField(row, "livenessPath"), ReadinessPath: stringField(row, "readinessPath"), PublicHealthPath: stringField(row, "publicHealthPath"),
 		ID: stringField(row, "id"), ProjectID: stringField(row, "projectId"), Name: stringField(row, "name"), Slug: stringField(row, "slug"), Type: defaultString(stringField(row, "type"), "web"),
 		ImageURL: coalesceString(stringField(row, "imageUrl"), stringField(row, "image"), stringField(desiredState, "imageUrl"), stringField(desiredState, "image")),
 		Port:     intField(row, "port"), Replicas: intField(desiredState, "replicas"), BaseDomain: coalesceString(stringField(row, "baseDomain"), stringField(desiredState, "baseDomain")), DesiredSpec: desiredSpec, DesiredState: desiredState,
@@ -725,7 +742,7 @@ func serviceFromRecord(row record) *Service {
 }
 
 func deploymentFromRecord(row record) *Deployment {
-	return &Deployment{ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts"), DesiredSpecSnapshot: snapshotJSONFromRecord(row), SnapshotVersion: snapshotVersionFromRecord(row), SourceDeploymentID: stringField(row, "sourceDeploymentId"), RetryOfDeploymentID: stringField(row, "retryOfDeploymentId")}
+	return &Deployment{PublicHealthStatus: defaultString(stringField(row, "publicHealthStatus"), "UNKNOWN"), HealthCheckedAt: parseTimestamp(stringField(row, "healthCheckedAt")), HealthFailureCode: stringField(row, "healthFailureCode"), ObservedGeneration: intField(row, "observedGeneration"), ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts"), DesiredSpecSnapshot: snapshotJSONFromRecord(row), SnapshotVersion: snapshotVersionFromRecord(row), SourceDeploymentID: stringField(row, "sourceDeploymentId"), RetryOfDeploymentID: stringField(row, "retryOfDeploymentId")}
 }
 
 func deletionClaimClock(options ClaimOptions) (time.Time, time.Duration) {
@@ -825,6 +842,15 @@ func cascadeFileService(state map[string]any, serviceID string) {
 	for _, row := range recordSlice(state, "deployments") {
 		if stringField(row, "serviceId") == serviceID {
 			deploymentIDs[stringField(row, "id")] = struct{}{}
+		}
+	}
+	for _, job := range recordSlice(state, "workflowJobs") {
+		if stringField(job, "type") == PublicHealthObserve {
+			if _, deleted := deploymentIDs[stringField(job, "targetId")]; deleted && (stringField(job, "status") == "queued" || stringField(job, "status") == "running") {
+				job["status"] = "cancelled"
+				job["lockedAt"] = nil
+				job["lockedBy"] = nil
+			}
 		}
 	}
 	setRecordSlice(state, "deployments", filterRecords(recordSlice(state, "deployments"), func(row record) bool {

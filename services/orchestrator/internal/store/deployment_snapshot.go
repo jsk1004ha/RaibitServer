@@ -20,6 +20,13 @@ type snapshotSecretEnv struct {
 }
 
 type runtimeSnapshot struct {
+	HealthCheckPath  *string `json:"healthCheckPath"`
+	LivenessPath     *string `json:"livenessPath"`
+	ReadinessPath    *string `json:"readinessPath"`
+	PublicHealthPath *string `json:"publicHealthPath"`
+	HealthCheck      *struct {
+		Path string `json:"path"`
+	} `json:"healthCheck"`
 	Type               string              `json:"type"`
 	Port               *int                `json:"port"`
 	Replicas           *int                `json:"replicas"`
@@ -54,11 +61,11 @@ func (deployment *Deployment) RuntimeService(live *Service) (*Service, error) {
 		return nil, ErrDeploymentSnapshot
 	}
 	selected := make(map[string]json.RawMessage)
-	for _, key := range []string{"type", "port", "replicas", "command", "args", "schedule", "env", "secretEnv", "allowPublicEgress", "publicEgress", "egress", "allowTenantIngress"} {
+	for _, key := range []string{"type", "port", "replicas", "command", "args", "schedule", "env", "secretEnv", "allowPublicEgress", "publicEgress", "egress", "allowTenantIngress", "healthCheckPath", "livenessPath", "readinessPath", "publicHealthPath", "healthCheck"} {
 		if value, exists := fields[key]; exists {
 			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 				switch key {
-				case "port", "replicas", "allowPublicEgress", "publicEgress", "egress", "allowTenantIngress":
+				case "port", "replicas", "allowPublicEgress", "publicEgress", "egress", "allowTenantIngress", "healthCheckPath", "livenessPath", "readinessPath", "publicHealthPath", "healthCheck":
 					continue
 				default:
 					return nil, ErrDeploymentSnapshot
@@ -76,6 +83,27 @@ func (deployment *Deployment) RuntimeService(live *Service) (*Service, error) {
 		return nil, ErrDeploymentSnapshot
 	}
 	view := *live
+	view.HealthCheckPath, view.LivenessPath, view.ReadinessPath, view.PublicHealthPath = "", "", "", ""
+	for target, value := range map[*string]*string{&view.HealthCheckPath: execution.HealthCheckPath, &view.LivenessPath: execution.LivenessPath, &view.ReadinessPath: execution.ReadinessPath, &view.PublicHealthPath: execution.PublicHealthPath} {
+		if value != nil {
+			if !validHealthPath(*value) {
+				return nil, ErrDeploymentSnapshot
+			}
+			*target = *value
+		}
+	}
+	if execution.HealthCheck != nil && execution.HealthCheck.Path != "" {
+		if !validHealthPath(execution.HealthCheck.Path) || (view.HealthCheckPath != "" && view.HealthCheckPath != execution.HealthCheck.Path) {
+			return nil, ErrDeploymentSnapshot
+		}
+		if raw, exists := fields["healthCheckPath"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, ErrDeploymentSnapshot
+		}
+		view.HealthCheckPath = execution.HealthCheck.Path
+	}
+	if execution.Type != "web" && view.PublicHealthPath != "" {
+		return nil, ErrDeploymentSnapshot
+	}
 	view.Type, view.Port, view.Replicas = execution.Type, 3000, 1
 	if execution.Port != nil {
 		if *execution.Port < 0 || *execution.Port > 65535 {
