@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
+import { ThemeMenu } from "@/components/theme-menu"
 import { PrimitiveClientFixture } from "@/test-fixtures/primitive-client"
 import { assertE2eFixturesEnabled } from "../errors/fixtures/fixture-access"
 
@@ -50,6 +51,17 @@ export default async function PrimitiveFixturePage() {
             흰색 캔버스와 라이빗 네이비를 중심으로 기본, 포커스, 오류, 비활성 상태를 확인합니다.
           </p>
         </header>
+
+        <section aria-labelledby="theme-menu-title" className="grid gap-4">
+          <div>
+            <h2 id="theme-menu-title" className="text-lg font-medium">테마 메뉴</h2>
+            <p className="text-sm text-muted-foreground">동일 문서의 두 메뉴가 하나의 테마 선택을 공유합니다.</p>
+          </div>
+          <div className="flex items-center gap-3" data-theme-menu-fixture>
+            <ThemeMenu />
+            <ThemeMenu />
+          </div>
+        </section>
 
         <section aria-labelledby="button-title" className="grid gap-4">
           <h2 id="button-title" className="text-lg font-medium">행동</h2>

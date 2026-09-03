@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { LIFECYCLE_CONTRACT, terminalLifecycleInputs } from './lifecycle.ts';
 import { AUTH_RETENTION_PRUNE_BATCH_SIZE, ControlPlaneStore } from './store.ts';
 import { deepClone, stableId } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
@@ -13,6 +14,7 @@ import { redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
+import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import { parseGitHubRepository } from './github-integration.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
@@ -242,6 +244,8 @@ export class InMemoryControlPlaneRepository {
   async enforceUserCan(input: Record<string, any>) { return this.store.enforceUserCan(input); }
   async writeDesiredProject(projectSpec: Record<string, any>) {
     const orgInput = projectSpec.organization || null;
+    if (Object.hasOwn(projectSpec, 'organizationSlug')) validatedOrganizationRouteSlug(projectSpec.organizationSlug);
+    if (orgInput && Object.hasOwn(orgInput, 'slug')) validatedOrganizationRouteSlug(orgInput.slug);
     const requestedOrganizationId = projectSpec.organizationId || projectSpec.orgId || null;
     const existingOrganization = (requestedOrganizationId ? this.store.organizations.get(String(requestedOrganizationId)) : null)
       || [...this.store.organizations.values()].find((organization) => String(organization.slug) === slugInput(projectSpec.organizationSlug || orgInput?.slug || orgInput?.name || requestedOrganizationId || ''));
@@ -331,10 +335,11 @@ export class PrismaControlPlaneRepository {
   }
 
   async createOrganization(input: Record<string, any>) {
+    const slug = organizationSlugForCreate(input);
     return this.prisma.organization.upsert({
-      where: { slug: input.slug || slugInput(input.name) },
+      where: { slug },
       update: { name: input.name, plan: input.plan || 'free' },
-      create: { name: input.name, slug: input.slug || slugInput(input.name), plan: input.plan || 'free' },
+      create: { name: input.name, slug, plan: input.plan || 'free' },
     });
   }
 
@@ -573,12 +578,13 @@ export class PrismaControlPlaneRepository {
         }
         const payload = record.payload || {};
         if (payload.kind !== 'signup') return { status: 'invalid' };
+        const organizationSlug = validatedOrganizationRouteSlug(payload.organizationSlug);
         const claimed = await transaction.emailVerificationCode.updateMany({
           where: { id: record.id, consumedAt: null, expiresAt: { gt: now }, attempts: { lt: maxAttempts } },
           data: { consumedAt: now },
         });
         if (Number(claimed.count || 0) !== 1) return { status: 'invalid' };
-        const existingOrganization = await transaction.organization.findUnique({ where: { slug: slugInput(payload.organizationSlug) } });
+        const existingOrganization = await transaction.organization.findUnique({ where: { slug: organizationSlug } });
         if (existingOrganization) throw conflictError('organization_slug_already_exists');
         const existingUser = await transaction.user.findUnique({ where: { email } });
         if (existingUser) throw conflictError('user_already_exists');
@@ -589,7 +595,7 @@ export class PrismaControlPlaneRepository {
         const organization = await transaction.organization.create({
           data: {
             name: payload.organizationName || payload.organizationSlug,
-            slug: slugInput(payload.organizationSlug),
+            slug: organizationSlug,
             plan: payload.plan || 'free',
           },
         });
@@ -658,10 +664,23 @@ export class PrismaControlPlaneRepository {
   }
 
   async addMember(input: Record<string, any>) {
-    const role = input.role || 'developer';
+    const roleResult = parseOrganizationMembershipRoleForMutation(input.role || 'DEVELOPER');
+    if (roleResult.ok === false) throw badRequestError(roleResult.code);
+    const role = typeof input.role === 'string' && input.role === input.role.toLowerCase() ? input.role : roleResult.role;
     const where = { organizationId_userId: { organizationId: input.organizationId, userId: input.userId } };
     return this.prisma.$transaction(async (transaction: any) => {
       const existing = await transaction.membership.findUnique({ where });
+      const protectCanonicalOwner = normalizeOrganizationRoleForRead(existing?.role) === 'OWNER' && roleResult.role !== 'OWNER';
+      const ownerCount = protectCanonicalOwner || input.actorRole !== undefined
+        ? await organizationOwnerCount(transaction, input.organizationId)
+        : 0;
+      if (input.actorRole !== undefined) {
+        const transition = membershipRoleTransition({ actorRole: input.actorRole, targetRole: roleResult.role, currentRole: existing?.role || 'VIEWER', ownerCount });
+        if (transition.statusCode === 400) throw badRequestError(transition.code);
+        if (transition.statusCode === 403) throw forbiddenError(transition.code);
+        if (transition.statusCode === 409) throw conflictError(transition.code);
+      }
+      if (protectCanonicalOwner && ownerCount <= 1) throw conflictError('membership_last_owner');
       const membership = await transaction.membership.upsert({
         where,
         update: { role },
@@ -671,7 +690,7 @@ export class PrismaControlPlaneRepository {
         await transaction.user.update({ where: { id: input.userId }, data: { sessionVersion: { increment: 1 } } });
       }
       return membership;
-    });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async removeMember(input: Record<string, any>) {
@@ -679,10 +698,14 @@ export class PrismaControlPlaneRepository {
     return this.prisma.$transaction(async (transaction: any) => {
       const existing = await transaction.membership.findUnique({ where });
       if (!existing) return null;
+      const isOwner = existing.role === 'OWNER' || existing.role === 'owner';
+      const canCountOwners = typeof transaction.membership.count === 'function';
+      const ownerCount = isOwner && canCountOwners ? await organizationOwnerCount(transaction, input.organizationId) : 0;
+      if (isOwner && canCountOwners && ownerCount <= 1) throw conflictError('membership_last_owner');
       const membership = await transaction.membership.delete({ where });
       await transaction.user.update({ where: { id: input.userId }, data: { sessionVersion: { increment: 1 } } });
       return membership;
-    });
+    }, { isolationLevel: 'Serializable' });
   }
 
   async listMembershipsForUser(userId: string) {
@@ -1712,6 +1735,8 @@ export class PrismaControlPlaneRepository {
 
   async writeDesiredProject(projectSpec: Record<string, any>) {
     const orgInput = projectSpec.organization || null;
+    if (Object.hasOwn(projectSpec, 'organizationSlug')) validatedOrganizationRouteSlug(projectSpec.organizationSlug);
+    if (orgInput && Object.hasOwn(orgInput, 'slug')) validatedOrganizationRouteSlug(orgInput.slug);
     const requestedOrganizationId = projectSpec.organizationId || projectSpec.orgId || null;
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const organization = await resolveDesiredOrganization(tx, orgInput, requestedOrganizationId, projectSpec.organizationSlug);
@@ -1964,8 +1989,8 @@ export async function createControlPlaneRepository(options: Record<string, any> 
 
 const deletionRequestedStatus = 'DELETE_REQUESTED';
 const deletionStatuses = [deletionRequestedStatus, 'DELETING'];
-const terminalDeploymentStatuses = ['READY', 'FAILED', 'CANCELLED', 'CLEANED_UP'];
-const terminalWorkflowStatuses = ['succeeded', 'completed', 'failed', 'cancelled'];
+const terminalDeploymentStatuses = terminalLifecycleInputs(LIFECYCLE_CONTRACT.machines.deployment.states, LIFECYCLE_CONTRACT.machines.deployment.aliases);
+const terminalWorkflowStatuses = terminalLifecycleInputs(LIFECYCLE_CONTRACT.machines.workflow.states, LIFECYCLE_CONTRACT.machines.workflow.aliases);
 
 function isDeleting(row: Record<string, any> | null | undefined) {
   return deletionStatuses.includes(String(row?.status || '').toUpperCase());
@@ -2111,10 +2136,13 @@ async function resolveDesiredOrganization(tx: any, orgInput: Record<string, any>
     throw error;
   }
   const desired = orgInput || { name: organizationSlug || 'default', slug: organizationSlug || 'default', plan: 'free' };
+  const slug = Object.hasOwn(desired, 'slug')
+    ? validatedOrganizationRouteSlug(desired.slug)
+    : slugInput(desired.name);
   return tx.organization.upsert({
-    where: { slug: desired.slug || slugInput(desired.name) },
-    update: { name: desired.name || desired.slug, plan: desired.plan || 'free' },
-    create: { name: desired.name || desired.slug, slug: desired.slug || slugInput(desired.name), plan: desired.plan || 'free' },
+    where: { slug },
+    update: { name: desired.name || slug, plan: desired.plan || 'free' },
+    create: { name: desired.name || slug, slug, plan: desired.plan || 'free' },
   });
 }
 
@@ -2847,6 +2875,32 @@ function badRequestError(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 400;
   return error;
+}
+
+function organizationSlugForCreate(input: Record<string, any>) {
+  if (!Object.hasOwn(input, 'slug')) return slugInput(input.name);
+  return validatedOrganizationRouteSlug(input.slug);
+}
+
+function validatedOrganizationRouteSlug(value: unknown) {
+  const parsed = parseOrganizationRouteSlug(value);
+  if (parsed.ok === false) throw badRequestError(parsed.code);
+  return parsed.slug;
+}
+
+type MembershipOwnerCounter = {
+  readonly membership: {
+    readonly count: (input: {
+      readonly where: {
+        readonly organizationId: string;
+        readonly role: { readonly in: readonly string[] };
+      };
+    }) => Promise<number>;
+  };
+};
+
+async function organizationOwnerCount(transaction: MembershipOwnerCounter, organizationId: string) {
+  return transaction.membership.count({ where: { organizationId, role: { in: ['OWNER', 'owner'] } } });
 }
 
 function conflictError(message: string) {

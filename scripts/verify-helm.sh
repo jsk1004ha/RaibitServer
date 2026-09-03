@@ -281,7 +281,11 @@ expect_render_failure missing-mongodb-provider-image --set-string provisioner.pr
 expect_render_failure missing-redis-provider-image --set-string provisioner.providerImages.redis=
 expect_render_failure missing-valkey-provider-image --set-string provisioner.providerImages.valkey=
 expect_render_failure mutable-redis-provider-image --set-string provisioner.providerImages.redis=docker.io/library/redis:latest
-expect_render_failure mutable-plan-only-provider-image --set-string provisioner.providerImages.minio=docker.io/minio/minio:latest
+"$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" \
+  --set-string provisioner.providerImages.minio=docker.io/minio/minio:latest >"$OUTPUT_DIR/production-with-unsupported-provider-image.yaml"
+grep -q 'value: "docker.io/minio/minio:latest"' "$OUTPUT_DIR/production-with-unsupported-provider-image.yaml"
+grep -Fq 'variables.provider in ["postgresql","mysql","mariadb","mongodb","redis","valkey"]' \
+  "$OUTPUT_DIR/production-with-unsupported-provider-image.yaml"
 "$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" \
   --set-string provisioner.providerImages.minio= \
   --set-string provisioner.providerImages.qdrant= \

@@ -86,6 +86,7 @@ test('thin API resolves projectIds-scoped update and delete against the project 
     assert.equal(controlPlane.store.projects.has(projectB.id), true);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -125,6 +126,7 @@ test('maintainer project updates cannot mutate deletion state or project identit
     assert.equal(controlPlane.store.getProject(project.id).slug, project.slug);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -162,6 +164,7 @@ test('project create derives scope from nested organization before persistence',
     assert.equal(created.statusCode, 201);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -185,6 +188,7 @@ test('nested organization project creation requires project:create, not project:
     assert.equal(created.statusCode, 201);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -215,6 +219,7 @@ test('log snapshot endpoints enforce the same tenant scope as streams', async ()
     assert.equal(runtimeLogs.statusCode, 403);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 

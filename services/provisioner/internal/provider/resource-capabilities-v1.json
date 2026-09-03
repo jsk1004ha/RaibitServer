@@ -1,0 +1,471 @@
+{
+  "version": 1,
+  "description": "Canonical implemented capabilities, not a production readiness certificate. Generated Go/Helm copies must match these bytes. Command plans are not managed backup/restore workflows.",
+  "engines": [
+    {
+      "engine": "postgresql",
+      "displayName": "PostgreSQL",
+      "aliases": [
+        "postgres",
+        "pg"
+      ],
+      "runtime": "dedicated-local",
+      "imageKey": "postgresql",
+      "reasonCode": "LOCAL_ONLY",
+      "reasonKo": "로컬 전용 · 운영 릴리스 검증 전",
+      "local": {
+        "provision": true,
+        "authenticatedHealth": true,
+        "attach": true,
+        "query": true,
+        "schema": true,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": false,
+        "schema": false,
+        "backup": true,
+        "restore": true
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "mysql",
+      "displayName": "MySQL",
+      "aliases": [],
+      "runtime": "dedicated-local",
+      "imageKey": "mysql",
+      "reasonCode": "LOCAL_ONLY",
+      "reasonKo": "로컬 전용 · 운영 릴리스 검증 전",
+      "local": {
+        "provision": true,
+        "authenticatedHealth": true,
+        "attach": true,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": true,
+        "schema": true,
+        "backup": true,
+        "restore": true
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "mariadb",
+      "displayName": "MariaDB",
+      "aliases": [],
+      "runtime": "dedicated-local",
+      "imageKey": "mariadb",
+      "reasonCode": "LOCAL_ONLY",
+      "reasonKo": "로컬 전용 · 운영 릴리스 검증 전",
+      "local": {
+        "provision": true,
+        "authenticatedHealth": true,
+        "attach": true,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": true,
+        "schema": true,
+        "backup": true,
+        "restore": true
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "mongodb",
+      "displayName": "MongoDB",
+      "aliases": [
+        "mongo"
+      ],
+      "runtime": "dedicated-local",
+      "imageKey": "mongodb",
+      "reasonCode": "LOCAL_ONLY",
+      "reasonKo": "로컬 전용 · 운영 릴리스 검증 전",
+      "local": {
+        "provision": true,
+        "authenticatedHealth": true,
+        "attach": true,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": true,
+        "schema": true,
+        "backup": true,
+        "restore": true
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "sqlite",
+      "displayName": "SQLite",
+      "aliases": [
+        "sqlite3"
+      ],
+      "runtime": "sqlite-local",
+      "imageKey": null,
+      "reasonCode": "LOCAL_ONLY",
+      "reasonKo": "로컬 전용 · 운영 릴리스 검증 전",
+      "local": {
+        "provision": true,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": true,
+        "schema": true,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": false,
+        "schema": false,
+        "backup": true,
+        "restore": true
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "redis",
+      "displayName": "Redis",
+      "aliases": [],
+      "runtime": "dedicated-local",
+      "imageKey": "redis",
+      "reasonCode": "LOCAL_ONLY",
+      "reasonKo": "로컬 전용 · 운영 릴리스 검증 전",
+      "local": {
+        "provision": true,
+        "authenticatedHealth": true,
+        "attach": true,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": true,
+        "schema": true,
+        "backup": true,
+        "restore": true
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "valkey",
+      "displayName": "Valkey",
+      "aliases": [],
+      "runtime": "dedicated-local",
+      "imageKey": "valkey",
+      "reasonCode": "LOCAL_ONLY",
+      "reasonKo": "로컬 전용 · 운영 릴리스 검증 전",
+      "local": {
+        "provision": true,
+        "authenticatedHealth": true,
+        "attach": true,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": true,
+        "schema": true,
+        "backup": true,
+        "restore": true
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "object-storage",
+      "displayName": "객체 저장소",
+      "aliases": [
+        "s3",
+        "minio",
+        "object",
+        "storage"
+      ],
+      "runtime": "unavailable",
+      "imageKey": null,
+      "reasonCode": "ENGINE_NOT_IMPLEMENTED",
+      "reasonKo": "준비 중 · 프로비저닝과 인증 상태 검증 미구현",
+      "local": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "vector-db",
+      "displayName": "벡터 데이터베이스",
+      "aliases": [
+        "vector",
+        "weaviate",
+        "milvus"
+      ],
+      "runtime": "unavailable",
+      "imageKey": null,
+      "reasonCode": "ENGINE_NOT_IMPLEMENTED",
+      "reasonKo": "준비 중 · 프로비저닝과 인증 상태 검증 미구현",
+      "local": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "qdrant",
+      "displayName": "Qdrant",
+      "aliases": [],
+      "runtime": "unavailable",
+      "imageKey": null,
+      "reasonCode": "ENGINE_NOT_IMPLEMENTED",
+      "reasonKo": "준비 중 · 프로비저닝과 인증 상태 검증 미구현",
+      "local": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "nats",
+      "displayName": "NATS",
+      "aliases": [],
+      "runtime": "unavailable",
+      "imageKey": null,
+      "reasonCode": "ENGINE_NOT_IMPLEMENTED",
+      "reasonKo": "준비 중 · 프로비저닝과 인증 상태 검증 미구현",
+      "local": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    },
+    {
+      "engine": "message-queue",
+      "displayName": "메시지 큐",
+      "aliases": [
+        "queue",
+        "kafka",
+        "redpanda",
+        "rabbitmq"
+      ],
+      "runtime": "unavailable",
+      "imageKey": null,
+      "reasonCode": "ENGINE_NOT_IMPLEMENTED",
+      "reasonKo": "준비 중 · 프로비저닝과 인증 상태 검증 미구현",
+      "local": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "release": {
+        "provision": false,
+        "authenticatedHealth": false,
+        "attach": false,
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "planOnly": {
+        "query": false,
+        "schema": false,
+        "backup": false,
+        "restore": false
+      },
+      "liveEvidence": {
+        "local": "not-recorded",
+        "release": "not-recorded"
+      }
+    }
+  ]
+}

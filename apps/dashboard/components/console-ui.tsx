@@ -6,10 +6,13 @@ import { consoleOrganizationLinks, resolveOrganizationRouteValue } from '../lib/
 import { cn } from '../lib/utils';
 import { ConsoleSearch } from './console-search';
 import { ConsoleMobileNav } from './console-mobile-nav';
+import { ThemeMenu } from './theme-menu';
 import { Brand } from './brand';
 import { FlashBanner } from './flash-banner';
 import { Icon } from './icon';
 import type { IconName } from './icon';
+import { SectionNavigationScroll } from './section-navigation-scroll';
+import { UserAvatar } from './user-avatar';
 
 type JsonCardProps = {
   title: string;
@@ -121,13 +124,22 @@ export async function ConsoleShell({
           })}
         </nav>
         <div className="border-t border-border p-3">
-          <p className="truncate px-2 pb-2 text-xs text-muted-foreground" title={user?.email || '로그인 사용자'}>{user?.email || '로그인 사용자'}</p>
+          <div className="flex min-w-0 items-center gap-2 px-2 pb-2">
+            <UserAvatar avatarUrl={user?.avatarUrl} email={user?.email} name={user?.name} size="sm" />
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium text-foreground" title={user?.name || '로그인 사용자'}>{user?.name || '로그인 사용자'}</p>
+              <p className="truncate text-xs text-muted-foreground" title={user?.email || '로그인 사용자'}>{user?.email || '로그인 사용자'}</p>
+            </div>
+          </div>
           <form method="post" action={apiAction('/auth/logout')}><input type="hidden" name="_returnTo" value="/login" /><button className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'w-full justify-start')} type="submit">로그아웃</button></form>
         </div>
       </aside>
       <header className="flex min-w-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
-        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} projectLabel={projectLabel} projectValue={projectValue} userEmail={user?.email || '로그인 사용자'} />
-        <ConsoleSearch compact items={searchItems} />
+        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} projectLabel={projectLabel} projectValue={projectValue} userAvatarUrl={user?.avatarUrl} userEmail={user?.email || '로그인 사용자'} userName={user?.name} />
+        <div className="flex shrink-0 items-center gap-2" aria-label="모바일 콘솔 도구">
+          <ConsoleSearch compact items={searchItems} />
+          <ThemeMenu />
+        </div>
       </header>
       <main id="main-content" className="min-h-0 min-w-0 overflow-y-auto overscroll-y-contain md:col-start-2 md:row-start-1">
         <header className="sticky top-0 z-10 hidden min-h-16 items-center justify-between gap-4 border-b border-border bg-background/95 px-6 supports-backdrop-filter:backdrop-blur-sm md:flex">
@@ -138,6 +150,7 @@ export async function ConsoleShell({
           <div className="flex items-center gap-2" aria-label="콘솔 도구">
             <ConsoleSearch items={searchItems} />
             <a className={buttonVariants({ variant: active === 'guide' ? 'secondary' : 'ghost', size: 'sm' })} href="/guide"><Icon name="command-line" /><span>사용 설명서</span></a>
+            <ThemeMenu />
           </div>
         </header>
         <div className="px-4 pt-3 md:px-6"><Suspense fallback={null}><FlashBanner /></Suspense></div>
@@ -149,11 +162,13 @@ export async function ConsoleShell({
 
 export function SectionNav({ items, current, label, variant = 'tabs' }: { items: SectionNavItem[]; current: string; label: string; variant?: 'tabs' | 'steps' }) {
   return (
-    <nav className={`section-nav section-nav-${variant}`} aria-label={label}>
-      {items.map((item, index) => {
-        const active = item.id === current;
-        return <a key={item.id} className={`section-nav-item ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} aria-label={item.description ? `${item.label}: ${item.description}` : item.label} href={item.href}>{variant === 'steps' ? <span className="section-nav-index">{index + 1}</span> : null}<span><strong>{item.label}</strong>{item.description ? <small>{item.description}</small> : null}</span></a>;
-      })}
+    <nav className="min-w-0" aria-label={label}>
+      <SectionNavigationScroll className="mb-raibit-xl" current={current} viewportClassName={`section-nav section-nav-${variant}`}>
+        {items.map((item, index) => {
+          const active = item.id === current;
+          return <a key={item.id} className={`section-nav-item ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} aria-label={item.description ? `${item.label}: ${item.description}` : item.label} href={item.href}>{variant === 'steps' ? <span className="section-nav-index">{index + 1}</span> : null}<span><strong>{item.label}</strong>{item.description ? <small>{item.description}</small> : null}</span></a>;
+        })}
+      </SectionNavigationScroll>
     </nav>
   );
 }

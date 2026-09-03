@@ -1,27 +1,43 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
-const compiledDirectory = await mkdtemp(join(fileURLToPath(new URL('../.raibitserver-work/', import.meta.url)), 'deployment-agent-test-'));
-execFileSync(process.execPath, [
-  'node_modules/typescript/lib/tsc.js',
-  'packages/core/src/deployment-agent.ts',
-  '--outDir', compiledDirectory,
-  '--module', 'NodeNext',
-  '--moduleResolution', 'NodeNext',
-  '--target', 'ES2022',
-  '--skipLibCheck',
-  '--types', 'node',
-  '--strict', 'false',
-  '--noImplicitAny', 'false',
-  '--allowImportingTsExtensions',
-  '--rewriteRelativeImportExtensions',
-], { cwd: new URL('..', import.meta.url), stdio: 'pipe' });
-const { assessDeploymentService, createDeploymentAgentPlan } = await import(pathToFileURL(join(compiledDirectory, 'deployment-agent.js')));
-test.after(() => rm(compiledDirectory, { recursive: true, force: true }));
+const compiledParent = await mkdtemp(join(tmpdir(), 'raibitserver-deployment-agent-'));
+let cleaned = false;
+const cleanup = async () => {
+  if (cleaned) return;
+  cleaned = true;
+  await rm(compiledParent, { recursive: true, force: true });
+};
+test.after(cleanup);
+let assessDeploymentService;
+let createDeploymentAgentPlan;
+try {
+  await writeFile(join(compiledParent, 'package.json'), '{"type":"module"}\n');
+  const compiledDirectory = await mkdtemp(join(compiledParent, 'deployment-agent-test-'));
+  execFileSync(process.execPath, [
+    'node_modules/typescript/lib/tsc.js',
+    'packages/core/src/deployment-agent.ts',
+    '--outDir', compiledDirectory,
+    '--module', 'NodeNext',
+    '--moduleResolution', 'NodeNext',
+    '--target', 'ES2022',
+    '--skipLibCheck',
+    '--types', 'node',
+    '--strict', 'false',
+    '--noImplicitAny', 'false',
+    '--allowImportingTsExtensions',
+    '--rewriteRelativeImportExtensions',
+  ], { cwd: new URL('..', import.meta.url), stdio: 'pipe' });
+  ({ assessDeploymentService, createDeploymentAgentPlan } = await import(pathToFileURL(join(compiledDirectory, 'deployment-agent.js'))));
+} catch (error) {
+  await cleanup();
+  throw error;
+}
 
 const digest = `sha256:${'a'.repeat(64)}`;
 

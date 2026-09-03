@@ -26,7 +26,7 @@
         "requests": { "cpu": "100m", "memory": "128Mi" },
         "limits": { "cpu": "500m", "memory": "512Mi" }
       },
-      "attachedResources": ["festival-postgres", "festival-redis", "assets"]
+      "attachedResources": ["festival-postgres", "festival-redis"]
     },
     {
       "name": "api",
@@ -82,13 +82,6 @@
       "engine": "redis",
       "type": "cache",
       "plan": "shared-small"
-    },
-    {
-      "name": "assets",
-      "engine": "object-storage",
-      "type": "storage",
-      "plan": "shared-medium",
-      "bucket": "festival-assets"
     }
   ],
   "filesByService": {

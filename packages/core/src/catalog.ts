@@ -1,4 +1,6 @@
-export const RESOURCE_CATALOG = Object.freeze({
+import { resourceCapability } from './resource-capabilities.ts';
+
+const RESOURCE_METADATA = {
   postgresql: {
     type: 'database',
     engine: 'postgresql',
@@ -119,17 +121,24 @@ export const RESOURCE_CATALOG = Object.freeze({
     env: ['QUEUE_URL', 'QUEUE_USERNAME', 'QUEUE_PASSWORD', 'QUEUE_TOPIC'],
     features: ['topic-management', 'consumer-lag', 'dead-letter-queue', 'usage-monitoring'],
   },
-});
+};
+
+export const RESOURCE_CATALOG = Object.freeze(Object.fromEntries(Object.entries(RESOURCE_METADATA).map(([key, metadata]) => {
+  const capabilities = resourceCapability(key);
+  return [key, { ...metadata, capabilities, operator: capabilities?.runtime,
+    features: Object.entries(capabilities?.local ?? {}).filter(([, enabled]) => enabled).map(([operation]) => operation),
+  }];
+})));
 
 export function listCatalog() {
-  return Object.entries(RESOURCE_CATALOG).map(([key, value]) => ({ key, ...value }));
+  return Object.entries(RESOURCE_CATALOG).map(([key, value]) => ({ key, ...value, capabilities: resourceCapability(key) }));
 }
 
 export function getCatalogEntry(engine) {
   const key = normalizeResourceEngine(engine);
   const entry = RESOURCE_CATALOG[key];
   if (!entry) throw new Error(`unsupported resource engine: ${engine}`);
-  return { key, ...entry };
+  return { key, ...entry, capabilities: resourceCapability(key) };
 }
 
 export function normalizeResourceEngine(engine) {

@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { cookies, headers } from 'next/headers';
-import { ThemeToggle } from '@/components/theme-toggle';
 import { e2eFixturesEnabled } from '@/lib/e2e-fixture-policy';
 import { THEME_COOKIE_NAME, normalizeThemePreference } from '@/lib/theme';
 import './globals.css';
@@ -40,7 +39,6 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           </a>
         </nav>
         {children}
-        <ThemeToggle initialTheme={theme} />
       </body>
     </html>
   );

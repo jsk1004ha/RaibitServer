@@ -1,9 +1,11 @@
+import { GitBranch } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert';
-import { Button } from '../../components/ui/button';
+import { Button, buttonVariants } from '../../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader } from '../../components/ui/card';
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '../../components/ui/field';
 import { Input } from '../../components/ui/input';
 import { Brand } from '../../components/brand';
+import { ThemeMenu } from '../../components/theme-menu';
 import { apiAction } from '../../lib/api';
 
 const modes = ['login', 'signup', 'verify'] as const;
@@ -32,16 +34,16 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
   return (
     <main id="main-content" className="grid min-h-dvh bg-background lg:grid-cols-2">
-      <section className="hidden min-h-dvh flex-col justify-between bg-primary px-10 py-10 text-primary-foreground lg:flex">
+      <section className="hidden min-h-dvh flex-col justify-between bg-brand-surface px-10 py-10 text-brand-surface-foreground lg:flex">
         <a className="flex w-fit items-center gap-3 text-sm font-medium" href={publicHomeHref}>
           <Brand height={44} width={44} priority />
           <span>RAIBIT SERVER</span>
         </a>
         <div className="max-w-md">
-          <p className="text-xs font-medium text-primary-foreground/70">DEPLOYMENT PLATFORM</p>
-          <p className="mt-4 text-3xl leading-tight font-medium text-balance">동아리의 프로젝트를 한곳에서 배포하고 운영하세요.</p>
+          <p className="text-xs font-medium text-brand-surface-foreground/70">DEPLOYMENT PLATFORM</p>
+          <p className="mt-4 text-3xl leading-tight font-medium text-balance break-keep [overflow-wrap:anywhere]">동아리의 프로젝트를 한곳에서 배포하고 운영하세요.</p>
         </div>
-        <p className="text-sm text-primary-foreground/70">인천과학고 라이빗 호스팅 서비스</p>
+        <p className="text-sm text-brand-surface-foreground/70 break-keep [overflow-wrap:anywhere]">인천과학고 라이빗 호스팅 서비스</p>
       </section>
 
       <section className="flex min-h-dvh items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
@@ -51,6 +53,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             <span>RAIBIT SERVER</span>
           </a>
           <Card>
+            <div data-slot="theme-utility" className="flex justify-end px-(--card-spacing)">
+              <ThemeMenu />
+            </div>
             <CardHeader>
               <p className="text-xs font-medium text-muted-foreground">{copy.eyebrow}</p>
               <h1 className="text-2xl tracking-tight">{copy.title}</h1>
@@ -80,6 +85,11 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                   <Field><FieldLabel htmlFor="login-password">비밀번호</FieldLabel><Input aria-describedby={messageId} id="login-password" name="password" type="password" autoComplete="current-password" required /></Field>
                   <Button type="submit">콘솔에 로그인</Button>
                 </FieldGroup>
+                <div aria-hidden="true" className="flex items-center gap-3 text-xs text-muted-foreground"><span className="h-px flex-1 bg-border" /><span>또는</span><span className="h-px flex-1 bg-border" /></div>
+                <div className="flex flex-col gap-2">
+                  <a className={buttonVariants({ variant: 'outline', className: 'w-full' })} href={apiAction('/auth/github/login')}><GitBranch aria-hidden="true" />GitHub로 로그인</a>
+                  <p className="text-xs leading-relaxed text-muted-foreground break-keep">가입 승인된 계정과 GitHub의 인증 이메일이 같으면 프로필 사진도 함께 연결됩니다.</p>
+                </div>
               </form> : null}
 
               {mode === 'signup' ? <form method="post" action={apiAction('/auth/signup')} className="auth-form">
@@ -150,6 +160,11 @@ function errorMessage(code: string): string {
     invalid_credentials: '이메일 또는 비밀번호를 확인해 주세요.',
     email_not_verified: '먼저 이메일 인증을 완료해 주세요.',
     session_expired: '세션이 만료되었습니다. 다시 로그인해 주세요.',
+    github_account_not_registered: 'GitHub 인증 이메일과 일치하는 승인 계정을 찾지 못했습니다.',
+    github_oauth_denied: 'GitHub 로그인이 취소되었습니다.',
+    github_oauth_not_configured: 'GitHub 로그인이 아직 설정되지 않았습니다.',
+    github_oauth_state_invalid: 'GitHub 로그인 요청이 만료되었습니다. 다시 시도해 주세요.',
+    github_verified_email_required: 'GitHub에서 인증된 이메일을 확인할 수 없습니다.',
     invalid_or_expired_email_verification_code: '인증 코드가 올바르지 않거나 만료되었습니다.',
     request_failed: '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
   };

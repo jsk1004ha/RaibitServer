@@ -31,11 +31,11 @@ function DeploymentStream({ rows, field, label, empty }: {
   readonly label: string;
   readonly empty: string;
 }) {
-  return <div aria-label={label} className="max-h-128 overflow-auto bg-[var(--canvas-night)] text-background focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50" role="log" tabIndex={0}>
-    {rows.length ? <ol className="divide-y divide-background/10 font-mono text-xs">{rows.map((row, index) => {
+  return <div aria-label={label} className="log-viewer max-h-128 rounded-none border-0 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50" role="log" tabIndex={0}>
+    {rows.length ? <ol className="divide-y divide-inverse-raised font-mono text-xs">{rows.map((row, index) => {
       const content = field === 'line' ? row.line : row.message;
-      return <li className="grid min-w-0 gap-1 px-4 py-3 sm:grid-cols-[8rem_5rem_minmax(0,1fr)] sm:gap-3" key={String(row.id ?? index)}><time className="text-background/70">{String(row.createdAt || row.timestamp || '이벤트')}</time><span className="text-background/80">{String(row.level || row.type || '정보')}</span><span className="min-w-0 break-all whitespace-pre-wrap">{String(content || row.message || row.line || JSON.stringify(row))}</span></li>;
-    })}</ol> : <p className="px-4 py-8 text-center text-sm text-background/70">{empty}</p>}
+      return <li className="grid min-w-0 gap-1 px-4 py-3 sm:grid-cols-[8rem_5rem_minmax(0,1fr)] sm:gap-3" key={String(row.id ?? index)}><time className="text-inverse-foreground/70">{String(row.createdAt || row.timestamp || '이벤트')}</time><span className="text-inverse-foreground/80">{String(row.level || row.type || '정보')}</span><span className="min-w-0 break-all whitespace-pre-wrap">{String(content || row.message || row.line || JSON.stringify(row))}</span></li>;
+    })}</ol> : <p className="px-4 py-8 text-center text-sm text-inverse-foreground/70">{empty}</p>}
   </div>;
 }
 

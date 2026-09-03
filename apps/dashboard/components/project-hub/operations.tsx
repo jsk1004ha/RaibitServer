@@ -1,8 +1,9 @@
 import { apiAction } from '@/lib/api';
+import { RESOURCE_CAPABILITIES } from '../../../../packages/core/src/resource-capabilities';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants, ActionLink } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -56,7 +57,33 @@ export function ResourcesView({ data }: Readonly<{ data: ProjectHubData }>) {
 }
 
 function NewResourceView({ data }: Readonly<{ data: ProjectHubData }>) {
-  return <Card className="mx-auto w-full max-w-3xl"><CardHeader><CardTitle><h2>리소스 추가</h2></CardTitle><CardDescription>관리형 데이터 계층</CardDescription></CardHeader><form action={apiAction(`/projects/${data.projectId}/resources`)} method="post"><input name="_returnTo" type="hidden" value={`${data.base}?view=resources`} /><CardContent><FieldGroup><Field><FieldLabel htmlFor="resource-name">리소스 이름</FieldLabel><Input id="resource-name" name="name" placeholder="예: postgres" required /></Field><Field><FieldLabel htmlFor="resource-engine">엔진</FieldLabel><Select defaultValue="postgresql" id="resource-engine" name="engine">{[['postgresql', 'PostgreSQL'], ['sqlite', 'SQLite'], ['redis', 'Redis'], ['valkey', 'Valkey'], ['mysql', 'MySQL'], ['mariadb', 'MariaDB'], ['mongodb', 'MongoDB'], ['object-storage', '객체 저장소'], ['qdrant', 'Qdrant'], ['nats', 'NATS']].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field></FieldGroup></CardContent><CardFooter className="mt-raibit-xl justify-end gap-raibit-sm"><a className={buttonVariants({ variant: 'ghost' })} href={`${data.base}?view=resources`}>취소</a><button className={buttonVariants()} type="submit">리소스 추가</button></CardFooter></form></Card>;
+  return (
+    <Card className="mx-auto w-full max-w-3xl">
+      <CardHeader><CardTitle><h2>리소스 추가</h2></CardTitle><CardDescription>로컬 전용 데이터 계층 · 운영 릴리스 검증 전</CardDescription></CardHeader>
+      <form action={apiAction(`/projects/${data.projectId}/resources`)} method="post">
+        <input name="_returnTo" type="hidden" value={`${data.base}?view=resources`} />
+        <CardContent><FieldGroup>
+          <Field><FieldLabel htmlFor="resource-name">리소스 이름</FieldLabel><Input id="resource-name" name="name" placeholder="예: postgres" required /></Field>
+          <Field>
+            <FieldLabel htmlFor="resource-engine">엔진</FieldLabel>
+            <Select defaultValue="postgresql" id="resource-engine" name="engine" aria-describedby="resource-capability-help">
+              {RESOURCE_CAPABILITIES.map((entry) => <option key={entry.engine} value={entry.engine} disabled={!entry.local.provision}>
+                {entry.displayName} · {entry.local.provision ? '로컬 전용' : '준비 중'}
+              </option>)}
+            </Select>
+            <FieldDescription className="break-keep" id="resource-capability-help">SQLite는 로컬 파일 전용입니다. 관리형 백업·복구는 아직 제공하지 않습니다.</FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel>준비 중인 엔진</FieldLabel>
+            {RESOURCE_CAPABILITIES.filter((entry) => !entry.local.provision).map((entry) => <FieldDescription className="break-keep" key={entry.engine} data-resource-engine={entry.engine} data-reason-code={entry.reasonCode}>
+              {entry.displayName}: {entry.reasonKo}
+            </FieldDescription>)}
+          </Field>
+        </FieldGroup></CardContent>
+        <CardFooter className="mt-raibit-xl justify-end gap-raibit-sm"><a className={buttonVariants({ variant: 'ghost' })} href={`${data.base}?view=resources`}>취소</a><button className={buttonVariants()} type="submit">리소스 추가</button></CardFooter>
+      </form>
+    </Card>
+  );
 }
 
 export function LogsView({ data }: Readonly<{ data: ProjectHubData }>) {

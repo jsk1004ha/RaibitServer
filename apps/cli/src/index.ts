@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
+// Generated package-local snapshot keeps emitted CLI help independent of source paths.
+import resourceCapabilities from './resource-capabilities-v1.json' with { type: 'json' };
 import { RAIBITSERVERClient } from '@raibitserver/api-client';
 
 const apiUrl = process.env.RAIBITSERVER_API_URL || 'http://localhost:3000/api';
@@ -8,7 +10,10 @@ const client = new RAIBITSERVERClient({ baseUrl: apiUrl, token });
 
 async function main(argv: string[]) {
   const [domain, action, ...args] = argv;
-  if (!domain || ['help', '--help', '-h'].includes(domain)) return help();
+  if (!domain || ['help', '--help', '-h'].includes(domain)) {
+    console.log(`Resource capabilities (local only; release evidence not recorded):\n${resourceCapabilities.engines.map((entry) => `  ${entry.engine}: ${entry.reasonKo}`).join('\n')}\nManaged backup/restore: unavailable; command plans only.`);
+    return help();
+  }
   if (domain === 'login') return print(await client.login({ email: value(args, '--email') || args[0], password: value(args, '--password') || args[1] }));
   if (domain === 'whoami') return print(await client.me());
   if (domain === 'projects' && action === 'list') return print(await client.listProjects(value(args, '--organization-id')));

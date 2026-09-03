@@ -1,8 +1,7 @@
 {{- if .Values.production }}
-{{- $liveProviders := dict "postgresql" true "mysql" true "mariadb" true "mongodb" true "redis" true "valkey" true }}
-{{- range $provider, $image := .Values.provisioner.providerImages }}
-{{- $configuredImage := default "" $image }}
-{{- if and (or (hasKey $liveProviders $provider) (ne $configuredImage "")) (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$" $configuredImage)) }}
+{{- range $provider := (include "raibitserver.localProviderEngines" . | fromJsonArray) }}
+{{- $configuredImage := default "" (index $.Values.provisioner.providerImages $provider) }}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$" $configuredImage) }}
 {{- fail (printf "production provider image %s requires a valid sha256 digest-pinned reference" $provider) }}
 {{- end }}
 {{- end }}
@@ -11,6 +10,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "raibitserver.fullname" . }}-provisioner
+  annotations:
+    raibitserver.io/resource-capabilities-sha256: {{ .Files.Get "files/resource-capabilities-v1.json" | sha256sum | quote }}
   labels:
     {{- include "raibitserver.commonLabels" . | nindent 4 }}
     app.kubernetes.io/name: raibitserver-provisioner

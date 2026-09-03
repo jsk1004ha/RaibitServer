@@ -134,7 +134,8 @@ test.describe('@t13-operations', () => {
       ['query', 'SELECT 1'],
     ]);
     await userPage.getByRole('button', { name: '쿼리 실행' }).click();
-    await expectRoute(userPage, resourceBase, { view: 'query', notice: 'saved' });
+    await expect(userPage.getByRole('region', { name: '쿼리 결과' })).toContainText('READY');
+    await expectRoute(userPage, resourceBase, { view: 'query' });
     await userPage.getByLabel('변경 쿼리 확인').check();
     expect(await nativeFormData(userPage, 'form[action*="/console/query"]')).toEqual([
       ['_returnTo', `${resourceBase}?view=query`],

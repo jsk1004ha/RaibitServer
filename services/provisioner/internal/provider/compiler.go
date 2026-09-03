@@ -580,6 +580,9 @@ func supportedEngine(engine, configuredProvider string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := requireLocalCapability(normalizedEngine); err != nil {
+		return "", err
+	}
 	providerName := strings.ToLower(strings.TrimSpace(configuredProvider))
 	allowedProviders := map[string]bool{
 		"":                                       true,

@@ -153,7 +153,7 @@ test('dashboard has route-level loading, error, not-found, accessible controls a
 	for (const component of ['badge', 'button', 'card', 'field', 'input', 'table']) {
 		assert.match(admin, new RegExp(`from '@/components/ui/${component}'`));
 	}
-	for (const marker of ['className="mx-auto flex w-full max-w-7xl', '<Card>', '<Table>', '<FieldGroup']) {
+	for (const marker of ['className="mx-auto flex w-full max-w-7xl', '<Card className="admin-table-card">', '<Table className="admin-responsive-table">', '<FieldGroup']) {
 		assert.ok(admin.includes(marker), `${marker} current admin UI composition missing`);
 	}
 	assert.doesNotMatch(admin, /className="[^"]*quota-editor/);

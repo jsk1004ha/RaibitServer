@@ -70,10 +70,11 @@ test('runtime images contain only the executables their production entrypoints r
   assert.match(dashboard, /^ENV RAIBITSERVER_GIT_SHA=\$RAIBITSERVER_GIT_SHA$/m, 'dashboard runtime must expose its exact image revision');
   assert.match(dashboard, /^ENV RAIBITSERVER_GITHUB_REPOSITORY=\$RAIBITSERVER_GITHUB_REPOSITORY$/m, 'dashboard runtime must expose the commit repository');
   assert.match(dashboard, /server\.js/);
-  assert.match(cli, /exec tsc --ignoreConfig \.\.\/\.\.\/packages\/api-client\/src\/index\.ts[\s\S]*api-client-runtime/);
+  assert.match(cli, /COPY scripts\/build-cli-runtime\.mjs scripts\/build-cli-runtime\.mjs/);
+  assert.match(cli, /RUN pnpm --filter @raibitserver\/cli deploy[\s\S]*RUN node scripts\/build-cli-runtime\.mjs \/opt\/raibitserver\/cli/);
   assert.match(cli, /dist\/index\.js/);
   const cliInstall = cli.indexOf('RUN pnpm install --frozen-lockfile');
-  const cliCompile = cli.indexOf('RUN pnpm --filter @raibitserver/cli exec tsc -p tsconfig.json');
+  const cliCompile = cli.indexOf('RUN node scripts/build-cli-runtime.mjs');
   const cliConfigManifest = cli.indexOf('COPY packages/config/package.json packages/config/package.json');
   const cliConfigSource = cli.indexOf('COPY packages/config packages/config');
   assert.ok(cliConfigManifest >= 0 && cliConfigManifest < cliInstall, 'CLI image must copy the shared config manifest before install');

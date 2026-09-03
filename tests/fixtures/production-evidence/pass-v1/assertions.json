@@ -1,0 +1,1 @@
+{"fixture":true,"component":"resources","observedAt":"2026-09-02T09:55:06.046Z","assertions":["provision","attach_query","backup_checksum","isolated_restore","resource_delete"],"cleanup":"PASS"}

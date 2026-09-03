@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 
 function hasCommand(command) {
-  return spawnSync('bash', ['-lc', `command -v ${command}`], { encoding: 'utf8' }).status === 0;
+  return spawnSync(command, ['version'], { encoding: 'utf8', windowsHide: true }).status === 0;
 }
 
 test('Go builder worker contract is executable when Go exists or statically present otherwise', async (t) => {

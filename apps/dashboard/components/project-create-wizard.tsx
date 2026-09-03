@@ -18,6 +18,7 @@ import {
   projectWizardSteps,
   type ProjectWizardStepId,
 } from './project-create-wizard-state';
+import { SectionNavigationScroll } from './section-navigation-scroll';
 
 export function ProjectCreateWizard({ action, orgSlug }: { action: string; orgSlug: string }) {
   const [stepId, setStepId] = useState<ProjectWizardStepId>('project');
@@ -52,7 +53,7 @@ export function ProjectCreateWizard({ action, orgSlug }: { action: string; orgSl
     <form ref={formRef} method="post" action={action} onSubmit={guardSubmit} className="grid min-w-0 gap-5 lg:grid-cols-[14rem_minmax(0,1fr)]" data-project-create-form>
       <input type="hidden" name="_returnTo" value={`/org/${orgSlug}/projects`} />
       <nav aria-label="프로젝트 만들기 단계" className="min-w-0">
-        <ol className="flex min-w-0 gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
+        <SectionNavigationScroll as="ol" current={stepId} viewportClassName="gap-2 pb-1 lg:flex-col lg:overflow-visible">
           {projectWizardSteps.map((item, index) => {
             const current = index === step;
             const complete = index < step;
@@ -65,7 +66,7 @@ export function ProjectCreateWizard({ action, orgSlug }: { action: string; orgSl
               </li>
             );
           })}
-        </ol>
+        </SectionNavigationScroll>
       </nav>
 
       <Card className="min-w-0">

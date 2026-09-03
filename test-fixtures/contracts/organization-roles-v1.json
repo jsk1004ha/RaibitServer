@@ -1,0 +1,46 @@
+{
+  "schema": "raibitserver.organization-roles/v1",
+  "grantableRoles": ["OWNER", "ADMIN", "MAINTAINER", "DEVELOPER", "DB_ADMIN", "VIEWER"],
+  "legacyReadAliases": ["billing-manager", "project-owner"],
+  "readAliasRole": "VIEWER",
+  "routeFixtures": [
+    {
+      "kind": "service",
+      "input": { "organizationSlug": "gdg-hongik", "projectSlug": "festival-2026", "serviceName": "web" },
+      "host": "apps--gdg-hongik--festival-2026.raibitserver.app"
+    },
+    {
+      "kind": "preview",
+      "input": { "organizationSlug": "gdg-hongik", "projectSlug": "festival-2026", "serviceName": "web", "preview": "pr-32" },
+      "host": "preview--pr-32--gdg-hongik--festival-2026.raibitserver.app"
+    },
+    {
+      "kind": "serviceConsole",
+      "input": { "organizationSlug": "gdg-hongik", "projectSlug": "festival-2026", "serviceName": "api" },
+      "host": "console--gdg-hongik--festival-2026-api.raibitserver.app"
+    },
+    {
+      "kind": "resourceConsole",
+      "input": { "organizationSlug": "gdg-hongik", "projectSlug": "festival-2026", "resourceName": "postgres" },
+      "host": "resources--gdg-hongik--festival-2026-postgres.raibitserver.app"
+    }
+  ],
+  "permissionMatrix": {
+    "OWNER": ["project:create", "project:update", "project:delete", "service:create", "deploy:run", "env:read", "env:write", "db:create", "db:delete", "db:data:read", "db:query:write", "team:invite", "audit:read"],
+    "ADMIN": ["project:create", "project:update", "project:delete", "service:create", "deploy:run", "env:read", "env:write", "db:create", "db:delete", "team:invite", "audit:read"],
+    "MAINTAINER": ["project:update", "service:create", "deploy:run", "env:read", "env:write", "db:data:read"],
+    "DEVELOPER": ["deploy:run", "db:schema:read"],
+    "DB_ADMIN": ["db:create", "db:delete", "db:data:read", "db:query:write"],
+    "VIEWER": []
+  },
+  "transitionAuthority": {
+    "OWNER": ["OWNER", "ADMIN", "MAINTAINER", "DEVELOPER", "DB_ADMIN", "VIEWER"],
+    "ADMIN": ["ADMIN", "MAINTAINER", "DEVELOPER", "DB_ADMIN", "VIEWER"],
+    "MAINTAINER": [],
+    "DEVELOPER": [],
+    "DB_ADMIN": [],
+    "VIEWER": []
+  },
+  "invalidTenantSlugs": ["127.0.0.1", "*.example", "apps", "a-very-long-organization-slug-that-is-exactly-sixty-four-bytes-long"],
+  "sharedProjectSlug": "same-project"
+}

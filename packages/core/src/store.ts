@@ -12,6 +12,7 @@ import { normalizeResourceEngine } from './catalog.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
+import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import {
   boundedActivityRows,
   dateMs,
@@ -85,8 +86,12 @@ export class ControlPlaneStore {
     this.authRateLimits = new Map();
   }
 
-  createOrganization({ name, slug, plan = 'free' }: Record<string, any>) {
-    const org = { id: stableId('org', slug || name), name, slug: slugify(slug || name), plan, createdAt: nowIso() };
+  createOrganization(input: Record<string, any>) {
+    const { name, plan = 'free' } = input;
+    const slug = organizationSlugForCreate(input);
+    const org = { id: stableId('org', slug || name), name, slug, plan, createdAt: nowIso() };
+    const existing = this.organizations.get(org.id);
+    if (existing && existing.slug !== slug) throw conflict('organization_identity_collision');
     this.organizations.set(org.id, org);
     this.audit('system', 'organization:create', 'organization', org.id, { slug: org.slug, plan });
     return deepClone(org);
@@ -102,6 +107,7 @@ export class ControlPlaneStore {
     const timestamp = nowIso();
     const id = stableId('usr', email || name);
     const existing = this.users.get(id);
+    if (existing && existing.email !== String(email || '').toLowerCase()) throw conflict('user_identity_collision');
     const passwordChanged = Boolean(existing && passwordHash && passwordHash !== existing.passwordHash);
     const user = {
       id,
@@ -329,28 +335,45 @@ export class ControlPlaneStore {
     return redactUser(deepClone(user));
   }
 
-  addMember({ organizationId, userId, role = 'developer' }: Record<string, any>) {
+  addMember({ organizationId, userId, role = 'DEVELOPER', actorRole }: Record<string, any>) {
+    const roleResult = parseOrganizationMembershipRoleForMutation(role);
+    if (roleResult.ok === false) throw badRequest(roleResult.code);
+    const storedRole = typeof role === 'string' && role === role.toLowerCase() ? role : roleResult.role;
     const existing = this.members.find((member) => member.organizationId === organizationId && member.userId === userId);
+    const currentCanonicalRole = normalizeOrganizationRoleForRead(existing?.role);
+    const protectCanonicalOwner = currentCanonicalRole === 'OWNER' && roleResult.role !== 'OWNER';
+    const ownerCount = protectCanonicalOwner || actorRole !== undefined
+      ? this.members.filter((member) => member.organizationId === organizationId && normalizeOrganizationRoleForRead(member.role) === 'OWNER').length
+      : 0;
+    if (actorRole !== undefined) {
+      const transition = membershipRoleTransition({ actorRole, targetRole: roleResult.role, currentRole: existing?.role || 'VIEWER', ownerCount });
+      if (transition.statusCode === 400) throw badRequest(transition.code);
+      if (transition.statusCode === 403) throw forbidden(transition.code);
+      if (transition.statusCode === 409) throw conflict(transition.code);
+    }
     if (existing) {
-      const nextRole = role || existing.role;
-      if (existing.role !== nextRole) {
-        existing.role = nextRole;
+      if (protectCanonicalOwner && ownerCount <= 1) throw conflict('membership_last_owner');
+      if (existing.role !== storedRole) {
+        existing.role = storedRole;
         existing.updatedAt = nowIso();
         if (this.users.has(userId)) this.incrementSessionVersion(userId);
-        this.audit(userId, 'organization.member:role-change', 'organization', organizationId, { role: nextRole });
+        this.audit(userId, 'organization.member:role-change', 'organization', organizationId, { role: storedRole });
       }
       return deepClone(existing);
     }
-    const member = { organizationId, userId, role, createdAt: nowIso() };
+    const member = { organizationId, userId, role: storedRole, createdAt: nowIso() };
     this.members.push(member);
-    this.audit(userId, 'organization.member:add', 'organization', organizationId, { role });
+    this.audit(userId, 'organization.member:add', 'organization', organizationId, { role: storedRole });
     return deepClone(member);
   }
 
   removeMember({ organizationId, userId }: Record<string, any>) {
     const index = this.members.findIndex((member) => member.organizationId === organizationId && member.userId === userId);
     if (index < 0) return null;
-    const [member] = this.members.splice(index, 1);
+    const member = this.members[index];
+    const ownerCount = this.members.filter((candidate) => candidate.organizationId === organizationId && normalizeOrganizationRoleForRead(candidate.role) === 'OWNER').length;
+    if (normalizeOrganizationRoleForRead(member.role) === 'OWNER' && ownerCount <= 1) throw conflict('membership_last_owner');
+    this.members.splice(index, 1);
     if (this.users.has(userId)) this.incrementSessionVersion(userId);
     this.audit(userId, 'organization.member:remove', 'organization', organizationId, { role: member.role });
     return deepClone(member);
@@ -362,6 +385,8 @@ export class ControlPlaneStore {
 
   createProject({ organizationId, name, slug, description = '', status = 'active' }: Record<string, any>) {
     const project = { id: stableId('prj', organizationId, slug || name), organizationId, name, slug: slugify(slug || name), description, status, createdAt: nowIso(), updatedAt: nowIso() };
+    const existing = this.projects.get(project.id);
+    if (existing && (existing.organizationId !== organizationId || existing.slug !== project.slug)) throw conflict('project_identity_collision');
     this.projects.set(project.id, project);
     this.audit('system', 'project:create', 'project', project.id, { organizationId, slug: project.slug });
     return deepClone(project);
@@ -992,8 +1017,10 @@ export class ControlPlaneStore {
     }
     const payload = row.payload || {};
     if (payload.kind !== 'signup') return { status: 'invalid' };
+    const organizationSlug = organizationSlugForCreate({ slug: payload.organizationSlug });
     if (this.findUserByEmail(email)) throw conflict('user_already_exists');
-    if (this.findOrganizationBySlug(payload.organizationSlug)) throw conflict('organization_slug_already_exists');
+    if (this.findOrganizationBySlug(organizationSlug)) throw conflict('organization_slug_already_exists');
+    if (this.users.has(stableId('usr', email))) throw conflict('user_identity_collision');
     const firstUser = this.users.size === 0;
     const policy = typeof input.resolvePolicy === 'function'
       ? input.resolvePolicy(payload, { firstUser })
@@ -1682,6 +1709,13 @@ function badRequest(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 400;
   return error;
+}
+
+function organizationSlugForCreate(input: Record<string, any>) {
+  if (!Object.hasOwn(input, 'slug')) return slugify(input.name);
+  const parsed = parseOrganizationRouteSlug(input.slug);
+  if (parsed.ok === false) throw badRequest(parsed.code);
+  return parsed.slug;
 }
 
 function forbidden(message: string) {

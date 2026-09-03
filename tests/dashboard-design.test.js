@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import ts from 'typescript';
+import { RESOURCE_CAPABILITIES } from '../packages/core/src/resource-capabilities.ts';
 
 // allow: SIZE_OK — this is the plan-required route/form behavior ledger, not one production unit.
 const read = (path) => fs.readFile(new URL(path, import.meta.url), 'utf8');
@@ -19,7 +22,7 @@ test('approved RAIBIT visual contract identifies the redesign and its target sur
 });
 
 test('native POST contracts preserve return targets, override fields, and confirmations', async () => {
-  const [shell, login, projectRoute, projectServices, projectOperations, projectSettings, projectEnvironment, deployment, resource, github] = await Promise.all([
+  const [shell, login, projectRoute, projectServices, projectOperations, projectSettings, projectEnvironment, deployment, resource, resourceQuery, github] = await Promise.all([
     read('../apps/dashboard/components/console-ui.tsx'),
     read('../apps/dashboard/app/login/page.tsx'),
     read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
@@ -29,6 +32,7 @@ test('native POST contracts preserve return targets, override fields, and confir
     read('../apps/dashboard/components/project-hub/environment.tsx'),
     read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
     read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../apps/dashboard/components/resource-query-console.tsx'),
     read('../apps/dashboard/app/github/page.tsx'),
   ]);
   const project = [projectRoute, projectServices, projectOperations, projectSettings, projectEnvironment].join('\n');
@@ -43,8 +47,10 @@ test('native POST contracts preserve return targets, override fields, and confir
     'name="_returnTo" type="hidden" value={`/org/${orgSlug}/projects`}', 'name="_confirmProject"',
   ]) assert.ok(project.includes(marker), `${marker} project mutation contract missing`);
   assert.match(deployment, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/rollback`[\s\S]*?name="_returnTo" value=\{`\$\{base\}\?view=overview`\}[\s\S]*?name="confirmed" value="true" required/);
+  assert.ok(resource.includes('returnTo={`${base}?view=query`}'), 'query return target wiring missing');
+  assert.ok(resourceQuery.includes('<input name="_returnTo" type="hidden" value={returnTo} />'), 'query fallback return target missing');
   for (const marker of [
-    'name="_returnTo" value={`${base}?view=query`}', 'name="_returnTo" value={`${base}?view=provider`}',
+    'name="_returnTo" value={`${base}?view=provider`}',
     'name="confirmed" value="true"', 'name="dryRun" value="true"', 'name="serviceId"', 'name="envPrefix"',
   ]) assert.ok(resource.includes(marker), `${marker} resource mutation contract missing`);
   for (const marker of [
@@ -210,11 +216,11 @@ test('public landing keeps the introduction focused and exposes an auto-refreshi
   assert.ok(privacy.includes('ishsraibit@gmail.com'));
   assert.ok(footer.includes('href="/support"'));
   assert.ok(footer.includes('href="/status"'));
-  assert.ok(footer.includes('System Status'));
+  assert.ok(footer.includes('운영 현황'));
   assert.ok(footer.includes('https://github.com/jsk1004ha/RaibitServer'));
   assert.ok(footer.includes('href="/contributors"'));
   assert.ok(footer.includes('href="/privacy"'));
-  assert.ok(footer.includes('Privacy Policy'));
+  assert.ok(footer.includes('개인정보 처리방침'));
   assert.ok(footer.includes('© 2026 Raibit, ISHS.'));
 });
 
@@ -370,7 +376,7 @@ test('project workflow controls derive tenant scope server-side and expose acces
   assert.ok(wizard.includes('id="project-organization" value={orgSlug} readOnly aria-describedby="organization-scope-note"'));
   assert.ok(wizard.includes('로그인 권한으로 확인'));
   assert.doesNotMatch(wizard, /<input[^>]*name="organizationId"/);
-  assert.match(wizard, /<ol[^>]*>/);
+  assert.match(wizard, /<SectionNavigationScroll as="ol"[^>]*>/);
   assert.ok(wizard.includes('hidden={step !== 0}'));
   assert.ok(wizard.includes('hidden={step !== 3}'));
   assert.ok(wizard.includes('disabled={index > step}'));
@@ -388,10 +394,32 @@ test('project workflow controls derive tenant scope server-side and expose acces
   for (const option of [
     "['web', '웹']", "['private', '비공개 서비스']",
     "['worker', '워커']", "['cron', '예약 작업']",
-    "['job', '일회성 작업']", "['object-storage', '객체 저장소']",
+    "['job', '일회성 작업']",
   ]) {
     assert.ok(projectFeatures.includes(option), `${option} localized enum label missing`);
   }
+  const dashboardRequire = createRequire(new URL('../apps/dashboard/package.json', import.meta.url));
+  const React = dashboardRequire('react');
+  const { renderToStaticMarkup } = dashboardRequire('react-dom/server');
+  const ast = ts.createSourceFile('operations.tsx', operations, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let projection;
+  function visit(node) {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(ast) === 'Select') {
+      projection = node.children.find(child => ts.isJsxExpression(child) && child.expression)?.expression.getText(ast);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert.ok(projection, 'resource selector must have a generated option projection');
+  const compiled = ts.transpileModule(`const result = (${projection});`, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const options = new Function('React', 'RESOURCE_CAPABILITIES', `${compiled}\nreturn result;`)(React, RESOURCE_CAPABILITIES);
+  assert.deepEqual(options.map(option => option.props.value), RESOURCE_CAPABILITIES.map(entry => entry.engine));
+  for (const option of options) {
+    const supported = ['postgresql', 'mysql', 'mariadb', 'mongodb', 'sqlite', 'redis', 'valkey'].includes(option.props.value);
+    assert.equal(option.props.disabled, !supported, option.props.value);
+    assert.ok(renderToStaticMarkup(option).includes(supported ? '로컬 전용' : '준비 중'));
+  }
+  assert.match(renderToStaticMarkup(options.find(option => option.props.value === 'object-storage')), /객체 저장소 · 준비 중/);
 });
 
 test('deployment detail awaits route params and keeps operational controls on a compact Korean surface', async () => {
@@ -435,7 +463,8 @@ test('deployment detail awaits route params and keeps operational controls on a 
   assert.ok(deployment.includes('id="rollback-deployment"'));
   assert.match(deployment, /function DeploymentStream\(\{ rows, field, label, empty \}/);
   assert.match(deployment, /role="log"\s+tabIndex=\{0\}/);
-  assert.match(deployment, /bg-\[var\(--canvas-night\)\]\s+text-background\s+focus-visible:outline-none\s+focus-visible:ring-3/);
+  assert.match(deployment, /className="log-viewer[^\"]*focus-visible:outline-none[^\"]*focus-visible:ring-3/);
+  assert.match(deployment, /text-inverse-foreground/);
   assert.match(deployment, /font-mono\s+text-xs/);
   assert.match(deployment, /break-all\s+whitespace-pre-wrap/);
   assert.match(deployment, /<DeploymentStream rows=\{logs\.body\?\.logs \|\| \[\]\} field="line" label="마스킹된 빌드 로그"/);
@@ -445,7 +474,11 @@ test('deployment detail awaits route params and keeps operational controls on a 
 });
 
 test('resource console awaits route params and links localized tabs to real operational sections', async () => {
-  const resource = await read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx');
+  const [resource, queryConsole] = await Promise.all([
+    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../apps/dashboard/components/resource-query-console.tsx'),
+  ]);
+  const resourceContract = `${resource}\n${queryConsole}`;
 
   assert.match(resource, /params:\s*Promise<\{\s*orgSlug:\s*string;\s*projectId:\s*string;\s*resourceId:\s*string\s*\}>/);
   assert.ok(resource.includes('const [{ orgSlug, projectId, resourceId }, queryParams] = await Promise.all([params, searchParams]);'));
@@ -480,10 +513,13 @@ test('resource console awaits route params and links localized tabs to real oper
   ]) {
     assert.ok(resource.includes(marker), `${marker} resource marker missing`);
   }
+  assert.ok(resource.includes('<ResourceQueryConsole action={apiAction(`/resources/${resourceId}/console/query`, state.context)}'));
   for (const field of ['query', 'command', 'confirmed', 'dryRun', 'serviceId', 'envPrefix']) {
-    assert.ok(resource.includes(`name="${field}"`), `${field} resource field missing`);
+    assert.ok(resourceContract.includes(`name="${field}"`), `${field} resource field missing`);
   }
-  assert.equal(resource.match(/name="confirmed"/g)?.length, 2);
+  assert.equal(resourceContract.match(/name="confirmed"/g)?.length, 2);
+  assert.match(queryConsole, /fetch\(action,[\s\S]*?body: JSON\.stringify\(\{ confirmed, query \}\)/);
+  assert.match(queryConsole, /<section aria-label="쿼리 결과"/);
 
   assert.match(resource, /id="provider-command"[\s\S]*?<button[^>]*type="submit"[^>]*>공급자 명령 실행<\/button>/);
 

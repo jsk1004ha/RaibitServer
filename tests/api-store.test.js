@@ -43,6 +43,7 @@ test('HTTP API serves health, catalog, and manifest planning', async () => {
     assert.equal(controlPlane.store.snapshot().workflowJobs.length, 1);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -198,6 +199,7 @@ test('HTTP API exposes deployment detail, status transition, cancel, and rollbac
     assert.match(runtimeStream.body, /event: service\.logs\.snapshot/);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -235,6 +237,7 @@ test('rollback cannot use unscoped deployments or bypass deployment quotas', asy
     assert.match(denied.body.error, /maxDeploymentsPerDay/);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -255,6 +258,7 @@ test('HTTP deployment queue rejects workloads blocked by security policy', async
     assert.equal(controlPlane.store.snapshot().workflowJobs.length, 0);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -282,5 +286,6 @@ test('HTTP resource create strips tenant-supplied provider connection fields', a
     assert.equal(response.body.desiredSpec.storageGb, undefined);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });

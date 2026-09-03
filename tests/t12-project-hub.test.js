@@ -110,9 +110,9 @@ test('project navigation reveals the active tab after direct mobile navigation',
 
   // When the isolated scroll leaf hydrates, then the server-rendered current item is centered without a vertical page jump.
   assert.doesNotMatch(navigation, /['"]use client['"]/);
-  assert.match(navigation, /<SectionNavigationScroll current=\{current\}>/);
+  assert.match(navigation, /<SectionNavigationScroll current=\{current\}[^>]*>/);
   assert.match(scroll, /^'use client';/);
-  assert.match(scroll, /querySelector<HTMLElement>\('\[aria-current="page"\]'\)/);
+  assert.match(scroll, /querySelector<HTMLElement>\('\[aria-current\]'\)/);
   assert.match(scroll, /scrollIntoView\(\{ block: 'nearest', inline: 'center' \}\)/);
 });
 

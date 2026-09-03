@@ -1,14 +1,18 @@
 import type { DeploymentListResponse, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceListResponse, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
+import { createOperationsClient } from './operations.ts';
+export { createOperationsClient, ApiOperationError } from './operations.ts';
 
 export type PageOptions = { limit?: number; cursor?: string; after?: string };
 
 export class RAIBITSERVERClient {
   readonly baseUrl: string;
   readonly token?: string;
+  readonly operations: ReturnType<typeof createOperationsClient>;
 
   constructor(options: { baseUrl: string; token?: string }) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
     this.token = options.token;
+    this.operations = createOperationsClient(options);
   }
 
   withToken(token: string) {
