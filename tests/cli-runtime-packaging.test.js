@@ -7,8 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = realpathSync.native(fileURLToPath(new URL('../', import.meta.url)));
+const workspaceStatePath = path.join(root, 'node_modules', '.pnpm-workspace-state-v1.json');
 
 test('Given production dependencies, when Docker packages the CLI, then Node loads validated client operations without TypeScript', () => {
+  const workspaceStateBeforeDeploy = existsSync(workspaceStatePath) ? readFileSync(workspaceStatePath) : null;
   assert.ok(existsSync(path.join(root, 'scripts/build-cli-runtime.mjs')), 'CLI production packaging must compile the runtime schema dependency graph');
   const evidence = process.env.RAIBITSERVER_CLI_PACKAGING_EVIDENCE;
   if (evidence) mkdirSync(evidence, { recursive: true });
@@ -66,5 +68,12 @@ test('Given production dependencies, when Docker packages the CLI, then Node loa
     assert.match(dockerfile, /RUN node scripts\/build-cli-runtime\.mjs \/opt\/raibitserver\/cli/);
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
+    if (workspaceStateBeforeDeploy === null) rmSync(workspaceStatePath, { force: true });
+    else writeFileSync(workspaceStatePath, workspaceStateBeforeDeploy);
   }
+  assert.deepEqual(
+    existsSync(workspaceStatePath) ? readFileSync(workspaceStatePath) : null,
+    workspaceStateBeforeDeploy,
+    'CLI production deploy must restore root pnpm workspace state before later scripts run',
+  );
 });
