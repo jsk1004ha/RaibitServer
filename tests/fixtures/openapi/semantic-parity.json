@@ -1,5 +1,7 @@
 {
   "wireBodies": {
+    "deployments-retry": {"requestIdempotencyKey":"parity-retry","snapshotVersion":1},
+    "services-redeploy": {"requestIdempotencyKey":"parity-redeploy","snapshotVersion":1},
     "auth-signup": {"email":"parity@example.test","password":"test-password","name":"Parity","studentId":"1"},
     "auth-login": {"email":"parity@example.test","password":"test-password"},
     "auth-email-verify": {"email":"parity@example.test","code":"123456"},
@@ -75,6 +77,8 @@
     {"operation":"auth-login","method":"POST","path":"/auth/login","body":{"email":"parity@example.test","password":"wrong-password"},"status":403,"public":true},
     {"operation":"auth-login","method":"POST","path":"/auth/login","body":{"email":"invalid","password":"x"},"status":400,"public":true},
     {"operation":"deployments-get","method":"GET","path":"/deployments/missing","status":404},
+    {"operation":"deployments-retry","method":"POST","path":"/deployments/{deploymentId}/retry","body":{"requestIdempotencyKey":"parity-retry","snapshotVersion":1},"status":409},
+    {"operation":"services-redeploy","method":"POST","path":"/services/{serviceId}/redeploy","body":{"requestIdempotencyKey":"parity-redeploy","snapshotVersion":1},"status":409},
     {"operation":"deployments-rollback","method":"POST","path":"/deployments/{deploymentId}/rollback","body":{"confirmed":false},"status":400},
     {"operation":"deployments-cancel","method":"POST","path":"/deployments/{deploymentId}/cancel","body":{},"status":200},
     {"operation":"deployments-cancel","method":"POST","path":"/deployments/parity-ready/cancel","body":{},"status":409},

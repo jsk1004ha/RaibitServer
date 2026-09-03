@@ -179,6 +179,12 @@ model Deployment {
   id                String    @id @default(cuid())
   serviceId         String
   projectId         String
+  sourceDeploymentId String?
+  retryOfDeploymentId String?
+  requestIdempotencyKey String?
+  desiredSpecSnapshot Json?
+  requestedByUserId String?
+  snapshotVersion Int?
   status            String    @default("QUEUED")
   deploymentType    String    @default("PRODUCTION")
   triggerType       String    @default("MANUAL")
@@ -209,6 +215,8 @@ model Deployment {
   events            DeploymentEvent[]
 
   @@index([serviceId, status])
+  @@unique([serviceId, requestIdempotencyKey])
+  @@index([sourceDeploymentId])
   @@index([projectId, deploymentType])
   @@index([status, reconcileLockedAt, createdAt])
   @@index([serviceId, createdAt, id])

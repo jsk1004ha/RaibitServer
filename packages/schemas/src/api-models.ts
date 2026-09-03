@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DeploymentLineageFields } from './deployment-operation.ts';
 import { DeploymentStatusSchema } from './lifecycle.ts';
 import { ResourceAvailabilitySchema } from './resource-execution.ts';
 // Generated package-local mirror; scripts/generate-resource-capabilities.mjs checks canonical byte parity.
@@ -28,7 +29,8 @@ export const ErrorBody = z.union([
 export const Project = z.object({ id, name: z.string(), organizationId: id, slug: z.string() }).catchall(json);
 export const Service = z.object({ id, projectId: id, name: z.string(), type: z.string(), status: z.string().optional() }).catchall(json);
 export const Resource = z.object({ id, projectId: id, name: z.string(), engine: z.string(), status: z.string() }).catchall(json);
-export const Deployment = z.object({ id, serviceId: id, status: DeploymentStatusSchema, projectId: id.optional(), imageDigest: z.string().nullable().optional(), errorCode: z.string().nullable().optional(), errorMessage: z.string().nullable().optional() }).catchall(json);
+export const Deployment = z.object({ id, serviceId: id, status: DeploymentStatusSchema, projectId: id.optional(), imageDigest: z.string().nullable().optional(), errorCode: z.string().nullable().optional(), errorMessage: z.string().nullable().optional(), ...DeploymentLineageFields }).catchall(json);
+export const DeploymentOperationResult = z.object({ deployment: Deployment, workflowJob: z.object({ id, targetId: id, targetType: z.literal('deployment'), type: z.string(), status: z.string(), payload: JsonFields }).catchall(json) });
 export const User = z.object({ id, email: z.string(), name: z.string().nullable().optional(), role: z.string(), approvalStatus: z.string() }).catchall(json);
 export const Membership = z.object({ id: id.optional(), userId: id, organizationId: id, role: z.string() }).catchall(json);
 export const Session = z.object({ user: User, memberships: z.array(Membership), token: z.string() });

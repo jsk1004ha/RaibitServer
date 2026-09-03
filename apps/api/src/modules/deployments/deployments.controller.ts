@@ -43,6 +43,20 @@ export class ServiceDeploymentsController {
 export class DeploymentLogsController {
   constructor(private readonly deploymentsService: DeploymentsService) {}
 
+  @RequirePermission('deploy:run')
+  @Post('deployments/:deploymentId/retry')
+  @HttpCode(202)
+  retry(@Param('deploymentId') deploymentId: string, @Body() input: unknown, @Req() req: { readonly raibitSubject: { readonly id: string } }) {
+    return this.deploymentsService.createDeploymentOperation({ operation: 'retry', id: deploymentId }, input, req.raibitSubject);
+  }
+
+  @RequirePermission('deploy:run')
+  @Post('services/:serviceId/redeploy')
+  @HttpCode(202)
+  redeploy(@Param('serviceId') serviceId: string, @Body() input: unknown, @Req() req: { readonly raibitSubject: { readonly id: string } }) {
+    return this.deploymentsService.createDeploymentOperation({ operation: 'redeploy', id: serviceId }, input, req.raibitSubject);
+  }
+
   @RequirePermission('project:read')
   @Get('deployments/:deploymentId')
   get(@Param('deploymentId') deploymentId: string, @Req() req: any) {

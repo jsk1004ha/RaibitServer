@@ -16,20 +16,34 @@ export function checkAdditiveSql(sql) {
   assert.doesNotMatch(code, /\b(DROP|TRUNCATE|RENAME|DELETE|UPDATE|INSERT|DO|GRANT|REVOKE)\b/i, 'destructive or unsupported SQL');
   const identifier = '(?:"[A-Za-z_][A-Za-z_0-9]*"|[A-Za-z_][A-Za-z_0-9]*)';
   const column = `${identifier}\\s+(?:TEXT|INTEGER|BIGINT|BOOLEAN|JSONB|TIMESTAMP(?:\\(\\d+\\))?|DOUBLE PRECISION)(?:\\s+DEFAULT\\s+(?:''|NULL|true|false|[0-9]+|CURRENT_TIMESTAMP))?`;
-  const add = new RegExp(`^ALTER\\s+TABLE\\s+${identifier}\\s+ADD\\s+COLUMN\\s+${column}(?:\\s*,\\s*ADD\\s+COLUMN\\s+${column})*$`, 'i');
+  const add = new RegExp(`^ALTER\\s+TABLE\\s+(${identifier})\\s+ADD\\s+COLUMN\\s+${column}(?:\\s*,\\s*ADD\\s+COLUMN\\s+${column})*$`, 'i');
   const createTable = new RegExp(`^CREATE\\s+TABLE\\s+(${identifier})\\s*\\([\\s\\S]+\\)$`, 'i');
   const columns = `${identifier}(?:\\s*,\\s*${identifier})*`;
   const predicate = `${identifier}\\s+IS\\s+NOT\\s+NULL`;
-  const createIndex = new RegExp(`^CREATE\\s+(UNIQUE\\s+)?INDEX\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${identifier}\\s+ON\\s+(${identifier})\\s*\\(\\s*${columns}\\s*\\)(?:\\s+WHERE\\s+${predicate}(?:\\s+AND\\s+${predicate})*)?$`, 'i');
+  const createIndex = new RegExp(`^CREATE\\s+(UNIQUE\\s+)?INDEX\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${identifier}\\s+ON\\s+(${identifier})\\s*\\(\\s*(${columns})\\s*\\)(?:\\s+WHERE\\s+${predicate}(?:\\s+AND\\s+${predicate})*)?$`, 'i');
   const tableIdentity = (name) => name.startsWith('"') ? name.slice(1, -1) : name.toLowerCase();
   const createdTables = new Set();
+  const nullableAdditions = new Map();
   for (const statement of code.split(';').map((part) => part.trim()).filter(Boolean)) {
+    const addition = add.exec(statement);
     const table = createTable.exec(statement);
     const index = createIndex.exec(statement);
-    assert.ok(add.test(statement) || table || index, 'migration must use additive nullable columns, tables or supported indexes');
+    assert.ok(addition || table || index, 'migration must use additive nullable columns, tables or supported indexes');
+    if (addition) {
+      const identity = tableIdentity(addition[1]);
+      const nullable = nullableAdditions.get(identity) || new Set();
+      for (const match of statement.matchAll(new RegExp(`ADD\\s+COLUMN\\s+(${identifier})\\s+([^,]+)`, 'gi'))) {
+        if (!/\bDEFAULT\b/i.test(match[2])) nullable.add(tableIdentity(match[1]));
+      }
+      nullableAdditions.set(identity, nullable);
+    }
     if (table) createdTables.add(tableIdentity(table[1]));
     // A new table has no N-1 writers; an existing table can contain permitted duplicates.
-    if (index?.[1]) assert.ok(createdTables.has(tableIdentity(index[2])), 'UNIQUE index requires a table created earlier in this migration');
+    if (index?.[1]) {
+      const identity = tableIdentity(index[2]);
+      const includesNewNullable = index[3].split(',').some(name => nullableAdditions.get(identity)?.has(tableIdentity(name.trim())));
+      assert.ok(createdTables.has(identity) || includesNewNullable, 'UNIQUE index requires a new table or a new nullable column without a default in this migration');
+    }
   }
   assert.ok(code.trim(), 'empty migration');
 }

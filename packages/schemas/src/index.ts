@@ -1,4 +1,5 @@
 import { z } from 'zod';
+export * from './deployment-operation.ts';
 import type { DeploymentStatus } from './lifecycle.ts';
 export * from './lifecycle.ts';
 import { OrganizationRouteSlugSchema } from './organization-role.ts';
@@ -122,7 +123,7 @@ export type ServiceSpec = z.input<typeof ServiceCreateSchema> & { id?: string; p
 export type ResourceSpec = z.input<typeof ResourceCreateSchema> & { id?: string; projectId?: string };
 export type ProjectSpec = z.input<typeof ProjectCreateSchema> & { id?: string };
 export type DeploymentRequest = z.input<typeof DeploymentCreateSchema> & { projectId?: string; serviceId?: string };
-export interface DeploymentSpec extends DeploymentRequest { id?: string; projectId?: string; serviceId: string; status?: DeploymentStatus; imageDigest?: string | null; errorCode?: string | null; errorMessage?: string | null; previewUrl?: string | null; workflowJob?: Record<string, unknown>; }
+export interface DeploymentSpec extends DeploymentRequest { id?: string; projectId?: string; serviceId: string; status?: DeploymentStatus; imageDigest?: string | null; errorCode?: string | null; errorMessage?: string | null; previewUrl?: string | null; workflowJob?: Record<string, unknown>; readonly sourceDeploymentId?: string | null; readonly retryOfDeploymentId?: string | null; readonly requestIdempotencyKey?: string | null; readonly requestedByUserId?: string | null; readonly snapshotVersion?: number | null; readonly desiredSpecSnapshot?: Readonly<Record<string, unknown>> | null; }
 export interface ProjectListResponse { projects: ProjectSpec[]; nextCursor?: string | null; }
 export interface ServiceListResponse { services: ServiceSpec[]; nextCursor?: string | null; }
 export interface ResourceListResponse { resources: ResourceSpec[]; nextCursor?: string | null; }

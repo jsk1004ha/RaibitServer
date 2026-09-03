@@ -13,6 +13,35 @@ const manifest = JSON.parse(readFileSync(new URL('../prisma/migration-contract.j
 const crds = JSON.parse(readFileSync(new URL('../test-fixtures/contracts/crd-schema-v1.json', import.meta.url), 'utf8'));
 const require = createRequire(import.meta.url);
 
+test('deployment lineage nullable uniqueness migration gate', async t => {
+  // Given: only a newly added nullable key may constrain existing Deployment rows.
+  const add = 'ALTER TABLE "Deployment" ADD COLUMN "operationKey" TEXT;';
+  const index = 'CREATE UNIQUE INDEX "lineage_unique" ON "Deployment"("serviceId", "operationKey");';
+  const cases = [
+    [add + index, true],
+    [index + add, false],
+    [add + 'CREATE UNIQUE INDEX "bad" ON "Service"("operationKey");', false],
+    ['ALTER TABLE "Deployment" ADD COLUMN "operationKey" TEXT DEFAULT \'x\';' + index, false],
+    ['ALTER TABLE "Deployment" ADD COLUMN "operationKey" TEXT NOT NULL;' + index, false],
+    [add + index.replace('("serviceId", "operationKey")', '("serviceId")'), false],
+    [add + index.replace(';', ' NULLS NOT DISTINCT;'), false],
+    [add + index.replace('"operationKey")', 'lower("operationKey"))'), false],
+  ];
+  // When / Then: both the pure checker and actual CLI accept only the safe case.
+  for (const [sql, accepted] of cases) await t.test(sql, child => {
+    if (accepted) assert.doesNotThrow(() => checkAdditiveSql(sql));
+    else assert.throws(() => checkAdditiveSql(sql));
+    const root = fixture(child);
+    const next = structuredClone(manifest);
+    const id = '000013_lineage_gate_fixture';
+    mkdirSync(join(root, 'prisma/migrations', id));
+    writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
+    next.migrations.push({ id, sha256: digest(sql) });
+    writeFileSync(join(root, 'prisma/migration-contract.json'), JSON.stringify(next));
+    assert.equal(spawnSync(process.execPath, [join(projectRoot, 'scripts/check-migration-contract.mjs'), root], { encoding: 'utf8' }).status, accepted ? 0 : 1);
+  });
+});
+
 function fixture(t, cleanup = true) {
   const root = mkdtempSync(join(tmpdir(), 'raibit-migration-'));
   if (cleanup) t.after(() => rmSync(root, { recursive: true, force: true }));

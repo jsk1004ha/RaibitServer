@@ -1,5 +1,7 @@
 export { RAIBITSERVERControlPlane } from './control-plane.ts';
 export { ControlPlaneStore } from './store.ts';
+export { DeploymentOperationError, parseDeploymentOperationBody } from './deployment-operations.ts';
+export type { DeploymentOperation, DeploymentOperationBody, DesiredSpecSnapshot } from './deployment-operations.ts';
 export { OAuthTransactionError } from './oauth-transaction.ts';
 export { startGitHubOAuth, consumeGitHubOAuthIdentity, GitHubOAuthFlowError } from './github-oauth-flow.ts';
 export type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput, OAuthTransactionRecord, OAuthTransactionErrorCode } from './oauth-transaction.ts';

@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { assertOperationReplay, captureDeploymentSnapshot, deploymentSuccessor, DeploymentOperationError, eligibleDeploymentSource, successorWorkflow, type DeploymentOperation } from './deployment-operations.ts';
 import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
 import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput } from './oauth-transaction.ts';
 import { createPrismaOAuthTransaction, consumePrismaOAuthTransaction, deletePrismaOAuthTransactions } from './prisma-oauth-transaction.ts';
@@ -167,6 +168,30 @@ export class InMemoryControlPlaneRepository {
     return this.runQuotaMutation(input.actorUserId, 'deployment:create', deploymentQuotaRequirements(deployment?.deploymentType), () => this.store.rollbackDeployment(deploymentId, input));
   }
   async createSecret(input: Record<string, any>) { return this.store.createSecret(input); }
+  async createDeploymentOperation(input: DeploymentOperation) {
+    const service = this.store.services.get(input.serviceId);
+    if (!service) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404);
+    const existing = [...this.store.deployments.values()].find(row => row.serviceId === input.serviceId && row.requestIdempotencyKey === input.requestIdempotencyKey);
+    if (existing) {
+      const workflowJob = [...this.store.workflowJobs.values()].find(row => row.targetId === existing.id && row.targetType === 'deployment');
+      if (!workflowJob) throw new DeploymentOperationError('LINEAGE_JOB_MISSING');
+      assertOperationReplay(input, workflowJob.payload);
+      return deepClone({ deployment: existing, workflowJob });
+    }
+    const rows = [...this.store.deployments.values()].filter(row => row.serviceId === input.serviceId);
+    const source = input.operation === 'retry' ? this.store.deployments.get(input.sourceDeploymentId || '') : rows.filter(eligibleDeploymentSource).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || b.id.localeCompare(a.id))[0];
+    const candidate = deploymentSuccessor(source || null, input);
+    if (rows.some(row => !terminalDeploymentStatuses.includes(row.status))) throw new DeploymentOperationError('ACTIVE_DEPLOYMENT');
+    assertMutable(service, 'service');
+    const project = this.store.projects.get(service.projectId);
+    if (!project) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404);
+    assertMutable(project, 'project');
+    return this.runQuotaMutation(input.requestedByUserId === 'system' ? null : input.requestedByUserId, 'deployment:create', deploymentQuotaRequirements(candidate.deploymentType), () => {
+      const deployment = this.store.createDeployment(candidate);
+      const workflowJob = this.store.enqueueWorkflowJob(successorWorkflow(candidate, input));
+      return { deployment, workflowJob };
+    });
+  }
   async createDeploymentWorkflow(input: Record<string, any>) {
     const requestedDeployment = input.deployment || input;
     return this.runQuotaMutation(input.actorUserId || requestedDeployment.actorUserId, 'deployment:create', deploymentQuotaRequirements(requestedDeployment.deploymentType), () => {
@@ -891,7 +916,7 @@ export class PrismaControlPlaneRepository {
       assertMutable(service, 'service');
       const projectId = input.projectId || service.projectId;
       await requireMutableProject(tx, projectId);
-      return tx.deployment.create({ data: deploymentData({ ...input, projectId }) });
+      return tx.deployment.create({ data: deploymentData({ ...input, projectId, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
     }, { isolationLevel: 'Serializable' });
   }
 
@@ -1059,7 +1084,7 @@ export class PrismaControlPlaneRepository {
       assertMutable(service, 'service');
       await requireMutableProject(tx, requestedDeployment.projectId || service.projectId);
       await enforcePrismaQuotaRequirements(tx, input.actorUserId || requestedDeployment.actorUserId, 'deployment:create', deploymentQuotaRequirements(requestedDeployment.deploymentType));
-      const deployment = await tx.deployment.create({ data: deploymentData({ ...requestedDeployment, projectId: requestedDeployment.projectId || service?.projectId }) });
+      const deployment = await tx.deployment.create({ data: deploymentData({ ...requestedDeployment, projectId: requestedDeployment.projectId || service?.projectId, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
       const workflowJob = await tx.workflowJob.create({ data: workflowJobData({
         ...(input.workflow || {}),
         targetType: 'deployment',
@@ -1080,6 +1105,35 @@ export class PrismaControlPlaneRepository {
 
   async getService(serviceId: string) {
     return this.prisma.service.findUnique({ where: { id: serviceId } });
+  }
+
+  async createDeploymentOperation(input: DeploymentOperation) {
+    return this.prisma.$transaction(async tx => {
+      // READ COMMITTED takes a fresh snapshot after the per-service lock, so all
+      // concurrent replays observe the committed winner without retry storms.
+      await tx.$queryRaw`SELECT 1::int AS locked FROM pg_advisory_xact_lock(hashtextextended(${input.serviceId}, 15))`;
+      const service = await tx.service.findUnique({ where: { id: input.serviceId } });
+      if (!service) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404);
+      const existing = await tx.deployment.findUnique({ where: { serviceId_requestIdempotencyKey: { serviceId: input.serviceId, requestIdempotencyKey: input.requestIdempotencyKey } } });
+      if (existing) {
+        const workflowJob = await tx.workflowJob.findFirst({ where: { targetId: existing.id, targetType: 'deployment' } });
+        if (!workflowJob) throw new DeploymentOperationError('LINEAGE_JOB_MISSING');
+        assertOperationReplay(input, workflowJob.payload);
+        return { deployment: existing, workflowJob };
+      }
+      const source = input.operation === 'retry'
+        ? await tx.deployment.findUnique({ where: { id: input.sourceDeploymentId || '' } })
+        : await tx.deployment.findFirst({ where: { serviceId: input.serviceId, status: { in: ['BUILD_FAILED', 'FAILED', 'READY'] } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
+      const candidate = deploymentSuccessor(source, input);
+      if (await tx.deployment.findFirst({ where: { serviceId: input.serviceId, status: { notIn: [...terminalDeploymentStatuses] } } })) throw new DeploymentOperationError('ACTIVE_DEPLOYMENT');
+      assertMutable(service, 'service');
+      await requireMutableProject(tx, service.projectId);
+      await enforcePrismaQuotaRequirements(tx, input.requestedByUserId === 'system' ? null : input.requestedByUserId, 'deployment:create', deploymentQuotaRequirements(candidate.deploymentType));
+      const deployment = await tx.deployment.create({ data: candidate });
+      const workflowJob = await tx.workflowJob.create({ data: workflowJobData(successorWorkflow(candidate, input)) });
+      await tx.deploymentEvent.create({ data: { deploymentId: deployment.id, type: 'deployment.queued', message: 'Immutable deployment operation queued', metadata: { sourceDeploymentId: candidate.sourceDeploymentId } } });
+      return { deployment, workflowJob };
+    }, { isolationLevel: 'ReadCommitted', maxWait: 30000, timeout: 30000 });
   }
 
   async getResource(resourceId: string) {
@@ -2297,6 +2351,12 @@ function deploymentData(input: Record<string, any>) {
     serviceId: input.serviceId,
     projectId: input.projectId,
     commitSha: input.commitSha || input.commitHash || null,
+    sourceDeploymentId: input.sourceDeploymentId ?? null,
+    retryOfDeploymentId: input.retryOfDeploymentId ?? null,
+    requestIdempotencyKey: input.requestIdempotencyKey ?? null,
+    desiredSpecSnapshot: input.desiredSpecSnapshot,
+    requestedByUserId: input.requestedByUserId ?? input.actorUserId ?? null,
+    snapshotVersion: input.snapshotVersion ?? null,
     commitHash: input.commitHash || input.commitSha || null,
     imageUrl: input.imageUrl || input.image || null,
     imageDigest: input.imageDigest || null,

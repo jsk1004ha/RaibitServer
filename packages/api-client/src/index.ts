@@ -1,6 +1,7 @@
 import type { DeploymentListResponse, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceListResponse, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
 import { createOperationsClient } from './operations.ts';
 import type { ApiInput } from '@raibitserver/schemas';
+import type { DeploymentOperationInput } from '@raibitserver/schemas';
 export { createOperationsClient, ApiOperationError } from './operations.ts';
 
 export type PageOptions = { limit?: number; cursor?: string; after?: string };
@@ -77,6 +78,9 @@ export class RAIBITSERVERClient {
   deleteResource(resourceId: string): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}`, { method: 'DELETE' }); }
   attachResource(resourceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/attach`, { method: 'POST', body: input }); }
   provisionResource(resourceId: string, input: { intent: 'preview-plan' | 'live-provision' }): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/provision`, { method: 'POST', body: input }); }
+
+  retryDeployment(deploymentId: string, body: DeploymentOperationInput) { return this.operations['deployments-retry']({ path: { deploymentId }, query: {}, body }); }
+  redeployService(serviceId: string, body: DeploymentOperationInput) { return this.operations['services-redeploy']({ path: { serviceId }, query: {}, body }); }
 
   createDeployment(projectId: string, serviceId: string, request?: DeploymentRequest): Promise<DeploymentSpec>;
   createDeployment(serviceId: string, request?: DeploymentRequest): Promise<DeploymentSpec>;

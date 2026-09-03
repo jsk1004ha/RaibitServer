@@ -5,6 +5,8 @@ import { RAIBITSERVERService } from '../../raibitserver.service';
 export class DeploymentsService {
   constructor(private readonly controlPlane: RAIBITSERVERService) {}
 
+  createDeploymentOperation(target: { readonly operation: 'retry' | 'redeploy'; readonly id: string }, input: unknown, subject: { readonly id: string }) { return this.controlPlane.createDeploymentOperation(target, input, subject); }
+
   listDeployments(projectId: string, serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.listDeployments(projectId, serviceId, subject, options); }
   createDeployment(projectId: string, serviceId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.createDeployment(projectId, serviceId, input, subject); }
   listDeploymentsForService(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.listDeploymentsForService(serviceId, subject, options); }

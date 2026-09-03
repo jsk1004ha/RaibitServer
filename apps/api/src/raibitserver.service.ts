@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
+import { DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
@@ -373,6 +374,18 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const service = await repository.getService(serviceId);
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     return this.createDeployment(service.projectId, serviceId, input, subject);
+  }
+
+  async createDeploymentOperation(target: { readonly operation: 'retry' | 'redeploy'; readonly id: string }, input: unknown, subject: { readonly id: string }) {
+    const repository = await this.repositoryPromise;
+    return repositoryMutation(async () => {
+      const source = target.operation === 'retry' ? await repository.getDeployment(target.id) : null;
+      const service = await repository.getService(source?.serviceId || target.id);
+      if (!service || (target.operation === 'retry' && !source)) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404);
+      try { await assertProjectAccess(repository, service.projectId, subject); }
+      catch (error) { if (error instanceof ForbiddenException) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404); throw error; }
+      return repository.createDeploymentOperation({ ...parseDeploymentOperationBody(input), operation: target.operation, serviceId: service.id, ...(source ? { sourceDeploymentId: source.id } : {}), requestedByUserId: subject.id });
+    });
   }
 
   async listDeploymentsForService(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -901,6 +914,7 @@ async function repositoryMutation<T>(operation: () => T | Promise<T>): Promise<T
 }
 
 function nestAuthError(error: any) {
+  if (error instanceof DeploymentOperationError) return new HttpException({ statusCode: error.statusCode, code: error.code, message: error.message }, error.statusCode);
   if (error instanceof ResourceCapabilityUnavailable) return new BadRequestException({ statusCode: 400, code: error.code, reasonCode: error.reasonCode, message: error.message });
   if (error instanceof ResourceIntentInvalid) return new BadRequestException({ statusCode: 400, code: error.code, message: error.message });
   const message = error instanceof Error ? error.message : 'auth_error';

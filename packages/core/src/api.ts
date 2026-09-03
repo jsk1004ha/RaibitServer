@@ -1,4 +1,6 @@
 import { RAIBITSERVERControlPlane } from './control-plane.ts';
+import { InMemoryControlPlaneRepository } from './persistence.ts';
+import { DeploymentOperationError, parseDeploymentOperationBody } from './deployment-operations.ts';
 import { oauthAttempt, publicOAuthError, OAuthPublicError } from './oauth-security.ts';
 import { maskSecrets } from './secrets.ts';
 import { authorizeRequest, authorizeSubject, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
@@ -393,6 +395,19 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const body = await readJson(req);
         return send(res, 200, controlPlane.store.attachResource({ ...body, resourceId, actorUserId: subject.id }));
       }
+      const lineageMatch = url.pathname.match(/^\/(deployments|services)\/([^/]+)\/(retry|redeploy)$/);
+      if (lineageMatch && method === 'POST' && ((lineageMatch[1] === 'deployments' && lineageMatch[3] === 'retry') || (lineageMatch[1] === 'services' && lineageMatch[3] === 'redeploy'))) {
+        const subject = authorizeAction(req, 'deploy:run', auth);
+        const id = decodeURIComponent(lineageMatch[2]);
+        const source = lineageMatch[3] === 'retry' ? controlPlane.store.getDeployment(id) : null;
+        const service = controlPlane.store.services.get(source?.serviceId || id);
+        if (!service || (lineageMatch[3] === 'retry' && !source)) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404);
+        try { await assertProjectAccess(controlPlane.store, service.projectId, subject); }
+        catch (error) { if (error instanceof Error && 'statusCode' in error && error.statusCode === 403) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404); throw error; }
+        const body = parseDeploymentOperationBody(await readJson(req));
+        const result = await new InMemoryControlPlaneRepository(controlPlane.store).createDeploymentOperation({ ...body, operation: lineageMatch[3] === 'retry' ? 'retry' : 'redeploy', serviceId: service.id, ...(source ? { sourceDeploymentId: source.id } : {}), requestedByUserId: subject.id });
+        return send(res, 202, result);
+      }
       const serviceDeploymentsMatch = url.pathname.match(/^\/services\/([^/]+)\/deployments$/);
       if (serviceDeploymentsMatch && method === 'GET') {
         const serviceId = decodeURIComponent(serviceDeploymentsMatch[1]);
@@ -768,6 +783,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (safe.statusCode === 429) res.setHeader('Retry-After', String(safe.retryAfterSeconds));
         return send(res, safe.statusCode, { statusCode: safe.statusCode, message: safe.code, error: safe.code });
       }
+      if (error instanceof DeploymentOperationError) return send(res, error.statusCode, { statusCode: error.statusCode, message: error.message, code: error.code });
       return send(res, error.statusCode || 500, { error: error.message || 'internal_error', ...(error.code ? { code: error.code } : {}), ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) });
     }
   };

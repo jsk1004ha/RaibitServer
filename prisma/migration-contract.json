@@ -53,6 +53,10 @@
     {
       "id": "000011_oauth_transactions",
       "sha256": "49d1eceacdb848782fe663a0c39cd82eefe3b21453eac6ae338d7babdfb1f893"
+    },
+    {
+      "id": "000012_deployment_lineage",
+      "sha256": "742aac0d4305b53862ebda29c61ae55a2e4684675ca3a7cd1753bc950395e2da"
     }
   ]
 }

@@ -9,6 +9,72 @@ info:
 servers:
   - url: http://localhost:3000/api
 paths:
+  /deployments/{deploymentId}/retry:
+    post:
+      operationId: deployments-retry
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/deployments-retryBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeploymentOperationResult"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
+  /services/{serviceId}/redeploy:
+    post:
+      operationId: services-redeploy
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/deployments-retryBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeploymentOperationResult"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
   /health:
     get:
       operationId: health
@@ -251,7 +317,9 @@ paths:
               - codeVerifier
               - error
             additionalProperties: false
-      description: Exactly one of code or error=access_denied is required. Both variants require the same single-use state, verifier and exact redirect binding.
+      description: Exactly one of code or error=access_denied is required. Both
+        variants require the same single-use state, verifier and exact redirect
+        binding.
       security: []
       x-permission: null
   /auth/me:
@@ -2820,6 +2888,36 @@ components:
           anyOf:
             - type: string
             - type: "null"
+        sourceDeploymentId:
+          anyOf:
+            - type: string
+            - type: "null"
+        retryOfDeploymentId:
+          anyOf:
+            - type: string
+            - type: "null"
+        requestIdempotencyKey:
+          anyOf:
+            - type: string
+            - type: "null"
+        desiredSpecSnapshot:
+          anyOf:
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema0"
+            - type: "null"
+        requestedByUserId:
+          anyOf:
+            - type: string
+            - type: "null"
+        snapshotVersion:
+          anyOf:
+            - type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            - type: "null"
       required:
         - id
         - serviceId
@@ -2848,6 +2946,43 @@ components:
           maximum: 9007199254740991
         imageUrl:
           type: string
+      additionalProperties: false
+    DeploymentOperationResult:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        deployment:
+          $ref: "#/components/schemas/Deployment"
+        workflowJob:
+          type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+            targetId:
+              type: string
+              minLength: 1
+            targetType:
+              type: string
+              const: deployment
+            type:
+              type: string
+            status:
+              type: string
+            payload:
+              $ref: "#/components/schemas/JsonFields"
+          required:
+            - id
+            - targetId
+            - targetType
+            - type
+            - status
+            - payload
+          additionalProperties:
+            $ref: "#/components/schemas/JsonValue"
+      required:
+        - deployment
+        - workflowJob
       additionalProperties: false
     DeploymentStream:
       $schema: https://json-schema.org/draft/2020-12/schema
@@ -3485,7 +3620,7 @@ components:
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema0"
+                $ref: "#/components/schemas/__shared#/$defs/schema1"
           required:
             - intent
             - engine
@@ -3797,6 +3932,21 @@ components:
         - approvalStatus
       additionalProperties:
         $ref: "#/components/schemas/JsonValue"
+    deployments-retryBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        requestIdempotencyKey:
+          type: string
+          pattern: ^[A-Za-z0-9._:-]{1,128}$
+        snapshotVersion:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+      required:
+        - requestIdempotencyKey
+        - snapshotVersion
+      additionalProperties: false
     healthResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4268,7 +4418,7 @@ components:
         - resourceId
         - serviceId
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema1"
+        $ref: "#/components/schemas/__shared#/$defs/schema2"
     resources-attachBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4343,7 +4493,7 @@ components:
         tables:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema2"
+            $ref: "#/components/schemas/__shared#/$defs/schema3"
       required:
         - engine
         - tables
@@ -4358,7 +4508,7 @@ components:
         rows:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema3"
+            $ref: "#/components/schemas/__shared#/$defs/schema4"
         fields:
           type: array
           items:
@@ -4398,7 +4548,7 @@ components:
         collections:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema4"
+            $ref: "#/components/schemas/__shared#/$defs/schema5"
       required:
         - engine
         - collections
@@ -4427,7 +4577,7 @@ components:
         keys:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema5"
+            $ref: "#/components/schemas/__shared#/$defs/schema6"
       required:
         - engine
         - keys
@@ -4614,7 +4764,7 @@ components:
       required:
         - accepted
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema6"
+        $ref: "#/components/schemas/__shared#/$defs/schema7"
     github-webhooksBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4626,7 +4776,7 @@ components:
         installation:
           $ref: "#/components/schemas/JsonFields"
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema7"
+        $ref: "#/components/schemas/__shared#/$defs/schema8"
     github-importResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4636,7 +4786,7 @@ components:
       required:
         - service
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema8"
+        $ref: "#/components/schemas/__shared#/$defs/schema9"
     github-importBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4737,7 +4887,7 @@ components:
         - quotas
         - auditLogs
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema9"
+        $ref: "#/components/schemas/__shared#/$defs/schema10"
     usage-meResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4757,7 +4907,7 @@ components:
         warnings:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema10"
+            $ref: "#/components/schemas/__shared#/$defs/schema11"
       required:
         - unlimited
         - quota
@@ -4766,7 +4916,7 @@ components:
         - gauges
         - warnings
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema11"
+        $ref: "#/components/schemas/__shared#/$defs/schema12"
     __shared:
       $defs:
         schema0:
@@ -4925,6 +5075,19 @@ components:
               propertyNames:
                 type: string
               additionalProperties: *a12
+        schema12:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a13
+                $ref: "#/components/schemas/__shared#/$defs/schema12"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a13
   securitySchemes:
     bearerAuth:
       type: http

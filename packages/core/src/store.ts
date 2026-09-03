@@ -1,4 +1,5 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
+import { captureDeploymentSnapshot } from './deployment-operations.ts';
 import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
 import { createMemoryOAuthTransaction, consumeMemoryOAuthTransaction, deleteMemoryOAuthTransactions } from './oauth-transaction.ts';
 import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput, OAuthTransactionRecord } from './oauth-transaction.ts';
@@ -645,6 +646,8 @@ export class ControlPlaneStore {
       updatedAt: nowIso(),
       finishedAt: null,
       ...maskSecrets(rest),
+      desiredSpecSnapshot: rest.desiredSpecSnapshot ? deepClone(rest.desiredSpecSnapshot) : captureDeploymentSnapshot(service || {}),
+      snapshotVersion: rest.snapshotVersion ?? 1,
     };
     this.deployments.set(deployment.id, deployment);
     this.audit('system', 'deployment:create', 'deployment', deployment.id, { serviceId, status });
@@ -661,6 +664,7 @@ export class ControlPlaneStore {
   updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
     const current = this.deployments.get(deploymentId);
     if (!current) return null;
+    if (['desiredSpecSnapshot', 'snapshotVersion', 'sourceDeploymentId', 'retryOfDeploymentId', 'requestIdempotencyKey', 'requestedByUserId'].some(key => Object.hasOwn(updates, key))) throw conflict('deployment lineage is immutable');
     const safeUpdates = maskSecrets(updates || {});
     const nextUpdates = normalizeDeploymentUpdates(safeUpdates, current);
     if (Object.prototype.hasOwnProperty.call(nextUpdates, 'status')) {

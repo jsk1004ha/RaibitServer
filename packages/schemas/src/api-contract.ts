@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DeploymentOperationInputSchema } from './deployment-operation.ts';
 import * as M from './api-models.ts';
 import { ProjectUpdateSchema, ServiceUpdateSchema, ResourceUpdateSchema } from './desired-state-mutations.ts';
 
@@ -31,6 +32,8 @@ function operation<I extends z.ZodType, O extends z.ZodType>(spec: { readonly me
 // A transport contract, not a list of claimed Nest handlers. Runtime parity discovers
 // the independent module graph and verifies every verb, path, status and permission.
 export const apiOperations = {
+  'deployments-retry': operation({ method: 'post', path: '/deployments/{deploymentId}/retry', status: 202, permission: 'deploy:run', input: input(deployment, M.Empty, DeploymentOperationInputSchema), response: M.DeploymentOperationResult }),
+  'services-redeploy': operation({ method: 'post', path: '/services/{serviceId}/redeploy', status: 202, permission: 'deploy:run', input: input(service, M.Empty, DeploymentOperationInputSchema), response: M.DeploymentOperationResult }),
   'health': operation({ method: 'get', path: '/health', status: 200, permission: null, input: noInput, response: z.object({ status: z.literal('ok'), service: z.literal('raibitserver-api'), uptimeSeconds: z.number().int().nonnegative() }) }),
   'auth-signup': operation({ method: 'post', path: '/auth/signup', status: 201, permission: null, input: input(M.Empty, M.Empty, M.SignupInput), response: M.Signup }),
   'auth-login': operation({ method: 'post', path: '/auth/login', status: 201, permission: null, input: input(M.Empty, M.Empty, M.AuthInput), response: M.Session }),
