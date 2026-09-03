@@ -132,16 +132,18 @@ paths:
     get:
       operationId: auth-github-login
       parameters:
-        - name: state
-          in: query
-          required: false
-          schema:
-            type: string
         - name: codeChallenge
           in: query
+          required: true
+          schema:
+            type: string
+            pattern: ^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$
+        - name: redirectUri
+          in: query
           required: false
           schema:
             type: string
+            maxLength: 2048
       responses:
         "200":
           description: Successful response
@@ -163,19 +165,28 @@ paths:
       parameters:
         - name: code
           in: query
-          required: false
+          required: true
           schema:
             type: string
+            pattern: ^[^\u0000-\u0020\u007f]{1,256}$
         - name: state
           in: query
-          required: false
+          required: true
           schema:
             type: string
+            pattern: ^[A-Za-z0-9_-]{32,128}$
         - name: codeVerifier
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: ^[A-Za-z0-9._~-]{43,128}$
+        - name: redirectUri
           in: query
           required: false
           schema:
             type: string
+            maxLength: 2048
       responses:
         "200":
           description: Successful response
@@ -3702,17 +3713,16 @@ components:
           const: github
         configured:
           type: boolean
+          const: true
         oauthUrl:
-          anyOf:
-            - type: string
-            - type: "null"
+          type: string
+          format: uri
         state:
           type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
         mode:
           type: string
-          enum:
-            - redirect
-            - configuration-required
+          const: redirect
       required:
         - provider
         - configured
@@ -3722,71 +3732,41 @@ components:
       additionalProperties: false
     auth-github-callbackResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
-      anyOf:
-        - type: object
-          properties:
-            user:
-              $ref: "#/components/schemas/User"
-            memberships:
-              type: array
-              items:
-                $ref: "#/components/schemas/Membership"
-            token:
-              type: string
-            provider:
-              type: string
-              const: github
-            linked:
-              type: boolean
-              const: true
-            codePresent:
-              type: boolean
-              const: true
-            received:
-              type: boolean
-              const: true
-            mode:
-              type: string
-              const: oauth-complete
-          required:
-            - user
-            - memberships
-            - token
-            - provider
-            - linked
-            - codePresent
-            - received
-            - mode
-          additionalProperties: false
-        - type: object
-          properties:
-            provider:
-              type: string
-              const: github
-            linked:
-              type: boolean
-              const: false
-            codePresent:
-              type: boolean
-              const: false
-            received:
-              type: boolean
-              const: true
-            state:
-              anyOf:
-                - type: string
-                - type: "null"
-            mode:
-              type: string
-              const: oauth-callback-pending
-          required:
-            - provider
-            - linked
-            - codePresent
-            - received
-            - state
-            - mode
-          additionalProperties: false
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        memberships:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+        token:
+          type: string
+        provider:
+          type: string
+          const: github
+        linked:
+          type: boolean
+          const: true
+        codePresent:
+          type: boolean
+          const: true
+        received:
+          type: boolean
+          const: true
+        mode:
+          type: string
+          const: oauth-complete
+      required:
+        - user
+        - memberships
+        - token
+        - provider
+        - linked
+        - codePresent
+        - received
+        - mode
+      additionalProperties: false
     auth-meResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object

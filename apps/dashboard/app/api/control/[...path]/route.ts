@@ -42,7 +42,14 @@ const PUBLIC_GET_PATHS = new Set(['/health', '/auth/github/login', '/auth/github
 type RouteContext = { params: Promise<{ path: string[] }> | { path: string[] } };
 
 export async function GET(request: NextRequest, routeContext: RouteContext) {
-  return proxyRequest(request, routeContext, 'GET');
+  try {
+    return await proxyRequest(request, routeContext, 'GET');
+  } catch (error) {
+    if (request.nextUrl.pathname === '/api/control/auth/github/callback') {
+      return githubOAuthErrorRedirect(request.url, 'github_oauth_unavailable', true);
+    }
+    throw error;
+  }
 }
 
 export async function POST(request: NextRequest, routeContext: RouteContext) {
@@ -74,10 +81,10 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
     return NextResponse.json({ error: 'invalid_request_origin' }, { status: 403 });
   }
 
-  const context = await dashboardApiContext();
   if (method === 'GET' && (path === '/auth/github/login' || path === '/auth/github/callback')) {
-    return handleGitHubOAuthRequest(request, browserRequestUrl, path, context);
+    return handleGitHubOAuthRequest(request, browserRequestUrl, path);
   }
+  const context = await dashboardApiContext();
   const isPublicPath = method === 'GET' ? PUBLIC_GET_PATHS.has(path) : PUBLIC_POST_PATHS.has(path);
   if (!context.token && !isPublicPath) {
     if (isFormSubmission) return formErrorRedirect(browserRequestUrl, '/login', 'authentication_required');
@@ -220,14 +227,16 @@ function applySessionCookie(response: NextResponse, path: string, payload: any) 
   if (path === '/auth/logout') response.cookies.set(SESSION_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
 }
 
-async function handleGitHubOAuthRequest(request: NextRequest, browserRequestUrl: string, path: string, context: Awaited<ReturnType<typeof dashboardApiContext>>) {
+async function handleGitHubOAuthRequest(request: NextRequest, browserRequestUrl: string, path: string) {
   if (path === '/auth/github/login') {
-    const state = crypto.randomBytes(32).toString('base64url');
     const codeVerifier = crypto.randomBytes(48).toString('base64url');
     const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
     const redirectUri = new URL('/api/control/auth/github/callback', browserRequestUrl).toString();
-    const result = await requestGitHubOAuthJson(context, path, new URLSearchParams({ state, codeChallenge }), request.signal);
+    const context = await dashboardApiContext();
+    const result = await requestGitHubOAuthJson(context, path, new URLSearchParams({ redirectUri, codeChallenge }), request.signal);
     if (!result.ok) return githubOAuthErrorRedirect(browserRequestUrl, result.error);
+    const state = result.payload?.state;
+    if (!isGitHubOAuthState(state)) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_configuration_invalid');
     const authorizeHref = githubOAuthAuthorizeHref(result.payload?.oauthUrl, { state, redirectUri, codeChallenge });
     if (!authorizeHref) return githubOAuthErrorRedirect(browserRequestUrl, result.payload?.configured === false ? 'github_oauth_not_configured' : 'github_oauth_configuration_invalid');
     const response = NextResponse.redirect(new URL(authorizeHref), 302);
@@ -241,13 +250,16 @@ async function handleGitHubOAuthRequest(request: NextRequest, browserRequestUrl:
   const expectedState = request.cookies.get(GITHUB_OAUTH_STATE_COOKIE_NAME)?.value || '';
   const codeVerifier = request.cookies.get(GITHUB_OAUTH_VERIFIER_COOKIE_NAME)?.value || '';
   const returnedState = request.nextUrl.searchParams.get('state') || '';
-  if (!oauthStateMatches(expectedState, returnedState) || !isGitHubOAuthCodeVerifier(codeVerifier)) {
+  if (request.nextUrl.searchParams.getAll('state').length !== 1 || request.nextUrl.searchParams.getAll('code').length > 1
+    || request.nextUrl.searchParams.getAll('redirectUri').length > 1 || !oauthStateMatches(expectedState, returnedState) || !isGitHubOAuthCodeVerifier(codeVerifier)) {
     return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_state_invalid', true);
   }
   if (request.nextUrl.searchParams.has('error')) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_denied', true);
   const code = request.nextUrl.searchParams.get('code');
   if (!validOAuthCode(code)) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_code_required', true);
-  const result = await requestGitHubOAuthJson(context, path, new URLSearchParams({ code, state: returnedState, codeVerifier }), request.signal);
+  const redirectUri = request.nextUrl.searchParams.get('redirectUri') ?? new URL('/api/control/auth/github/callback', browserRequestUrl).toString();
+  const context = await dashboardApiContext();
+  const result = await requestGitHubOAuthJson(context, path, new URLSearchParams({ code, state: returnedState, codeVerifier, redirectUri }), request.signal);
   if (!result.ok) return githubOAuthErrorRedirect(browserRequestUrl, result.error, true);
   if (!extractSessionToken(result.payload)) return githubOAuthErrorRedirect(browserRequestUrl, 'github_oauth_session_invalid', true);
   const response = NextResponse.redirect(new URL('/console', browserRequestUrl), 302);

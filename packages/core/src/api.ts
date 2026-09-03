@@ -10,7 +10,7 @@ import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { assertEnvironmentWriteAllowed } from './env-policy.ts';
 import { quotaUsageGauges, quotaWarnings } from './quota.ts';
 import { assertSystemDeploymentActor, enforceAuthAbuseLimits, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
-import { fetchGitHubOAuthIdentity, githubOAuthLoginPlan } from './github-integration.ts';
+import { consumeGitHubOAuthIdentity, startGitHubOAuth } from './github-oauth-flow.ts';
 import { createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, resolveGitHubAppInstallationSelection, verifyGitHubAppInstallationState } from './github-app.ts';
 import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
 import { publicSitesFromSnapshot } from './public-sites.ts';
@@ -81,30 +81,17 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, { user: publicUser, memberships, token });
       }
       if (method === 'GET' && url.pathname === '/auth/github/login') {
-        return send(res, 200, githubOAuthLoginPlan({
-          state: url.searchParams.get('state'),
-          codeChallenge: url.searchParams.get('codeChallenge'),
+        const input = Object.fromEntries([...url.searchParams.keys()].map((key) => [key, url.searchParams.getAll(key).length === 1 ? url.searchParams.get(key) : url.searchParams.getAll(key)]));
+        return send(res, 200, await startGitHubOAuth(controlPlane.store, input, {
+          source: req.socket?.remoteAddress || '', jwtSecret: auth.jwtSecret, provider: options.githubOAuth,
         }));
       }
       if (method === 'GET' && url.pathname === '/auth/github/callback') {
-        const code = url.searchParams.get('code');
-        const state = url.searchParams.get('state');
-        if (!code) {
-          return send(res, 200, {
-            provider: 'github',
-            received: true,
-            codePresent: false,
-            state,
-            mode: 'oauth-callback-pending',
-            linked: false,
-          });
-        }
-        if (!state) return send(res, 400, { error: 'oauth_state_required' });
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
-        const identity = await fetchGitHubOAuthIdentity({
-          code,
-          codeVerifier: url.searchParams.get('codeVerifier'),
-        }, options.githubOAuth || {});
+        const input = Object.fromEntries([...url.searchParams.keys()].map((key) => [key, url.searchParams.getAll(key).length === 1 ? url.searchParams.get(key) : url.searchParams.getAll(key)]));
+        const identity = await consumeGitHubOAuthIdentity(controlPlane.store, input, {
+          source: req.socket?.remoteAddress || '', jwtSecret: auth.jwtSecret, provider: options.githubOAuth,
+        });
         let user = controlPlane.store.findUserByGitHubId(identity.githubId) || controlPlane.store.findUserByEmail(identity.email);
         if (!user) throw statusError('github_account_not_registered', 403);
         assertUserEmailVerified(user);
@@ -772,6 +759,11 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
 
       return send(res, 404, { error: 'not_found', path: url.pathname });
     } catch (error) {
+      if (/^\/auth\/github\/(login|callback)(\?|$)/.test(req.url || '')) {
+        const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+        const message = error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : 'github_oauth_failed';
+        return send(res, statusCode, { statusCode, message, error: message });
+      }
       return send(res, error.statusCode || 500, { error: error.message || 'internal_error' });
     }
   };

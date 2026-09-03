@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import {
   GITHUB_OAUTH_STATE_COOKIE_NAME,
   GITHUB_OAUTH_VERIFIER_COOKIE_NAME,
@@ -22,7 +21,7 @@ test('GitHub OAuth transient cookies are host-only, HttpOnly, and callback-scope
   assert.deepEqual(githubOAuthCookieOptions({ NODE_ENV: 'development' }), {
     httpOnly: true,
     sameSite: 'lax',
-    secure: false,
+    secure: true,
     path: '/api/control/auth/github/callback',
     maxAge: 600,
   });
@@ -61,25 +60,6 @@ test('GitHub OAuth authorization accepts only the exact GitHub endpoint and PKCE
   const elevatedScope = new URL(valid);
   elevatedScope.searchParams.set('scope', 'read:user user:email repo');
   assert.equal(githubOAuthAuthorizeHref(elevatedScope.toString(), { state, redirectUri, codeChallenge: challenge }), null);
-});
-
-test('dashboard OAuth route uses state, PKCE, HttpOnly session extraction, and clears transient cookies', async () => {
-  const route = await fs.readFile(new URL('../app/api/control/[...path]/route.ts', import.meta.url), 'utf8');
-  for (const marker of [
-    "crypto.randomBytes(32)",
-    "crypto.createHash('sha256')",
-    'crypto.timingSafeEqual',
-    'GITHUB_OAUTH_STATE_COOKIE_NAME',
-    'GITHUB_OAUTH_VERIFIER_COOKIE_NAME',
-    'githubOAuthAuthorizeHref',
-    'extractSessionToken(result.payload)',
-    'clearGitHubOAuthCookies(response)',
-  ]) assert.ok(route.includes(marker), `GitHub OAuth route contract missing: ${marker}`);
-
-  const login = await fs.readFile(new URL('../app/login/page.tsx', import.meta.url), 'utf8');
-  assert.ok(login.includes("apiAction('/auth/github/login')"));
-  assert.ok(login.includes('GitHub로 로그인'));
-  assert.ok(login.includes('프로필 사진도 함께 연결됩니다'));
 });
 
 test('avatar content policy permits GitHub avatars without opening arbitrary HTTPS images', () => {

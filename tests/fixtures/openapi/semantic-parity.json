@@ -24,6 +24,8 @@
     "admin-quota-post": {"maxServices":4,"accountType":"NON_CLUB"}
   },
   "wireQueries": {
+    "auth-github-login":{"codeChallenge":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+    "auth-github-callback":{"code":"parity-code","state":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","codeVerifier":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
     "github-authorize":{"installation_id":"123","setup_action":"install","state":"state +/?"},
     "github-callback":{"code":"code +/?","state":"state +/?"},
     "projects-list":{"limit":2,"cursor":"cursor +/?"},
@@ -35,13 +37,13 @@
     {"operation":"projects-list","body":{"projects":[{"id":"project","name":"Parity","organizationId":"org","slug":"parity"}],"nextCursor":null}},
     {"operation":"deployments-get","body":{"id":"deployment","serviceId":"service","status":"READY","imageDigest":null,"errorCode":null,"errorMessage":null}},
     {"operation":"services-logs-stream","body":{"service":null,"logs":[{"id":"log","line":"ready","timestamp":"2026-09-02T00:00:00Z"}],"serviceCursor":"v1","logCursor":null,"stream":{"retryMs":3000,"heartbeatMs":15000,"maxLifetimeMs":900000,"slowClientTimeoutMs":5000}}},
-    {"operation":"auth-github-login","body":{"provider":"github","configured":false,"oauthUrl":null,"state":"state","mode":"configuration-required"}}
+    {"operation":"auth-github-login","body":{"provider":"github","configured":true,"oauthUrl":"https://github.com/login/oauth/authorize","state":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","mode":"redirect"}}
   ],
   "http": [
     {"operation":"health","method":"GET","path":"/health","status":200,"public":true},
     {"operation":"public-sites","method":"GET","path":"/public/sites?limit=1","status":200,"public":true},
-    {"operation":"auth-github-login","method":"GET","path":"/auth/github/login","status":200,"public":true},
-    {"operation":"auth-github-callback","method":"GET","path":"/auth/github/callback","status":200,"public":true},
+    {"operation":"auth-github-login","method":"GET","path":"/auth/github/login","status":400,"public":true},
+    {"operation":"auth-github-callback","method":"GET","path":"/auth/github/callback","status":400,"public":true},
     {"operation":"auth-login","method":"POST","path":"/auth/login","body":{"email":"parity@example.test","password":"test-password"},"status":201,"public":true,"saveToken":true},
     {"operation":"auth-me","method":"GET","path":"/auth/me","status":200},
     {"operation":"projects-create","method":"POST","path":"/projects","body":{"name":"Parity"},"status":201,"save":"projectId"},

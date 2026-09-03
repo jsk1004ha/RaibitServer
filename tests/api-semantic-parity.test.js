@@ -76,7 +76,7 @@ test('Given the running Nest graph, when contracts and HTTP are exercised, then 
       assert.equal(captured.url, expectedPath + (expectedQuery ? `?${expectedQuery}` : ''), `${id}: client path/query disagreement`);
       assert.equal(captured.authorization, 'Bearer wire-fixture-token', `${id}: client authorization missing`);
       if (['post', 'patch'].includes(operation.method)) assert.deepEqual(JSON.parse(captured.body), input.body, `${id}: client body disagreement`);
-      report.operations.push({ operationId: id, method: captured.method, path: operation.path, status: route.status, permission: route.permission, wire: captured.url });
+      report.operations.push({ operationId: id, method: captured.method, path: operation.path, status: route.status, permission: route.permission, wire: operation.path.startsWith('/auth/github/') ? expectedPath + '?[REDACTED]' : captured.url });
     }
     for (const fixture of fixtures.responseFixtures) {
       const contract = apiOperations[fixture.operation];

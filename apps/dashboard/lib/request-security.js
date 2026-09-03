@@ -39,12 +39,11 @@ export function githubInstallStateCookieOptions(env = process.env) {
   };
 }
 
-export function githubOAuthCookieOptions(env = process.env) {
-  const { httpOnly, sameSite, secure } = sessionCookieOptions(env);
+export function githubOAuthCookieOptions() {
   return {
-    httpOnly,
-    sameSite,
-    secure,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: true,
     path: '/api/control/auth/github/callback',
     maxAge: 600,
   };

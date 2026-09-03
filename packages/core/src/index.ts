@@ -1,6 +1,7 @@
 export { RAIBITSERVERControlPlane } from './control-plane.ts';
 export { ControlPlaneStore } from './store.ts';
 export { OAuthTransactionError } from './oauth-transaction.ts';
+export { startGitHubOAuth, consumeGitHubOAuthIdentity, GitHubOAuthFlowError } from './github-oauth-flow.ts';
 export type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput, OAuthTransactionRecord, OAuthTransactionErrorCode } from './oauth-transaction.ts';
 export { resolveBuildStrategy } from './build-strategy.ts';
 export { detectFramework } from './framework-detector.ts';

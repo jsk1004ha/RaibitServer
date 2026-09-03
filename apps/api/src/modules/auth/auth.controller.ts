@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Post, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { AuthService } from './auth.service';
+import type { IncomingMessage } from 'node:http';
 
 @Controller('auth')
 export class AuthController {
@@ -27,13 +28,13 @@ export class AuthController {
   }
 
   @Get('github/login')
-  githubLogin(@Query() input: Record<string, any>) {
-    return this.authService.githubLogin(input || {});
+  githubLogin(@Query() input: Record<string, unknown>, @Req() req: IncomingMessage) {
+    return this.authService.githubLogin(input || {}, req);
   }
 
   @Get('github/callback')
-  githubCallback(@Query() input: Record<string, any>) {
-    return this.authService.githubCallback(input || {});
+  githubCallback(@Query() input: Record<string, unknown>, @Req() req: IncomingMessage) {
+    return this.authService.githubCallback(input || {}, req);
   }
 
   @RequirePermission('project:read')

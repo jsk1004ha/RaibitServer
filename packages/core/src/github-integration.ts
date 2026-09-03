@@ -171,7 +171,9 @@ export function githubWebhookOutboundPlan(actionPlan: Record<string, any>, actio
 export function githubOAuthLoginPlan(options: Record<string, any> = {}) {
   const clientId = options.clientId || process.env.GITHUB_CLIENT_ID || process.env.RAIBITSERVER_GITHUB_CLIENT_ID || '';
   const redirectUri = options.redirectUri || process.env.RAIBITSERVER_GITHUB_REDIRECT_URI || '';
-  const state = validOAuthState(options.state) ? options.state : crypto.randomBytes(32).toString('base64url');
+  if (options.state !== undefined) throw githubOAuthError('github_oauth_input_invalid', 400);
+  if (!validCodeChallenge(options.codeChallenge)) throw githubOAuthError('github_oauth_challenge_required', 400);
+  const state = crypto.randomBytes(32).toString('base64url');
   const configured = Boolean(clientId && redirectUri);
   const oauthUrl = configured ? new URL('https://github.com/login/oauth/authorize') : null;
   if (oauthUrl) {
@@ -192,10 +194,11 @@ export async function fetchGitHubOAuthIdentity(input: Record<string, any>, optio
   const clientSecret = options.clientSecret || process.env.GITHUB_CLIENT_SECRET || process.env.RAIBITSERVER_GITHUB_CLIENT_SECRET || '';
   const redirectUri = options.redirectUri || process.env.RAIBITSERVER_GITHUB_REDIRECT_URI || '';
   const code = requiredOAuthValue(input.code, 'github_oauth_code_required', 256);
+  if (!validCodeVerifier(input.codeVerifier)) throw githubOAuthError('github_oauth_verifier_required', 400);
   if (!clientId || !clientSecret || !redirectUri) throw githubOAuthError('github_oauth_not_configured', 503);
 
   const tokenBody = new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: redirectUri });
-  if (validCodeVerifier(input.codeVerifier)) tokenBody.set('code_verifier', input.codeVerifier);
+  tokenBody.set('code_verifier', input.codeVerifier);
   const requestOptions = {
     fetchImpl: (options.fetchImpl || globalThis.fetch) as FetchLike,
     requestTimeoutMs: boundedTimeout(options.requestTimeoutMs),
@@ -247,11 +250,7 @@ export function deterministicGitHubCallbackAllowed(input: Record<string, any> = 
 }
 
 function validCodeChallenge(value: unknown): value is string {
-  return typeof value === 'string' && /^[A-Za-z0-9_-]{43,128}$/.test(value);
-}
-
-function validOAuthState(value: unknown): value is string {
-  return typeof value === 'string' && /^[A-Za-z0-9_-]{32,128}$/.test(value);
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value) && Buffer.from(value, 'base64url').toString('base64url') === value;
 }
 
 function validCodeVerifier(value: unknown): value is string {

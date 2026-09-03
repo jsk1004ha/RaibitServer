@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
+import crypto from 'node:crypto';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 
 const CALLBACK_URL = 'https://console.raibit.kr/api/control/auth/github/callback';
-const JWT_SECRET = 'github-oauth-session-secret';
-const STATE = 'state_value_abcdefghijklmnopqrstuvwxyz_123456';
+const JWT_SECRET = 'github-oauth-session-secret-minimum-32-characters';
 const CODE_VERIFIER = 'verifier_value_abcdefghijklmnopqrstuvwxyz_0123456789_ABCDEFG';
 const AVATAR_URL = 'https://avatars.githubusercontent.com/u/4242?v=4';
 
@@ -16,7 +16,8 @@ test('GitHub OAuth links an existing approved account and persists its provider 
   const calls = [];
   const server = await startApi(controlPlane, githubFetch({ calls, email: 'member@example.com' }));
   try {
-    const callback = await request(server, `/auth/github/callback?${new URLSearchParams({ code: 'one-time-code', state: STATE, codeVerifier: CODE_VERIFIER })}`);
+    const state = await startOAuth(server);
+    const callback = await request(server, `/auth/github/callback?${new URLSearchParams({ code: 'one-time-code', state, codeVerifier: CODE_VERIFIER })}`);
     assert.equal(callback.statusCode, 200);
     assert.equal(callback.body.linked, true);
     assert.equal(callback.body.mode, 'oauth-complete');
@@ -42,7 +43,8 @@ test('GitHub OAuth rejects unverified provider email without linking the account
   const controlPlane = approvedControlPlane('member@example.com');
   const server = await startApi(controlPlane, githubFetch({ email: 'member@example.com', verified: false }));
   try {
-    const callback = await request(server, `/auth/github/callback?${new URLSearchParams({ code: 'unverified-code', state: STATE, codeVerifier: CODE_VERIFIER })}`);
+    const state = await startOAuth(server);
+    const callback = await request(server, `/auth/github/callback?${new URLSearchParams({ code: 'unverified-code', state, codeVerifier: CODE_VERIFIER })}`);
     assert.equal(callback.statusCode, 403);
     assert.equal(callback.body.error, 'github_verified_email_required');
     assert.equal(controlPlane.store.findUserByEmail('member@example.com').githubId, null);
@@ -56,7 +58,8 @@ test('GitHub OAuth never creates an unapproved account from provider data', asyn
   const controlPlane = new RAIBITSERVERControlPlane();
   const server = await startApi(controlPlane, githubFetch({ email: 'unknown@example.com' }));
   try {
-    const callback = await request(server, `/auth/github/callback?${new URLSearchParams({ code: 'unknown-code', state: STATE, codeVerifier: CODE_VERIFIER })}`);
+    const state = await startOAuth(server);
+    const callback = await request(server, `/auth/github/callback?${new URLSearchParams({ code: 'unknown-code', state, codeVerifier: CODE_VERIFIER })}`);
     assert.equal(callback.statusCode, 403);
     assert.equal(callback.body.error, 'github_account_not_registered');
     assert.equal(controlPlane.store.findUserByEmail('unknown@example.com'), null);
@@ -77,6 +80,13 @@ function approvedControlPlane(email) {
   });
   controlPlane.store.addMember({ organizationId: organization.id, userId: user.id, role: 'developer' });
   return controlPlane;
+}
+
+async function startOAuth(server) {
+  const codeChallenge = crypto.createHash('sha256').update(CODE_VERIFIER).digest('base64url');
+  const response = await request(server, `/auth/github/login?${new URLSearchParams({ codeChallenge })}`);
+  assert.equal(response.statusCode, 200);
+  return response.body.state;
 }
 
 function githubFetch({ calls = [], email, verified = true }) {

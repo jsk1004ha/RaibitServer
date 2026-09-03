@@ -33,7 +33,7 @@ test('email verification uses a sending-only sender from the configured domain',
   assert.equal(message.from, 'RAIBITSERVER <email-verification@mydomain.com>');
 });
 
-test('first auth user bootstraps as admin non-club and GitHub callback remains passive', async () => {
+test('first auth user bootstraps as admin non-club and unsolicited GitHub callback is rejected', async () => {
   const secret = 'first-user-bootstrap-secret';
   const previousAdminEmails = process.env.ADMIN_EMAILS;
   const previousCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE;
@@ -82,10 +82,8 @@ test('first auth user bootstraps as admin non-club and GitHub callback remains p
     await once(githubServer, 'listening');
     try {
       const callback = await request(githubServer.address().port, 'GET', '/auth/github/callback?email=gh-first%40example.com&githubId=42&login=gh-first&organizationSlug=gh-first-org&state=oauth-state');
-      assert.equal(callback.statusCode, 200);
-      assert.equal(callback.body.linked, false);
-      assert.equal(callback.body.state, 'oauth-state');
-      assert.equal(callback.body.mode, 'oauth-callback-pending');
+      assert.equal(callback.statusCode, 400);
+      assert.equal(callback.body.error, 'github_oauth_input_invalid');
       assert.equal(callback.body.user, undefined);
       assert.equal(Boolean(callback.body.token), false);
     } finally {
@@ -350,11 +348,10 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(bobProjects.statusCode, 401);
 
     const bobGithub = await request(port, 'GET', '/auth/github/callback?email=bob%40example.com&githubId=gh-bob&login=bob&state=link-existing');
-    assert.equal(bobGithub.statusCode, 200);
-    assert.equal(bobGithub.body.linked, false);
-    assert.equal(bobGithub.body.mode, 'oauth-callback-pending');
+    assert.equal(bobGithub.statusCode, 400);
+    assert.equal(bobGithub.body.error, 'github_oauth_input_invalid');
     const duplicateGithub = await request(port, 'GET', '/auth/github/callback?email=eve%40example.com&githubId=gh-bob&login=eve&state=duplicate-link');
-    assert.equal(duplicateGithub.statusCode, 200);
+    assert.equal(duplicateGithub.statusCode, 400);
 
     const approveBob = await request(port, 'POST', `/admin/users/${bobVerified.body.user.id}/approve`, { accountType: 'NON_CLUB' }, aliceLogin.body.token);
     assert.equal(approveBob.statusCode, 200);

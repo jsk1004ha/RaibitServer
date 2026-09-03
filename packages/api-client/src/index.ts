@@ -1,5 +1,6 @@
 import type { DeploymentListResponse, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceListResponse, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
 import { createOperationsClient } from './operations.ts';
+import type { ApiInput } from '@raibitserver/schemas';
 export { createOperationsClient, ApiOperationError } from './operations.ts';
 
 export type PageOptions = { limit?: number; cursor?: string; after?: string };
@@ -26,13 +27,11 @@ export class RAIBITSERVERClient {
   verifyEmail(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/auth/email/verify', { method: 'POST', body: input }); }
   resendEmailVerification(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/auth/email/resend', { method: 'POST', body: input }); }
   logout(): Promise<Record<string, unknown>> { return this.request('/auth/logout', { method: 'POST' }); }
-  githubLogin(input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-    const query = new URLSearchParams(Object.entries(input).map(([key, value]) => [key, String(value)])).toString();
-    return this.request(`/auth/github/login${query ? `?${query}` : ''}`);
+  githubLogin(input: ApiInput<'auth-github-login'>['query']) {
+    return this.operations['auth-github-login']({ path: {}, query: input, body: {} });
   }
-  githubCallback(input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-    const query = new URLSearchParams(Object.entries(input).map(([key, value]) => [key, String(value)])).toString();
-    return this.request(`/auth/github/callback${query ? `?${query}` : ''}`);
+  githubCallback(input: ApiInput<'auth-github-callback'>['query']) {
+    return this.operations['auth-github-callback']({ path: {}, query: input, body: {} });
   }
 
   listOrganizations(): Promise<Record<string, unknown>> { return this.request('/organizations'); }

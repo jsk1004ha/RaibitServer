@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, fetchGitHubOAuthIdentity, githubOAuthLoginPlan, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import type { IncomingMessage } from 'node:http';
+import { consumeGitHubOAuthIdentity, startGitHubOAuth } from '@raibitserver/core';
+import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -697,32 +699,25 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     });
   }
 
-  githubLogin(input: Record<string, any> = {}) {
-    return githubOAuthLoginPlan({ state: input.state, codeChallenge: input.codeChallenge });
+  async githubLogin(input: Record<string, unknown>, request: IncomingMessage) {
+    try {
+      return await startGitHubOAuth(await this.repositoryPromise, input, {
+        source: request.socket.remoteAddress || '', jwtSecret: process.env.RAIBITSERVER_AUTH_JWT_SECRET,
+      });
+    } catch (error) { throw nestAuthError(error); }
   }
 
-  async githubCallback(input: Record<string, any> = {}) {
-    if (!input.code) {
-      return {
-        provider: 'github',
-        received: true,
-        codePresent: false,
-        state: input.state || null,
-        mode: 'oauth-callback-pending',
-        linked: false,
-      };
-    }
-    if (!input.state) throw new BadRequestException('oauth_state_required');
-    const repository: any = await this.repositoryPromise;
+  async githubCallback(input: Record<string, unknown>, request: IncomingMessage) {
+    const repository = await this.repositoryPromise;
     const jwtSecret = jwtSecretOrThrow();
     let identity;
     try {
-      identity = await fetchGitHubOAuthIdentity({ code: input.code, codeVerifier: input.codeVerifier });
+      identity = await consumeGitHubOAuthIdentity(repository, input, { source: request.socket.remoteAddress || '', jwtSecret });
     } catch (error) {
       throw nestAuthError(error);
     }
-    let user = repository.findUserByGitHubId ? await repository.findUserByGitHubId(identity.githubId) : repository.store.findUserByGitHubId(identity.githubId);
-    if (!user) user = repository.findUserByEmail ? await repository.findUserByEmail(identity.email) : repository.store.findUserByEmail(identity.email);
+    let user = await repository.findUserByGitHubId(identity.githubId);
+    if (!user) user = await repository.findUserByEmail(identity.email);
     if (!user) throw new ForbiddenException('github_account_not_registered');
     assertNestEmailVerified(user);
     assertNestUserApproved(user);
@@ -737,7 +732,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     } catch (error) {
       throw nestAuthError(error);
     }
-    const memberships = repository.listMembershipsForUser ? await repository.listMembershipsForUser(user.id) : repository.store.listMembershipsForUser(user.id);
+    const memberships = await repository.listMembershipsForUser(user.id);
     const token = createSessionToken(user, memberships, jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver' });
     return {
       provider: 'github',
