@@ -28,6 +28,7 @@ type Resource struct {
 	Plan                 string
 	Region               string
 	Version              string
+	VersionPresent       bool
 	Status               string
 	ConnectionSecretName string
 	ClaimToken           string

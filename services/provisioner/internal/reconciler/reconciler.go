@@ -272,10 +272,8 @@ func (r *Reconciler) RunOnce(ctx context.Context) (*Result, error) {
 		"healthStatus":            "HEALTHY",
 		"healthFailureCount":      0,
 	})
-	if err := r.store.MarkResourceReady(ctx, resource, plan.Provider, plan.SecretName, plan.Endpoint, keys, desiredState); err != nil {
-		return nil, err
-	}
-	return &Result{Processed: 1, ResourceID: resource.ID, Status: store.StatusReady, ManifestFile: manifestFile, Command: waitCommand, DryRun: false}, nil
+	err = r.store.MarkResourceReady(ctx, resource, plan.Provider, plan.SecretName, plan.Endpoint, keys, desiredState)
+	return ordinaryPublicationResult(&Result{Processed: 1, ResourceID: resource.ID, Status: store.StatusReady, ManifestFile: manifestFile, Command: waitCommand, DryRun: false}, err)
 }
 
 func (r *Reconciler) dryRunRecheck() time.Duration {

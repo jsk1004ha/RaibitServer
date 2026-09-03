@@ -21,6 +21,7 @@ JOIN "Project" p ON p.id = r."projectId"
 WHERE UPPER(p.status) NOT IN ('DELETE_REQUESTED', 'DELETING')
 	AND p."deletionRequestedAt" IS NULL
 	AND r."deletionRequestedAt" IS NULL
+  AND r."desiredState"->>'recoveryPrepared' IS DISTINCT FROM 'true'
   AND r."desiredState"->'resourceExecution'->>'intent' = 'live-provision'
   AND r."desiredState"->'resourceExecution'->>'environment' = $5
   AND ($6::jsonb ->> LOWER(r.engine)) IS NOT NULL
@@ -52,6 +53,8 @@ WHERE (UPPER(r.status) = 'READY'
   AND UPPER(p.status) NOT IN ('DELETE_REQUESTED', 'DELETING')
   AND p."deletionRequestedAt" IS NULL
   AND r."deletionRequestedAt" IS NULL
+  AND r."desiredState"->>'recoveryPublicationBlocked' IS DISTINCT FROM 'true'
+  AND NOT EXISTS (SELECT 1 FROM "ResourceRecoveryPin" pin WHERE pin."resourceId"=r.id AND pin.kind='RESTORE_TARGET')
 ORDER BY r."updatedAt" ASC, r.id ASC
 FOR UPDATE OF r SKIP LOCKED
 LIMIT 1`
@@ -61,7 +64,8 @@ SELECT r.id, r."projectId", p."organizationId", p.slug, r.name, r.slug, r.type, 
        r.provider, r.plan, r.region, r.version, r.status, r."connectionSecretName", r."desiredSpec", r."desiredState"
 FROM "Resource" r
 JOIN "Project" p ON p.id = r."projectId"
-WHERE (UPPER(r.status) = $1 AND (
+WHERE NOT EXISTS (SELECT 1 FROM "ResourceRecoveryPin" pin WHERE pin."resourceId"=r.id)
+ AND ((UPPER(r.status) = $1 AND (
         $4::numeric <= 0
         OR NOT (COALESCE(r."desiredState", '{}'::jsonb) ? 'lastDryRunDeletionAt')
         OR EXTRACT(EPOCH FROM r."updatedAt") * 1000 <= EXTRACT(EPOCH FROM clock_timestamp()) * 1000 - $4::numeric
@@ -70,7 +74,7 @@ WHERE (UPPER(r.status) = $1 AND (
         CASE WHEN jsonb_typeof(r."desiredState"->'claimHeartbeatUnixMs') = 'number'
              THEN (r."desiredState"->>'claimHeartbeatUnixMs')::numeric END,
         EXTRACT(EPOCH FROM r."updatedAt") * 1000
-      ) <= EXTRACT(EPOCH FROM clock_timestamp()) * 1000 - $3::numeric)
+      ) <= EXTRACT(EPOCH FROM clock_timestamp()) * 1000 - $3::numeric))
 ORDER BY r."updatedAt" ASC, r."createdAt" ASC, r.id ASC
 FOR UPDATE OF r SKIP LOCKED
 LIMIT 1`
@@ -81,6 +85,7 @@ SET status = $1,
     "updatedAt" = clock_timestamp() AT TIME ZONE 'UTC',
     "desiredState" = COALESCE("desiredState", '{}'::jsonb) - 'claimHeartbeatUnixMs'
 WHERE id = $2 AND UPPER(status) = $3
+  AND NOT EXISTS (SELECT 1 FROM "ResourceRecoveryPin" pin WHERE pin."resourceId"=$2)
 RETURNING "updatedAt"`
 
 const claimResourceUpdateSQL = `
@@ -97,6 +102,7 @@ const finalizeResourceDeletionSQL = `
 WITH locked AS (
   SELECT id FROM "Resource"
   WHERE id = $1 AND status = 'DELETING' AND "updatedAt" = $2
+    AND NOT EXISTS (SELECT 1 FROM "ResourceRecoveryPin" pin WHERE pin."resourceId"=$1)
   FOR UPDATE
 ), removed_attachments AS (
   DELETE FROM "ResourceAttachment" WHERE "resourceId" IN (SELECT id FROM locked)
@@ -141,6 +147,7 @@ SET "desiredState" = jsonb_set(
 WHERE id = $1
   AND status = $2
   AND "updatedAt" = $3
+  AND ($2 <> 'DELETING' OR NOT EXISTS (SELECT 1 FROM "ResourceRecoveryPin" pin WHERE pin."resourceId"=$1))
 RETURNING id`
 
 const persistProviderIdentitySQL = `
@@ -500,8 +507,10 @@ func (s *PostgresStore) MarkResourceReady(ctx context.Context, resource *Resourc
 	if err != nil {
 		return err
 	}
-	var updatedID string
-	err = s.db.QueryRowContext(ctx, markResourceReadySQL, provider, secretName, payload, resource.ID, claimedAt).Scan(&updatedID)
+	prepared, err := s.publishOrdinaryResource(ctx, ordinaryPublication{resource.ID, claimedAt, provider, secretName, payload})
+	if prepared && err == nil {
+		return ErrRecoveryPrepared
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("resource %s READY transition conflict: claim expired or deletion requested", resource.ID)
 	}
@@ -537,6 +546,7 @@ func scanResource(row scanner) (*Resource, error) {
 	}
 	if version.Valid {
 		resource.Version = version.String
+		resource.VersionPresent = true
 	}
 	if connectionSecretName.Valid {
 		resource.ConnectionSecretName = connectionSecretName.String
