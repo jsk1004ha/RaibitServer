@@ -89,6 +89,14 @@ test('Given six fixture engines and real isolated SQLite, When public lifecycle 
   t.diagnostic(JSON.stringify({ ...sample.sqlite, fixtureEngineCount: 6, nativeEngines: 'NOT_RUN' }));
   if (process.env.RAIBITSERVER_TASK14_SQLITE_RECEIPT) await writeFile(process.env.RAIBITSERVER_TASK14_SQLITE_RECEIPT, JSON.stringify({ ...sample.sqlite, fixtureEngineCount: 6, nativeEngines: 'NOT_RUN' }), { flag: 'wx' });
 });
+for (const [name, mutate] of [
+  ['its own provider Pod', s => { s.receipts[0].attachment.consumerPodUid = s.receipts[0].native.consumerPodUid = s.receipts[0].objects.podUid; }],
+  ['another engine provider Pod', s => { s.receipts[0].attachment.consumerPodUid = s.receipts[0].native.consumerPodUid = s.receipts[1].objects.podUid; }],
+]) test(`Given attached consumer uses ${name}, When the physical CLI verifies lifecycle receipts, Then attachment identity mismatch`, async t => {
+  const sample = await specimen(t); mutate(sample);
+  const result = cli(await persist(sample));
+  assert.equal(result.status, 1); assert.equal(result.stdout, ''); assert.equal(result.stderr.trim(), 'attachment_identity_mismatch');
+});
 const mutations = [
   ['missing engine', 'invalid_resource_scope', s => s.manifest.fragments[0].resourceScope.engineReceiptPaths.pop()],
   ['duplicate engine path', 'reused_engine_receipt', s => { s.manifest.fragments[0].resourceScope.engineReceiptPaths[1] = 'postgresql.json'; }],

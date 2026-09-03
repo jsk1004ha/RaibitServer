@@ -38,6 +38,8 @@ export async function verifyResourceLifecycle(directory, manifest) {
     unique(receipts.map(receipt => receipt.attachment.id));
     unique(receipts.map(receipt => receipt.native.nonce));
     unique(receipts.flatMap(receipt => [receipt.objects.workloadUid, receipt.objects.podUid, receipt.objects.pvcUid, receipt.objects.secretUid]));
+    const providerPodUids = new Set(receipts.map(receipt => receipt.objects.podUid));
+    if (receipts.some(receipt => providerPodUids.has(receipt.attachment.consumerPodUid) || providerPodUids.has(receipt.native.consumerPodUid))) throw new EvidenceError('attachment_identity_mismatch');
     for (const receipt of receipts) {
       const { identity, attachment, objects, providerHealth, native } = receipt;
       if (digest({ ...identity, resourceId: manifest.identity.resourceId }) !== digest(manifest.identity)) throw new EvidenceError('identity_mismatch');
