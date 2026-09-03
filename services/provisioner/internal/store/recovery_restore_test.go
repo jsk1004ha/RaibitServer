@@ -29,6 +29,7 @@ func (f recoveryFixture) prepare(t *testing.T, id string) {
 	state := decodeMap([]byte(recoveryState()))
 	state["recoveryRestoreId"] = id
 	state["recoveryPublicationBlocked"] = true
+	state["resourceExecution"] = map[string]any{"intent": "live-provision", "environment": "local", "image": "image"}
 	err := f.s.MarkResourceReady(f.ctx, &Resource{ID: f.id + "-target", Status: StatusReconciling, ClaimToken: claimed.Format(time.RFC3339Nano)}, "raibitserver", "target-connection", "target:5432", []string{"DATABASE_URL"}, state)
 	if !errors.Is(err, ErrRecoveryPrepared) {
 		t.Fatalf("target was not privately prepared: %v", err)
