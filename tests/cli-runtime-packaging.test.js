@@ -9,6 +9,15 @@ import { fileURLToPath } from 'node:url';
 const root = realpathSync.native(fileURLToPath(new URL('../', import.meta.url)));
 const workspaceStatePath = path.join(root, 'node_modules', '.pnpm-workspace-state-v1.json');
 
+function cleanupSandboxAndRestoreWorkspaceState({ sandbox, statePath, state, removeSandbox = rmSync }) {
+  try {
+    removeSandbox(sandbox, { recursive: true, force: true });
+  } finally {
+    if (state === null) rmSync(statePath, { force: true });
+    else writeFileSync(statePath, state);
+  }
+}
+
 test('Given production dependencies, when Docker packages the CLI, then Node loads validated client operations without TypeScript', () => {
   const workspaceStateBeforeDeploy = existsSync(workspaceStatePath) ? readFileSync(workspaceStatePath) : null;
   assert.ok(existsSync(path.join(root, 'scripts/build-cli-runtime.mjs')), 'CLI production packaging must compile the runtime schema dependency graph');
@@ -67,13 +76,27 @@ test('Given production dependencies, when Docker packages the CLI, then Node loa
     const dockerfile = readFileSync(path.join(root, 'apps/cli/Dockerfile'), 'utf8');
     assert.match(dockerfile, /RUN node scripts\/build-cli-runtime\.mjs \/opt\/raibitserver\/cli/);
   } finally {
-    rmSync(sandbox, { recursive: true, force: true });
-    if (workspaceStateBeforeDeploy === null) rmSync(workspaceStatePath, { force: true });
-    else writeFileSync(workspaceStatePath, workspaceStateBeforeDeploy);
+    cleanupSandboxAndRestoreWorkspaceState({ sandbox, statePath: workspaceStatePath, state: workspaceStateBeforeDeploy });
   }
   assert.deepEqual(
     existsSync(workspaceStatePath) ? readFileSync(workspaceStatePath) : null,
     workspaceStateBeforeDeploy,
     'CLI production deploy must restore root pnpm workspace state before later scripts run',
   );
+});
+
+test('Given sandbox cleanup failure, when packaging state restores, then original workspace state survives', () => {
+  const fixture = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'raibit-cli-workspace-state-')));
+  const statePath = path.join(fixture, '.pnpm-workspace-state-v1.json');
+  const originalState = Buffer.from('{"dev":true}\n', 'utf8');
+  try {
+    writeFileSync(statePath, '{"production":true}\n');
+    assert.throws(
+      () => cleanupSandboxAndRestoreWorkspaceState({ sandbox: path.join(fixture, 'sandbox'), statePath, state: originalState, removeSandbox: () => { throw new Error('injected sandbox cleanup failure'); } }),
+      /injected sandbox cleanup failure/,
+    );
+    assert.deepEqual(readFileSync(statePath), originalState, 'original workspace state must survive sandbox cleanup failure');
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
