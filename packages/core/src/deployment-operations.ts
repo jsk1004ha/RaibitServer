@@ -68,19 +68,34 @@ export function eligibleDeploymentSource(source: LineageSource) {
   return ['BUILD_FAILED', 'FAILED', 'READY'].includes(normalizeDeploymentStatus(source.status));
 }
 
+function immutableGitCommit(source: LineageSource, spec: DesiredSpecSnapshot): string | null {
+  const text = (value: Json | undefined) => typeof value === 'string' ? value.trim() : '';
+  const repo = text(spec.repoUrl) || text(spec.repositoryUrl);
+  const sourceType = text(spec.sourceType).toLowerCase();
+  const mode = text(spec.buildMode).toLowerCase().replaceAll('_', '-');
+  if (text(spec.localPath) || sourceType === 'image' || ['image', 'prebuilt', 'prebuilt-image'].includes(mode) || (!repo && source.imageUrl?.trim())) return null;
+  if (!repo && !['git', 'github'].includes(sourceType)) return null;
+  const sha = source.commitSha?.trim().toLowerCase() || '';
+  const hash = source.commitHash?.trim().toLowerCase() || '';
+  const commit = sha || hash;
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit) || /^0+$/.test(commit) || (sha && hash && sha !== hash)) throw new DeploymentOperationError('SOURCE_INELIGIBLE');
+  return commit;
+}
+
 export function deploymentSuccessor(source: LineageSource | null, input: DeploymentOperation) {
   if (!source || source.serviceId !== input.serviceId) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404);
   const eligible = input.operation === 'retry' ? ['BUILD_FAILED', 'FAILED'].includes(normalizeDeploymentStatus(source.status)) : eligibleDeploymentSource(source);
   if (!eligible) throw new DeploymentOperationError('SOURCE_INELIGIBLE');
   if (!source.snapshotVersion || !source.desiredSpecSnapshot || typeof source.desiredSpecSnapshot !== 'object' || Array.isArray(source.desiredSpecSnapshot)) throw new DeploymentOperationError('SNAPSHOT_UNAVAILABLE');
   if (source.snapshotVersion !== 1 || input.snapshotVersion !== source.snapshotVersion) throw new DeploymentOperationError('STALE_SNAPSHOT');
+  const commit = immutableGitCommit(source, source.desiredSpecSnapshot);
   return {
     id: `dep_${crypto.randomUUID()}`, serviceId: source.serviceId, projectId: source.projectId,
     status: normalizeDeploymentStatus('QUEUED'), sourceDeploymentId: source.id,
     retryOfDeploymentId: input.operation === 'retry' ? source.id : null,
     requestIdempotencyKey: input.requestIdempotencyKey, requestedByUserId: input.requestedByUserId,
     snapshotVersion: source.snapshotVersion, desiredSpecSnapshot: structuredClone(source.desiredSpecSnapshot),
-    commitSha: source.commitSha ?? source.commitHash ?? null, commitHash: source.commitHash ?? source.commitSha ?? null,
+    commitSha: commit ?? source.commitSha ?? source.commitHash ?? null, commitHash: commit ?? source.commitHash ?? source.commitSha ?? null,
     imageUrl: source.imageUrl ?? null, imageDigest: source.imageDigest ?? null,
     branch: source.branch ?? 'main', deploymentType: source.deploymentType ?? 'production', triggerType: input.operation,
     pullRequestNumber: source.pullRequestNumber ?? null, previewUrl: source.previewUrl ?? null,

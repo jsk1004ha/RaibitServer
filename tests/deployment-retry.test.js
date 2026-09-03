@@ -4,13 +4,13 @@ import { InMemoryControlPlaneRepository } from '../packages/core/src/persistence
 import { bootLineageApi } from './fixtures/deployment-retry-runtime.mjs';
 import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
 import { apiOperations, createOpenApiDocument } from '../packages/schemas/src/api-contract.ts';
-import { parseDeploymentOperationBody } from '../packages/core/src/deployment-operations.ts';
+import { deploymentSuccessor, parseDeploymentOperationBody } from '../packages/core/src/deployment-operations.ts';
 
 async function fixture() {
   const repository = new InMemoryControlPlaneRepository();
   const org = await repository.createOrganization({ name: 'Lineage', slug: 'lineage' });
   const project = await repository.createProject({ organizationId: org.id, name: 'App', slug: 'app' });
-  const service = await repository.createService({ projectId: project.id, name: 'Web', type: 'web', image: 'example/app:v1', desiredSpec: { image: 'example/app:v1', port: 3000 } });
+  const service = await repository.createService({ projectId: project.id, name: 'Web', type: 'web', sourceType: 'image', image: 'example/app:v1', desiredSpec: { image: 'example/app:v1', port: 3000 } });
   const source = await repository.createDeployment({ id: 'source', serviceId: service.id, projectId: project.id, commitSha: 'a'.repeat(40), imageUrl: 'example/app:v1', status: 'FAILED' });
   return { repository, service, source };
 }
@@ -111,7 +111,7 @@ for (const transport of ['core', 'nest']) {
     // Given: scoped actors and a failed source on the actual HTTP adapter.
     const runtime = await bootLineageApi(t, transport);
     const { repository, service, project } = runtime;
-    const source = await repository.createDeployment({ id: 'adversarial', serviceId: service.id, projectId: project.id, status: 'BUILD_FAILED' });
+    const source = await repository.createDeployment({ id: 'adversarial', serviceId: service.id, projectId: project.id, status: 'BUILD_FAILED', imageUrl: `example/app@sha256:${'c'.repeat(64)}`, imageDigest: `sha256:${'c'.repeat(64)}` });
     const path = `/deployments/${source.id}/retry`;
     const body = { requestIdempotencyKey: 'matrix-key', snapshotVersion: 1 };
     // When / Then: each untrusted request fails with no successor/job.
@@ -168,7 +168,7 @@ test('deployment retry adversarial matrix preserves secret refs and quota reject
   const reference = { name: 'DB_PASSWORD', valueFrom: { secretKeyRef: { name: 'database-credentials', key: 'password' } } };
   repository.store.services.get(service.id).secretEnv = [reference];
   repository.store.services.get(service.id).environment = { API_TOKEN: 'fixture-raw-token' };
-  const source = await repository.createDeployment({ id: 'secret-source', serviceId: service.id, status: 'FAILED' });
+  const source = await repository.createDeployment({ id: 'secret-source', serviceId: service.id, status: 'FAILED', imageUrl: `example/app@sha256:${'c'.repeat(64)}`, imageDigest: `sha256:${'c'.repeat(64)}` });
   const user = await repository.createUser({ name: 'Quota', email: 'quota-lineage@example.test', approvalStatus: 'APPROVED' });
   const project = repository.store.projects.get(service.projectId);
   await repository.addMember({ userId: user.id, organizationId: project.organizationId, role: 'OWNER' });
@@ -183,3 +183,62 @@ test('deployment retry adversarial matrix preserves secret refs and quota reject
   assert.equal(repository.store.workflowJobs.length, 0);
   await assert.rejects(repository.updateDeployment(source.id, { desiredSpecSnapshot: {} }), error => error.statusCode === 409);
 });
+
+test('C15-1 Git lineage accepts only an unambiguous complete durable revision', () => {
+  // Given: a v1 Git snapshot with no access to mutable Service or job state.
+  const source = { id: 'git-source', serviceId: 'service', projectId: 'project', status: 'FAILED', snapshotVersion: 1, desiredSpecSnapshot: { sourceType: 'github', repoUrl: 'https://example.test/repo.git' } };
+  for (const operation of ['retry', 'redeploy']) {
+    const input = { operation, serviceId: source.serviceId, sourceDeploymentId: source.id, requestedByUserId: 'system', requestIdempotencyKey: operation, snapshotVersion: 1 };
+    // When / Then: missing, mutable, abbreviated, zero and conflicting pins fail closed.
+    for (const commitSha of [null, '', '  ', 'HEAD', 'main', 'refs/tags/v1', 'abc1234', 'g'.repeat(40), '0'.repeat(40), '0'.repeat(64)]) {
+      assert.throws(() => deploymentSuccessor({ ...source, commitSha }, input), error => error.code === 'SOURCE_INELIGIBLE' && error.statusCode === 409, String(commitSha));
+    }
+    assert.throws(() => deploymentSuccessor({ ...source, commitSha: 'a'.repeat(40), commitHash: 'b'.repeat(40) }, input), error => error.code === 'SOURCE_INELIGIBLE');
+    for (const pin of ['a'.repeat(40), 'b'.repeat(64)]) {
+      const successor = deploymentSuccessor({ ...source, commitSha: ' ', commitHash: ` ${pin.toUpperCase()} ` }, input);
+      assert.equal(successor.commitSha, pin);
+      assert.equal(successor.commitHash, pin);
+      assert.equal(deploymentSuccessor({ ...source, commitSha: pin, commitHash: pin.toUpperCase() }, input).commitSha, pin);
+    }
+    for (const desiredSpecSnapshot of [{ sourceType: 'image' }, { buildMode: 'prebuilt_image', repoUrl: 'ignored' }, { localPath: '/fixture', repoUrl: 'ignored' }, { sourceType: 'github' }]) {
+      assert.equal(deploymentSuccessor({ ...source, desiredSpecSnapshot, imageUrl: `example/app@sha256:${'c'.repeat(64)}` }, input).status, 'queued');
+    }
+  }
+});
+
+for (const transport of ['core', 'nest']) {
+  test(`C15-1 unresolved Git source rejects retry and selected latest redeploy before writes over ${transport} HTTP`, async t => {
+    // Given: a pinned older Git source and newer sources whose initial clone never pinned a revision.
+    const runtime = await bootLineageApi(t, transport);
+    const { repository, service, project } = runtime;
+    const spec = { sourceType: 'github', repoUrl: 'https://example.test/repo.git' };
+    repository.store.services.get(service.id).desiredSpec = spec;
+    const old = await repository.createDeployment({ id: 'pinned-old', serviceId: service.id, projectId: project.id, status: 'FAILED', commitSha: 'a'.repeat(40) });
+    repository.store.deployments.get(old.id).createdAt = '2020-01-01T00:00:00.000Z';
+    for (const [index, commitSha] of [null, '', 'HEAD'].entries()) {
+      const source = await repository.createDeployment({ id: `unpinned-${index}`, serviceId: service.id, projectId: project.id, status: 'BUILD_FAILED', commitSha, desiredSpecSnapshot: spec, snapshotVersion: 1 });
+      repository.store.deployments.get(source.id).createdAt = `2026-01-0${index + 1}T00:00:00.000Z`;
+      const before = JSON.stringify([...repository.store.deployments]);
+      const events = JSON.stringify(repository.store.listDeploymentEvents(source.id));
+      // When / Then: both routes refuse the selected source; no fallback, successor, event or job writes.
+      for (const path of [`/deployments/${source.id}/retry`, `/services/${service.id}/redeploy`]) {
+        const result = await runtime.post(path, { requestIdempotencyKey: `invalid-${index}`, snapshotVersion: 1 });
+        assert.equal(result.status, 409, JSON.stringify(result));
+        assert.equal(result.body.code, 'SOURCE_INELIGIBLE');
+        assert.equal(JSON.stringify([...repository.store.deployments]), before);
+        assert.equal(JSON.stringify(repository.store.listDeploymentEvents(source.id)), events);
+        assert.equal(repository.store.workflowJobs.length, 0);
+      }
+    }
+    // Given / When: the latest source is durably pinned; an exact replay survives a later invalid source.
+    const latest = await repository.createDeployment({ id: 'pinned-latest', serviceId: service.id, projectId: project.id, status: 'FAILED', commitHash: 'b'.repeat(64), desiredSpecSnapshot: spec, snapshotVersion: 1 });
+    const body = { requestIdempotencyKey: 'pinned', snapshotVersion: 1 };
+    const accepted = await runtime.post(`/services/${service.id}/redeploy`, body);
+    assert.equal(accepted.status, 202);
+    assert.equal(accepted.body.deployment.sourceDeploymentId, latest.id);
+    assert.equal(accepted.body.deployment.commitSha, 'b'.repeat(64));
+    await repository.createDeployment({ id: 'new-unpinned', serviceId: service.id, projectId: project.id, status: 'FAILED', desiredSpecSnapshot: spec, snapshotVersion: 1 });
+    assert.deepEqual(await runtime.post(`/services/${service.id}/redeploy`, body), accepted);
+    t.diagnostic(JSON.stringify({ transport, rejectedRequests: 6, noWriteOnRejection: true, initialUnpinnedAllowed: true, pinnedLatestAccepted: true, replayStable: true }));
+  });
+}

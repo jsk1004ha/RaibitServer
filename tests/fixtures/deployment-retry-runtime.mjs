@@ -31,7 +31,7 @@ export async function bootLineageApi(t, transport) {
   const reader = await repository.createUser({ email: 'reader@example.test', name: 'Reader', approvalStatus: 'APPROVED' });
   const readerMembership = await repository.addMember({ userId: reader.id, organizationId: organization.id, role: 'VIEWER' });
   const project = await repository.createProject({ organizationId: organization.id, name: 'App', slug: 'app' });
-  const service = await repository.createService({ projectId: project.id, name: 'Web', type: 'web', image: 'example/app:v1', port: 3000 });
+  const service = await repository.createService({ projectId: project.id, name: 'Web', type: 'web', sourceType: 'image', image: 'example/app:v1', port: 3000 });
   const token = createSessionToken(user, [membership], jwtSecret);
   const outsideToken = createSessionToken(outsider, [], jwtSecret);
   const readerToken = createSessionToken(reader, [readerMembership], jwtSecret);
