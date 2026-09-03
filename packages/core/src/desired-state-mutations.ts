@@ -96,13 +96,12 @@ export function serviceMutationState(current: Record<string, unknown>, updates: 
     limits: { cpu: '500m', memory: '512Mi', ...optionalRecord(previous.limits), ...optionalRecord(patch.limits) },
   };
   for (const kind of ['requests', 'limits'] as const) for (const unit of ['cpu', 'memory'] as const) {
-    if (!Object.hasOwn(optionalRecord(patch[kind]), unit)) continue;
+    const quota = context.quota?.[unit === 'cpu' ? 'maxCpuMillicores' : 'maxMemoryMb'];
+    if (quota !== undefined && (typeof quota !== 'number' || !Number.isSafeInteger(quota) || quota <= 0)) invalid(`quota.${unit}`);
+    const ceiling = typeof quota === 'number' ? quota : unit === 'cpu' ? SERVICE_SETTINGS_LIMITS.cpuMillicores : SERVICE_SETTINGS_LIMITS.memoryMiB;
     const next = settingQuantity(resources[kind][unit], unit);
     const retained = optionalRecord(previous[kind])[unit];
     if (retained !== undefined && next <= settingQuantity(retained, unit)) continue;
-    const quota = context.quota?.[unit === 'cpu' ? 'maxCpuMillicores' : 'maxMemoryMb'];
-    if (quota !== undefined && (typeof quota !== 'number' || !Number.isSafeInteger(quota) || quota < 0)) invalid(`quota.${unit}`);
-    const ceiling = typeof quota === 'number' ? quota : unit === 'cpu' ? SERVICE_SETTINGS_LIMITS.cpuMillicores : SERVICE_SETTINGS_LIMITS.memoryMiB;
     if (next > ceiling) invalid(`resources.${kind}.${unit}`);
   }
   for (const unit of ['cpu', 'memory'] as const) if (settingQuantity(resources.requests[unit], unit) > settingQuantity(resources.limits[unit], unit)) invalid(`resources.requests.${unit}`);

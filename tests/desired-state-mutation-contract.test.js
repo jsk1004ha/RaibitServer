@@ -266,3 +266,91 @@ test('desired-state adversarial mutation matrix: explicit attach cannot replace 
   await assert.rejects(() => prisma.importGitHubRepository(input), (error) => error.statusCode === 409);
   await capture('source-replacement', { memoryAttach: 'rejected', prismaAttach: 'rejected', prismaImport: 'rejected', truth: 'L1 adapter fake' });
 });
+
+const retainedResources = { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '2', memory: '2Gi' } };
+const quotaBoundaryCases = [];
+for (const key of ['maxCpuMillicores', 'maxMemoryMb']) {
+  for (const resources of [{}, { requests: {} }, { limits: {} }, { requests: { cpu: '25m', memory: '25Mi' } }]) {
+    quotaBoundaryCases.push({ name: `implicit-default-${key}-${JSON.stringify(resources)}`, quota: { maxCpuMillicores: 2000, maxMemoryMb: 2048, [key]: 50 }, patch: { branch: 'must-not-write', resources }, status: 400 });
+  }
+  for (const value of [0, -1, NaN, Infinity, 'invalid', null]) {
+    const quota = { maxCpuMillicores: 2000, maxMemoryMb: 2048, [key]: value };
+    for (const [operation, retained, patch] of [
+      ['default', false, { resources: {} }],
+      ['unchanged', true, { resources: { limits: { cpu: '2', memory: '2Gi' } } }],
+      ['reduced', true, { resources: { limits: { cpu: '1.5', memory: '1Gi' } } }],
+      ['unrelated', true, { name: 'Visible', branch: 'allowed' }],
+    ]) quotaBoundaryCases.push({ name: `${operation}-${key}-${String(value)}`, quota, retained, patch: { branch: 'must-not-write', ...patch }, status: operation === 'unrelated' ? 200 : 400 });
+  }
+}
+quotaBoundaryCases.push(
+  { name: 'missing-policy-default', patch: { resources: {} }, status: 200 },
+  { name: 'positive-policy-default', quota: { maxCpuMillicores: 2000, maxMemoryMb: 2048 }, patch: { resources: {} }, status: 200 },
+  { name: 'positive-policy-grandfather', quota: { maxCpuMillicores: 50, maxMemoryMb: 50 }, retained: true, patch: { resources: { limits: { cpu: '1.5', memory: '1Gi' } } }, status: 200 },
+  { name: 'missing-policy-grandfather', retained: true, patch: { resources: { limits: { cpu: '1.5', memory: '1Gi' } } }, status: 200 },
+);
+function quotaFixture(store, scenario, index) {
+  const organization = store.createOrganization({ name: `Quota ${index}`, slug: `quota-${index}` });
+  const project = store.createProject({ organizationId: organization.id, name: `Quota ${index}` });
+  const service = store.createService({ projectId: project.id, name: 'web', sourceType: 'image', image: 'app:1', ...(scenario.retained ? { resources: retainedResources } : {}) });
+  const user = store.createUser({ email: `quota-${index}@example.test`, approvalStatus: 'APPROVED', accountType: 'CLUB_MEMBER' });
+  store.addMember({ organizationId: organization.id, userId: user.id, role: 'OWNER' });
+  if (scenario.quota) store.setQuota({ userId: user.id, ...scenario.quota });
+  return { organization, service, user };
+}
+function quotaResult(scenario, response, before, after) {
+  const resources = response.body?.desiredState?.resources || response.body?.resources;
+  const expected = scenario.patch.resources === undefined ? retainedResources
+    : scenario.retained ? { ...retainedResources, limits: { cpu: '1.5', memory: '1Gi' } }
+    : { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '500m', memory: '512Mi' } };
+  return { name: scenario.name, status: response.status, expectedStatus: scenario.status, before, after,
+    passed: response.status === scenario.status && (scenario.status === 400 ? before === after : digest(resources) === digest(expected)) };
+}
+
+for (const adapter of ['memory', 'Prisma contract fake']) test(`resource quota rejects implicit defaults and invalid-policy grandfathering: ${adapter}`, async () => {
+  const outcomes = [];
+  for (const [index, scenario] of quotaBoundaryCases.entries()) {
+    // Given: either no resources or retained high values, with one actor's exact policy.
+    const store = new ControlPlaneStore(); const { service, user } = quotaFixture(store, scenario, index);
+    let row = { id: service.id, projectId: service.projectId, name: service.name, status: 'CREATED', desiredState: scenario.retained ? { resources: retainedResources } : {} };
+    let writes = 0;
+    const tx = {
+      service: { findUnique: async () => structuredClone(row), update: async ({ data }) => { writes++; row = { ...row, ...data }; return row; } },
+      project: { findUnique: async () => ({ id: service.projectId, status: 'ACTIVE' }) },
+      deployment: { findFirst: async () => null }, quota: { findFirst: async () => scenario.quota },
+    };
+    const repository = new PrismaControlPlaneRepository({ $transaction: async (callback) => callback(tx) });
+    const snapshot = () => digest(adapter === 'memory' ? store.snapshot() : { row, writes });
+    const before = snapshot(); let response;
+    // When: apply the same mixed patch to the real store or serializable adapter seam.
+    try {
+      const body = adapter === 'memory' ? store.updateService(service.id, scenario.patch, { actorUserId: user.id }) : await repository.updateService(service.id, scenario.patch, { actorUserId: user.id });
+      response = { status: 200, body };
+    } catch (error) { if (error.statusCode !== 400) throw error; response = { status: error.statusCode }; }
+    // Then: reject with no row/audit/write changes, or preserve the allowed policy case.
+    outcomes.push(quotaResult(scenario, response, before, snapshot()));
+  }
+  await capture(`quota-boundary-${adapter === 'memory' ? 'memory' : 'prisma'}`, outcomes);
+  assert.deepEqual(outcomes.filter((result) => !result.passed).map(({ name, status, expectedStatus }) => ({ name, status, expectedStatus })), []);
+});
+
+test('resource quota rejects implicit defaults and invalid-policy grandfathering: authenticated HTTP', async () => {
+  // Given: real Nest and thin listeners with actor identity from a signed session, not JSON.
+  const nest = await bootParityApi(); const control = new RAIBITSERVERControlPlane(); const secret = 'local-semantic-parity-test-secret-only';
+  const thin = http.createServer(createApiHandler(control, { auth: { mode: 'jwt', jwtSecret: secret } }));
+  thin.listen(0, '127.0.0.1'); await once(thin, 'listening'); const outcomes = [];
+  try {
+    for (const [adapter, store, base] of [['nest', nest.repository.store, nest.baseUrl], ['thin', control.store, `http://127.0.0.1:${thin.address().port}`]]) {
+      for (const [index, scenario] of quotaBoundaryCases.entries()) {
+        const { organization, service, user } = quotaFixture(store, scenario, index);
+        const token = signJwtHs256({ sub: user.id, role: 'OWNER', organizationId: organization.id }, secret);
+        const before = digest(store.snapshot());
+        // When / Then: real authenticated PATCH must reject atomically or retain valid values.
+        const response = await fetch(`${base}/services/${service.id}`, { method: 'PATCH', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(scenario.patch) });
+        const body = await response.json();
+        outcomes.push({ adapter, patch: scenario.patch, response: { status: response.status, headers: Object.fromEntries(response.headers), body }, ...quotaResult(scenario, { status: response.status, body }, before, digest(store.snapshot())) });
+      }
+    }
+  } finally { await nest.app.close(); await new Promise((resolve) => thin.close(resolve)); await capture('quota-boundary-http', { outcomes, cleanup: !thin.listening }); }
+  assert.deepEqual(outcomes.filter((result) => !result.passed).map(({ adapter, name, status, expectedStatus }) => ({ adapter, name, status, expectedStatus })), []);
+});
