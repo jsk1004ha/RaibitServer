@@ -330,6 +330,7 @@ model Resource {
   attachments          ResourceAttachment[]
   usageRecords         UsageRecord[]
   backups              ResourceBackup[]
+  recoveryPins         ResourceRecoveryPin[]
 
   @@unique([projectId, name])
   @@unique([projectId, slug])
@@ -358,6 +359,100 @@ model ResourceBackup {
   metadata   Json?
   createdAt  DateTime @default(now())
   resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  formatVersion Int?
+  organizationId String?
+  projectId String?
+  engine String?
+  provider String?
+  sourceGeneration String?
+  sourceProvenance Json?
+  sourceSpec Json?
+  requestedByUserId String?
+  requestIdempotencyKey String?
+  requestFingerprint String?
+  artifactKey String?
+  artifactChecksum String?
+  artifactSize BigInt?
+  encryptionKeyVersion String?
+  winningAttempt Int?
+  cleanupToken String?
+  cleanupWorker String?
+  cleanupLeaseUntil DateTime?
+  startedAt DateTime?
+  deadlineAt DateTime?
+  readyAt DateTime?
+  expiresAt DateTime?
+  updatedAt DateTime?
+  errorCode String?
+  restores ResourceRestore[]
+  recoveryPins ResourceRecoveryPin[]
+  attempts ResourceRecoveryAttempt[]
+
+  @@unique([organizationId, resourceId, requestIdempotencyKey], map: "ResourceBackup_replay_key")
+}
+
+model ResourceRestore {
+  id String @id
+  formatVersion Int @default(1)
+  organizationId String
+  projectId String
+  backupId String
+  sourceResourceId String
+  targetResourceId String @unique
+  engine String
+  provider String
+  sourceGeneration String
+  requestedByUserId String
+  requestIdempotencyKey String
+  requestFingerprint String
+  status String @default("QUEUED")
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  startedAt DateTime?
+  deadlineAt DateTime?
+  readyAt DateTime?
+  errorCode String?
+  targetCleanedAt DateTime?
+  cleanupToken String?
+  cleanupWorker String?
+  cleanupLeaseUntil DateTime?
+  backup ResourceBackup @relation(fields: [backupId], references: [id], onDelete: Restrict)
+  recoveryPins ResourceRecoveryPin[]
+
+  @@unique([organizationId, backupId, requestIdempotencyKey])
+}
+
+model ResourceRecoveryPin {
+  id String @id
+  resourceId String
+  backupId String
+  restoreId String? @unique
+  kind String
+  createdAt DateTime @default(now())
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  backup ResourceBackup @relation(fields: [backupId], references: [id], onDelete: Restrict)
+  restore ResourceRestore? @relation(fields: [restoreId], references: [id], onDelete: Restrict)
+
+  @@index([resourceId], map: "ResourceRecoveryPin_resource")
+}
+
+model ResourceRecoveryAttempt {
+  backupId String
+  attempt Int
+  objectKey String @unique
+  uploadId String?
+  keyVersion String
+  firstClaimAt DateTime
+  candidateStoredBytes BigInt?
+  candidatePlaintextBytes BigInt?
+  candidateChecksum String?
+  state String
+  cleanupPending Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  backup ResourceBackup @relation(fields: [backupId], references: [id], onDelete: Restrict)
+
+  @@id([backupId, attempt])
 }
 
 model Domain {
