@@ -32,6 +32,7 @@ spec:
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -74,6 +75,16 @@ spec:
               value: {{ .Values.provisioner.providerImages.qdrant | quote }}
             - name: RAIBITSERVER_PROVIDER_NATS_IMAGE
               value: {{ .Values.provisioner.providerImages.nats | quote }}
+{{- if .Values.provisioner.backups.enabled }}
+            - name: RAIBITSERVER_PROVISIONER_BACKUP_ENABLED
+              value: "true"
+            - name: RAIBITSERVER_PROVISIONER_BACKUP_ENDPOINT
+              value: {{ .Values.provisioner.backups.endpoint | quote }}
+            - name: RAIBITSERVER_PROVISIONER_BACKUP_BUCKET
+              value: {{ .Values.provisioner.backups.bucket | quote }}
+            - name: RAIBITSERVER_PROVISIONER_BACKUP_CONFIG_FILE
+              value: /var/run/secrets/raibitserver/backup/config.json
+{{- end }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -91,6 +102,17 @@ spec:
               drop: ["ALL"]
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+{{- if .Values.provisioner.backups.enabled }}
+            - { name: backup-config, mountPath: /var/run/secrets/raibitserver/backup, readOnly: true }
+{{- end }}
       volumes:
         - name: tmp
           emptyDir: { sizeLimit: 128Mi }
+{{- if .Values.provisioner.backups.enabled }}
+        - name: backup-config
+          secret:
+            secretName: {{ .Values.provisioner.backups.existingSecret | quote }}
+            defaultMode: 0440
+            items:
+              - { key: {{ .Values.provisioner.backups.secretKey | quote }}, path: config.json }
+{{- end }}

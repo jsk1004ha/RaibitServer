@@ -199,6 +199,12 @@ provisioner:
   execute: false
   reconcileIntervalSeconds: 5
   healthIntervalSeconds: 300
+  backups:
+    enabled: false
+    endpoint: ""
+    bucket: ""
+    existingSecret: ""
+    secretKey: ""
   # Production packaging requires images only for dedicated-local engines in
   # files/resource-capabilities-v1.json. This is not release readiness evidence.
   # Unsupported minio/qdrant/nats may stay empty. SQLite is local-file only.
