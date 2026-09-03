@@ -877,9 +877,12 @@ func scanDeployment(row scanner) (*Deployment, error) {
 	var deployment Deployment
 	var commitSha, commitHash, previewURL, imageURL, imageDigest sql.NullString
 	var pr sql.NullInt64
+	var snapshotVersion sql.NullInt64
+	var sourceDeploymentID, retryOfDeploymentID sql.NullString
 	err := row.Scan(
 		&deployment.ID, &deployment.ServiceID, &deployment.ProjectID, &deployment.Status, &deployment.DeploymentType, &deployment.TriggerType,
 		&deployment.Branch, &commitSha, &commitHash, &pr, &previewURL, &imageURL, &imageDigest,
+		&deployment.DesiredSpecSnapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID,
 	)
 	if err != nil {
 		return nil, err
@@ -892,12 +895,19 @@ func scanDeployment(row scanner) (*Deployment, error) {
 	deployment.PreviewURL = nullString(previewURL)
 	deployment.ImageURL = nullString(imageURL)
 	deployment.ImageDigest = nullString(imageDigest)
-	return &deployment, nil
+	if snapshotVersion.Valid {
+		version := int(snapshotVersion.Int64)
+		deployment.SnapshotVersion = &version
+	}
+	deployment.SourceDeploymentID = nullString(sourceDeploymentID)
+	deployment.RetryOfDeploymentID = nullString(retryOfDeploymentID)
+	_, err = deployment.BuildSpec()
+	return &deployment, err
 }
 
 func deploymentSelectSQL() string {
 	return `SELECT id, "serviceId", "projectId", status, "deploymentType", "triggerType", branch, "commitSha", "commitHash",
-       "pullRequestNumber", "previewUrl", "imageUrl", "imageDigest"
+       "pullRequestNumber", "previewUrl", "imageUrl", "imageDigest", "desiredSpecSnapshot", "snapshotVersion", "sourceDeploymentId", "retryOfDeploymentId"
 FROM "Deployment"`
 }
 

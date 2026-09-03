@@ -690,7 +690,8 @@ func (s *RemoteStore) GetDeployment(ctx context.Context, deploymentID string) (*
 	if response.Deployment == nil {
 		return nil, errors.New("dispatcher returned no deployment")
 	}
-	return response.Deployment, nil
+	_, err := response.Deployment.BuildSpec()
+	return response.Deployment, err
 }
 
 func (s *RemoteStore) IssueGitHubRepositoryCredential(ctx context.Context, request GitHubRepositoryCredentialRequest) (*GitHubRepositoryCredential, error) {
@@ -725,7 +726,8 @@ func (s *RemoteStore) UpdateDeployment(ctx context.Context, deploymentID string,
 	if response.Deployment == nil {
 		return nil, errors.New("dispatcher returned no updated deployment")
 	}
-	return response.Deployment, nil
+	_, err := response.Deployment.BuildSpec()
+	return response.Deployment, err
 }
 
 func (s *RemoteStore) UpdateDeploymentForLease(ctx context.Context, lease WorkflowLease, deploymentID string, updates map[string]any) (*Deployment, error) {

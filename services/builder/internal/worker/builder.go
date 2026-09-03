@@ -389,7 +389,11 @@ func (b *Builder) resolveState(ctx context.Context, job *controlplane.WorkflowJo
 	if err != nil {
 		return nil, err
 	}
-	return &buildContext{Job: job, Deployment: deployment, Service: service, Project: project}, nil
+	service, resolvedJob, err := deployment.BuildInputs(service, job)
+	if err != nil {
+		return nil, err
+	}
+	return &buildContext{Job: resolvedJob, Deployment: deployment, Service: service, Project: project}, nil
 }
 
 func (b *Builder) recheckTargetDeletion(ctx context.Context, state *buildContext) error {
