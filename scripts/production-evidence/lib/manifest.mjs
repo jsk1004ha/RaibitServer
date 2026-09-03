@@ -1,4 +1,5 @@
 import { ProductionEvidenceSchema } from '../../../packages/schemas/src/production-evidence.ts';
+import { RESOURCE_LIFECYCLE_ASSERTIONS } from '../../../packages/schemas/src/resource-lifecycle-evidence.ts';
 import { APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST, EvidenceError, assertRedacted, digest } from './operator-inputs.mjs';
 
 export const MAX_RUN_AGE_MS = 4 * 60 * 60 * 1000;
@@ -30,7 +31,7 @@ export function verifyManifest(value, options = {}) {
     if (value.identity.approvedInputSha256 !== APPROVED_INPUT_SHA256 || value.preflight?.approvedInputSha256 !== APPROVED_INPUT_SHA256) return fail('approved_input_digest_mismatch');
     if (Object.hasOwn(value, 'releaseEligible') || Object.hasOwn(value, 'ok')) return fail('misleading_success_output');
     const parsed = ProductionEvidenceSchema.safeParse(value);
-    if (!parsed.success) return fail('invalid_schema');
+    if (!parsed.success) return fail(parsed.error.issues.some(issue => issue.path.includes('resourceScope')) ? 'invalid_resource_scope' : 'invalid_schema');
     const manifest = parsed.data;
     if (manifest.identity.operatorContractDigest !== OPERATOR_CONTRACT_DIGEST) return fail('operator_contract_digest_mismatch');
     for (const key of ['operatorContractDigest', 'operatorInputFingerprint']) if (manifest.preflight[key] !== manifest.identity[key]) return fail('identity_mismatch');
@@ -42,6 +43,24 @@ export function verifyManifest(value, options = {}) {
     if (!['component', 'train-a', 'final'].includes(profile)) return fail('invalid_profile');
     const selected = options.fragment;
     if (selected && !['resources', 'domains'].includes(selected)) return fail('invalid_component');
+    for (const fragment of manifest.fragments) {
+      if (fragment.resourceScope && fragment.component !== 'resources') return fail('resource_scope_mismatch');
+      switch (fragment.resourceScope?.kind) {
+        case undefined: case 'full': break;
+        case 'lifecycle-only': {
+          if (manifest.profile !== 'component' || profile !== 'component' || (selected && selected !== 'resources') || components.length !== 1) return fail('resource_scope_mismatch');
+          const paths = [...fragment.resourceScope.engineReceiptPaths, fragment.resourceScope.sqliteReceiptPath];
+          if (new Set(paths).size !== paths.length) return fail('reused_engine_receipt');
+          if (paths.some(file => !fragment.artifacts.some(artifact => artifact.path === file))) return fail('missing_artifact');
+          for (const assertion of fragment.assertions.filter(assertion => RESOURCE_LIFECYCLE_ASSERTIONS.includes(assertion.id))) {
+            if (fragment.resourceScope.engineReceiptPaths.some(file => !assertion.artifactPaths.includes(file))) return fail('missing_artifact');
+          }
+          if ([...fragment.cleanup.assertions, ...manifest.cleanup.assertions].some(assertion => paths.some(file => !assertion.artifactPaths.includes(file)))) return fail('missing_artifact');
+          break;
+        }
+        default: return fail('resource_scope_mismatch');
+      }
+    }
     const componentMode = Boolean(selected) || profile === 'component';
     const required = componentMode ? [selected ?? components[0]] : ['local', 'cluster', 'lifecycle', 'resources', 'operations', ...(profile === 'final' ? ['domains'] : [])];
     if (!selected && profile === 'component' && (components.length !== 1 || !['resources', 'domains'].includes(components[0]))) return fail('invalid_component');
@@ -63,7 +82,7 @@ export function verifyManifest(value, options = {}) {
       if (fragment.status === 'NOT_RUN') return fail('not_run');
       if (fragment.status !== 'PASS') return fail('assertion_failed');
       const paths = fragment.artifacts.map(({ path }) => path);
-      checkAssertions(fragment.assertions, REQUIRED_ASSERTIONS[fragment.component], paths);
+      checkAssertions(fragment.assertions, fragment.resourceScope?.kind === 'lifecycle-only' ? RESOURCE_LIFECYCLE_ASSERTIONS : REQUIRED_ASSERTIONS[fragment.component], paths);
       checkAssertions(fragment.cleanup.assertions, ['component_cleanup'], paths);
     }
     if (!componentMode && manifest.fixture) return fail('fixture_not_release_evidence');

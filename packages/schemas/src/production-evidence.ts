@@ -34,8 +34,9 @@ export const EvidenceIdentitySchema = z.strictObject({
   organizationId: IdentifierSchema, projectId: IdentifierSchema, serviceId: IdentifierSchema,
   deploymentId: IdentifierSchema, resourceId: IdentifierSchema,
 }).readonly();
+export const EvidenceArtifactPathSchema = z.string().regex(/^[a-zA-Z0-9_-][a-zA-Z0-9_./-]*$/).refine((v) => !v.split('/').includes('..'));
 export const EvidenceArtifactSchema = z.strictObject({
-  path: z.string().regex(/^[a-zA-Z0-9_-][a-zA-Z0-9_./-]*$/).refine((v) => !v.split('/').includes('..')),
+  path: EvidenceArtifactPathSchema,
   sha256: Sha256Schema,
   redacted: z.literal(true),
 }).readonly();
@@ -48,6 +49,13 @@ export const EvidenceCleanupSchema = z.strictObject({
   status: EvidenceStatusSchema,
   assertions: z.array(EvidenceAssertionSchema).min(1).readonly(),
 }).readonly();
+export const ResourceEvidenceScopeSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('full') }).readonly(),
+  z.strictObject({ kind: z.literal('lifecycle-only'),
+    engineReceiptPaths: z.array(EvidenceArtifactPathSchema).length(6).readonly(),
+    sqliteReceiptPath: EvidenceArtifactPathSchema,
+  }).readonly(),
+]);
 export const EvidenceFragmentSchema = z.strictObject({
   component: EvidenceComponentSchema,
   level: z.enum(['L1', 'L2', 'L3']),
@@ -58,6 +66,7 @@ export const EvidenceFragmentSchema = z.strictObject({
   assertions: z.array(EvidenceAssertionSchema).min(1).readonly(),
   artifacts: z.array(EvidenceArtifactSchema).min(1).readonly(),
   cleanup: EvidenceCleanupSchema,
+  resourceScope: ResourceEvidenceScopeSchema.optional(),
 }).readonly();
 export const ProductionEvidenceSchema = z.strictObject({
   schema: z.literal('raibitserver.production-evidence/v1'),

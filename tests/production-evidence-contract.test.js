@@ -60,6 +60,13 @@ for (const component of ['resources', 'domains']) test(`Given a fresh ${componen
   assert.deepEqual(verifyManifest(componentSample(component, new Date(now).toISOString()).manifest, { now }).releaseEligible, false);
   assert.equal(verifyManifest(fullManifest('final'), { now, fragment: component }).reason, 'component_only');
 });
+for (const profile of ['component', 'train-a', 'final']) for (const kind of [undefined, 'full']) test(`Given ${profile} resources scope=${kind}, When backup proof is missing, Then the full contract is preserved`, () => {
+  const manifest = profile === 'component' ? sample().manifest : fullManifest(profile);
+  const fragment = manifest.fragments.find(item => item.component === 'resources');
+  if (kind) fragment.resourceScope = { kind };
+  fragment.assertions = fragment.assertions.filter(item => item.id !== 'backup_checksum');
+  assert.equal(verifyManifest(manifest, { now, fragment: 'resources' }).reason, 'missing_assertion');
+});
 const mutations = [
   ['missing_fragment', (m) => { m.profile = 'final'; }],
   ['missing_fragment', (m) => { m.fragments.pop(); }],
@@ -196,7 +203,7 @@ for (const [reason, mutate] of mutations.slice(0, 22)) test(`Given ${reason} in 
 });
 test('Given only committed runtime files, When preflight runs in a copied tree without .omo, Then contract verification succeeds', async (t) => {
   const directory = await sandbox(t);
-  for (const relative of ['scripts/production-evidence', 'packages/schemas/src/production-evidence.ts', 'test-fixtures/contracts/operator-inputs-v1.json']) {
+  for (const relative of ['scripts/production-evidence', 'packages/schemas/src/production-evidence.ts', 'packages/schemas/src/resource-lifecycle-evidence.ts', 'test-fixtures/contracts/operator-inputs-v1.json']) {
     const target = path.join(directory, relative); await mkdir(path.dirname(target), { recursive: true }); await cp(path.join(root, relative), target, { recursive: true });
   }
   await writeFile(path.join(directory, 'package.json'), '{"type":"module"}');

@@ -3,13 +3,17 @@ import path from 'node:path';
 import { verifyManifest } from './production-evidence/lib/manifest.mjs';
 import { EvidenceError, loadOperatorContract, readJson } from './production-evidence/lib/operator-inputs.mjs';
 import { checkRun, verifyArtifacts } from './production-evidence/lib/run.mjs';
+import { verifyResourceLifecycle } from './production-evidence/lib/resource-lifecycle.mjs';
 
 try {
   const args = process.argv.slice(2);
   const options = {};
   for (const flag of ['--fragment', '--profile']) {
     const index = args.indexOf(flag);
-    if (index >= 0) { options[flag.slice(2)] = args[index + 1]; args.splice(index, 2); }
+    if (index >= 0) {
+      if (!args[index + 1] || args[index + 1].startsWith('--') || args.lastIndexOf(flag) !== index) throw new EvidenceError('invalid_arguments');
+      options[flag.slice(2)] = args[index + 1]; args.splice(index, 2);
+    }
   }
   if (args.length !== 1 || !args[0] || args[0].startsWith('--')) throw new EvidenceError('invalid_arguments');
   await loadOperatorContract();
@@ -20,6 +24,7 @@ try {
   // A committed component sample has no run receipt and never authorizes release.
   if (!manifest.fixture) await checkRun(path.dirname(file), manifest);
   await verifyArtifacts(path.dirname(file), manifest);
+  await verifyResourceLifecycle(path.dirname(file), manifest);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } catch (error) {
   process.stderr.write(`${error instanceof EvidenceError ? error.reason : 'evidence_io_failed'}\n`);
