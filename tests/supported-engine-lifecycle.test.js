@@ -14,7 +14,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const engines = ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey'];
 const clients = ['psql', 'mysql', 'mariadb', 'mongosh', 'redis-cli', 'valkey-cli'];
 const keys = ['DATABASE_URL', 'MYSQL_URL', 'MARIADB_URL', 'MONGODB_URI', 'REDIS_URL', 'VALKEY_URL'];
-const stages = ['createdAt', 'readyAt', 'attachedAt', 'healthAt', 'sentinelAt', 'detachedAt', 'consumerRemovedAt', 'providerDeleteStartedAt', 'objectsDeletedAt', 'rowDeletedAt', 'cleanupAt'];
+const stages = ['createdAt', 'providerHealthAt', 'readyAt', 'attachedAt', 'healthAt', 'sentinelAt', 'detachedAt', 'consumerRemovedAt', 'providerDeleteStartedAt', 'objectsDeletedAt', 'rowDeletedAt', 'cleanupAt'];
 const lifecycleAssertions = ['provision', 'authenticated_health', 'attach_query', 'detach', 'resource_delete'];
 function cli(file, options = []) {
   return spawnSync(process.execPath, [path.join(root, 'scripts/verify-production-evidence.mjs'), ...options, file], { encoding: 'utf8' });
@@ -35,12 +35,16 @@ async function specimen(t) {
       providerImage: `registry.example/${engine}@sha256:${digest(engine)}`, namespace: 'shared-tenant',
       objects: { workloadUid: randomUUID(), podUid: randomUUID(), pvcUid: randomUUID(), secretUid: randomUUID(), secretName: `connection-${engine}`, secretImmutable: true, storageBound: true, workloadReady: true },
       attachment: { id: `attachment-${engine}`, serviceId: identity.serviceId, deploymentId: identity.deploymentId, namespace: 'shared-tenant', consumerPodUid: 'shared-consumer-pod', secretName: `connection-${engine}`, key: keys[index], secretUid: '' },
+      providerHealth: { kind: 'engine-native', client: clients[index], namespace: 'shared-tenant', providerPodUid: '', secretUid: '', authenticated: true, healthExitCode: 0 },
       native: { kind: 'engine-native', client: clients[index], namespace: 'shared-tenant', consumerPodUid: 'shared-consumer-pod', secretUid: '', authenticated: true, healthExitCode: 0, writeExitCode: 0, readExitCode: 0, nonce, inputSha256: checksum, readSha256: checksum },
       times: Object.fromEntries(stages.map((stage, position) => [stage, new Date(base + 10 + position * 10).toISOString()])),
       deletion: { attachmentsRemaining: 0, injectedRefsRemaining: 0, consumerRemoved: true, providerObjectsRemaining: 0, resourceRowsRemaining: 0 }, cleanup: 'PASS',
     };
   });
-  for (const receipt of receipts) receipt.attachment.secretUid = receipt.native.secretUid = receipt.objects.secretUid;
+  for (const receipt of receipts) {
+    receipt.attachment.secretUid = receipt.native.secretUid = receipt.providerHealth.secretUid = receipt.objects.secretUid;
+    receipt.providerHealth.providerPodUid = receipt.objects.podUid;
+  }
   // The six engine rows are synthetic contract data. Only this isolated SQLite operation is real.
   const databasePath = path.join(directory, 'isolated.db'), databaseId = randomUUID();
   const value = JSON.stringify({ databaseId, engine: 'sqlite', runId: manifest.identity.runId });
@@ -91,6 +95,17 @@ const mutations = [
   ['duplicate engine identity', 'reused_engine_receipt', s => { s.receipts[1].engine = 'postgresql'; }],
   ['renamed copied receipt', 'reused_engine_receipt', s => { Object.assign(s.receipts[1], structuredClone(s.receipts[0]), { engine: 'mysql' }); }],
   ['wrong engine client', 'native_evidence_mismatch', s => { s.receipts[1].native.client = 'psql'; }],
+  ['missing provider health', 'invalid_engine_receipt', s => { for (const receipt of s.receipts) { delete receipt.providerHealth; delete receipt.times.providerHealthAt; } }],
+  ['wrong provider health client', 'native_evidence_mismatch', s => { s.receipts[0].providerHealth.client = 'mysql'; }],
+  ['foreign provider health namespace', 'native_evidence_mismatch', s => { s.receipts[0].providerHealth.namespace = 'foreign'; }],
+  ['foreign provider Pod', 'native_evidence_mismatch', s => { s.receipts[0].providerHealth.providerPodUid = 'foreign'; }],
+  ['foreign provider Secret', 'native_evidence_mismatch', s => { s.receipts[0].providerHealth.secretUid = randomUUID(); }],
+  ['copied consumer probe as provider health', 'invalid_engine_receipt', s => { s.receipts[0].providerHealth = { ...s.receipts[0].native, providerPodUid: s.receipts[0].attachment.consumerPodUid }; }],
+  ['non-native provider health', 'invalid_engine_receipt', s => { s.receipts[0].providerHealth.kind = 'provider-contract'; }],
+  ['unauthenticated provider health', 'invalid_engine_receipt', s => { s.receipts[0].providerHealth.authenticated = false; }],
+  ['failed provider health', 'invalid_engine_receipt', s => { s.receipts[0].providerHealth.healthExitCode = 1; }],
+  ['provider health after attach', 'lifecycle_order_mismatch', s => { s.receipts[0].times.providerHealthAt = s.receipts[0].times.attachedAt; }],
+  ['provider health outside run', 'stale_state', s => { s.receipts[0].times.providerHealthAt = new Date(Date.now() - 20_000).toISOString(); }],
   ['contract query', 'invalid_engine_receipt', s => { s.receipts[0].native.kind = 'provider-contract'; }],
   ['unauthenticated', 'invalid_engine_receipt', s => { s.receipts[0].native.authenticated = false; }],
   ['wrong password', 'invalid_engine_receipt', s => { s.receipts[0].native.healthExitCode = 1; }],

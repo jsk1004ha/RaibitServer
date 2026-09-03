@@ -22,8 +22,13 @@ export const ResourceLifecycleReceiptSchema = z.strictObject({
     authenticated: z.literal(true), healthExitCode: z.literal(0), writeExitCode: z.literal(0), readExitCode: z.literal(0),
     nonce: z.uuidv4(), inputSha256: Sha256Schema, readSha256: Sha256Schema,
   }).readonly(),
+  providerHealth: z.strictObject({
+    kind: z.literal('engine-native'), client: z.enum(['psql', 'mysql', 'mariadb', 'mongosh', 'redis-cli', 'valkey-cli']),
+    namespace: DnsLabelSchema, providerPodUid: ObjectIdentitySchema, secretUid: ObjectIdentitySchema,
+    authenticated: z.literal(true), healthExitCode: z.literal(0),
+  }).readonly(),
   times: z.strictObject({
-    createdAt: z.iso.datetime(), readyAt: z.iso.datetime(), attachedAt: z.iso.datetime(), healthAt: z.iso.datetime(),
+    createdAt: z.iso.datetime(), providerHealthAt: z.iso.datetime(), readyAt: z.iso.datetime(), attachedAt: z.iso.datetime(), healthAt: z.iso.datetime(),
     sentinelAt: z.iso.datetime(), detachedAt: z.iso.datetime(), consumerRemovedAt: z.iso.datetime(),
     providerDeleteStartedAt: z.iso.datetime(), objectsDeletedAt: z.iso.datetime(), rowDeletedAt: z.iso.datetime(), cleanupAt: z.iso.datetime(),
   }).readonly(),

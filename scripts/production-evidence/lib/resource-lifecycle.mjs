@@ -5,7 +5,7 @@ import { EvidenceError, digest, assertRedacted } from './operator-inputs.mjs';
 
 const nativeClients = Object.freeze({ postgresql: 'psql', mysql: 'mysql', mariadb: 'mariadb', mongodb: 'mongosh', redis: 'redis-cli', valkey: 'valkey-cli' });
 const connectionKeys = Object.freeze({ postgresql: 'DATABASE_URL', mysql: 'MYSQL_URL', mariadb: 'MARIADB_URL', mongodb: 'MONGODB_URI', redis: 'REDIS_URL', valkey: 'VALKEY_URL' });
-const stages = ['createdAt', 'readyAt', 'attachedAt', 'healthAt', 'sentinelAt', 'detachedAt', 'consumerRemovedAt', 'providerDeleteStartedAt', 'objectsDeletedAt', 'rowDeletedAt', 'cleanupAt'];
+const stages = ['createdAt', 'providerHealthAt', 'readyAt', 'attachedAt', 'healthAt', 'sentinelAt', 'detachedAt', 'consumerRemovedAt', 'providerDeleteStartedAt', 'objectsDeletedAt', 'rowDeletedAt', 'cleanupAt'];
 function unique(values) {
   if (new Set(values).size !== values.length) throw new EvidenceError('reused_engine_receipt');
 }
@@ -39,15 +39,16 @@ export async function verifyResourceLifecycle(directory, manifest) {
     unique(receipts.map(receipt => receipt.native.nonce));
     unique(receipts.flatMap(receipt => [receipt.objects.workloadUid, receipt.objects.podUid, receipt.objects.pvcUid, receipt.objects.secretUid]));
     for (const receipt of receipts) {
-      const { identity, attachment, objects, native } = receipt;
+      const { identity, attachment, objects, providerHealth, native } = receipt;
       if (digest({ ...identity, resourceId: manifest.identity.resourceId }) !== digest(manifest.identity)) throw new EvidenceError('identity_mismatch');
       if (receipt.provenance !== (manifest.fixture ? 'fixture' : 'credentialed')) throw new EvidenceError('level_mismatch');
       if (receipt.cleanup !== 'PASS') throw new EvidenceError('cleanup_failed');
       if (attachment.serviceId !== identity.serviceId || attachment.deploymentId !== identity.deploymentId || attachment.namespace !== receipt.namespace || attachment.secretUid !== objects.secretUid || attachment.secretName !== objects.secretName || attachment.key !== connectionKeys[receipt.engine]) throw new EvidenceError('attachment_identity_mismatch');
       const expected = digest({ runId: identity.runId, engine: receipt.engine, resourceId: identity.resourceId, nonce: native.nonce });
       if (native.namespace !== receipt.namespace || native.consumerPodUid !== attachment.consumerPodUid || native.secretUid !== objects.secretUid || native.client !== nativeClients[receipt.engine] || native.inputSha256 !== expected || native.readSha256 !== expected) throw new EvidenceError('native_evidence_mismatch');
+      if (providerHealth.namespace !== receipt.namespace || providerHealth.providerPodUid !== objects.podUid || providerHealth.secretUid !== objects.secretUid || providerHealth.client !== nativeClients[receipt.engine]) throw new EvidenceError('native_evidence_mismatch');
       const times = stages.map(stage => Date.parse(receipt.times[stage]));
-      if (times[0] < Date.parse(fragment.startedAt) || times.at(-1) > Date.parse(fragment.observedAt)) throw new EvidenceError('stale_state');
+      if (times.some(time => time < Date.parse(fragment.startedAt) || time > Date.parse(fragment.observedAt))) throw new EvidenceError('stale_state');
       if (times.some((time, index) => index > 0 && time < times[index - 1])) throw new EvidenceError('lifecycle_order_mismatch');
     }
     const sqlite = SqliteLifecycleReceiptSchema.safeParse(values.at(-1));
