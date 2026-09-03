@@ -1,4 +1,5 @@
 import { RAIBITSERVERControlPlane } from './control-plane.ts';
+import { projectObservationPayload } from './observability-projection.ts';
 import { publicDeploymentHealth } from './deployment-health.ts';
 import { InMemoryControlPlaneRepository } from './persistence.ts';
 import { DeploymentOperationError, parseDeploymentOperationBody } from './deployment-operations.ts';
@@ -903,7 +904,7 @@ function keysetPage(key: string, rows: Array<Record<string, any>>, timestampFiel
 }
 
 function activityPage(key: string, rows: Array<Record<string, any>>) {
-  return { [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp') };
+  return projectObservationPayload({ [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp') });
 }
 
 function projectSpecFromBody(body) {
@@ -947,7 +948,7 @@ export function send(res, statusCode, body) {
 }
 
 export function sendSseSnapshot(res, event, body) {
-  const payload = JSON.stringify(body);
+  const payload = JSON.stringify(projectObservationPayload(body));
   res.writeHead(200, {
     ...securityHeaders(),
     'content-type': 'text/event-stream; charset=utf-8',

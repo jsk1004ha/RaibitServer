@@ -1,5 +1,6 @@
 import { nowIso, stableId } from './ids.ts';
 import { sanitizeLogRecord } from './security.ts';
+export { sanitizeObservationLine, sanitizeObservationRecord, OBSERVABILITY_LINE_BYTES, OBSERVABILITY_RESPONSE_BYTES } from './observability-redaction.ts';
 
 export function deploymentEvent({ organizationId, projectId, serviceId, deploymentId, type, message, metadata = {} }) {
   return {

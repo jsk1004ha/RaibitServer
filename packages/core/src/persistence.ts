@@ -16,6 +16,7 @@ import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJo
 import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, resourceNameFallback, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
 import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate } from './security.ts';
+import { maskedObservationRows } from './observability-projection.ts';
 import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
@@ -1855,7 +1856,7 @@ export class PrismaControlPlaneRepository {
   }
 
   async appendDeploymentEvent(input: Record<string, any>) {
-    return this.prisma.deploymentEvent.create({ data: { deploymentId: input.deploymentId, type: input.type || 'deployment.event', message: maskLogLine(input.message), metadata: sanitizeJson(input.metadata || {}) } });
+    return this.prisma.deploymentEvent.create({ data: { deploymentId: input.deploymentId, type: input.type || 'deployment.event', message: maskLogLine(input.message), metadata: sanitizeJson(sanitizeLogRecord(input.metadata || {})) } });
   }
 
   async listDeploymentLogs(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.buildLog, { deploymentId }, options); }
@@ -2086,7 +2087,7 @@ async function findActivityRows(model: any, scope: Record<string, any>, options:
     orderBy: [{ timestamp: cursorFilter ? 'asc' : 'desc' }, { id: cursorFilter ? 'asc' : 'desc' }],
     take: activityLimit(options.limit),
   });
-  return cursorFilter ? rows : rows.reverse();
+  return maskedObservationRows(cursorFilter ? rows : rows.reverse());
 }
 
 async function findKeysetRows(model: any, scope: Record<string, any>, options: Record<string, any> = {}, query: Record<string, any> = {}) {

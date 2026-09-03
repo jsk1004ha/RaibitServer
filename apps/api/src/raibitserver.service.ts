@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import { DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
+import { projectObservationPayload } from '@raibitserver/core';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
@@ -421,15 +422,15 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       repository.listDeploymentEvents(deploymentId, { cursor: options.eventCursor, limit: options.limit }),
     ]));
     const deploymentCursor = entityVersion(deployment);
-    return {
+    return projectObservationPayload({
       deployment: !options.deploymentCursor || options.deploymentCursor !== deploymentCursor ? deployment : null,
       logs,
       events,
       deploymentCursor,
-      logCursor: keysetCursorForRows(logs, 'timestamp') || options.logCursor || null,
-      eventCursor: keysetCursorForRows(events, 'timestamp') || options.eventCursor || null,
+      logCursor: options.logCursor || null,
+      eventCursor: options.eventCursor || null,
       stream: sseStreamConfig(),
-    };
+    });
   }
 
   async listRuntimeLogs(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -447,13 +448,13 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     await assertProjectAccess(repository, service.projectId, subject);
     const logs = await paginationRead<Array<Record<string, any>>>(() => repository.listRuntimeLogs(serviceId, { cursor: options.logCursor, limit: options.limit }));
     const serviceCursor = entityVersion(service);
-    return {
+    return projectObservationPayload({
       service: !options.serviceCursor || options.serviceCursor !== serviceCursor ? service : null,
       logs,
       serviceCursor,
-      logCursor: keysetCursorForRows(logs, 'timestamp') || options.logCursor || null,
+      logCursor: options.logCursor || null,
       stream: sseStreamConfig(),
-    };
+    });
   }
 
   async queryResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
@@ -941,7 +942,7 @@ async function usersForRepository(repository: any) {
 }
 
 function activityPage(key: 'logs' | 'events', rows: Array<Record<string, any>>) {
-  return { [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp') };
+  return projectObservationPayload({ [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp') });
 }
 
 function keysetPage(key: 'projects' | 'services' | 'resources' | 'deployments', rows: Array<Record<string, any>>, timestampField: string) {

@@ -786,7 +786,7 @@ export class ControlPlaneStore {
   }
 
   appendDeploymentEvent({ deploymentId, type, message, metadata = {} }: Record<string, any>) {
-    const row = { id: stableId('devevt', deploymentId, this.deploymentEvents.length), deploymentId, type, message: sanitizeLogRecord(String(message ?? '')), metadata: maskSecrets(metadata), timestamp: nowIso() };
+    const row = { id: stableId('devevt', deploymentId, this.deploymentEvents.length), deploymentId, type, message: sanitizeLogRecord(String(message ?? '')), metadata: sanitizeLogRecord(metadata), timestamp: nowIso() };
     this.deploymentEvents.push(row);
     return deepClone(row);
   }
