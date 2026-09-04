@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { Prisma } from '@prisma/client';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { registerHooks, createRequire } from 'node:module';
 import { PrismaControlPlaneRepository, runtimePemContextQuery } from '../packages/core/src/persistence.ts';
@@ -224,11 +223,16 @@ test('Given adversarial predecessor history, When PostgreSQL establishes PEM con
       {id:'11111111-ffff-ffff-ffff-ffffffffffff',serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:source.timestamp,line:'same-tie-1'},
       {id:'eeeeeeee-ffff-ffff-ffff-ffffffffffff',serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:source.timestamp,line:'same-tie-e'},
     ]});
+    await repository.prisma.runtimeLog.createMany({data:Array.from({length:16},(_,sourceIndex)=>Array.from({length:128},(_,rowIndex)=>({
+      id:randomUUID(),serviceId:service.id,deploymentId:deployment.id,podName:'noise-pod',podUid:randomUUID(),containerName:'app',level:'info',timestamp:source.timestamp,line:`noise-${sourceIndex}-${rowIndex}`,
+    }))).flat()});
     await repository.prisma.runtimeLog.create({data:{id:source.id,serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:source.timestamp,line:'after-history'}});
     await repository.prisma.$executeRawUnsafe('ANALYZE "RuntimeLog"');
 
-    const rows = await repository.prisma.$queryRaw(runtimePemContextQuery([source]));
-    const explain = await repository.prisma.$queryRaw(Prisma.sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${runtimePemContextQuery([source])}`);
+    const statement = runtimePemContextQuery([source]);
+    const rows = await repository.prisma.$queryRaw(statement);
+    // The statement text is the production factory's static SQL; its source values remain bound.
+    const explain = await repository.prisma.$queryRawUnsafe(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statement.text}`,...statement.values);
     const plan = explain[0]['QUERY PLAN'][0].Plan;
     const runtimeIndex = planNodes(plan).find((node) => node['Relation Name'] === 'RuntimeLog' && (node['Node Type'] === 'Index Scan' || node['Node Type'] === 'Index Only Scan'));
     const limit = planNodes(plan).find((node) => node['Node Type'] === 'Limit');
@@ -238,10 +242,11 @@ test('Given adversarial predecessor history, When PostgreSQL establishes PEM con
     assert.equal(rows.slice(-3).map((row)=>row.line).join(','),'same-tie-0,same-tie-1,same-tie-e');
     assert.equal(rows.slice(0,2).every((row)=>row.truncated===true),true);
     assert.equal(runtimeIndex !== undefined,true,JSON.stringify(plan));
-    assert.equal(runtimeIndex['Actual Rows']<=5,true,JSON.stringify(runtimeIndex));
+    assert.equal(runtimeIndex['Index Name'].startsWith('RuntimeLog_serviceId_deploymentId_podUid_containerName_'),true,JSON.stringify(runtimeIndex));
+    assert.equal(runtimeIndex['Actual Rows']<=6,true,JSON.stringify(runtimeIndex));
     assert.equal(limit !== undefined && limit['Actual Rows']<=5,true,JSON.stringify(plan));
     assert.equal(Number.isInteger(runtimeIndex['Shared Hit Blocks']),true,JSON.stringify(runtimeIndex));
-    t.diagnostic(JSON.stringify({historyRows:1024,returnedRows:rows.length,returnedLineBytes:rows.reduce((sum,row)=>sum+Buffer.byteLength(row.line),0),indexActualRows:runtimeIndex['Actual Rows'],indexSharedHitBlocks:runtimeIndex['Shared Hit Blocks'],limitActualRows:limit['Actual Rows']}));
+    t.diagnostic(JSON.stringify({historyRows:1024,noiseRows:2048,returnedRows:rows.length,returnedLineBytes:rows.reduce((sum,row)=>sum+Buffer.byteLength(row.line),0),indexName:runtimeIndex['Index Name'],indexActualRows:runtimeIndex['Actual Rows'],indexSharedHitBlocks:runtimeIndex['Shared Hit Blocks'],limitActualRows:limit['Actual Rows']}));
   } catch (error) {
     primaryFailure = error;
     throw error;

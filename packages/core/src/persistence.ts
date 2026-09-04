@@ -2156,7 +2156,7 @@ function pemContextSources(rows: readonly ObservationLogRow[]): PemContextSource
 export function runtimePemContextQuery(sources: readonly RuntimePemContextSource[]) {
   const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.serviceId} AS text), CAST(${source.deploymentId} AS text), CAST(${source.podUid} AS text), CAST(${source.containerName} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
   return Prisma.sql`
-    WITH requested("requestId", "serviceId", "deploymentId", "podUid", "containerName", "timestamp", "id") AS (VALUES ${Prisma.join(values)}),
+    WITH requested("requestId", "serviceId", "deploymentId", "podUid", "containerName", "timestamp", "id") AS MATERIALIZED (VALUES ${Prisma.join(values)})
     SELECT requested."requestId", history."line", history."truncated"
     FROM requested CROSS JOIN LATERAL (
       SELECT clipped."line", clipped."truncated", clipped."timestamp", clipped."id"
@@ -2167,8 +2167,9 @@ export function runtimePemContextQuery(sources: readonly RuntimePemContextSource
         FROM "RuntimeLog" AS log
         WHERE log."serviceId" = requested."serviceId" AND log."deploymentId" = requested."deploymentId"
           AND log."podUid" = requested."podUid" AND log."containerName" = requested."containerName"
+          AND log."id" <> requested."id"
           AND (log."timestamp", log."id") < (requested."timestamp", requested."id")
-        ORDER BY log."timestamp" DESC, log."id" DESC
+        ORDER BY log."serviceId" ASC, log."deploymentId" ASC, log."podUid" ASC, log."containerName" ASC, log."timestamp" DESC, log."id" DESC
         LIMIT ${PEM_CONTEXT_LIMITS.rowsPerSource + 1}
       ) AS clipped
       WHERE octet_length(clipped."line") <= ${PEM_CONTEXT_LIMITS.lineBytes}
@@ -2180,7 +2181,7 @@ export function runtimePemContextQuery(sources: readonly RuntimePemContextSource
 function buildPemContextQuery(sources: readonly BuildPemContextSource[]) {
   const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.deploymentId} AS text), CAST(${source.step} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
   return Prisma.sql`
-    WITH requested("requestId", "deploymentId", "step", "timestamp", "id") AS (VALUES ${Prisma.join(values)}),
+    WITH requested("requestId", "deploymentId", "step", "timestamp", "id") AS MATERIALIZED (VALUES ${Prisma.join(values)})
     SELECT requested."requestId", history."line", history."truncated"
     FROM requested CROSS JOIN LATERAL (
       SELECT clipped."line", clipped."truncated", clipped."timestamp", clipped."id"
@@ -2190,8 +2191,9 @@ function buildPemContextQuery(sources: readonly BuildPemContextSource[]) {
           log."timestamp", log."id"
         FROM "BuildLog" AS log
         WHERE log."deploymentId" = requested."deploymentId" AND log."step" = requested."step"
+          AND log."id" <> requested."id"
           AND (log."timestamp", log."id") < (requested."timestamp", requested."id")
-        ORDER BY log."timestamp" DESC, log."id" DESC
+        ORDER BY log."deploymentId" ASC, log."step" ASC, log."timestamp" DESC, log."id" DESC
         LIMIT ${PEM_CONTEXT_LIMITS.rowsPerSource + 1}
       ) AS clipped
       WHERE octet_length(clipped."line") <= ${PEM_CONTEXT_LIMITS.lineBytes}
