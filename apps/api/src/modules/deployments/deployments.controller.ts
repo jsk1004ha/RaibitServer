@@ -1,5 +1,5 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
-import { startBoundedSseStream } from '@raibitserver/core';
+import { Body, Controller, Get, HttpCode, HttpException, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
+import { clearObservationProjectionContinuation, createObservationProjectionContinuation, encodeDeploymentActivityResumeToken, encodeServiceLogResumeToken, startBoundedSseStream } from '@raibitserver/core';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { DeploymentsService } from './deployments.service';
 
@@ -89,6 +89,13 @@ export class DeploymentLogsController {
     return this.deploymentsService.rollbackDeployment(deploymentId, input || {}, req.raibitSubject);
   }
 
+  @RequirePermission('deploy:run')
+  @Post('deployments/:deploymentId/preview-cleanup')
+  @HttpCode(202)
+  previewCleanup(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.requestPreviewCleanup(deploymentId, input || {}, req.raibitSubject);
+  }
+
   @RequirePermission('logs:read')
   @Get('deployments/:deploymentId/logs')
   logs(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Req() req: any) {
@@ -104,16 +111,25 @@ export class DeploymentLogsController {
   @RequirePermission('logs:read')
   @Get('deployments/:deploymentId/stream')
   async deploymentStream(@Param('deploymentId') deploymentId: string, @Req() req: any, @Res() res: any) {
-    const snapshot = await this.deploymentsService.deploymentActivitySnapshot(deploymentId, req.raibitSubject);
+    const continuation = createObservationProjectionContinuation();
+    const { snapshot, resumeScope } = await this.deploymentsService.openDeploymentActivityStream(deploymentId, req.raibitSubject, {
+      lastEventId: req.headers?.['last-event-id'],
+      observationContinuation: continuation,
+    });
     startBoundedSseStream({
       req,
       res,
       event: 'deployment.snapshot',
       initialPayload: snapshot,
+      preprojected: true,
+      eventId: (payload) => encodeDeploymentActivityResumeToken(resumeScope, payload),
+      terminalError: (error) => error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500,
+      onClose: () => clearObservationProjectionContinuation(continuation),
       load: (cursors) => this.deploymentsService.deploymentActivitySnapshot(deploymentId, req.raibitSubject, {
         deploymentCursor: cursors.deploymentCursor,
         logCursor: cursors.logCursor,
         eventCursor: cursors.eventCursor,
+        observationContinuation: continuation,
       }),
     });
   }
@@ -127,15 +143,24 @@ export class DeploymentLogsController {
   @RequirePermission('logs:read')
   @Get('services/:serviceId/logs/stream')
   async runtimeStream(@Param('serviceId') serviceId: string, @Req() req: any, @Res() res: any) {
-    const snapshot = await this.deploymentsService.serviceLogSnapshot(serviceId, req.raibitSubject);
+    const continuation = createObservationProjectionContinuation();
+    const { snapshot, resumeScope } = await this.deploymentsService.openServiceLogStream(serviceId, req.raibitSubject, {
+      lastEventId: req.headers?.['last-event-id'],
+      observationContinuation: continuation,
+    });
     startBoundedSseStream({
       req,
       res,
       event: 'service.logs.snapshot',
       initialPayload: snapshot,
+      preprojected: true,
+      eventId: (payload) => encodeServiceLogResumeToken(resumeScope, payload),
+      terminalError: (error) => error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500,
+      onClose: () => clearObservationProjectionContinuation(continuation),
       load: (cursors) => this.deploymentsService.serviceLogSnapshot(serviceId, req.raibitSubject, {
         serviceCursor: cursors.serviceCursor,
         logCursor: cursors.logCursor,
+        observationContinuation: continuation,
       }),
     });
   }

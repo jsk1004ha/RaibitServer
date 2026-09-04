@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
+import { sanitizeObservationLine, sanitizeObservationRecord } from './observability-redaction.ts';
 import { HEALTH_PATH_FIELDS, serviceHealthInput } from './deployment-health.ts';
-import { isSecretKey, maskSecretValue } from './secrets.ts';
+import { isSecretKey } from './secrets.ts';
 import { can } from './rbac.ts';
 import { canonicalizeProviderDesiredSpec, sanitizeResourceValue } from './resource-sanitizer.ts';
 import { INTERNAL_SERVICE_MUTATION, parseResourceMutation, parseServiceMutation } from './desired-state-mutations.ts';
@@ -445,7 +446,7 @@ export function redactDbConsoleStatement(statement: any) {
   const withoutLiteralValues = String(statement || '')
     .replace(/'([^']|'')*'/g, "'?'")
     .replace(/"([^"]|"")*"/g, '"?"');
-  const text = sanitizeLogString(withoutLiteralValues.replace(/\s+/g, ' ').trim()).slice(0, 160);
+  const text = sanitizeObservationLine(withoutLiteralValues.replace(/\s+/g, ' ').trim()).line.slice(0, 160);
   return text ? `${text}${String(statement || '').length > 160 ? '…' : ''}` : '';
 }
 
@@ -572,26 +573,7 @@ function stripLeadingSqlComments(value: string) {
 }
 
 export function sanitizeLogRecord(record: any): any {
-  if (typeof record === 'string') return sanitizeLogString(record);
-  if (Array.isArray(record)) return record.map((item) => sanitizeLogRecord(item));
-  if (!record || typeof record !== 'object') return record;
-  const output: AnyRecord = {};
-  for (const [key, value] of Object.entries(record)) {
-    output[key] = isSecretKey(key) && value !== null && value !== undefined && typeof value !== 'object'
-      ? maskSecretValue(value)
-      : sanitizeLogRecord(value);
-  }
-  return output;
-}
-
-function sanitizeLogString(value: string) {
-  return value
-    .replace(/([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)/gi, '$1****')
-    .replace(/(["']?[A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*["']?\s*[:=]\s*["'])([^"'\s,}]+)/gi, '$1****')
-    .replace(/\b(Bearer|Token)\s+[A-Za-z0-9._~+/-]+=*/gi, '$1 ****')
-    .replace(/(postgres(?:ql)?:\/\/[^:\s/@]+:)([^@\s]+)(@)/gi, '$1****$3')
-    .replace(/(mysql:\/\/[^:\s/@]+:)([^@\s]+)(@)/gi, '$1****$3')
-    .replace(/(redis:\/\/:[^@\s]+@)/gi, 'redis://:****@');
+  return sanitizeObservationRecord(record);
 }
 
 export function splitEnvForSecret(environment: AnyRecord = {}) {

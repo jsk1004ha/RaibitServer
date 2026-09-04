@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
-import { DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
+import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
+import { projectObservationPayload } from '@raibitserver/core';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
@@ -275,13 +276,17 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     if (!service) throw new NotFoundException(`service not found: ${input.serviceId}`);
     await assertProjectAccess(repository, resource.projectId, subject);
     if (String(service.projectId) !== String(resource.projectId)) throw new ForbiddenException('resource and service must be in the same project');
-    return repositoryMutation(() => repository.attachResource({ ...input, resourceId, actorUserId: subject.id }));
+    const result = await repositoryMutation(() => repository.attachResource({ ...input, resourceId, actorUserId: subject.id }));
+    return { ...result, operationId: result.id, status: 'ATTACHED' };
   }
 
   async provisionResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await this.getResource(resourceId, subject);
-    return repositoryMutation(() => repository.provisionResourceProvider({ ...input, resourceId, actorUserId: subject.id }));
+    const result = await repositoryMutation(() => repository.provisionResourceProvider({ ...input, resourceId, actorUserId: subject.id }));
+    return input.intent === 'live-provision'
+      ? { ...result, operationId: `resource-provision:${resourceId}`, status: result.resource?.status || result.result?.status }
+      : result;
   }
 
   async listDeployments(projectId: string, serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -312,6 +317,8 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       projectId,
       desiredStateWritten: true,
       workflowJob,
+      operationId: workflowJob.id,
+      streamHref: `/deployments/${deployment.id}/stream`,
     };
   }
 
@@ -346,11 +353,12 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     await this.getDeployment(deploymentId, subject);
     try {
-      return repository.cancelDeployment
+      const result = repository.cancelDeployment
         ? await repository.cancelDeployment(deploymentId, { ...input, actorUserId: subject.id })
         : await repository.store.cancelDeployment(deploymentId, { ...input, actorUserId: subject.id });
+      return { ...result, operationId: `deployment-cancel:${deploymentId}`, status: result.deployment?.status, streamHref: `/deployments/${deploymentId}/stream` };
     } catch (error) {
-      if ((error as any)?.statusCode === 409) throw new ConflictException(error instanceof Error ? error.message : 'deployment_cancellation_conflict');
+      if ((error as any)?.statusCode === 409) throw typedOperationException(409, error instanceof Error ? error.message : 'DEPLOYMENT_CANCELLATION_CONFLICT', false);
       throw error;
     }
   }
@@ -360,13 +368,21 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     const deployment = await this.getDeployment(deploymentId, subject);
     try {
-      return repository.rollbackDeployment
+      const result = repository.rollbackDeployment
         ? await repository.rollbackDeployment(deploymentId, { ...input, actorUserId: subject.id })
         : repository.store.rollbackDeployment(deploymentId, { ...input, actorUserId: subject.id });
+      return { ...result, operationId: result.workflowJob?.id || `deployment-rollback:${deploymentId}`, status: result.deployment?.status, streamHref: `/deployments/${result.deployment?.id || deploymentId}/stream` };
     } catch (error) {
-      if ((error as any)?.statusCode === 409) throw new ConflictException(error instanceof Error ? error.message : 'rollback conflict');
+      if ((error as any)?.statusCode === 409) throw typedOperationException(409, error instanceof Error ? error.message : 'ROLLBACK_CONFLICT', false);
       throw error;
     }
+  }
+
+  async requestPreviewCleanup(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) {
+    if (input?.confirmed !== true && input?.confirmed !== 'true') throw typedOperationException(400, 'CONFIRMATION_REQUIRED', false);
+    const repository: any = await this.repositoryPromise;
+    await this.getDeployment(deploymentId, subject);
+    return repositoryMutation(() => repository.requestPreviewCleanup(deploymentId, { actorUserId: subject.id }));
   }
 
   async createDeploymentForService(serviceId: string, input: Record<string, any>, subject: Record<string, any>) {
@@ -384,7 +400,8 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       if (!service || (target.operation === 'retry' && !source)) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404);
       try { await assertProjectAccess(repository, service.projectId, subject); }
       catch (error) { if (error instanceof ForbiddenException) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404); throw error; }
-      return repository.createDeploymentOperation({ ...parseDeploymentOperationBody(input), operation: target.operation, serviceId: service.id, ...(source ? { sourceDeploymentId: source.id } : {}), requestedByUserId: subject.id });
+      const result = await repository.createDeploymentOperation({ ...parseDeploymentOperationBody(input), operation: target.operation, serviceId: service.id, ...(source ? { sourceDeploymentId: source.id } : {}), requestedByUserId: subject.id });
+      return { ...result, operationId: result.workflowJob.id, status: result.deployment.status, streamHref: `/deployments/${result.deployment.id}/stream` };
     });
   }
 
@@ -400,7 +417,10 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
     if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
     await assertProjectAccess(repository, deployment.projectId, subject);
-    return paginationRead(async () => activityPage('logs', await repository.listDeploymentLogs(deploymentId, options)));
+    return paginationRead(async () => {
+      const logs = await repository.listDeploymentLogs(deploymentId, options);
+      return activityPage('logs', logs, options, await logPemContext(repository, logs));
+    });
   }
 
   async listDeploymentEvents(deploymentId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -408,7 +428,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
     if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
     await assertProjectAccess(repository, deployment.projectId, subject);
-    return paginationRead(async () => activityPage('events', await repository.listDeploymentEvents(deploymentId, options)));
+    return paginationRead(async () => activityPage('events', await repository.listDeploymentEvents(deploymentId, options), options));
   }
 
   async deploymentActivitySnapshot(deploymentId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -421,15 +441,39 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       repository.listDeploymentEvents(deploymentId, { cursor: options.eventCursor, limit: options.limit }),
     ]));
     const deploymentCursor = entityVersion(deployment);
-    return {
+    const logContexts = await logPemContext(repository, logs);
+    return projectObservationPayload({
       deployment: !options.deploymentCursor || options.deploymentCursor !== deploymentCursor ? deployment : null,
       logs,
       events,
       deploymentCursor,
-      logCursor: keysetCursorForRows(logs, 'timestamp') || options.logCursor || null,
-      eventCursor: keysetCursorForRows(events, 'timestamp') || options.eventCursor || null,
+      logCursor: options.logCursor || null,
+      eventCursor: options.eventCursor || null,
       stream: sseStreamConfig(),
-    };
+    }, observationProjectionOptions(options, logContexts));
+  }
+
+  async openDeploymentActivityStream(deploymentId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
+    const repository: any = await this.repositoryPromise;
+    const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
+    if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
+    await assertProjectAccess(repository, deployment.projectId, subject);
+    const resumeScope = { projectId: String(deployment.projectId), deploymentId: String(deployment.id) };
+    let resume = null;
+    if (options.lastEventId !== undefined) {
+      try { resume = decodeDeploymentActivityResumeToken(options.lastEventId, resumeScope); }
+      catch (error) {
+        if (error instanceof DeploymentActivityResumeTokenError) throw typedOperationException(400, error.code, false);
+        throw error;
+      }
+    }
+    const snapshot = await this.deploymentActivitySnapshot(deploymentId, subject, {
+      deploymentCursor: resume?.deploymentCursor || undefined,
+      logCursor: resume?.logCursorToken || undefined,
+      eventCursor: resume?.eventCursorToken || undefined,
+      observationContinuation: options.observationContinuation,
+    });
+    return { snapshot, resumeScope };
   }
 
   async listRuntimeLogs(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -437,7 +481,10 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const service = await repository.getService(serviceId);
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     await assertProjectAccess(repository, service.projectId, subject);
-    return paginationRead(async () => activityPage('logs', await repository.listRuntimeLogs(serviceId, options)));
+    return paginationRead(async () => {
+      const logs = await repository.listRuntimeLogs(serviceId, options);
+      return activityPage('logs', logs, options, await logPemContext(repository, logs));
+    });
   }
 
   async serviceLogSnapshot(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -447,13 +494,39 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     await assertProjectAccess(repository, service.projectId, subject);
     const logs = await paginationRead<Array<Record<string, any>>>(() => repository.listRuntimeLogs(serviceId, { cursor: options.logCursor, limit: options.limit }));
     const serviceCursor = entityVersion(service);
-    return {
+    const logContexts = await logPemContext(repository, logs);
+    return projectObservationPayload({
       service: !options.serviceCursor || options.serviceCursor !== serviceCursor ? service : null,
       logs,
       serviceCursor,
-      logCursor: keysetCursorForRows(logs, 'timestamp') || options.logCursor || null,
+      logCursor: options.logCursor || null,
       stream: sseStreamConfig(),
-    };
+    }, observationProjectionOptions(options, logContexts));
+  }
+
+  async openServiceLogStream(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, service.projectId, subject);
+    const resumeScope = { projectId: String(service.projectId), serviceId: String(service.id) };
+    const resume = options.lastEventId === undefined
+      ? null
+      : await paginationRead(async () => decodeServiceLogResumeToken(options.lastEventId, resumeScope));
+    const logs = await paginationRead<Array<Record<string, any>>>(() => repository.listRuntimeLogs(serviceId, {
+      cursor: resume?.logCursorToken || undefined,
+      limit: options.limit,
+    }));
+    const serviceCursor = entityVersion(service);
+    const logContexts = await logPemContext(repository, logs);
+    const snapshot = projectObservationPayload({
+      service: resume?.serviceCursor === serviceCursor ? null : service,
+      logs,
+      serviceCursor,
+      logCursor: resume?.logCursorToken || null,
+      stream: sseStreamConfig(),
+    }, observationProjectionOptions(options, logContexts));
+    return { snapshot, resumeScope };
   }
 
   async queryResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
@@ -812,6 +885,11 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     return repository.handleGitHubWebhook(input);
   }
+
+  async applyNextPreviewObservation(input: { readonly workerId: string }) {
+    const repository: any = await this.repositoryPromise;
+    return repository.applyNextPreviewObservation(input);
+  }
 }
 
 async function assertProjectAccess(repository: any, projectId: string, subject: Record<string, any>) {
@@ -914,9 +992,9 @@ async function repositoryMutation<T>(operation: () => T | Promise<T>): Promise<T
 }
 
 function nestAuthError(error: any) {
-  if (error instanceof DeploymentOperationError) return new HttpException({ statusCode: error.statusCode, code: error.code, message: error.message }, error.statusCode);
-  if (error instanceof ResourceCapabilityUnavailable) return new BadRequestException({ statusCode: 400, code: error.code, reasonCode: error.reasonCode, message: error.message });
-  if (error instanceof ResourceIntentInvalid) return new BadRequestException({ statusCode: 400, code: error.code, message: error.message });
+  if (error instanceof DeploymentOperationError) return typedOperationException(error.statusCode, error.code, error.code === 'ACTIVE_DEPLOYMENT');
+  if (error instanceof ResourceCapabilityUnavailable) return new BadRequestException({ ...typedOperationBody(400, error.code, false), reasonCode: error.reasonCode });
+  if (error instanceof ResourceIntentInvalid) return new BadRequestException(typedOperationBody(400, error.code, false));
   const message = error instanceof Error ? error.message : 'auth_error';
   if (error?.statusCode === 400) return new BadRequestException(message);
   if (error?.statusCode === 403) return new ForbiddenException(message);
@@ -928,6 +1006,14 @@ function nestAuthError(error: any) {
   return error;
 }
 
+function typedOperationBody(statusCode: number, code: string, retryable: boolean, permission = false) {
+  return { statusCode, message: code, code, retryable, terminal: !retryable, permission };
+}
+
+function typedOperationException(statusCode: number, code: string, retryable: boolean, permission = false) {
+  return new HttpException(typedOperationBody(statusCode, code, retryable, permission), statusCode);
+}
+
 async function usersForRepository(repository: any) {
   if (repository?.store?.users) return [...repository.store.users.values()];
   if (repository?.listUsers) return repository.listUsers();
@@ -935,8 +1021,20 @@ async function usersForRepository(repository: any) {
   return snapshot.users || [];
 }
 
-function activityPage(key: 'logs' | 'events', rows: Array<Record<string, any>>) {
-  return { [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp') };
+function activityPage(key: 'logs' | 'events', rows: Array<Record<string, any>>, options: Record<string, any> = {}, logContexts: readonly any[] = []) {
+  return projectObservationPayload(
+    { [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp'), logContinuationUnknown: key === 'logs' },
+    key === 'logs' ? observationProjectionOptions(options, logContexts) : {},
+  );
+}
+
+function observationProjectionOptions(options: Record<string, any>, logContexts: readonly any[] = []) {
+  const continuation = options.observationContinuation;
+  return { ...(continuation?.v === 1 ? { continuation } : {}), logContexts, unknownLogState: true };
+}
+
+async function logPemContext(repository: any, rows: Array<Record<string, any>>) {
+  return repository.logPemContext ? repository.logPemContext(rows) : [];
 }
 
 function keysetPage(key: 'projects' | 'services' | 'resources' | 'deployments', rows: Array<Record<string, any>>, timestampField: string) {

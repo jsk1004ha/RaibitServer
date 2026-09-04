@@ -3,6 +3,7 @@ export * from './resource-recovery.ts';
 import { ServiceHealthFields, refineServiceHealth, type DeploymentHealth } from './deployment-health.ts';
 export * from './deployment-health.ts';
 export * from './deployment-operation.ts';
+export * from './preview.ts';
 import type { DeploymentStatus } from './lifecycle.ts';
 export * from './lifecycle.ts';
 import { OrganizationRouteSlugSchema } from './organization-role.ts';

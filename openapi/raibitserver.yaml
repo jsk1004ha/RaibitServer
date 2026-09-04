@@ -4,8 +4,8 @@ info:
   title: RAIBITSERVER API
   version: 0.4.0
   description: Implemented Nest control-plane operations. Prototype-only and
-    planned operations are not advertised. SSE returns snapshots/deltas;
-    Last-Event-ID resume is not implemented.
+    planned operations are not advertised. Deployment activity and per-service
+    runtime log streams resume from bounded, scope-bound Last-Event-ID tokens.
 servers:
   - url: http://localhost:3000/api
 paths:
@@ -815,7 +815,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Deployment"
+                $ref: "#/components/schemas/DeploymentMutationResult"
         default:
           description: Typed error response
           content:
@@ -893,7 +893,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Deployment"
+                $ref: "#/components/schemas/DeploymentMutationResult"
         default:
           description: Typed error response
           content:
@@ -1061,6 +1061,39 @@ paths:
       security:
         - bearerAuth: []
       x-permission: deploy:run
+  /deployments/{deploymentId}/preview-cleanup:
+    post:
+      operationId: deployments-preview-cleanup
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Confirmation"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewCleanupResult"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: deploy:run
   /deployments/{deploymentId}/logs:
     get:
       operationId: deployments-logs
@@ -1164,6 +1197,12 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 4096
       responses:
         "200":
           description: Successful response
@@ -1182,8 +1221,11 @@ paths:
       x-permission: logs:read
       x-sse:
         event: deployment.snapshot
-        resume: unsupported
-        reconnect: fresh-snapshot
+        resume: last-event-id-v1
+        reconnect: strictly-after-accepted-cursor
+        scope: project-and-deployment
+        maxResumeTokenLength: 4096
+        terminal: stream.end
         error:
           $ref: "#/components/schemas/StreamError"
   /services/{serviceId}/logs:
@@ -1243,6 +1285,12 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 2048
       responses:
         "200":
           description: Successful response
@@ -1261,8 +1309,11 @@ paths:
       x-permission: logs:read
       x-sse:
         event: service.logs.snapshot
-        resume: unsupported
-        reconnect: fresh-snapshot
+        resume: last-event-id-v1
+        reconnect: strictly-after-accepted-cursor
+        scope: project-and-service
+        maxResumeTokenLength: 2048
+        terminal: stream.end
         error:
           $ref: "#/components/schemas/StreamError"
   /projects/{projectId}/deployment-agent/plan:
@@ -2976,6 +3027,9 @@ components:
             - production
             - preview
             - manual
+            - PRODUCTION
+            - PREVIEW
+            - MANUAL
         triggerType:
           type: string
         branch:
@@ -2989,40 +3043,152 @@ components:
         imageUrl:
           type: string
       additionalProperties: false
+    DeploymentMutationResult:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        serviceId:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - queued
+            - BUILDING
+            - IMAGE_READY
+            - DEPLOYING
+            - READY
+            - BUILD_FAILED
+            - FAILED
+            - CANCELLED
+            - PREVIEW_CLEANUP_REQUESTED
+            - ROLLBACK_REQUESTED
+            - CLEANED_UP
+        projectId:
+          type: string
+          minLength: 1
+        imageDigest:
+          anyOf:
+            - type: string
+            - type: "null"
+        errorCode:
+          anyOf:
+            - type: string
+            - type: "null"
+        errorMessage:
+          anyOf:
+            - type: string
+            - type: "null"
+        sourceDeploymentId:
+          anyOf:
+            - type: string
+            - type: "null"
+        retryOfDeploymentId:
+          anyOf:
+            - type: string
+            - type: "null"
+        requestIdempotencyKey:
+          anyOf:
+            - type: string
+            - type: "null"
+        desiredSpecSnapshot:
+          anyOf:
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema0"
+            - type: "null"
+        requestedByUserId:
+          anyOf:
+            - type: string
+            - type: "null"
+        snapshotVersion:
+          anyOf:
+            - type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            - type: "null"
+        publicHealthStatus:
+          default: UNKNOWN
+          type: string
+          enum:
+            - UNKNOWN
+            - CHECKING
+            - HEALTHY
+            - DEGRADED
+        healthCheckedAt:
+          default: null
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        healthFailureCode:
+          default: null
+          anyOf:
+            - type: string
+              enum:
+                - PUBLIC_HEALTH_INVALID_TARGET
+                - PUBLIC_HEALTH_DNS_FAILED
+                - PUBLIC_HEALTH_UNSAFE_ADDRESS
+                - PUBLIC_HEALTH_CONNECT_FAILED
+                - PUBLIC_HEALTH_TLS_FAILED
+                - PUBLIC_HEALTH_TIMEOUT
+                - PUBLIC_HEALTH_REDIRECT
+                - PUBLIC_HEALTH_HTTP_STATUS
+                - PUBLIC_HEALTH_RESPONSE_TOO_LARGE
+                - PUBLIC_HEALTH_CANCELLED
+            - type: "null"
+        observedGeneration:
+          default: null
+          anyOf:
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+            - type: "null"
+        operationId:
+          type: string
+          minLength: 1
+        streamHref:
+          type: string
+        workflowJob:
+          $ref: "#/components/schemas/WorkflowJob"
+      required:
+        - id
+        - serviceId
+        - status
+        - publicHealthStatus
+        - healthCheckedAt
+        - healthFailureCode
+        - observedGeneration
+        - operationId
+        - streamHref
+        - workflowJob
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
     DeploymentOperationResult:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
       properties:
+        operationId:
+          type: string
+          minLength: 1
+        status:
+          type: string
+        streamHref:
+          type: string
         deployment:
           $ref: "#/components/schemas/Deployment"
         workflowJob:
-          type: object
-          properties:
-            id:
-              type: string
-              minLength: 1
-            targetId:
-              type: string
-              minLength: 1
-            targetType:
-              type: string
-              const: deployment
-            type:
-              type: string
-            status:
-              type: string
-            payload:
-              $ref: "#/components/schemas/JsonFields"
-          required:
-            - id
-            - targetId
-            - targetType
-            - type
-            - status
-            - payload
-          additionalProperties:
-            $ref: "#/components/schemas/JsonValue"
+          $ref: "#/components/schemas/WorkflowJob"
       required:
+        - operationId
+        - status
+        - streamHref
         - deployment
         - workflowJob
       additionalProperties: false
@@ -3159,6 +3325,12 @@ components:
               type: string
             reasonCode:
               type: string
+            retryable:
+              type: boolean
+            terminal:
+              type: boolean
+            permission:
+              type: boolean
           required:
             - statusCode
             - message
@@ -3376,6 +3548,35 @@ components:
         after:
           type: string
           maxLength: 1024
+      additionalProperties: false
+    PreviewCleanupResult:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        operationId:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - PREVIEW_CLEANUP_REQUESTED
+            - CLEANED_UP
+        streamHref:
+          type: string
+        lineageId:
+          type: string
+          minLength: 1
+        deploymentIds:
+          type: array
+          items:
+            type: string
+            minLength: 1
+      required:
+        - operationId
+        - status
+        - streamHref
+        - lineageId
+        - deploymentIds
       additionalProperties: false
     Project:
       $schema: https://json-schema.org/draft/2020-12/schema
@@ -4066,6 +4267,34 @@ components:
         - approvalStatus
       additionalProperties:
         $ref: "#/components/schemas/JsonValue"
+    WorkflowJob:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        targetId:
+          type: string
+          minLength: 1
+        targetType:
+          type: string
+          const: deployment
+        type:
+          type: string
+        status:
+          type: string
+        payload:
+          $ref: "#/components/schemas/JsonFields"
+      required:
+        - id
+        - targetId
+        - targetType
+        - type
+        - status
+        - payload
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
     deployments-retryBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4440,15 +4669,32 @@ components:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
       properties:
+        operationId:
+          type: string
+          minLength: 1
+        status:
+          type: string
+        streamHref:
+          type: string
         deployment:
           $ref: "#/components/schemas/Deployment"
       required:
+        - operationId
+        - status
+        - streamHref
         - deployment
       additionalProperties: false
     deployments-rollbackResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
       properties:
+        operationId:
+          type: string
+          minLength: 1
+        status:
+          type: string
+        streamHref:
+          type: string
         deployment:
           $ref: "#/components/schemas/Deployment"
         rollbackOfDeploymentId:
@@ -4461,6 +4707,9 @@ components:
         workflowJob:
           $ref: "#/components/schemas/JsonFields"
       required:
+        - operationId
+        - status
+        - streamHref
         - deployment
         - rollbackOfDeploymentId
         - previousDeployment
@@ -4577,6 +4826,12 @@ components:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
       properties:
+        operationId:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          const: ATTACHED
         resourceId:
           type: string
           minLength: 1
@@ -4584,6 +4839,8 @@ components:
           type: string
           minLength: 1
       required:
+        - operationId
+        - status
         - resourceId
         - serviceId
       additionalProperties:
@@ -4604,6 +4861,11 @@ components:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
       properties:
+        operationId:
+          type: string
+          minLength: 1
+        status:
+          type: string
         resource:
           $ref: "#/components/schemas/Resource"
         result:

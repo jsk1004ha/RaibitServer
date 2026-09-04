@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "marker": "****",
+  "maxLineBytes": 16384,
+  "continuation": {
+    "v": 1,
+    "pem": false
+  },
+  "cases": [
+    {
+      "name": "assignment",
+      "input": "PASSWORD=FORBIDDEN_ASSIGN ready",
+      "expected": "PASSWORD=**** ready"
+    },
+    {
+      "name": "quoted-json",
+      "input": "{\"password\":\"FORBIDDEN_QUOTED space\",\"ok\":true}",
+      "expected": "{\"password\":\"****\",\"ok\":true}"
+    },
+    {
+      "name": "escaped-json",
+      "input": "{\\\"api_key\\\":\\\"FORBIDDEN_ESCAPED value\\\"}",
+      "expected": "{\\\"api_key\\\":\\\"****\\\"}"
+    },
+    {
+      "name": "bearer",
+      "input": "Authorization: Bearer FORBIDDEN_BEARER",
+      "expected": "Authorization: Bearer ****"
+    },
+    {
+      "name": "basic",
+      "input": "Authorization: Basic Rk9SQklEREVOX0JBU0lD",
+      "expected": "Authorization: Basic ****"
+    },
+    {
+      "name": "cookie",
+      "input": "Cookie: sid=FORBIDDEN_COOKIE; theme=dark",
+      "expected": "Cookie: ****"
+    },
+    {
+      "name": "set-cookie",
+      "input": "Set-Cookie: sid=FORBIDDEN_SETCOOKIE; Secure; HttpOnly",
+      "expected": "Set-Cookie: ****"
+    },
+    {
+      "name": "jwt",
+      "input": "session eyJhbGciOiJIUzI1NiJ9.eyJmb3JiaWRkZW4iOiJKV1QifQ.c2lnbmF0dXJl done",
+      "expected": "session **** done"
+    },
+    {
+      "name": "github-token",
+      "input": "using ghp_FORBIDDEN_GITHUB12345678901234567890",
+      "expected": "using ****"
+    },
+    {
+      "name": "openai-token",
+      "input": "using sk-proj-FORBIDDEN_OPENAI12345678901234567890",
+      "expected": "using ****"
+    },
+    {
+      "name": "credential-url",
+      "input": "connect postgres://alice:FORBIDDEN_URL@db.test/demo",
+      "expected": "connect postgres://****:****@db.test/demo"
+    },
+    {
+      "name": "redis-password-only",
+      "input": "connect redis://:FORBIDDEN_REDIS@cache.test:6379/0",
+      "expected": "connect redis://:****@cache.test:6379/0"
+    },
+    {
+      "name": "token-query-url",
+      "input": "https://host.test/path?token=FORBIDDEN_QUERY&mode=read",
+      "expected": "https://host.test/path?token=****&mode=read"
+    },
+    {
+      "name": "pem-complete",
+      "input": "before -----BEGIN PRIVATE KEY-----\nFORBIDDEN_PEM\n-----END PRIVATE KEY----- after",
+      "expected": "before **** after"
+    },
+    {
+      "name": "harmless",
+      "input": "ready request_id=abc123 monkey=banana keyboard=us path=/healthz",
+      "expected": "ready request_id=abc123 monkey=banana keyboard=us path=/healthz"
+    },
+    {
+      "name": "idempotent",
+      "input": "password=**** Bearer **** redis://:****@cache.test",
+      "expected": "password=**** Bearer **** redis://:****@cache.test"
+    }
+  ],
+  "streams": [
+    {
+      "name": "pem-restart",
+      "records": [
+        {
+          "input": "before -----BEGIN RSA PRIVATE KEY-----",
+          "expected": "before ****",
+          "pemAfter": true
+        },
+        {
+          "input": "FORBIDDEN_PEM_MIDDLE",
+          "expected": "****",
+          "pemAfter": true
+        },
+        {
+          "input": "-----END RSA PRIVATE KEY----- after",
+          "expected": "**** after",
+          "pemAfter": false
+        },
+        {
+          "input": "ready",
+          "expected": "ready",
+          "pemAfter": false
+        }
+      ]
+    }
+  ]
+}

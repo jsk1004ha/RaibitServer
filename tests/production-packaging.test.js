@@ -383,7 +383,8 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
   assert.ok(workloadPolicyStart >= 0 && workloadPolicyEnd > workloadPolicyStart, 'orchestrator workload admission policy must exist');
   const workloadPolicy = workerSecurity.slice(workloadPolicyStart, workloadPolicyEnd);
   assert.match(workloadPolicy, /\['app\.kubernetes\.io\/managed-by', 'raibitserver\.io\/managed', 'raibitserver\.io\/project-id', 'raibitserver\.io\/service-id'\]\.all\(key,/);
-  assert.doesNotMatch(workloadPolicy, /\[[^\]\n]*raibitserver\.io\/deployment-id[^\]\n]*\]\.all\(key,/, 'a new rollout must be allowed to replace deployment provenance labels');
+  const ordinaryOwnershipValidation = workloadPolicy.match(/request\.operation != 'UPDATE'[\s\S]*?message: "orchestrator workload ownership labels are immutable"/)?.[0] ?? '';
+  assert.doesNotMatch(ordinaryOwnershipValidation, /\[[^\]\n]*raibitserver\.io\/deployment-id[^\]\n]*\]\.all\(key,/, 'a new ordinary rollout must be allowed to replace deployment provenance labels');
   assert.match(workerSecurity, /raibitserver\.io\/verify-image-signatures[\s\S]*required/);
   assert.match(workerSecurity, /automountServiceAccountToken[\s\S]*false/);
   assert.match(workerSecurity, /allowPrivilegeEscalation[\s\S]*false/);
@@ -407,6 +408,37 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
   assert.match(workerSecurity, /policyTypes\.size\(\) == 2[\s\S]*'Ingress' in variables\.target\.spec\.policyTypes[\s\S]*!has\(peer\.ipBlock\)/);
   assert.match(workerSecurity, /policyTypes\.size\(\) == 1[\s\S]*peer\.ipBlock\.cidr == '0\.0\.0\.0\/0'[\s\S]*peer\.ipBlock\.cidr == '::\/0'/);
   assert.match(providerCompiler, /"raibitserver\.io\/namespace-kind":\s+"application"/);
+});
+
+test('orchestrator admission permits only a frozen preview route to retarget its current candidate', async () => {
+  const workerSecurity = await readText('infra/helm/raibitserver/templates/worker-security.yaml');
+  const policyStart = workerSecurity.indexOf('kind: ValidatingAdmissionPolicy\nmetadata:\n  name: {{ include "raibitserver.fullname" . }}-orchestrator-workload-boundary');
+  const policyEnd = workerSecurity.indexOf('\n---\napiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding', policyStart);
+  assert.ok(policyStart >= 0 && policyEnd > policyStart, 'orchestrator workload admission policy must exist');
+  const policy = workerSecurity.slice(policyStart, policyEnd);
+
+  assert.match(policy, /failurePolicy: Fail/);
+  assert.match(policy, /operations: \["CREATE", "UPDATE", "DELETE"\]/);
+  assert.match(policy, /name: isPreviewRoute[\s\S]*variables\.target\.kind == 'Ingress'[\s\S]*raibitserver\.io\/preview-route/);
+  assert.match(policy, /variables\.target\.metadata\.labels\.size\(\) == 10/);
+  assert.match(policy, /'app\.kubernetes\.io\/name', 'app\.kubernetes\.io\/managed-by', 'raibitserver\.io\/managed', 'raibitserver\.io\/project-id', 'raibitserver\.io\/service-id', 'raibitserver\.io\/deployment-id', 'raibitserver\.io\/preview-route', 'raibitserver\.io\/preview-lineage-id', 'raibitserver\.io\/preview-generation', 'raibitserver\.io\/preview-backend-service'/);
+  assert.match(policy, /variables\.target\.metadata\.name == variables\.appName/);
+  assert.match(policy, /variables\.target\.metadata\.labels\['raibitserver\.io\/preview-lineage-id'\] != ''/);
+  assert.match(policy, /variables\.target\.metadata\.labels\['raibitserver\.io\/preview-generation'\]\.matches\('\^\[1-9\]\[0-9\]\*\$'\)/);
+  assert.match(policy, /variables\.previewBackendService\.size\(\) <= 63[\s\S]*variables\.previewBackendService\.matches\('\^\[a-z0-9\]/);
+  assert.match(policy, /backend\.service\.name == variables\.previewBackendService/);
+  assert.match(policy, /'raibitserver\.io\/preview-route' in oldObject\.metadata\.labels\) == \('raibitserver\.io\/preview-route' in object\.metadata\.labels\)/);
+  assert.match(policy, /'app\.kubernetes\.io\/name', 'raibitserver\.io\/project-id', 'raibitserver\.io\/service-id', 'raibitserver\.io\/preview-lineage-id'\]\.all\(key,/);
+  assert.match(policy, /'raibitserver\.io\/deployment-id', 'raibitserver\.io\/preview-generation', 'raibitserver\.io\/preview-backend-service'\]\.all\(key, object\.metadata\.labels\[key\] == oldObject\.metadata\.labels\[key\]\)/);
+  assert.match(policy, /'raibitserver\.io\/deployment-id', 'raibitserver\.io\/preview-generation', 'raibitserver\.io\/preview-backend-service'\]\.all\(key, object\.metadata\.labels\[key\] != oldObject\.metadata\.labels\[key\]\)/);
+  assert.match(policy, /!variables\.isPreviewRoute[\s\S]*backend\.service\.name == variables\.appName/);
+  const previewIngressValidation = policy.match(/\(variables\.isPreviewRoute && variables\.target\.metadata\.labels\.size\(\) == 10[\s\S]*?message: "orchestrator Ingresses require one exact compiler route or frozen preview route"/)?.[0] ?? '';
+  assert.match(previewIngressValidation, /metadata\.annotations\.size\(\) == \{\{ \$ingressAnnotationCount \}\}/);
+  assert.match(previewIngressValidation, /variables\.ingressHost\.matches\([\s\S]*!variables\.ingressHost\.startsWith\('\*\.'/);
+  assert.match(previewIngressValidation, /!has\(variables\.target\.spec\.defaultBackend\)[\s\S]*ingressClassName == \{\{ \$ingressClassName \| squote \}\}/);
+  assert.match(previewIngressValidation, /\(!has\(variables\.target\.spec\.tls\) \|\| variables\.target\.spec\.tls\.size\(\) == 0\)[\s\S]*rules\.size\(\) == 1/);
+  assert.match(previewIngressValidation, /http\.paths\.size\(\) == 1[\s\S]*path == '\/'[\s\S]*pathType == 'Prefix'/);
+  assert.match(previewIngressValidation, /backend\.service\.port\.number >= 1[\s\S]*backend\.service\.port\.number <= 65535/);
 });
 
 test('provider tenant admission accepts only compiler-shaped resources and preserves ownership', async () => {

@@ -190,7 +190,7 @@ test('HTTP API exposes deployment detail, status transition, cancel, and rollbac
     assert.equal(rollback.body.workflowJob.type, 'rollback-deploy');
     assert.equal(controlPlane.store.listDeploymentEvents(queued.id).some((event) => event.type === 'deployment.rollback.requested'), true);
 
-    controlPlane.store.appendRuntimeLog({ serviceId: service.id, deploymentId: queued.id, line: 'ready' });
+    controlPlane.store.appendRuntimeLog({ serviceId: service.id, deploymentId: queued.id, sourceInstanceId: 'api-store-ready', line: 'ready' });
     const deploymentStream = await requestRaw(port, 'GET', `/deployments/${queued.id}/stream`);
     assert.equal(deploymentStream.statusCode, 200);
     assert.match(deploymentStream.headers['content-type'], /text\/event-stream/);

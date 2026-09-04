@@ -21,7 +21,8 @@ SELECT d.id, d."serviceId", d."projectId", d.status, d."deploymentType", d."trig
        d."commitSha", d."imageUrl", d."imageDigest", d."previewUrl", d."pullRequestNumber",
        d."reconcileAction", d."reconcileLockedBy", d."reconcileLockedAt", d."reconcileAttempts",
        d."desiredSpecSnapshot", d."snapshotVersion", d."sourceDeploymentId", d."retryOfDeploymentId",
-       d."publicHealthStatus",d."healthCheckedAt",d."healthFailureCode",d."observedGeneration"
+       d."publicHealthStatus",d."healthCheckedAt",d."healthFailureCode",d."observedGeneration",
+       d."previewLineageId",d."previewGeneration",d."previewRuntime",d."previewOwnedObjects"
 FROM "Deployment" d
 JOIN "Service" s ON s.id = d."serviceId"
 JOIN "Project" p ON p.id = d."projectId"
@@ -407,7 +408,8 @@ func (s *PostgresStore) TransitionDeployment(ctx context.Context, lease Deployme
           "commitSha", "imageUrl", "imageDigest", "previewUrl", "pullRequestNumber",
           "reconcileAction", "reconcileLockedBy", "reconcileLockedAt", "reconcileAttempts",
           "desiredSpecSnapshot", "snapshotVersion", "sourceDeploymentId", "retryOfDeploymentId",
-          "publicHealthStatus","healthCheckedAt","healthFailureCode","observedGeneration"`
+          "publicHealthStatus","healthCheckedAt","healthFailureCode","observedGeneration",
+          "previewLineageId","previewGeneration","previewRuntime","previewOwnedObjects"`
 	deployment, err := scanPostgresDeployment(s.db.QueryRowContext(ctx, query, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrDeploymentLeaseLost
@@ -432,11 +434,14 @@ func (s *PostgresStore) AppendRuntimeLog(ctx context.Context, input RuntimeLogIn
 	if strings.TrimSpace(input.Line) == "" {
 		return nil
 	}
+	if !runtimeSourceInstancePattern.MatchString(input.SourceInstanceID) {
+		return ErrRuntimeLogSourceIdentity
+	}
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO "RuntimeLog" (id, "serviceId", "deploymentId", "podName", "containerName", line, level, timestamp)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now.Format(time.RFC3339Nano)),
-		input.ServiceID, nullable(input.DeploymentID), defaultString(input.PodName, "orchestrator"), defaultString(input.ContainerName, "app"), Redact(input.Line), defaultString(input.Level, "info"), now)
+INSERT INTO "RuntimeLog" (id, "serviceId", "deploymentId", "podName", "podUid", "containerName", line, level, timestamp)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now.Format(time.RFC3339Nano)),
+		input.ServiceID, nullable(input.DeploymentID), defaultString(input.PodName, "orchestrator"), input.SourceInstanceID, defaultString(input.ContainerName, "app"), Redact(input.Line), defaultString(input.Level, "info"), now)
 	return err
 }
 
@@ -528,12 +533,15 @@ func scanPostgresDeployment(row rowScanner) (*Deployment, error) {
 	var pullRequestNumber sql.NullInt64
 	var snapshotVersion sql.NullInt64
 	var snapshot []byte
-	var sourceDeploymentID, retryOfDeploymentID sql.NullString
+	var sourceDeploymentID, retryOfDeploymentID, previewLineageID sql.NullString
+	var previewGeneration sql.NullInt64
+	var previewRuntime, previewOwnedObjects []byte
 	err := row.Scan(&deployment.ID, &deployment.ServiceID, &deployment.ProjectID, &deployment.Status, &deployment.DeploymentType,
 		&deployment.TriggerType, &deployment.Branch, &commitSHA, &imageURL, &imageDigest, &previewURL, &pullRequestNumber,
 		&reconcileAction, &reconcileLockedBy, &reconcileLockedAt, &deployment.ReconcileAttempts,
 		&snapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID,
-		&publicHealthStatus, &healthCheckedAt, &healthFailureCode, &observedGeneration)
+		&publicHealthStatus, &healthCheckedAt, &healthFailureCode, &observedGeneration,
+		&previewLineageID, &previewGeneration, &previewRuntime, &previewOwnedObjects)
 	if err != nil {
 		return nil, err
 	}
@@ -555,6 +563,12 @@ func scanPostgresDeployment(row rowScanner) (*Deployment, error) {
 	}
 	deployment.SourceDeploymentID = nullString(sourceDeploymentID)
 	deployment.RetryOfDeploymentID = nullString(retryOfDeploymentID)
+	deployment.PreviewLineageID = nullString(previewLineageID)
+	if previewGeneration.Valid {
+		deployment.PreviewGeneration = int(previewGeneration.Int64)
+	}
+	deployment.PreviewRuntimeJSON = previewRuntime
+	deployment.PreviewOwnedJSON = previewOwnedObjects
 	deployment.ImageURL = nullString(imageURL)
 	deployment.ImageDigest = nullString(imageDigest)
 	deployment.PreviewURL = nullString(previewURL)

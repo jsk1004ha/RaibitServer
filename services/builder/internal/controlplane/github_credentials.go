@@ -37,6 +37,11 @@ type GitHubCredentialIssuer interface {
 	RevokeRepositoryCredential(context.Context, string) error
 }
 
+type GitHubPullRequestCredentialIssuer interface {
+	IssuePullRequestCredential(context.Context, string, string) (*GitHubRepositoryCredential, error)
+	RevokeRepositoryCredential(context.Context, string) error
+}
+
 type GitHubAppCredentialIssuerConfig struct {
 	AppID          string
 	PrivateKeyFile string
@@ -86,6 +91,7 @@ func NewGitHubAppCredentialIssuer(config GitHubAppCredentialIssuerConfig) (GitHu
 		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	clientCopy := *client
+	clientCopy.Timeout = 15 * time.Second
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	now := config.Now
 	if now == nil {
@@ -95,6 +101,14 @@ func NewGitHubAppCredentialIssuer(config GitHubAppCredentialIssuerConfig) (GitHu
 }
 
 func (i *gitHubAppCredentialIssuer) IssueRepositoryCredential(ctx context.Context, installationID, repositoryID string) (*GitHubRepositoryCredential, error) {
+	return i.issueRepositoryCredential(ctx, installationID, repositoryID, "contents", false)
+}
+
+func (i *gitHubAppCredentialIssuer) IssuePullRequestCredential(ctx context.Context, installationID, repositoryID string) (*GitHubRepositoryCredential, error) {
+	return i.issueRepositoryCredential(ctx, installationID, repositoryID, "pull_requests", true)
+}
+
+func (i *gitHubAppCredentialIssuer) issueRepositoryCredential(ctx context.Context, installationID, repositoryID, permission string, verifyPermission bool) (*GitHubRepositoryCredential, error) {
 	installationID = strings.TrimSpace(installationID)
 	repositoryID = strings.TrimSpace(repositoryID)
 	numericInstallationID, err := strconv.ParseInt(installationID, 10, 64)
@@ -112,7 +126,7 @@ func (i *gitHubAppCredentialIssuer) IssueRepositoryCredential(ctx context.Contex
 	}
 	body, err := json.Marshal(map[string]any{
 		"repository_ids": []int64{numericRepositoryID},
-		"permissions":    map[string]string{"contents": "read"},
+		"permissions":    map[string]string{permission: "read"},
 	})
 	if err != nil {
 		return nil, errors.New("encode GitHub installation token request")
@@ -130,9 +144,12 @@ func (i *gitHubAppCredentialIssuer) IssueRepositoryCredential(ctx context.Contex
 		return nil, errors.New("GitHub installation token request failed")
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	if err != nil {
 		return nil, errors.New("read GitHub installation token response")
+	}
+	if len(responseBody) > 1<<20 {
+		return nil, errors.New("GitHub installation token response exceeds size limit")
 	}
 	if response.StatusCode != http.StatusCreated {
 		return nil, fmt.Errorf("GitHub installation token request returned status %d", response.StatusCode)
@@ -143,6 +160,7 @@ func (i *gitHubAppCredentialIssuer) IssueRepositoryCredential(ctx context.Contex
 		Repositories []struct {
 			ID int64 `json:"id"`
 		} `json:"repositories"`
+		Permissions map[string]string `json:"permissions"`
 	}
 	if err := json.Unmarshal(responseBody, &payload); err != nil {
 		return nil, errors.New("GitHub installation token response is invalid")
@@ -155,6 +173,9 @@ func (i *gitHubAppCredentialIssuer) IssueRepositoryCredential(ctx context.Contex
 	}
 	if len(payload.Repositories) != 1 || payload.Repositories[0].ID != numericRepositoryID {
 		return nil, errors.Join(errors.New("GitHub installation token response does not prove exact-repository scope"), revokeGitHubToken(ctx, i, payload.Token))
+	}
+	if verifyPermission && (len(payload.Permissions) != 1 || payload.Permissions[permission] != "read") {
+		return nil, errors.Join(errors.New("GitHub installation token response does not prove pull-request read scope"), revokeGitHubToken(ctx, i, payload.Token))
 	}
 	return &GitHubRepositoryCredential{Token: payload.Token, InstallationID: installationID, RepositoryID: repositoryID, UpstreamExpiresAt: payload.ExpiresAt.UTC()}, nil
 }

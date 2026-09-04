@@ -130,6 +130,9 @@ func (r *ServiceReconciler) RunOnceResult(ctx context.Context) (*ReconcileResult
 		return r.reconcileProjectDeletion(ctx, project)
 	}
 	if !r.config.DryRun {
+		if result, err := r.runNextPreviewRoute(ctx); result != nil || err != nil {
+			return result, err
+		}
 		if result, err := r.runNextHealth(ctx); result != nil || err != nil {
 			return result, err
 		}
@@ -536,32 +539,7 @@ func productionPruneSelector(plan kube.DeploymentPlan) (string, error) {
 }
 
 func (r *ServiceReconciler) cleanupPreview(ctx context.Context, project *store.Project, service *store.Service, deployment *store.Deployment) (*ReconcileResult, error) {
-	plan := r.newDeploymentPlan(kube.SpecFromState(project, service, deployment, r.config.BaseDomain))
-	if !plan.Safe {
-		failure := errors.New(plan.Error)
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, failure, "workload.failed")
-	}
-	cleanupManifests := kube.CleanupManifests(plan)
-	if len(cleanupManifests) == 0 {
-		failure := errors.New("preview cleanup plan contains no exact deployment-owned resources")
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, failure)
-	}
-	manifestFile, err := r.writeManifest(deployment.ID, cleanupManifests, "cleanup")
-	if err != nil {
-		return nil, err
-	}
-	_ = r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "preview.cleanup.started", Message: "deleting preview Kubernetes desired state", Metadata: map[string]any{"manifestFile": manifestFile, "dryRun": r.config.DryRun}})
-	deleteResult, err := r.runKubectl(ctx, []string{"delete", "--ignore-not-found", "-f", manifestFile})
-	_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment.ID, "preview-cleanup", deleteResult)
-	if err != nil {
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: []string{deleteResult.Command}, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err)
-	}
-	_, err = r.store.TransitionDeployment(ctx, deployment.Lease(), map[string]any{"status": store.DeploymentStatusCleanedUp, "finishedAt": time.Now().UTC().Format(time.RFC3339Nano)})
-	if err != nil {
-		return nil, err
-	}
-	_ = r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "preview.cleanup.completed", Message: "preview Kubernetes objects cleaned up", Metadata: map[string]any{"namespace": plan.Service.Namespace, "service": plan.Service.Name, "workloadKind": plan.Kind, "workloadName": plan.WorkloadName}})
-	return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: []string{deleteResult.Command}, DryRun: r.config.DryRun, Status: store.DeploymentStatusCleanedUp}, nil
+	return r.cleanupOwnedPreview(ctx, project, service, deployment)
 }
 
 func (r *ServiceReconciler) newDeploymentPlan(spec kube.AppServiceSpec) kube.DeploymentPlan {
@@ -575,11 +553,11 @@ func (r *ServiceReconciler) newDeploymentPlan(spec kube.AppServiceSpec) kube.Dep
 
 func (r *ServiceReconciler) collectDiagnostics(ctx context.Context, service *store.Service, deployment *store.Deployment, plan kube.DeploymentPlan) error {
 	if r.config.DryRun {
-		_ = r.store.AppendRuntimeLog(ctx, store.RuntimeLogInput{ServiceID: service.ID, DeploymentID: deployment.ID, PodName: "dry-run", ContainerName: "orchestrator", Line: "dry-run workload readiness assumed after manifest compile/apply plan", Level: "info"})
+		_ = r.store.AppendRuntimeLog(ctx, store.RuntimeLogInput{ServiceID: service.ID, DeploymentID: deployment.ID, PodName: "dry-run", SourceInstanceID: runtimeLogSourceInstanceID(deployment, "diagnostics"), ContainerName: "orchestrator", Line: "dry-run workload readiness assumed after manifest compile/apply plan", Level: "info"})
 		return r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "orchestrator.diagnostics", Message: "dry-run diagnostics captured", Metadata: map[string]any{"namespace": plan.Service.Namespace, "service": plan.Service.Name, "workloadKind": plan.Kind, "workloadName": plan.WorkloadName}})
 	}
 	events, _ := r.runKubectl(ctx, []string{"get", "events", "--namespace", plan.Service.Namespace, "--field-selector", "involvedObject.name=" + plan.WorkloadName, "--sort-by=.lastTimestamp"})
-	return r.appendCommandRuntimeLogs(ctx, service.ID, deployment.ID, "events", events)
+	return r.appendCommandRuntimeLogs(ctx, service.ID, deployment, "events", events)
 }
 
 func (r *ServiceReconciler) markFailed(ctx context.Context, deployment *store.Deployment, failure error, eventTypes ...string) error {
@@ -635,23 +613,28 @@ func (r *ServiceReconciler) runKubectl(ctx context.Context, args []string) (comm
 	return r.runner.Run(ctx, command.Command{Name: "kubectl", Args: fullArgs}, r.config.DryRun, r.config.Timeout)
 }
 
-func (r *ServiceReconciler) appendCommandRuntimeLogs(ctx context.Context, serviceID string, deploymentID string, step string, result command.Result) error {
+func (r *ServiceReconciler) appendCommandRuntimeLogs(ctx context.Context, serviceID string, deployment *store.Deployment, step string, result command.Result) error {
+	sourceInstanceID := runtimeLogSourceInstanceID(deployment, step)
 	if result.Command != "" {
-		if err := r.store.AppendRuntimeLog(ctx, store.RuntimeLogInput{ServiceID: serviceID, DeploymentID: deploymentID, PodName: step, ContainerName: "orchestrator", Line: "$ " + result.Command, Level: "info"}); err != nil {
+		if err := r.store.AppendRuntimeLog(ctx, store.RuntimeLogInput{ServiceID: serviceID, DeploymentID: deployment.ID, PodName: step, SourceInstanceID: sourceInstanceID, ContainerName: "orchestrator", Line: "$ " + result.Command, Level: "info"}); err != nil {
 			return err
 		}
 	}
 	for _, line := range splitLines(result.Stdout) {
-		if err := r.store.AppendRuntimeLog(ctx, store.RuntimeLogInput{ServiceID: serviceID, DeploymentID: deploymentID, PodName: step, ContainerName: "orchestrator", Line: line, Level: "info"}); err != nil {
+		if err := r.store.AppendRuntimeLog(ctx, store.RuntimeLogInput{ServiceID: serviceID, DeploymentID: deployment.ID, PodName: step, SourceInstanceID: sourceInstanceID, ContainerName: "orchestrator", Line: line, Level: "info"}); err != nil {
 			return err
 		}
 	}
 	for _, line := range splitLines(result.Stderr) {
-		if err := r.store.AppendRuntimeLog(ctx, store.RuntimeLogInput{ServiceID: serviceID, DeploymentID: deploymentID, PodName: step, ContainerName: "orchestrator", Line: line, Level: "warn"}); err != nil {
+		if err := r.store.AppendRuntimeLog(ctx, store.RuntimeLogInput{ServiceID: serviceID, DeploymentID: deployment.ID, PodName: step, SourceInstanceID: sourceInstanceID, ContainerName: "orchestrator", Line: line, Level: "warn"}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func runtimeLogSourceInstanceID(deployment *store.Deployment, step string) string {
+	return fmt.Sprintf("reconcile-attempt-%d:%s", deployment.ReconcileAttempts, step)
 }
 
 func (r *ServiceReconciler) writeManifest(deploymentID string, manifests []map[string]any, suffix string) (string, error) {

@@ -201,6 +201,10 @@ model Deployment {
   commitHash        String?
   pullRequestNumber Int?
   previewUrl        String?
+  previewLineageId   String?
+  previewGeneration Int?
+  previewRuntime    Json?
+  previewOwnedObjects Json?
   imageUrl          String?
   imageDigest       String?
   buildStartedAt    DateTime?
@@ -221,6 +225,9 @@ model Deployment {
   runtimeLogs       RuntimeLog[]
   runtimeMetrics    RuntimeMetric[]
   events            DeploymentEvent[]
+  previewLineage PreviewLineage? @relation("PreviewAttempts", fields: [previewLineageId, projectId, serviceId], references: [id, projectId, serviceId], onDelete: Restrict)
+  candidateFor PreviewLineage[] @relation("PreviewCandidate")
+  currentFor PreviewLineage[] @relation("PreviewCurrent")
 
   @@index([serviceId, status])
   @@unique([serviceId, requestIdempotencyKey])
@@ -229,6 +236,52 @@ model Deployment {
   @@index([status, reconcileLockedAt, createdAt])
   @@index([serviceId, createdAt, id])
   @@index([projectId, createdAt, id])
+  @@unique([previewLineageId, previewGeneration])
+  @@unique([id, previewLineageId, previewGeneration])
+}
+
+model PreviewLineage {
+  id String @id
+  organizationId String
+  projectId String
+  serviceId String
+  integrationId String
+  installationId String
+  repositoryId String
+  repository String
+  pullRequestNumber Int
+  stableHost String @unique
+  namespace String
+  routeName String
+  state String
+  version Int @default(1)
+  generation Int @default(0)
+  eventUpdatedAt DateTime
+  eventAction String
+  headSha String
+  headRef String
+  baseRef String
+  beforeSha String?
+  candidateDeploymentId String?
+  candidateGeneration Int?
+  currentDeploymentId String?
+  currentGeneration Int?
+  resolutionObservation Json?
+  resolutionErrorCode String?
+  routeIntent Json?
+  routeObserved Json?
+  reconcileToken String?
+  reconcileWorker String?
+  reconcileLeaseUntil DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  attempts Deployment[] @relation("PreviewAttempts")
+  candidate Deployment? @relation("PreviewCandidate", fields: [candidateDeploymentId, id, candidateGeneration], references: [id, previewLineageId, previewGeneration], onDelete: Restrict)
+  current Deployment? @relation("PreviewCurrent", fields: [currentDeploymentId, id, currentGeneration], references: [id, previewLineageId, previewGeneration], onDelete: Restrict)
+
+  @@unique([organizationId, projectId, serviceId, installationId, repositoryId, pullRequestNumber], map: "PreviewLineage_identity")
+  @@unique([id, projectId, serviceId])
+  @@index([state, updatedAt])
 }
 
 model BuildLog {
@@ -242,6 +295,7 @@ model BuildLog {
 
   @@index([deploymentId, timestamp])
   @@index([deploymentId, timestamp, id])
+  @@index([deploymentId, step, timestamp, id])
 }
 
 model RuntimeLog {
@@ -262,6 +316,7 @@ model RuntimeLog {
   @@index([deploymentId, timestamp])
   @@index([serviceId, timestamp, id])
   @@index([deploymentId, timestamp, id])
+  @@index([serviceId, deploymentId, podUid, containerName, timestamp, id])
 	@@index([timestamp])
 }
 

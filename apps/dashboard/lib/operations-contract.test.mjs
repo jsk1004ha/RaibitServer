@@ -26,7 +26,10 @@ test('deployment operations keep all five URL-addressed views and bounded semant
 
 test('deployment mutations preserve exact endpoints, fields, return paths, and confirmation rules', async () => {
   // Given: rollback and cancellation are native server-posted forms.
-  const source = await read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx');
+  const [source, operationSubmit] = await Promise.all([
+    read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
+    read('../components/operation-submit.tsx'),
+  ]);
 
   // When: their machine-consumed contracts are inspected.
   // Then: rollback is confirmed, cancellation is status-gated, and no status mutation is exposed.
@@ -34,7 +37,9 @@ test('deployment mutations preserve exact endpoints, fields, return paths, and c
   assert.match(source, /id="rollback-deployment"[\s\S]*name="imageUrl"[\s\S]*name="confirmed"[\s\S]*required/);
   assert.match(source, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/cancel`, context\)/);
   assert.match(source, /name="reason"/);
-  assert.match(source, /name="_returnTo" value=\{`\$\{base\}\?view=overview`\}/);
+  assert.match(source, /returnTo=\{`\$\{base\}\?view=overview`\}/);
+  assert.match(operationSubmit, /<form[\s\S]*action=\{action\}[\s\S]*method="post"/);
+  assert.match(operationSubmit, /name="_returnTo"/);
   assert.doesNotMatch(source, /\/deployments\/\$\{(?:deploymentId|encodedDeploymentId)\}\/status/);
 });
 
@@ -71,11 +76,12 @@ test('deployment route IDs decode at most once and use one canonical encoded pat
 
 test('resource operations keep seven views, engine defaults, and exact mutation contracts', async () => {
   // Given: the resource console keeps server-owned loading and a bounded client query leaf.
-  const [source, queryConsole] = await Promise.all([
+  const [source, queryConsole, operationSubmit] = await Promise.all([
     read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
     read('../components/resource-query-console.tsx'),
+    read('../components/operation-submit.tsx'),
   ]);
-  const mutationSource = `${source}\n${queryConsole}`;
+  const mutationSource = `${source}\n${queryConsole}\n${operationSubmit}`;
 
   // When: its URL, engine, and native form contracts are inspected.
   // Then: all seven views and all four mutation endpoints remain present.
@@ -90,7 +96,8 @@ test('resource operations keep seven views, engine defaults, and exact mutation 
   }
   assert.equal(mutationSource.match(/name="confirmed"/g)?.length, 2);
   const provisioning = await read('../components/resource-provision-actions.tsx');
-  for (const marker of ['preview-plan', 'live-provision', 'ResourceProvisionResultSchema', 'JSON.stringify({ intent })', 'aria-busy', 'aria-live="polite"']) assert.ok(provisioning.includes(marker), marker);
+  for (const marker of ['preview-plan', 'live-provision', 'OperationSubmit', 'returnTo']) assert.ok(provisioning.includes(marker), marker);
+  for (const marker of ['running.current', 'aria-busy', 'aria-live="polite"', 'name="_returnTo"']) assert.ok(operationSubmit.includes(marker), marker);
   assert.doesNotMatch(source, /name="dryRun"/);
   assert.match(source, /id="provider-command"[\s\S]*name="confirmed"[\s\S]*required/);
   assert.match(queryConsole, /name="query"[\s\S]*name="confirmed"[\s\S]*value="true"(?![\s\S]*required)/);

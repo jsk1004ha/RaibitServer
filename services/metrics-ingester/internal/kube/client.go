@@ -4,10 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,16 +30,16 @@ func NewFromEnvironment() (*Client, error) {
 		host := strings.TrimSpace(os.Getenv("KUBERNETES_SERVICE_HOST"))
 		port := firstNonEmpty(os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS"), os.Getenv("KUBERNETES_SERVICE_PORT"), "443")
 		if host == "" {
-			return nil, errors.New("Kubernetes API endpoint is required")
+			return nil, &ingester.Failure{Code: "configuration"}
 		}
 		baseURL = "https://" + host + ":" + port
 	}
 	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Host == "" {
-		return nil, fmt.Errorf("invalid Kubernetes API endpoint %q", baseURL)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" {
+		return nil, &ingester.Failure{Code: "configuration"}
 	}
 	if parsed.Scheme != "https" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" {
-		return nil, errors.New("Kubernetes API endpoint must use HTTPS")
+		return nil, &ingester.Failure{Code: "configuration"}
 	}
 	staticToken := strings.TrimSpace(os.Getenv("RAIBITSERVER_KUBERNETES_TOKEN"))
 	tokenFile := ""
@@ -50,66 +47,64 @@ func NewFromEnvironment() (*Client, error) {
 		tokenFile = filepath.Clean(firstNonEmpty(os.Getenv("RAIBITSERVER_KUBERNETES_TOKEN_FILE"), "/var/run/secrets/kubernetes.io/serviceaccount/token"))
 		payload, readErr := os.ReadFile(tokenFile)
 		if readErr != nil {
-			return nil, fmt.Errorf("read Kubernetes service-account token: %w", readErr)
+			return nil, &ingester.Failure{Code: "configuration"}
 		}
 		if strings.TrimSpace(string(payload)) == "" {
-			return nil, errors.New("Kubernetes service-account token is empty")
+			return nil, &ingester.Failure{Code: "configuration"}
 		}
 	}
 	if staticToken == "" && tokenFile == "" {
-		return nil, errors.New("Kubernetes service-account token is empty")
+		return nil, &ingester.Failure{Code: "configuration"}
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 	if parsed.Scheme == "https" {
 		ca, readErr := os.ReadFile(filepath.Clean(firstNonEmpty(os.Getenv("RAIBITSERVER_KUBERNETES_CA_FILE"), "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")))
 		if readErr != nil {
-			return nil, fmt.Errorf("read Kubernetes CA: %w", readErr)
+			return nil, &ingester.Failure{Code: "configuration"}
 		}
 		roots := x509.NewCertPool()
 		if !roots.AppendCertsFromPEM(ca) {
-			return nil, errors.New("Kubernetes CA contains no valid certificate")
+			return nil, &ingester.Failure{Code: "configuration"}
 		}
 		tlsConfig.RootCAs = roots
 	}
-	return &Client{baseURL: baseURL, staticToken: staticToken, tokenFile: tokenFile, http: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}}, nil
+	return &Client{baseURL: baseURL, staticToken: staticToken, tokenFile: tokenFile, http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{TLSClientConfig: tlsConfig, MaxIdleConns: 10, MaxIdleConnsPerHost: 5, ResponseHeaderTimeout: 10 * time.Second, MaxResponseHeaderBytes: 16384}}}, nil
 }
 
 func (c *Client) ListPodMetrics(ctx context.Context, continueToken string, limit int) ([]ingester.PodMetrics, string, error) {
+	if len(continueToken) > 4096 || limit < 1 || limit > 500 {
+		return nil, "", &ingester.Failure{Code: "field_limit"}
+	}
 	query := url.Values{"labelSelector": {workloadSelector}, "limit": {fmt.Sprint(limit)}}
 	if continueToken != "" {
 		query.Set("continue", continueToken)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/apis/metrics.k8s.io/v1beta1/pods?"+query.Encode(), nil)
-	if err != nil {
-		return nil, "", err
-	}
-	token, err := c.bearerToken()
-	if err != nil {
-		return nil, "", err
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", "application/json")
-	response, err := c.http.Do(request)
-	if err != nil {
-		return nil, "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return nil, "", fmt.Errorf("Kubernetes metrics API returned %s: %s", response.Status, strings.TrimSpace(string(body)))
-	}
 	var payload metricsList
-	if err := json.NewDecoder(io.LimitReader(response.Body, 8*1024*1024)).Decode(&payload); err != nil {
-		return nil, "", fmt.Errorf("decode Kubernetes metrics response: %w", err)
+	if err := c.get(ctx, "/apis/metrics.k8s.io/v1beta1/pods?"+query.Encode(), &payload); err != nil {
+		return nil, "", err
+	}
+	if len(payload.Items) > limit || len(payload.Metadata.Continue) > 4096 {
+		return nil, "", &ingester.Failure{Code: "field_limit"}
 	}
 	items := make([]ingester.PodMetrics, 0, len(payload.Items))
 	for _, item := range payload.Items {
+		if !validName(item.Metadata.Namespace, 63) || !validName(item.Metadata.Name, 253) || len(item.Metadata.UID) > 128 || len(item.Metadata.Labels) > 64 || len(item.Containers) > 32 || len(item.Timestamp) > 64 {
+			return nil, "", &ingester.Failure{Code: "field_limit"}
+		}
+		for key, value := range item.Metadata.Labels {
+			if len(key) > 253 || len(value) > 256 {
+				return nil, "", &ingester.Failure{Code: "field_limit"}
+			}
+		}
 		at, parseErr := time.Parse(time.RFC3339Nano, item.Timestamp)
 		if parseErr != nil {
 			continue
 		}
 		containers := make([]ingester.ContainerMetrics, 0, len(item.Containers))
 		for _, container := range item.Containers {
+			if !validName(container.Name, 63) || len(container.Usage.CPU) > 64 || len(container.Usage.Memory) > 64 {
+				return nil, "", &ingester.Failure{Code: "field_limit"}
+			}
 			containers = append(containers, ingester.ContainerMetrics{Name: container.Name, CPU: container.Usage.CPU, Memory: container.Usage.Memory})
 		}
 		items = append(items, ingester.PodMetrics{Namespace: item.Metadata.Namespace, Name: item.Metadata.Name, UID: item.Metadata.UID, Labels: item.Metadata.Labels, Timestamp: at, Containers: containers})
@@ -122,15 +117,15 @@ func (c *Client) bearerToken() (string, error) {
 		return strings.TrimSpace(c.staticToken), nil
 	}
 	if c.tokenFile == "" {
-		return "", errors.New("Kubernetes service-account token is empty")
+		return "", &ingester.Failure{Code: "configuration"}
 	}
 	payload, err := os.ReadFile(filepath.Clean(c.tokenFile))
 	if err != nil {
-		return "", fmt.Errorf("read Kubernetes service-account token: %w", err)
+		return "", &ingester.Failure{Code: "configuration"}
 	}
 	token := strings.TrimSpace(string(payload))
 	if token == "" {
-		return "", errors.New("Kubernetes service-account token is empty")
+		return "", &ingester.Failure{Code: "configuration"}
 	}
 	return token, nil
 }

@@ -64,6 +64,9 @@ func (s *PostgresStore) ClaimNextHealth(ctx context.Context, options ClaimOption
 			job.Attempts++
 			job.DeploymentType = stringField(d, "deploymentType")
 			job.PullRequestNumber = intField(d, "pullRequestNumber")
+			job.PreviewLineageID = stringField(d, "previewLineageId")
+			job.PreviewGeneration = intField(d, "previewGeneration")
+			job.PreviewRuntime = rawJSONFromRecord(d, "previewRuntime")
 			job.LockedBy = worker
 			job.LeaseExpiresAt = at.Add(HealthLeaseDuration)
 			claimed = &job

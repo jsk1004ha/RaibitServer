@@ -19,7 +19,10 @@ import { normalizeResourceEngine } from './catalog.ts';
 import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
+import { parsePreviewWebhook } from './preview-contract.ts';
+import { createPreviewRuntime, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
+import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import {
   boundedActivityRows,
@@ -68,6 +71,7 @@ export class ControlPlaneStore {
   emailDeliveries: any[];
   authRateLimits: Map<string, any>;
   oauthTransactions = new Map<string, OAuthTransactionRecord>();
+  previewLineages = new Map<string, any>();
 
   constructor() {
     this.organizations = new Map();
@@ -776,20 +780,44 @@ export class ControlPlaneStore {
     return { deployment: rollback, rollbackOfDeploymentId: current.id, previousDeployment: previous ? deepClone(previous) : null, workflowJob };
   }
 
+  requestPreviewCleanup(deploymentId: string, input: Record<string, any> = {}) {
+    const deployment = this.deployments.get(deploymentId);
+    if (!deployment) throw notFound(`deployment not found: ${deploymentId}`);
+    if (String(deployment.deploymentType).toLowerCase() !== 'preview' || !deployment.previewLineageId) throw conflict('PREVIEW_CLEANUP_UNAVAILABLE');
+    const lineage = this.previewLineages.get(deployment.previewLineageId);
+    if (!lineage || lineage.projectId !== deployment.projectId || lineage.serviceId !== deployment.serviceId) throw conflict('PREVIEW_CLEANUP_UNAVAILABLE');
+    const operationId = `preview-cleanup:${lineage.id}`;
+    const attempts = [...this.deployments.values()].filter((candidate) => candidate.previewLineageId === lineage.id);
+    const deploymentIds = attempts.map((candidate) => candidate.id);
+    const status = attempts.every((candidate) => normalizeDeploymentStatus(candidate.status) === 'CLEANED_UP') ? 'CLEANED_UP' : 'PREVIEW_CLEANUP_REQUESTED';
+    if (lineage.state !== 'CLOSED') {
+      const closed = { ...lineage, state: 'CLOSED', version: lineage.version + 1, candidateDeploymentId: null, candidateGeneration: null, currentDeploymentId: null, currentGeneration: null };
+      this.previewLineages.set(lineage.id, { ...closed, routeIntent: previewCloseIntent(closed) });
+      for (const attempt of attempts) if (normalizeDeploymentStatus(attempt.status) !== 'CLEANED_UP') {
+        this.deployments.set(attempt.id, { ...attempt, status: 'PREVIEW_CLEANUP_REQUESTED', updatedAt: nowIso() });
+        this.appendDeploymentEvent({ deploymentId: attempt.id, type: 'preview.cleanup.requested', message: 'Preview cleanup requested', metadata: { operationId, lineageId: lineage.id } });
+      }
+      for (let index = 0; index < this.workflowJobs.length; index += 1) if ((this.workflowJobs[index].targetId === lineage.id || deploymentIds.includes(this.workflowJobs[index].targetId)) && ['queued', 'running'].includes(this.workflowJobs[index].status)) this.workflowJobs[index] = { ...this.workflowJobs[index], status: 'cancelled', lockedBy: null, lockedAt: null };
+      this.audit(input.actorUserId || 'system', 'preview:cleanup-requested', 'preview-lineage', lineage.id, { operationId, deploymentIds });
+    }
+    return { operationId, status, streamHref: `/deployments/${deploymentId}/stream`, lineageId: lineage.id, deploymentIds };
+  }
+
   appendBuildLog({ deploymentId, step = 'build', line, level = 'info' }: Record<string, any>) {
     const row = { id: stableId('blog', deploymentId, this.buildLogs.length), deploymentId, step, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
     this.buildLogs.push(row);
     return deepClone(row);
   }
 
-  appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', containerName = 'app', line, level = 'info' }: Record<string, any>) {
-    const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, containerName, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
+  appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', podUid, sourceInstanceId, containerName = 'app', line, level = 'info' }: Record<string, any>) {
+    const resolvedPodUid = persistedRuntimePodUid({ podUid, sourceInstanceId });
+    const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, podUid: resolvedPodUid, containerName, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
     this.runtimeLogs.push(row);
     return deepClone(row);
   }
 
   appendDeploymentEvent({ deploymentId, type, message, metadata = {} }: Record<string, any>) {
-    const row = { id: stableId('devevt', deploymentId, this.deploymentEvents.length), deploymentId, type, message: sanitizeLogRecord(String(message ?? '')), metadata: maskSecrets(metadata), timestamp: nowIso() };
+    const row = { id: stableId('devevt', deploymentId, this.deploymentEvents.length), deploymentId, type, message: sanitizeLogRecord(String(message ?? '')), metadata: sanitizeLogRecord(metadata), timestamp: nowIso() };
     this.deploymentEvents.push(row);
     return deepClone(row);
   }
@@ -800,6 +828,25 @@ export class ControlPlaneStore {
 
   listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) {
     return deepClone(boundedActivityRows(this.runtimeLogs.filter((row) => row.serviceId === serviceId), options));
+  }
+
+  logPemContext(rows: readonly Record<string, unknown>[]): ObservationLogContext[] {
+    const first = new Map<string, Record<string, unknown>>();
+    for (const row of rows.slice(0, 16)) {
+      const source = observationLogSource(row);
+      if (source && !first.has(source)) first.set(source, row);
+    }
+    const scanLimit = 256;
+    const scanComplete = this.buildLogs.length <= scanLimit && this.runtimeLogs.length <= scanLimit;
+    const candidates = [...this.buildLogs.slice(-scanLimit), ...this.runtimeLogs.slice(-scanLimit)];
+    return [...first.entries()].map(([source, row]) => {
+      const history = candidates
+        .filter((candidate) => observationLogSource(candidate) === source && activityBefore(candidate, row))
+        .sort((left, right) => dateMs(right.timestamp) - dateMs(left.timestamp) || String(right.id).localeCompare(String(left.id)))
+        .slice(0, 5);
+      const complete = scanComplete && history.length <= 4 && history.every((candidate) => String(candidate.line || '').length <= 256);
+      return { source, rows: complete ? deepClone(history.reverse().map((candidate) => ({ line: candidate.line }))) : [], complete };
+    });
   }
 
   listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) {
@@ -1269,6 +1316,7 @@ export class ControlPlaneStore {
       throw error;
     }
     if (!verifyGitHubWebhookSignature(rawBody, signature, secret)) throw unauthorized('invalid GitHub webhook signature');
+    if (String(event || '').toLowerCase() === 'pull_request') return this.handlePreviewWebhook({ body: rawBody, signature, secret, deliveryId });
     const id = String(deliveryId || stableId('ghdel', event, rawBody));
     if (this.webhookEvents.get(id)?.handled) return { accepted: true, duplicate: true, deliveryId: id, actions: [] };
     const before = this.githubWebhookTransactionSnapshot();
@@ -1316,11 +1364,57 @@ export class ControlPlaneStore {
     }
   }
 
+  handlePreviewWebhook(input: Record<string, any>) {
+    const event = parsePreviewWebhook({ body: input.body, signature: input.signature, secret: input.secret, deliveryId: input.deliveryId });
+    if (this.webhookEvents.get(event.deliveryId)?.handled) return { accepted: true, duplicate: true, deliveryId: event.deliveryId, actions: [] };
+    const before = this.githubWebhookTransactionSnapshot();
+    try {
+      const actionPlan = { kind: event.action === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: event.repositoryId, installationId: event.installationId, repository: event.repository, baseBranch: event.baseRef };
+      const services = this.servicesForGitHubWebhook(actionPlan);
+      const actions: any[] = [];
+      const blocked = event.action === 'closed' ? new Set<string>() : this.githubWebhookQuotaBlocks(services, actionPlan, actions);
+      for (const service of services.filter((candidate) => !blocked.has(String(candidate.id)))) {
+        const project = this.projects.get(service.projectId);
+        const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+        const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
+        const integrationId = String(service.githubIntegrationId || desired.githubIntegrationId || github.integrationId || '');
+        const lineageId = stableId('preview-lineage', project.organizationId, project.id, service.id, event.installationId, event.repositoryId, event.pullRequestNumber);
+        const transition = transitionPreviewLineage(this.previewLineages.get(lineageId) || null, event, { organizationId: project.organizationId, projectId: project.id, serviceId: service.id, integrationId }, lineageId);
+        if (transition.decision === 'stale' || transition.decision === 'duplicate') { actions.push({ type: `preview-${transition.decision}`, serviceId: service.id, lineageId }); continue; }
+        this.previewLineages.set(lineageId, transition.lineage);
+        if (transition.decision === 'ambiguous') {
+          const job = this.enqueueWorkflowJob({ id: resolverJobId(transition.lineage), type: PREVIEW_RESOLVER_JOB, targetType: 'preview-lineage', targetId: lineageId, payload: resolverPayload(transition.lineage), maxAttempts: 3 });
+          actions.push({ type: 'preview-resolution-enqueued', serviceId: service.id, lineageId, workflowJobId: job.id });
+          continue;
+        }
+        const attempts = [...this.deployments.values()].filter((deployment) => deployment.previewLineageId === lineageId);
+        if (transition.decision === 'close') {
+          this.previewLineages.set(lineageId, { ...transition.lineage, routeIntent: previewCloseIntent(transition.lineage) });
+          const deploymentIds: string[] = [];
+          for (const attempt of attempts) if (String(attempt.status).toUpperCase() !== 'CLEANED_UP') { this.deployments.set(attempt.id, { ...attempt, status: 'PREVIEW_CLEANUP_REQUESTED', updatedAt: nowIso() }); deploymentIds.push(attempt.id); }
+          for (let index = 0; index < this.workflowJobs.length; index += 1) if ((this.workflowJobs[index].targetId === lineageId || deploymentIds.includes(this.workflowJobs[index].targetId)) && ['queued', 'running'].includes(this.workflowJobs[index].status)) this.workflowJobs[index] = { ...this.workflowJobs[index], status: 'cancelled', lockedBy: null, lockedAt: null };
+          actions.push({ type: 'preview-cleanup-requested', serviceId: service.id, lineageId, deploymentIds });
+          continue;
+        }
+        const deploymentId = stableId('dep', 'github-preview', event.deliveryId, service.id, transition.lineage.generation);
+        const runtime = createPreviewRuntime(transition.lineage, deploymentId);
+        const deployment = this.createDeployment({ id: deploymentId, serviceId: service.id, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime });
+        const job = this.enqueueWorkflowJob({ id: stableId('job', 'github-preview', event.deliveryId, service.id), type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, runtime } });
+        this.previewLineages.set(lineageId, { ...transition.lineage, candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation });
+        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, lineageId, deploymentId: deployment.id, workflowJobId: job.id });
+      }
+      this.webhookEvents.set(event.deliveryId, { id: stableId('whe', 'github', event.deliveryId), provider: 'github', eventType: 'pull_request', deliveryId: event.deliveryId, payload: maskSecrets({ action: event.action, repositoryId: event.repositoryId, pullRequestNumber: event.pullRequestNumber }), handled: true, errorMessage: null, createdAt: nowIso() });
+      this.audit('github-webhook', 'github:preview-webhook', 'github-delivery', event.deliveryId, { action: event.action, actions: actions.map(action => action.type) });
+      return { accepted: true, duplicate: false, deliveryId: event.deliveryId, matchedServiceCount: services.length, actions };
+    } catch (error) { this.restoreGitHubWebhookTransaction(before); throw error; }
+  }
+
   githubWebhookTransactionSnapshot() {
     const cloneMap = (source: Map<string, any>) => new Map([...source.entries()].map(([key, value]) => [key, deepClone(value)]));
     return {
       githubIntegrations: cloneMap(this.githubIntegrations),
       githubRepositories: cloneMap(this.githubRepositories),
+      previewLineages: cloneMap(this.previewLineages),
       deployments: cloneMap(this.deployments),
       webhookEvents: cloneMap(this.webhookEvents),
       quotas: cloneMap(this.quotas),
@@ -1333,6 +1427,7 @@ export class ControlPlaneStore {
   restoreGitHubWebhookTransaction(snapshot: Record<string, any>) {
     this.githubIntegrations = snapshot.githubIntegrations;
     this.githubRepositories = snapshot.githubRepositories;
+    this.previewLineages = snapshot.previewLineages;
     this.deployments = snapshot.deployments;
     this.webhookEvents = snapshot.webhookEvents;
     this.quotas = snapshot.quotas;
@@ -1585,7 +1680,13 @@ export class ControlPlaneStore {
 
   servicesForGitHubWebhook(actionPlan: Record<string, any>) {
     if (actionPlan.kind === 'ignored' || !actionPlan.repositoryId || !actionPlan.installationId || !actionPlan.repository) return [];
-    return [...this.services.values()].filter((service) => serviceMatchesGitHubWebhook(service, actionPlan, this.githubRepositories));
+    const inactive = new Set(['DELETE_REQUESTED', 'DELETING', 'DELETED']);
+    return [...this.services.values()].filter((service) => {
+      const project = this.projects.get(String(service.projectId));
+      return !inactive.has(String(service.status).toUpperCase())
+        && !inactive.has(String(project?.status).toUpperCase())
+        && serviceMatchesGitHubWebhook(service, actionPlan, this.githubRepositories);
+    });
   }
 
   resourceForConsole(resource: Record<string, any>) {
@@ -1930,6 +2031,11 @@ function uniqueRepositories(repositories: Array<Record<string, any> | null>) {
     byName.set(key, existing ? { ...existing, serviceIds: [...new Set([...(existing.serviceIds || []), ...(repository.serviceIds || [])])] } : repository);
   }
   return [...byName.values()];
+}
+
+function activityBefore(candidate: Record<string, unknown>, row: Record<string, unknown>) {
+  const timestampDifference = dateMs(candidate.timestamp) - dateMs(row.timestamp);
+  return timestampDifference < 0 || (timestampDifference === 0 && String(candidate.id).localeCompare(String(row.id)) < 0);
 }
 
 function cancelActiveBuildWorkflowJobs(jobs: Record<string, any>[], deploymentId: string, reason: string) {

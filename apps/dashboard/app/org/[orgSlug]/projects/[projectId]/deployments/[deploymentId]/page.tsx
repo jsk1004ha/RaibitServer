@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { apiAction, collectLoadIssues, dashboardApiContext, getJson } from '../../../../../../../lib/api';
 import { ConsoleShell, LoadErrorSummary, MetricStrip, SectionNav, StatusBadge } from '../../../../../../../components/console-ui';
 import { buttonVariants } from '@/components/ui/button';
@@ -7,6 +8,8 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { decodeDeploymentRouteSegment, encodeDeploymentRouteSegment } from '@/lib/deployment-route-segment';
+import { OperationSubmit } from '@/components/operation-submit';
+import { DeploymentActivityStream } from '@/components/project-hub/deployment-stream';
 
 const views = ['overview', 'logs', 'events', 'rollback', 'cancel'] as const;
 type DeploymentView = typeof views[number];
@@ -56,7 +59,15 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
       : Promise.resolve({ ok: true, status: 200, body: { events: [] } }),
   ]);
   const detail = deployment.body || {};
-  const cancellationAllowed = new Set(['QUEUED', 'BUILDING', 'IMAGE_READY']).has(String(detail.status || '').trim().toUpperCase());
+  const confirmedStatus = String(detail.status || '').trim().toUpperCase();
+  const cancellationAllowed = new Set(['QUEUED', 'BUILDING', 'IMAGE_READY']).has(confirmedStatus);
+  const rollbackAllowed = new Set(['READY', 'BUILD_FAILED', 'FAILED', 'CANCELLED']).has(confirmedStatus);
+  const snapshotVersion = typeof detail.snapshotVersion === 'number' && Number.isInteger(detail.snapshotVersion) && detail.snapshotVersion > 0 ? detail.snapshotVersion : null;
+  const retryRequestIdempotencyKey = snapshotVersion === null ? null : randomUUID();
+  const redeployRequestIdempotencyKey = snapshotVersion === null ? null : randomUUID();
+  const retryAllowed = snapshotVersion !== null && new Set(['BUILD_FAILED', 'FAILED', 'CANCELLED']).has(confirmedStatus);
+  const redeployAllowed = snapshotVersion !== null && typeof detail.serviceId === 'string' && detail.serviceId.length > 0;
+  const previewCleanupAllowed = snapshotVersion !== null && String(detail.deploymentType || '').toLowerCase() === 'preview' && confirmedStatus !== 'CLEANED_UP';
   const loadErrors = collectLoadIssues([['배포 정보', deployment], ['빌드 로그', logs], ['배포 이벤트', events]]);
   const base = `/org/${orgSlug}/projects/${projectId}/deployments/${encodedDeploymentId}`;
   const navItems = [
@@ -102,6 +113,18 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
               </Table>
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader className="border-b"><CardTitle><h2>복구 및 재실행</h2></CardTitle><CardDescription>표시되는 상태는 서버가 확인한 값입니다. 요청 직후 완료 상태를 추정하지 않습니다.</CardDescription></CardHeader>
+            <CardContent className="flex flex-col gap-raibit-lg">
+              <div className="flex flex-wrap gap-raibit-sm">
+                <OperationSubmit action={apiAction(`/deployments/${encodedDeploymentId}/retry`, context)} disabled={!retryAllowed} pendingLabel="재시도 요청을 확인하고 있습니다." returnTo={`${base}?view=overview`} submitClassName={buttonVariants({ variant: 'outline', size: 'sm' })} submitLabel="실패한 배포 다시 시도">{snapshotVersion !== null && retryRequestIdempotencyKey !== null ? <><input name="snapshotVersion" type="hidden" value={String(snapshotVersion)} /><input name="requestIdempotencyKey" type="hidden" value={retryRequestIdempotencyKey} /></> : null}</OperationSubmit>
+                <OperationSubmit action={apiAction(`/services/${String(detail.serviceId || '')}/redeploy`, context)} disabled={!redeployAllowed} pendingLabel="재배포 요청을 확인하고 있습니다." returnTo={`${base}?view=overview`} submitClassName={buttonVariants({ variant: 'outline', size: 'sm' })} submitLabel="현재 구성으로 재배포">{snapshotVersion !== null && redeployRequestIdempotencyKey !== null ? <><input name="snapshotVersion" type="hidden" value={String(snapshotVersion)} /><input name="requestIdempotencyKey" type="hidden" value={redeployRequestIdempotencyKey} /></> : null}</OperationSubmit>
+                <OperationSubmit action={apiAction(`/deployments/${encodedDeploymentId}/preview-cleanup`, context)} disabled={!previewCleanupAllowed} pendingLabel="미리보기 정리 요청을 확인하고 있습니다." returnTo={`${base}?view=overview`} submitClassName={buttonVariants({ variant: 'destructive', size: 'sm' })} submitLabel="미리보기 정리"><input name="confirmed" type="hidden" value="true" /></OperationSubmit>
+              </div>
+              {snapshotVersion === null ? <p className="text-sm text-muted-foreground">현재 서버 응답에 복구 작업에 필요한 스냅샷 버전이 없습니다. 새로 고친 뒤 다시 확인하세요.</p> : null}
+              <DeploymentActivityStream initialStatus={typeof detail.status === 'string' ? detail.status : undefined} streamHref={`/api/control/deployments/${encodedDeploymentId}/stream`} />
+            </CardContent>
+          </Card>
         </div> : null}
         {view === 'logs' ? <Card>
           <CardHeader className="border-b"><CardTitle><h2>빌드 로그</h2></CardTitle><CardDescription>민감한 값은 서버에서 마스킹된 출력입니다.</CardDescription><CardAction><span className="text-xs text-muted-foreground">마스킹됨</span></CardAction></CardHeader>
@@ -113,11 +136,11 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
         </Card> : null}
         {view === 'rollback' ? <Card className="border-destructive/30">
           <CardHeader className="border-b border-destructive/20 bg-destructive/5"><CardTitle><h2>롤백 확인</h2></CardTitle><CardDescription>이전 READY 이미지로 되돌립니다. 실행 전 대상을 확인하세요.</CardDescription></CardHeader>
-          <CardContent><form id="rollback-deployment" method="post" action={apiAction(`/deployments/${encodedDeploymentId}/rollback`, context)}><input type="hidden" name="_returnTo" value={`${base}?view=overview`} /><FieldGroup><Field><FieldLabel htmlFor="rollback-image">이전 이미지 URL</FieldLabel><Input id="rollback-image" name="imageUrl" placeholder="선택 사항" autoComplete="off" /><FieldDescription>비워 두면 서버가 직전 READY 이미지를 선택합니다.</FieldDescription></Field><label className="confirmation-control"><input type="checkbox" name="confirmed" value="true" required /><span>롤백 확인</span></label><button className={buttonVariants({ variant: 'destructive' })} type="submit">롤백</button></FieldGroup></form></CardContent>
+          <CardContent>{rollbackAllowed ? <OperationSubmit action={apiAction(`/deployments/${encodedDeploymentId}/rollback`, context)} id="rollback-deployment" pendingLabel="롤백 요청을 확인하고 있습니다." returnTo={`${base}?view=overview`} submitClassName={buttonVariants({ variant: 'destructive' })} submitLabel="롤백"><FieldGroup><Field><FieldLabel htmlFor="rollback-image">이전 이미지 URL</FieldLabel><Input id="rollback-image" name="imageUrl" placeholder="선택 사항" autoComplete="off" /><FieldDescription>비워 두면 서버가 직전 READY 이미지를 선택합니다.</FieldDescription></Field><label className="confirmation-control"><input type="checkbox" name="confirmed" value="true" required /><span>롤백 확인</span></label></FieldGroup></OperationSubmit> : <Empty><EmptyHeader><EmptyTitle>현재 상태에서는 롤백을 요청할 수 없습니다.</EmptyTitle><EmptyDescription>READY, BUILD_FAILED, FAILED, CANCELLED 상태에서만 이전 READY 이미지를 확인해 롤백할 수 있습니다.</EmptyDescription></EmptyHeader></Empty>}</CardContent>
         </Card> : null}
         {view === 'cancel' ? <Card className="border-destructive/30">
           <CardHeader className="border-b border-destructive/20 bg-destructive/5"><CardTitle><h2>배포 취소</h2></CardTitle><CardDescription>QUEUED, BUILDING, IMAGE_READY 상태의 배포만 중단할 수 있습니다.</CardDescription></CardHeader>
-          <CardContent>{cancellationAllowed ? <form method="post" action={apiAction(`/deployments/${encodedDeploymentId}/cancel`, context)}><input type="hidden" name="_returnTo" value={`${base}?view=overview`} /><FieldGroup><Field><FieldLabel htmlFor="cancel-reason">취소 사유</FieldLabel><Input id="cancel-reason" name="reason" placeholder="취소 이유" autoComplete="off" /><FieldDescription>운영 기록에 남길 선택 사항입니다.</FieldDescription></Field><button className={buttonVariants({ variant: 'destructive' })} type="submit">배포 취소</button></FieldGroup></form> : <Empty><EmptyHeader><EmptyTitle>현재 상태에서는 취소할 수 없습니다.</EmptyTitle><EmptyDescription>QUEUED, BUILDING, IMAGE_READY 상태에서만 취소할 수 있습니다. 실행 중이거나 완료된 배포는 롤백 또는 서비스 삭제를 사용하세요.</EmptyDescription></EmptyHeader></Empty>}</CardContent>
+          <CardContent>{cancellationAllowed ? <OperationSubmit action={apiAction(`/deployments/${encodedDeploymentId}/cancel`, context)} pendingLabel="취소 요청을 확인하고 있습니다." returnTo={`${base}?view=overview`} submitClassName={buttonVariants({ variant: 'destructive' })} submitLabel="배포 취소"><FieldGroup><Field><FieldLabel htmlFor="cancel-reason">취소 사유</FieldLabel><Input id="cancel-reason" name="reason" placeholder="취소 이유" autoComplete="off" /><FieldDescription>운영 기록에 남길 선택 사항입니다.</FieldDescription></Field></FieldGroup></OperationSubmit> : <Empty><EmptyHeader><EmptyTitle>현재 상태에서는 취소할 수 없습니다.</EmptyTitle><EmptyDescription>QUEUED, BUILDING, IMAGE_READY 상태에서만 취소할 수 있습니다. 실행 중이거나 완료된 배포는 롤백 또는 서비스 삭제를 사용하세요.</EmptyDescription></EmptyHeader></Empty>}</CardContent>
         </Card> : null}
       </section>
     </ConsoleShell>

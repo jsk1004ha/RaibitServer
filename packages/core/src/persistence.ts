@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { ResourceRecoveryRepository, type RecoveryQuotaPolicy } from './resource-recovery.ts';
 import { MemoryRecoveryTransaction } from './resource-recovery-memory.ts';
 import { PostgresRecoveryTransaction, lockRecoveryDeletion, assertPostgresRecoveryPublished } from './resource-recovery-postgres.ts';
@@ -22,9 +22,12 @@ import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecor
 import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
+import { parsePreviewObservation, parsePreviewWebhook, PreviewError } from './preview-contract.ts';
+import { applyPreviewObservation, assertPreviewRetry, createPreviewRuntime, PREVIEW_APPLY_JOB, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage, type PreviewLineageRecord } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import { parseGitHubRepository } from './github-integration.ts';
+import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
@@ -47,6 +50,34 @@ import {
 } from './store-helpers.ts';
 
 type QuotaRequirement = { metric: string; increment: number };
+type ObservationLogRow = Record<string, unknown>;
+export type PemContextSource = {
+  readonly requestId: number;
+  readonly source: string;
+  readonly deploymentId: string;
+  readonly timestamp: Date;
+  readonly id: string;
+} & ({
+  readonly kind: 'runtime';
+  readonly serviceId: string;
+  readonly podUid: string;
+  readonly containerName: string;
+} | {
+  readonly kind: 'build';
+  readonly step: string;
+});
+export type RuntimePemContextSource = Extract<PemContextSource, { readonly kind: 'runtime' }>;
+type BuildPemContextSource = Extract<PemContextSource, { readonly kind: 'build' }>;
+type PemContextQueryRow = { readonly requestId: number; readonly line: string; readonly truncated: boolean };
+
+export const PEM_CONTEXT_LIMITS = {
+  sources: 16,
+  rowsPerSource: 4,
+  lineCharacters: 256,
+  lineBytes: 1_024,
+  queryRows: 80,
+  queryBytes: 81_920,
+} as const;
 
 function combineQuotaRequirements(requirements: QuotaRequirement[]) {
   const combined = new Map<string, number>();
@@ -172,6 +203,7 @@ export class InMemoryControlPlaneRepository {
     const deployment = this.store.deployments.get(deploymentId);
     return this.runQuotaMutation(input.actorUserId, 'deployment:create', deploymentQuotaRequirements(deployment?.deploymentType), () => this.store.rollbackDeployment(deploymentId, input));
   }
+  async requestPreviewCleanup(deploymentId: string, input: Record<string, any> = {}) { return this.store.requestPreviewCleanup(deploymentId, input); }
   async createSecret(input: Record<string, any>) { return this.store.createSecret(input); }
   async createDeploymentOperation(input: DeploymentOperation) {
     const service = this.store.services.get(input.serviceId);
@@ -181,7 +213,7 @@ export class InMemoryControlPlaneRepository {
       const workflowJob = [...this.store.workflowJobs.values()].find(row => row.targetId === existing.id && row.targetType === 'deployment');
       if (!workflowJob) throw new DeploymentOperationError('LINEAGE_JOB_MISSING');
       assertOperationReplay(input, workflowJob.payload);
-      return deepClone({ deployment: existing, workflowJob });
+      return deepClone({ deployment: existing, workflowJob, operationId: workflowJob.id, status: existing.status, streamHref: `/deployments/${existing.id}/stream` });
     }
     const rows = [...this.store.deployments.values()].filter(row => row.serviceId === input.serviceId);
     const source = input.operation === 'retry' ? this.store.deployments.get(input.sourceDeploymentId || '') : rows.filter(eligibleDeploymentSource).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || b.id.localeCompare(a.id))[0];
@@ -194,7 +226,7 @@ export class InMemoryControlPlaneRepository {
     return this.runQuotaMutation(input.requestedByUserId === 'system' ? null : input.requestedByUserId, 'deployment:create', deploymentQuotaRequirements(candidate.deploymentType), () => {
       const deployment = this.store.createDeployment(candidate);
       const workflowJob = this.store.enqueueWorkflowJob(successorWorkflow(candidate, input));
-      return { deployment, workflowJob };
+      return { deployment, workflowJob, operationId: workflowJob.id, status: deployment.status, streamHref: `/deployments/${deployment.id}/stream` };
     });
   }
   async createDeploymentWorkflow(input: Record<string, any>) {
@@ -333,6 +365,7 @@ export class InMemoryControlPlaneRepository {
   async appendDeploymentEvent(input: Record<string, any>) { return this.store.appendDeploymentEvent(input); }
   async listDeploymentLogs(deploymentId: string, options: Record<string, any> = {}) { return this.store.listDeploymentLogs(deploymentId, options); }
   async listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) { return this.store.listRuntimeLogs(serviceId, options); }
+  async logPemContext(rows: readonly ObservationLogRow[]) { return this.store.logPemContext(rows); }
   async listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) { return this.store.listDeploymentEvents(deploymentId, options); }
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleQuery(resourceId, query, options); }
   async runResourceConsoleCommand(resourceId: string, command: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleCommand(resourceId, command, options); }
@@ -1084,6 +1117,33 @@ export class PrismaControlPlaneRepository {
     });
   }
 
+  async requestPreviewCleanup(deploymentId: string, input: Record<string, any> = {}) {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const deployment = await tx.deployment.findUnique({ where: { id: deploymentId } });
+      if (!deployment) throw notFoundError(`deployment not found: ${deploymentId}`);
+      if (String(deployment.deploymentType).toLowerCase() !== 'preview' || !deployment.previewLineageId) throw conflictError('PREVIEW_CLEANUP_UNAVAILABLE');
+      const lineageRow = await tx.previewLineage.findUnique({ where: { id: deployment.previewLineageId } });
+      if (!lineageRow || lineageRow.projectId !== deployment.projectId || lineageRow.serviceId !== deployment.serviceId) throw conflictError('PREVIEW_CLEANUP_UNAVAILABLE');
+      const lineage = previewLineageRecord(lineageRow);
+      const operationId = `preview-cleanup:${lineage.id}`;
+      const attempts = await tx.deployment.findMany({ where: { previewLineageId: lineage.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+      const deploymentIds = attempts.map((candidate: Record<string, any>) => candidate.id);
+      const status = attempts.every((candidate: Record<string, any>) => normalizeDeploymentStatus(candidate.status) === 'CLEANED_UP') ? 'CLEANED_UP' : 'PREVIEW_CLEANUP_REQUESTED';
+      if (lineage.state !== 'CLOSED') {
+        const closed = { ...lineage, state: 'CLOSED' as const, version: lineage.version + 1, candidateDeploymentId: null, candidateGeneration: null, currentDeploymentId: null, currentGeneration: null };
+        await tx.previewLineage.update({ where: { id: lineage.id }, data: { ...previewLineageData(closed), routeIntent: previewCloseIntent(closed), reconcileToken: null, reconcileWorker: null, reconcileLeaseUntil: null } });
+        await tx.deployment.updateMany({ where: { previewLineageId: lineage.id, status: { notIn: ['CLEANED_UP', 'cleaned_up'] } }, data: { status: 'PREVIEW_CLEANUP_REQUESTED' } });
+        await tx.workflowJob.updateMany({ where: { status: { in: ['queued', 'running'] }, OR: [{ targetId: lineage.id }, { targetId: { in: deploymentIds } }] }, data: { status: 'cancelled', lockedBy: null, lockedAt: null } });
+        for (const attempt of attempts) if (normalizeDeploymentStatus(attempt.status) !== 'CLEANED_UP') {
+          const eventId = stableId('devevt', attempt.id, operationId);
+          await tx.deploymentEvent.upsert({ where: { id: eventId }, update: {}, create: { id: eventId, deploymentId: attempt.id, type: 'preview.cleanup.requested', message: 'Preview cleanup requested', metadata: { operationId, lineageId: lineage.id } } });
+        }
+        await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'preview:cleanup-requested', targetType: 'preview-lineage', targetId: lineage.id, metadata: { operationId, deploymentIds } } });
+      }
+      return { operationId, status, streamHref: `/deployments/${deploymentId}/stream`, lineageId: lineage.id, deploymentIds };
+    });
+  }
+
   async createDeploymentWorkflow(input: Record<string, any>) {
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const requestedDeployment = input.deployment || input;
@@ -1127,20 +1187,33 @@ export class PrismaControlPlaneRepository {
         const workflowJob = await tx.workflowJob.findFirst({ where: { targetId: existing.id, targetType: 'deployment' } });
         if (!workflowJob) throw new DeploymentOperationError('LINEAGE_JOB_MISSING');
         assertOperationReplay(input, workflowJob.payload);
-        return { deployment: existing, workflowJob };
+        return { deployment: existing, workflowJob, operationId: workflowJob.id, status: existing.status, streamHref: `/deployments/${existing.id}/stream` };
       }
       const source = input.operation === 'retry'
         ? await tx.deployment.findUnique({ where: { id: input.sourceDeploymentId || '' } })
         : await tx.deployment.findFirst({ where: { serviceId: input.serviceId, status: { in: ['BUILD_FAILED', 'FAILED', 'READY'] } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
-      const candidate = deploymentSuccessor(source, input);
+      let previewLineage: PreviewLineageRecord | null = null;
+      if (String(source?.deploymentType || '').toLowerCase() === 'preview') {
+        const lineageRow = await tx.previewLineage.findUnique({ where: { id: source.previewLineageId || '' } });
+        previewLineage = assertPreviewRetry(lineageRow ? previewLineageRecord(lineageRow) : null, source);
+      }
+      let candidate = deploymentSuccessor(source, input);
+      if (previewLineage) {
+        const lineage = previewLineage;
+        const advanced = { ...lineage, version: lineage.version + 1, generation: lineage.generation + 1, candidateDeploymentId: null, candidateGeneration: null };
+        const runtime = createPreviewRuntime(advanced, candidate.id);
+        candidate = { ...candidate, commitSha: lineage.headSha, commitHash: lineage.headSha, previewLineageId: lineage.id, previewGeneration: advanced.generation, previewRuntime: runtime, previewUrl: `https://${lineage.stableHost}` };
+        await tx.previewLineage.update({ where: { id: lineage.id }, data: previewLineageData(advanced) });
+      }
       if (await tx.deployment.findFirst({ where: { serviceId: input.serviceId, status: { notIn: [...terminalDeploymentStatuses] } } })) throw new DeploymentOperationError('ACTIVE_DEPLOYMENT');
       assertMutable(service, 'service');
       await requireMutableProject(tx, service.projectId);
       await enforcePrismaQuotaRequirements(tx, input.requestedByUserId === 'system' ? null : input.requestedByUserId, 'deployment:create', deploymentQuotaRequirements(candidate.deploymentType));
       const deployment = await tx.deployment.create({ data: candidate });
       const workflowJob = await tx.workflowJob.create({ data: workflowJobData(successorWorkflow(candidate, input)) });
+      if (candidate.previewLineageId) await tx.previewLineage.update({ where: { id: candidate.previewLineageId }, data: { candidateDeploymentId: deployment.id, candidateGeneration: candidate.previewGeneration } });
       await tx.deploymentEvent.create({ data: { deploymentId: deployment.id, type: 'deployment.queued', message: 'Immutable deployment operation queued', metadata: { sourceDeploymentId: candidate.sourceDeploymentId } } });
-      return { deployment, workflowJob };
+      return { deployment, workflowJob, operationId: workflowJob.id, status: deployment.status, streamHref: `/deployments/${deployment.id}/stream` };
     }, { isolationLevel: 'ReadCommitted', maxWait: 30000, timeout: 30000 });
   }
 
@@ -1498,6 +1571,7 @@ export class PrismaControlPlaneRepository {
       (error as any).statusCode = 401;
       throw error;
     }
+    if (String(input.event || '').toLowerCase() === 'pull_request') return this.handlePreviewWebhook({ ...input, body: rawBody, secret });
     const deliveryId = String(input.deliveryId || stableId('ghdel', input.event, rawBody));
     const actionPlan = githubWebhookActionPlan(input.event, input.payload || {});
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
@@ -1565,6 +1639,124 @@ export class PrismaControlPlaneRepository {
     });
   }
 
+  async handlePreviewWebhook(input: Record<string, any>) {
+    const event = parsePreviewWebhook({ body: input.body, signature: input.signature, secret: input.secret, deliveryId: input.deliveryId });
+    const actionPlan = { kind: event.action === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: event.repositoryId, installationId: event.installationId, repository: event.repository, baseBranch: event.baseRef };
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const existingDelivery = await tx.webhookEvent.findUnique({ where: { deliveryId: event.deliveryId } });
+      if (existingDelivery?.handled) return { accepted: true, duplicate: true, deliveryId: event.deliveryId, actions: [] };
+      const services = await servicesForPrismaGitHubWebhook(tx, actionPlan);
+      const actions: Record<string, unknown>[] = [];
+      const blocked = event.action === 'closed' ? new Set<string>() : await prismaGitHubWebhookQuotaBlocks(tx, services, actionPlan, actions);
+      for (const service of services.filter((candidate: Record<string, any>) => !blocked.has(String(candidate.id)))) {
+        const organizationId = String(service.project.organizationId);
+        await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,18))', `preview:organization:${organizationId}`);
+        await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,15))', String(service.id));
+        const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+        const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
+        const integrationId = String(desired.githubIntegrationId || github.integrationId || '');
+        const lineageId = stableId('preview-lineage', organizationId, service.projectId, service.id, event.installationId, event.repositoryId, event.pullRequestNumber);
+        const currentRow = await tx.previewLineage.findFirst({ where: { id: lineageId } });
+        const current = currentRow ? previewLineageRecord(currentRow) : null;
+        const transition = transitionPreviewLineage(current, event, { organizationId, projectId: service.projectId, serviceId: service.id, integrationId }, lineageId);
+        if (transition.decision === 'stale' || transition.decision === 'duplicate') {
+          actions.push({ type: `preview-${transition.decision}`, serviceId: service.id, lineageId });
+          continue;
+        }
+        const data = previewLineageData(transition.lineage);
+        await tx.previewLineage.upsert({ where: { id: lineageId }, update: data, create: data });
+        if (transition.decision === 'ambiguous') {
+          const jobId = resolverJobId(transition.lineage);
+          await tx.workflowJob.upsert({ where: { id: jobId }, update: {}, create: { id: jobId, ...workflowJobData({ type: PREVIEW_RESOLVER_JOB, targetType: 'preview-lineage', targetId: lineageId, payload: resolverPayload(transition.lineage), maxAttempts: 3 }) } });
+          actions.push({ type: 'preview-resolution-enqueued', serviceId: service.id, lineageId, workflowJobId: jobId });
+          continue;
+        }
+        const attempts = await tx.deployment.findMany({ where: { previewLineageId: lineageId } });
+        if (transition.decision === 'close') {
+          await tx.previewLineage.update({ where: { id: lineageId }, data: { routeIntent: previewCloseIntent(transition.lineage), reconcileToken: null, reconcileWorker: null, reconcileLeaseUntil: null } });
+          const mutableIds = attempts.filter((attempt: Record<string, any>) => String(attempt.status).toUpperCase() !== 'CLEANED_UP').map((attempt: Record<string, any>) => attempt.id);
+          if (mutableIds.length) await tx.deployment.updateMany({ where: { id: { in: mutableIds } }, data: { status: 'PREVIEW_CLEANUP_REQUESTED' } });
+          await tx.workflowJob.updateMany({ where: { status: { in: ['queued', 'running'] }, OR: [{ targetType: 'preview-lineage', targetId: lineageId }, { targetType: 'deployment', targetId: { in: attempts.map((attempt: Record<string, any>) => attempt.id) } }] }, data: { status: 'cancelled', lockedBy: null, lockedAt: null } });
+          actions.push({ type: 'preview-cleanup-requested', serviceId: service.id, lineageId, deploymentIds: mutableIds });
+          continue;
+        }
+        const deploymentId = stableId('dep', 'github-preview', event.deliveryId, service.id, transition.lineage.generation);
+        const runtime = createPreviewRuntime(transition.lineage, deploymentId);
+        const deployment = await tx.deployment.create({ data: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
+        const jobId = stableId('job', 'github-preview', event.deliveryId, service.id);
+        await tx.workflowJob.create({ data: { id: jobId, ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: 1, runtime } }) } });
+        await tx.previewLineage.update({ where: { id: lineageId }, data: { candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation } });
+        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, lineageId, deploymentId: deployment.id, workflowJobId: jobId, generation: transition.lineage.generation });
+      }
+      const delivery = existingDelivery
+        ? await tx.webhookEvent.update({ where: { id: existingDelivery.id }, data: { handled: true, errorMessage: null } })
+        : await tx.webhookEvent.create({ data: { provider: 'github', eventType: 'pull_request', deliveryId: event.deliveryId, payload: sanitizeJson(maskSecrets({ action: event.action, repositoryId: event.repositoryId, pullRequestNumber: event.pullRequestNumber })), handled: true } });
+      await tx.auditLog.upsert({ where: { id: stableId('aud', 'github:preview-webhook', event.deliveryId) }, update: {}, create: { id: stableId('aud', 'github:preview-webhook', event.deliveryId), actorUserId: null, action: 'github:preview-webhook', targetType: 'github-delivery', targetId: event.deliveryId, metadata: sanitizeJson({ action: event.action, actions: actions.map(action => action.type) }) } });
+      return { accepted: true, duplicate: false, deliveryId: event.deliveryId, matchedServiceCount: services.length, actions, webhookEvent: delivery };
+    });
+  }
+
+  async applyNextPreviewObservation(options: Record<string, any> = {}) {
+    const workerId = String(options.workerId || 'preview-apply');
+    const now = new Date(options.now || Date.now());
+    const expiredBefore = new Date(now.getTime() - 60_000);
+    return this.prisma.$transaction(async (tx: any) => {
+      const job = await tx.workflowJob.findFirst({ where: { type: PREVIEW_APPLY_JOB, attempts: { lt: 3 }, runAfter: { lte: now }, OR: [{ status: 'queued' }, { status: 'running', lockedAt: { lte: expiredBefore } }] }, orderBy: [{ runAfter: 'asc' }, { createdAt: 'asc' }] });
+      if (!job) return { processed: false, reason: 'no_ready_preview_observation' };
+      const claimed = await tx.workflowJob.updateMany({ where: { id: job.id, type: PREVIEW_APPLY_JOB, attempts: job.attempts, status: job.status, lockedAt: job.lockedAt }, data: { status: 'running', attempts: { increment: 1 }, lockedBy: workerId, lockedAt: now } });
+      if (claimed.count !== 1) return { processed: false, reason: 'claim_lost' };
+      const lineage = await tx.previewLineage.findUnique({ where: { id: job.targetId } });
+      if (!lineage || job.targetType !== 'preview-lineage') {
+        await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'cancelled', lockedBy: null, lockedAt: null } });
+        return { processed: true, reason: 'stale_preview_observation' };
+      }
+      let observation;
+      try { observation = parsePreviewObservation(lineage.resolutionObservation); }
+      catch (error) {
+        if (!(error instanceof PreviewError)) throw error;
+        await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'failed', lockedBy: null, lockedAt: null, payload: { ...job.payload, terminalReason: 'preview_observation_invalid' } } });
+        return { processed: true, reason: 'preview_observation_invalid' };
+      }
+      if (observation.lineageId !== lineage.id || observation.lineageVersion !== lineage.version) {
+        await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'cancelled', lockedBy: null, lockedAt: null } });
+        return { processed: true, reason: 'stale_preview_observation' };
+      }
+      await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,18))', `preview:organization:${lineage.organizationId}`);
+      await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,15))', String(lineage.serviceId));
+      const service = await tx.service.findUnique({ where: { id: lineage.serviceId }, include: { project: { include: { organization: true } } } });
+      const actionPlan = { kind: observation.state === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: observation.repositoryId, installationId: observation.installationId, repository: lineage.repository, baseBranch: observation.baseRef };
+      const bindingValid = service && !['DELETE_REQUESTED', 'DELETING', 'DELETED'].includes(String(service.status).toUpperCase()) && !['DELETE_REQUESTED', 'DELETING', 'DELETED'].includes(String(service.project?.status).toUpperCase()) && serviceMatchesGitHubWebhook(service, actionPlan);
+      const matched = bindingValid ? await servicesForPrismaGitHubWebhook(tx, actionPlan) : [];
+      if (!matched.some((candidate: Record<string, any>) => candidate.id === lineage.serviceId)) {
+        await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'failed', lockedBy: null, lockedAt: null, payload: { ...job.payload, terminalReason: 'preview_binding_inactive' } } });
+        return { processed: true, reason: 'preview_binding_inactive' };
+      }
+      if (observation.state === 'open') {
+        const blocked = await prismaGitHubWebhookQuotaBlocks(tx, [service], actionPlan, []);
+        if (blocked.has(String(service.id))) {
+          await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'failed', lockedBy: null, lockedAt: null, payload: { ...job.payload, terminalReason: 'preview_quota_blocked' } } });
+          return { processed: true, reason: 'preview_quota_blocked' };
+        }
+      }
+      const transition = applyPreviewObservation(previewLineageRecord(lineage), observation);
+      await tx.previewLineage.update({ where: { id: lineage.id }, data: previewLineageData(transition.lineage) });
+      if (transition.decision === 'open') {
+        const deploymentId = stableId('dep', 'github-preview-apply', lineage.id, transition.lineage.version, transition.lineage.generation);
+        const runtime = createPreviewRuntime(transition.lineage, deploymentId);
+        const deployment = await tx.deployment.create({ data: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: observation.headSha, commitHash: observation.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_preview_resolver', branch: observation.headRef, pullRequestNumber: observation.pullRequestNumber, previewUrl: `https://${lineage.stableHost}`, previewLineageId: lineage.id, previewGeneration: transition.lineage.generation, previewRuntime: runtime, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
+        await tx.workflowJob.create({ data: { id: stableId('job', 'github-preview-apply', lineage.id, transition.lineage.version), ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId: lineage.id, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: 1, runtime } }) } });
+        await tx.previewLineage.update({ where: { id: lineage.id }, data: { candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation, resolutionObservation: null, resolutionErrorCode: null } });
+      } else if (transition.decision === 'close') {
+        const attempts = await tx.deployment.findMany({ where: { previewLineageId: lineage.id } });
+        const mutableIds = attempts.filter((attempt: Record<string, any>) => String(attempt.status).toUpperCase() !== 'CLEANED_UP').map((attempt: Record<string, any>) => attempt.id);
+        if (mutableIds.length) await tx.deployment.updateMany({ where: { id: { in: mutableIds } }, data: { status: 'PREVIEW_CLEANUP_REQUESTED' } });
+        await tx.previewLineage.update({ where: { id: lineage.id }, data: { routeIntent: previewCloseIntent(transition.lineage), resolutionObservation: null, resolutionErrorCode: null } });
+      }
+      await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'succeeded', lockedBy: null, lockedAt: null, payload: { ...job.payload, appliedVersion: transition.lineage.version } } });
+      return { processed: true, lineageId: lineage.id, decision: transition.decision };
+    }, { isolationLevel: 'Serializable' });
+  }
+
   async enqueueWorkflowJob(input: Record<string, any>) {
     return this.prisma.workflowJob.create({ data: workflowJobData(input) });
   }
@@ -1576,7 +1768,13 @@ export class PrismaControlPlaneRepository {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const job = await this.prisma.workflowJob.findFirst({
         where: {
-          type: { notIn: [WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE, WORKFLOW_TYPES.RESOURCE_BACKUP, WORKFLOW_TYPES.RESOURCE_RESTORE] },
+          type: { notIn: [
+            WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE,
+            WORKFLOW_TYPES.RESOURCE_BACKUP,
+            WORKFLOW_TYPES.RESOURCE_RESTORE,
+            WORKFLOW_TYPES.GITHUB_PREVIEW_RESOLVE,
+            WORKFLOW_TYPES.GITHUB_PREVIEW_APPLY,
+          ] },
           status: 'queued',
           runAfter: { lte: now },
           OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
@@ -1587,7 +1785,13 @@ export class PrismaControlPlaneRepository {
       const updated = await this.prisma.workflowJob.updateMany({
         where: {
           id: job.id,
-          type: { notIn: [WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE, WORKFLOW_TYPES.RESOURCE_BACKUP, WORKFLOW_TYPES.RESOURCE_RESTORE] },
+          type: { notIn: [
+            WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE,
+            WORKFLOW_TYPES.RESOURCE_BACKUP,
+            WORKFLOW_TYPES.RESOURCE_RESTORE,
+            WORKFLOW_TYPES.GITHUB_PREVIEW_RESOLVE,
+            WORKFLOW_TYPES.GITHUB_PREVIEW_APPLY,
+          ] },
           status: 'queued',
           runAfter: { lte: now },
           OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
@@ -1724,15 +1928,27 @@ export class PrismaControlPlaneRepository {
   }
 
   async appendRuntimeLog(input: Record<string, any>) {
-    return this.prisma.runtimeLog.create({ data: { serviceId: input.serviceId, deploymentId: input.deploymentId || null, podName: input.podName || 'local-pod', containerName: input.containerName || 'app', line: maskLogLine(input.line), level: input.level || 'info' } });
+    const podName = input.podName || 'local-pod';
+    const containerName = input.containerName || 'app';
+    const podUid = persistedRuntimePodUid({ podUid: input.podUid, sourceInstanceId: input.sourceInstanceId });
+    return this.prisma.runtimeLog.create({ data: { serviceId: input.serviceId, deploymentId: input.deploymentId || null, podName, podUid, containerName, line: maskLogLine(input.line), level: input.level || 'info' } });
   }
 
   async appendDeploymentEvent(input: Record<string, any>) {
-    return this.prisma.deploymentEvent.create({ data: { deploymentId: input.deploymentId, type: input.type || 'deployment.event', message: maskLogLine(input.message), metadata: sanitizeJson(input.metadata || {}) } });
+    return this.prisma.deploymentEvent.create({ data: { deploymentId: input.deploymentId, type: input.type || 'deployment.event', message: maskLogLine(input.message), metadata: sanitizeJson(sanitizeLogRecord(input.metadata || {})) } });
   }
 
   async listDeploymentLogs(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.buildLog, { deploymentId }, options); }
   async listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.runtimeLog, { serviceId }, options); }
+  async logPemContext(rows: readonly ObservationLogRow[]): Promise<ObservationLogContext[]> {
+    const sources = pemContextSources(rows);
+    const runtimeSources = sources.filter((source): source is RuntimePemContextSource => source.kind === 'runtime');
+    const buildSources = sources.filter((source): source is BuildPemContextSource => source.kind === 'build');
+    const queryRows: PemContextQueryRow[] = [];
+    if (runtimeSources.length) queryRows.push(...await this.prisma.$queryRaw<PemContextQueryRow[]>(runtimePemContextQuery(runtimeSources)));
+    if (buildSources.length) queryRows.push(...await this.prisma.$queryRaw<PemContextQueryRow[]>(buildPemContextQuery(buildSources)));
+    return pemContextsFromQuery(sources, queryRows);
+  }
   async listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.deploymentEvent, { deploymentId }, options); }
 
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) {
@@ -1938,6 +2154,22 @@ export class PrismaControlPlaneRepository {
   }
 }
 
+function previewLineageRecord(row: Record<string, any>): PreviewLineageRecord {
+  return {
+    id: row.id, organizationId: row.organizationId, projectId: row.projectId, serviceId: row.serviceId, integrationId: row.integrationId,
+    installationId: row.installationId, repositoryId: row.repositoryId, repository: row.repository, pullRequestNumber: row.pullRequestNumber,
+    stableHost: row.stableHost, namespace: row.namespace, routeName: row.routeName, state: row.state,
+    version: row.version, generation: row.generation, eventUpdatedAt: new Date(row.eventUpdatedAt).toISOString(), eventAction: row.eventAction,
+    headSha: row.headSha, headRef: row.headRef, baseRef: row.baseRef, beforeSha: row.beforeSha,
+    candidateDeploymentId: row.candidateDeploymentId, candidateGeneration: row.candidateGeneration,
+    currentDeploymentId: row.currentDeploymentId, currentGeneration: row.currentGeneration,
+  };
+}
+
+function previewLineageData(lineage: PreviewLineageRecord) {
+  return { ...lineage, eventUpdatedAt: new Date(lineage.eventUpdatedAt) };
+}
+
 async function findActivityRows(model: any, scope: Record<string, any>, options: Record<string, any> = {}) {
   const cursorFilter = prismaKeysetFilter(options, 'timestamp', 'asc');
   const rows = await model.findMany({
@@ -1946,6 +2178,99 @@ async function findActivityRows(model: any, scope: Record<string, any>, options:
     take: activityLimit(options.limit),
   });
   return cursorFilter ? rows : rows.reverse();
+}
+
+function pemContextSources(rows: readonly ObservationLogRow[]): PemContextSource[] {
+  const sources = new Map<string, PemContextSource>();
+  for (const row of rows.slice(0, 1000)) {
+    if (sources.size >= PEM_CONTEXT_LIMITS.sources) break;
+    const source = observationLogSource(row);
+    const id = boundedPemIdentity(row.id);
+    const timestamp = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp || ''));
+    const deploymentId = boundedPemIdentity(row.deploymentId);
+    if (!source || !id || !deploymentId || !Number.isFinite(timestamp.getTime()) || sources.has(source)) continue;
+    const serviceId = boundedPemIdentity(row.serviceId);
+    if (serviceId) {
+      const podUid = boundedPemIdentity(row.podUid);
+      const containerName = boundedPemIdentity(row.containerName);
+      if (podUid && containerName) sources.set(source, { requestId: sources.size + 1, source, kind: 'runtime', serviceId, deploymentId, podUid, containerName, timestamp, id });
+      continue;
+    }
+    const step = boundedPemIdentity(row.step);
+    if (step) sources.set(source, { requestId: sources.size + 1, source, kind: 'build', deploymentId, step, timestamp, id });
+  }
+  return [...sources.values()];
+}
+
+export function runtimePemContextQuery(sources: readonly RuntimePemContextSource[]) {
+  const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.serviceId} AS text), CAST(${source.deploymentId} AS text), CAST(${source.podUid} AS text), CAST(${source.containerName} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
+  return Prisma.sql`
+    WITH requested("requestId", "serviceId", "deploymentId", "podUid", "containerName", "timestamp", "id") AS MATERIALIZED (VALUES ${Prisma.join(values)})
+    SELECT requested."requestId", history."line", history."truncated"
+    FROM requested CROSS JOIN LATERAL (
+      SELECT clipped."line", clipped."truncated", clipped."timestamp", clipped."id"
+      FROM (
+        SELECT substring(log."line" FROM 1 FOR CAST(${PEM_CONTEXT_LIMITS.lineCharacters} AS integer)) AS "line",
+          substring(log."line" FROM CAST(${PEM_CONTEXT_LIMITS.lineCharacters + 1} AS integer) FOR 1) <> '' AS "truncated",
+          log."timestamp", log."id"
+        FROM "RuntimeLog" AS log
+        WHERE log."serviceId" = requested."serviceId" AND log."deploymentId" = requested."deploymentId"
+          AND log."podUid" = requested."podUid" AND log."containerName" = requested."containerName"
+          AND log."id" <> requested."id"
+          AND (log."timestamp", log."id") < (requested."timestamp", requested."id")
+        ORDER BY log."serviceId" ASC, log."deploymentId" ASC, log."podUid" ASC, log."containerName" ASC, log."timestamp" DESC, log."id" DESC
+        LIMIT ${PEM_CONTEXT_LIMITS.rowsPerSource + 1}
+      ) AS clipped
+      WHERE octet_length(clipped."line") <= ${PEM_CONTEXT_LIMITS.lineBytes}
+    ) AS history
+    ORDER BY requested."requestId", history."timestamp" ASC, history."id" ASC
+  `;
+}
+
+function buildPemContextQuery(sources: readonly BuildPemContextSource[]) {
+  const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.deploymentId} AS text), CAST(${source.step} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
+  return Prisma.sql`
+    WITH requested("requestId", "deploymentId", "step", "timestamp", "id") AS MATERIALIZED (VALUES ${Prisma.join(values)})
+    SELECT requested."requestId", history."line", history."truncated"
+    FROM requested CROSS JOIN LATERAL (
+      SELECT clipped."line", clipped."truncated", clipped."timestamp", clipped."id"
+      FROM (
+        SELECT substring(log."line" FROM 1 FOR CAST(${PEM_CONTEXT_LIMITS.lineCharacters} AS integer)) AS "line",
+          substring(log."line" FROM CAST(${PEM_CONTEXT_LIMITS.lineCharacters + 1} AS integer) FOR 1) <> '' AS "truncated",
+          log."timestamp", log."id"
+        FROM "BuildLog" AS log
+        WHERE log."deploymentId" = requested."deploymentId" AND log."step" = requested."step"
+          AND log."id" <> requested."id"
+          AND (log."timestamp", log."id") < (requested."timestamp", requested."id")
+        ORDER BY log."deploymentId" ASC, log."step" ASC, log."timestamp" DESC, log."id" DESC
+        LIMIT ${PEM_CONTEXT_LIMITS.rowsPerSource + 1}
+      ) AS clipped
+      WHERE octet_length(clipped."line") <= ${PEM_CONTEXT_LIMITS.lineBytes}
+    ) AS history
+    ORDER BY requested."requestId", history."timestamp" ASC, history."id" ASC
+  `;
+}
+
+function pemContextsFromQuery(sources: readonly PemContextSource[], rows: readonly PemContextQueryRow[]): ObservationLogContext[] {
+  const histories = new Map<number, PemContextQueryRow[]>();
+  const withinQueryLimit = rows.length <= PEM_CONTEXT_LIMITS.queryRows;
+  for (const row of rows.slice(0, PEM_CONTEXT_LIMITS.queryRows)) {
+    if (!Number.isInteger(row.requestId) || row.requestId < 1 || row.requestId > sources.length || typeof row.line !== 'string') continue;
+    const history = histories.get(row.requestId) || [];
+    if (history.length < PEM_CONTEXT_LIMITS.rowsPerSource + 1) history.push(row);
+    histories.set(row.requestId, history);
+  }
+  return sources.map((source) => {
+    const history = histories.get(source.requestId) || [];
+    const complete = withinQueryLimit && history.length <= PEM_CONTEXT_LIMITS.rowsPerSource && history.every((row) => row.truncated !== true && Buffer.byteLength(row.line) <= PEM_CONTEXT_LIMITS.lineBytes);
+    return { source: source.source, rows: complete ? history.map((row) => ({ line: row.line })) : [], complete };
+  });
+}
+
+function boundedPemIdentity(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const identity = value.trim();
+  return identity.length > 0 && identity.length <= 256 && /^[A-Za-z0-9._:-]+$/.test(identity) ? identity : null;
 }
 
 async function findKeysetRows(model: any, scope: Record<string, any>, options: Record<string, any> = {}, query: Record<string, any> = {}) {
@@ -2383,6 +2708,10 @@ function deploymentData(input: Record<string, any>) {
     branch: input.branch || 'main',
     pullRequestNumber: input.pullRequestNumber ? Number(input.pullRequestNumber) : null,
     previewUrl: input.previewUrl || null,
+    previewLineageId: input.previewLineageId ?? null,
+    previewGeneration: input.previewGeneration ?? null,
+    previewRuntime: input.previewRuntime,
+    previewOwnedObjects: input.previewOwnedObjects,
     errorCode: input.errorCode || null,
     errorMessage: input.errorMessage ? maskLogLine(input.errorMessage) : null,
     buildStartedAt: input.buildStartedAt ? new Date(input.buildStartedAt) : undefined,
@@ -2970,7 +3299,13 @@ async function servicesForPrismaGitHubWebhook(prisma: any, actionPlan: Record<st
     where: { githubRepositoryId: String(actionPlan.repositoryId) },
     include: { project: { include: { organization: true } } },
   });
-  return services.filter((service: Record<string, any>) => serviceMatchesGitHubWebhook(service, actionPlan));
+  return services.filter((service: Record<string, any>) => previewParentIsActive(service) && serviceMatchesGitHubWebhook(service, actionPlan));
+}
+
+function previewParentIsActive(service: Record<string, any>) {
+  const inactive = new Set(['DELETE_REQUESTED', 'DELETING', 'DELETED']);
+  return !inactive.has(String(service.status).toUpperCase())
+    && !inactive.has(String(service.project?.status).toUpperCase());
 }
 
 function serviceMatchesGitHubWebhook(service: Record<string, any>, actionPlan: Record<string, any>) {

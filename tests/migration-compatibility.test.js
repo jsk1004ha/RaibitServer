@@ -33,7 +33,7 @@ test('deployment lineage nullable uniqueness migration gate', async t => {
     else assert.throws(() => checkAdditiveSql(sql));
     const root = fixture(child);
     const next = structuredClone(manifest);
-    const id = '000013_lineage_gate_fixture';
+    const id = '000017_lineage_gate_fixture';
     mkdirSync(join(root, 'prisma/migrations', id));
     writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
     next.migrations.push({ id, sha256: digest(sql) });
@@ -118,7 +118,7 @@ test('reject destructive migration matrix before apply', async (t) => {
     await t.test(`appended migration rejected: ${sql}`, (child) => {
       const root = fixture(child);
       const next = structuredClone(manifest);
-      const id = '000011_rejected_fixture';
+      const id = '000017_rejected_fixture';
       mkdirSync(join(root, 'prisma/migrations', id));
       writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
       next.migrations.push({ id, sha256: digest(sql) });
@@ -152,7 +152,7 @@ test('index gate rejects N-1 uniqueness restrictions and unsupported index gramm
     await t.test(sql, (child) => {
       const root = fixture(child);
       const next = structuredClone(manifest);
-      const id = '000011_index_fixture';
+      const id = '000017_index_fixture';
       mkdirSync(join(root, 'prisma/migrations', id));
       writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
       next.migrations.push({ id, sha256: digest(sql) });

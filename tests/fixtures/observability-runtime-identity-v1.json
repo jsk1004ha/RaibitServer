@@ -1,0 +1,213 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "web",
+      "project": {
+        "id": "project-19",
+        "organizationId": "org-19",
+        "organizationSlug": "club",
+        "slug": "demo"
+      },
+      "service": {
+        "id": "service-19",
+        "slug": "web",
+        "type": "web"
+      },
+      "deployment": {
+        "id": "dep-web",
+        "deploymentType": "production",
+        "pullRequestNumber": 0
+      },
+      "expected": {
+        "namespace": "org-19--demo",
+        "serviceName": "web",
+        "workloadName": "web",
+        "kind": "Deployment",
+        "containerName": "web"
+      }
+    },
+    {
+      "name": "private",
+      "project": {
+        "id": "project-19",
+        "organizationId": "org-19",
+        "organizationSlug": "club",
+        "slug": "demo"
+      },
+      "service": {
+        "id": "service-19",
+        "slug": "web",
+        "type": "private"
+      },
+      "deployment": {
+        "id": "dep-private",
+        "deploymentType": "production",
+        "pullRequestNumber": 0
+      },
+      "expected": {
+        "namespace": "org-19--demo",
+        "serviceName": "web",
+        "workloadName": "web",
+        "kind": "Deployment",
+        "containerName": "web"
+      }
+    },
+    {
+      "name": "worker",
+      "project": {
+        "id": "project-19",
+        "organizationId": "org-19",
+        "organizationSlug": "club",
+        "slug": "demo"
+      },
+      "service": {
+        "id": "service-19",
+        "slug": "web",
+        "type": "worker"
+      },
+      "deployment": {
+        "id": "dep-worker",
+        "deploymentType": "production",
+        "pullRequestNumber": 0
+      },
+      "expected": {
+        "namespace": "org-19--demo",
+        "serviceName": "web",
+        "workloadName": "web",
+        "kind": "Deployment",
+        "containerName": "web"
+      }
+    },
+    {
+      "name": "job",
+      "project": {
+        "id": "project-19",
+        "organizationId": "org-19",
+        "organizationSlug": "club",
+        "slug": "demo"
+      },
+      "service": {
+        "id": "service-19",
+        "slug": "web",
+        "type": "job"
+      },
+      "deployment": {
+        "id": "dep-job",
+        "deploymentType": "production",
+        "pullRequestNumber": 0
+      },
+      "expected": {
+        "namespace": "org-19--demo",
+        "serviceName": "web",
+        "workloadName": "web-6764a3cfa467",
+        "kind": "Job",
+        "containerName": "web"
+      }
+    },
+    {
+      "name": "cron-long",
+      "project": {
+        "id": "project-19",
+        "organizationId": "org-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "organizationSlug": "club",
+        "slug": "project-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      "service": {
+        "id": "service-19",
+        "slug": "service-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        "type": "cron"
+      },
+      "deployment": {
+        "id": "dep-cron",
+        "deploymentType": "production",
+        "pullRequestNumber": 0
+      },
+      "expected": {
+        "namespace": "org-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-be37804fb9bb",
+        "serviceName": "service-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-14609a415df8",
+        "workloadName": "service-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-7ca6234151ee",
+        "kind": "CronJob",
+        "containerName": "service-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-14609a415df8"
+      }
+    },
+    {
+      "name": "web-long",
+      "project": {
+        "id": "project-19",
+        "organizationId": "org-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "organizationSlug": "club",
+        "slug": "project-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      "service": {
+        "id": "service-19",
+        "slug": "service-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        "type": "web"
+      },
+      "deployment": {
+        "id": "dep-long",
+        "deploymentType": "production",
+        "pullRequestNumber": 0
+      },
+      "expected": {
+        "namespace": "org-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-be37804fb9bb",
+        "serviceName": "service-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-14609a415df8",
+        "workloadName": "service-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-14609a415df8",
+        "kind": "Deployment",
+        "containerName": "service-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-14609a415df8"
+      }
+    },
+    {
+      "name": "preview-a",
+      "project": {
+        "id": "project-19",
+        "organizationId": "org-19",
+        "organizationSlug": "club",
+        "slug": "demo"
+      },
+      "service": {
+        "id": "service-19",
+        "slug": "web",
+        "type": "web"
+      },
+      "deployment": {
+        "id": "dep-preview-a",
+        "deploymentType": "preview",
+        "pullRequestNumber": 42
+      },
+      "expected": {
+        "namespace": "org-19--demo",
+        "serviceName": "pr-42-web-9ec28253e2f5",
+        "workloadName": "pr-42-web-9ec28253e2f5",
+        "kind": "Deployment",
+        "containerName": "pr-42-web-9ec28253e2f5"
+      }
+    },
+    {
+      "name": "preview-b",
+      "project": {
+        "id": "project-19",
+        "organizationId": "org-19",
+        "organizationSlug": "club",
+        "slug": "demo"
+      },
+      "service": {
+        "id": "service-19",
+        "slug": "web",
+        "type": "web"
+      },
+      "deployment": {
+        "id": "dep-preview-b",
+        "deploymentType": "preview",
+        "pullRequestNumber": 42
+      },
+      "expected": {
+        "namespace": "org-19--demo",
+        "serviceName": "pr-42-web-9869df9ac3c7",
+        "workloadName": "pr-42-web-9869df9ac3c7",
+        "kind": "Deployment",
+        "containerName": "pr-42-web-9869df9ac3c7"
+      }
+    }
+  ]
+}

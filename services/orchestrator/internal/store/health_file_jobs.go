@@ -81,6 +81,9 @@ func (s *FileStore) ClaimNextHealth(ctx context.Context, options ClaimOptions) (
 		job.Attempts++
 		job.DeploymentType = stringField(d, "deploymentType")
 		job.PullRequestNumber = intField(d, "pullRequestNumber")
+		job.PreviewLineageID = stringField(d, "previewLineageId")
+		job.PreviewGeneration = intField(d, "previewGeneration")
+		job.PreviewRuntime = rawJSONFromRecord(d, "previewRuntime")
 		job.LockedBy = worker
 		job.LeaseExpiresAt = at.Add(HealthLeaseDuration)
 		if err := s.save(state); err != nil {

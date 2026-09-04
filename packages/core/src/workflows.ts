@@ -12,6 +12,8 @@ export const WORKFLOW_TYPES = Object.freeze({
   PUBLIC_HEALTH_OBSERVE: 'public-health-observe',
   RESOURCE_BACKUP: 'resource.backup',
   RESOURCE_RESTORE: 'resource.restore',
+  GITHUB_PREVIEW_RESOLVE: 'github.preview-resolve',
+  GITHUB_PREVIEW_APPLY: 'github.preview-apply',
 });
 
 export const WORKFLOW_STATUSES = Object.freeze({
@@ -54,7 +56,13 @@ export function isWorkflowTerminal(job: Record<string, any>) {
 }
 
 export function isWorkflowJobReady(job: Record<string, any>, options: Record<string, any> = {}) {
-  if ([WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE, WORKFLOW_TYPES.RESOURCE_BACKUP, WORKFLOW_TYPES.RESOURCE_RESTORE].includes(job.type)) return false;
+  if ([
+    WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE,
+    WORKFLOW_TYPES.RESOURCE_BACKUP,
+    WORKFLOW_TYPES.RESOURCE_RESTORE,
+    WORKFLOW_TYPES.GITHUB_PREVIEW_RESOLVE,
+    WORKFLOW_TYPES.GITHUB_PREVIEW_APPLY,
+  ].includes(job.type)) return false;
   const now = dateMillis(options.now || Date.now());
   const runAfter = dateMillis(job.runAfter || 0);
   if (!READY_STATUSES.has(normalizeWorkflowStatus(job.status))) return false;

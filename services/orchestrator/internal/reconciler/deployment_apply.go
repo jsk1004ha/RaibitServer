@@ -35,7 +35,7 @@ func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Pr
 	_ = r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "orchestrator.apply.started", Message: "applying Kubernetes desired state", Metadata: map[string]any{"manifestFile": manifestFile, "rollback": rollback, "dryRun": r.config.DryRun, "workloadKind": plan.Kind, "workloadName": plan.WorkloadName}})
 	applyResult, err := r.runKubectl(ctx, []string{"apply", "--server-side", "-f", manifestFile})
 	commands := []string{applyResult.Command}
-	_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment.ID, "kubectl-apply", applyResult)
+	_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment, "kubectl-apply", applyResult)
 	if err != nil {
 		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err)
 	}
@@ -47,7 +47,7 @@ func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Pr
 			"--ignore-not-found=true", "--wait=true",
 		})
 		commands = append(commands, pruneResult.Command)
-		_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment.ID, "kubectl-prune", pruneResult)
+		_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment, "kubectl-prune", pruneResult)
 		if pruneErr != nil {
 			return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, pruneErr, "workload.failed")
 		}
@@ -58,7 +58,7 @@ func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Pr
 	}
 	readinessResult, err := r.runKubectl(ctx, readiness.args)
 	commands = append(commands, readinessResult.Command)
-	_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment.ID, readiness.step, readinessResult)
+	_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment, readiness.step, readinessResult)
 	if err != nil {
 		_ = r.collectDiagnostics(ctx, service, deployment, plan)
 		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err, readiness.failedEvent)
@@ -71,7 +71,11 @@ func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Pr
 	if observeErr != nil {
 		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, observeErr)
 	}
-	_, err = r.store.CompleteRollout(ctx, store.RolloutCompletion{Lease: deployment.Lease(), Now: r.now().UTC(), Observation: observation, ImageURL: spec.Image, LeaseDuration: r.config.ClaimLease})
+	owned, inventoryErr := r.observePreviewInventory(ctx, plan, deployment)
+	if inventoryErr != nil {
+		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, inventoryErr)
+	}
+	_, err = r.store.CompleteRollout(ctx, store.RolloutCompletion{Lease: deployment.Lease(), Now: r.now().UTC(), Observation: observation, ImageURL: spec.Image, LeaseDuration: r.config.ClaimLease, PreviewOwned: owned})
 	if err != nil {
 		if result, parentErr := r.abortIfParentDeleting(ctx, project, service, deployment, manifestFile, commands); result != nil || parentErr != nil {
 			return result, parentErr

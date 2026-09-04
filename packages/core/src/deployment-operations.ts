@@ -19,6 +19,8 @@ export type LineageSource = {
   readonly imageUrl?: string | null; readonly imageDigest?: string | null;
   readonly branch?: string; readonly deploymentType?: string;
   readonly pullRequestNumber?: number | null; readonly previewUrl?: string | null;
+  readonly previewLineageId?: string | null; readonly previewGeneration?: number | null;
+  readonly previewRuntime?: Json;
 };
 export class DeploymentOperationError extends Error {
   readonly name = 'DeploymentOperationError';
@@ -125,6 +127,8 @@ export function deploymentSuccessor(source: LineageSource | null, input: Deploym
     ...image,
     branch: source.branch ?? 'main', deploymentType: source.deploymentType ?? 'production', triggerType: input.operation,
     pullRequestNumber: source.pullRequestNumber ?? null, previewUrl: source.previewUrl ?? null,
+    previewLineageId: source.previewLineageId ?? null, previewGeneration: source.previewGeneration ?? null,
+    previewRuntime: source.previewRuntime ?? null,
   };
 }
 
@@ -136,6 +140,12 @@ export function successorWorkflow(deployment: ReturnType<typeof deploymentSucces
       sourceDeploymentId: deployment.sourceDeploymentId, commitSha: deployment.commitSha,
       imageUrl: deployment.imageUrl, imageDigest: deployment.imageDigest, branch: deployment.branch,
       desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: deployment.snapshotVersion,
+      ...(deployment.previewLineageId ? { lineageId: deployment.previewLineageId, lineageVersion: previewLineageVersion(deployment.previewRuntime),
+        generation: deployment.previewGeneration, runtime: deployment.previewRuntime } : {}),
       operationRequest: operationIdentity(input) },
   };
+}
+
+function previewLineageVersion(value: Json | undefined): number | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) && typeof value.lineageVersion === 'number' ? value.lineageVersion : undefined;
 }

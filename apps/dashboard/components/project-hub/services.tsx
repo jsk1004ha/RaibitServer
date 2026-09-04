@@ -5,6 +5,7 @@ import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { OperationSubmit } from '@/components/operation-submit';
 import { HubEmpty, ProjectStatusBadge } from './shared';
 import type { ProjectHubData, ServiceRecord } from './types';
 
@@ -72,7 +73,9 @@ export function ServicesView({ data }: Readonly<{ data: ProjectHubData }>) {
 }
 
 function DeployActions({ data, service }: Readonly<{ data: ProjectHubData; service: ServiceRecord }>) {
-  return <div className="flex flex-wrap gap-raibit-sm"><form action={apiAction(`/projects/${data.projectId}/services/${service.id}/deployments`)} method="post"><input name="_returnTo" type="hidden" value={`${data.base}?view=deployments`} /><input name="deploymentType" type="hidden" value="production" /><button className={buttonVariants({ size: 'sm' })} type="submit">운영 배포</button></form><form action={apiAction(`/projects/${data.projectId}/services/${service.id}/deployments`)} method="post"><input name="_returnTo" type="hidden" value={`${data.base}?view=deployments`} /><input name="deploymentType" type="hidden" value="preview" /><button className={buttonVariants({ variant: 'outline', size: 'sm' })} type="submit">미리보기</button></form></div>;
+  const action = apiAction(`/projects/${data.projectId}/services/${service.id}/deployments`);
+  const returnTo = `${data.base}?view=deployments`;
+  return <div className="flex flex-wrap items-start gap-raibit-sm"><OperationSubmit action={action} className="contents" pendingLabel="운영 배포 요청을 확인하고 있습니다." returnTo={returnTo} submitClassName={buttonVariants({ size: 'sm' })} submitLabel="운영 배포"><input name="deploymentType" type="hidden" value="production" /></OperationSubmit><OperationSubmit action={action} className="contents" pendingLabel="미리보기 배포 요청을 확인하고 있습니다." returnTo={returnTo} submitClassName={buttonVariants({ variant: 'outline', size: 'sm' })} submitLabel="미리보기"><input name="deploymentType" type="hidden" value="preview" /></OperationSubmit></div>;
 }
 
 function ServiceItem({ data, service }: Readonly<{ data: ProjectHubData; service: ServiceRecord }>) {

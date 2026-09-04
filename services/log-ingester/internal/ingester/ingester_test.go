@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/raibitserver/log-ingester/internal/identity"
+	redaction "github.com/raibitserver/log-ingester/internal/redact"
 )
 
 func TestRunOncePersistsBoundedRedactedLogsAndCursor(t *testing.T) {
@@ -75,7 +78,7 @@ func TestRunOnceDoesNotAdvanceCursorWhenInsertFails(t *testing.T) {
 func TestRedactCoversStructuredAuthorizationAndJWTSecrets(t *testing.T) {
 	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signaturevalue"
 	input := `{"password":"json-secret","token": "token-secret", "api_key":"escaped-\\\"secret"} Authorization: Bearer bearer-secret session=` + jwt + ` postgres://user:db-secret@db/app`
-	redacted := redact(input)
+	redacted := redaction.Text(input)
 	for _, secret := range []string{"json-secret", "token-secret", "escaped", "bearer-secret", "signaturevalue", "db-secret"} {
 		if strings.Contains(redacted, secret) {
 			t.Fatalf("secret %q remained in %q", secret, redacted)
@@ -89,7 +92,7 @@ func TestRunOnceEnforcesGlobalFairRecordAndByteBudgets(t *testing.T) {
 	for _, container := range []string{"one", "two", "three"} {
 		source.logs[container] = []LogEntry{{Timestamp: now, Line: "1234567890"}, {Timestamp: now.Add(time.Second), Line: "abcdefghij"}}
 	}
-	state := &fakeStore{}
+	state := &fakeStore{scopes: map[string]identity.Scope{"dep:svc-1": {ServiceID: "svc-1", DeploymentID: "dep:svc-1", Container: "one"}, "dep:svc-2": {ServiceID: "svc-2", DeploymentID: "dep:svc-2", Container: "two"}, "dep:svc-3": {ServiceID: "svc-3", DeploymentID: "dep:svc-3", Container: "three"}}}
 	result, err := New(Config{MaxRecordsPerRun: 2, MaxBytesPerRun: 20, MaxLineBytes: 10}, source, state).RunOnce(context.Background(), now)
 	if err != nil {
 		t.Fatal(err)
@@ -105,11 +108,11 @@ func TestRunOnceEnforcesGlobalFairRecordAndByteBudgets(t *testing.T) {
 func TestRunOnceSkipsGonePodLogAndContinues(t *testing.T) {
 	now := time.Date(2026, 7, 13, 5, 0, 0, 0, time.UTC)
 	source := &fakeSource{
-		pods:     []Pod{{Name: "pod", UID: "uid", Containers: []string{"gone", "healthy"}, Labels: map[string]string{serviceLabel: "svc"}}},
+		pods:     []Pod{{Name: "gone", UID: "gone", Containers: []string{"gone"}, Labels: map[string]string{serviceLabel: "gone"}}, {Name: "healthy", UID: "healthy", Containers: []string{"healthy"}, Labels: map[string]string{serviceLabel: "healthy"}}},
 		logs:     map[string][]LogEntry{"healthy": {{Timestamp: now, Line: "ready"}}},
 		readErrs: map[string]error{"gone": skippableReadError{}},
 	}
-	state := &fakeStore{}
+	state := &fakeStore{scopes: map[string]identity.Scope{"dep:gone": {ServiceID: "gone", DeploymentID: "dep:gone", Container: "gone"}, "dep:healthy": {ServiceID: "healthy", DeploymentID: "dep:healthy", Container: "healthy"}}}
 	result, err := New(Config{}, source, state).RunOnce(context.Background(), now)
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +134,11 @@ type fakeSource struct {
 }
 
 func (f *fakeSource) ListPods(_ context.Context, _ string, limit int) ([]Pod, string, error) {
+	for index := range f.pods {
+		if f.pods[index].Labels[serviceLabel] != "" && f.pods[index].Labels[deploymentLabel] == "" {
+			f.pods[index].Labels[deploymentLabel] = "dep:" + f.pods[index].Labels[serviceLabel]
+		}
+	}
 	if limit <= 0 || limit >= len(f.pods) {
 		return f.pods, "", nil
 	}
@@ -150,6 +158,8 @@ type fakeStore struct {
 	insertErr       error
 	retentionBefore time.Time
 	insertCalls     int
+	states          map[string]string
+	scopes          map[string]identity.Scope
 }
 
 func (f *fakeStore) Cursor(_ context.Context, key string) (time.Time, error) {
@@ -161,17 +171,60 @@ func (f *fakeStore) Insert(_ context.Context, records []Record, cursors []Cursor
 	if f.insertErr != nil {
 		return 0, f.insertErr
 	}
-	f.records = append(f.records, records...)
+	inserted := 0
+	for _, record := range records {
+		found := false
+		for _, old := range f.records {
+			if old.SourceKey == record.SourceKey {
+				found = true
+			}
+		}
+		if !found {
+			f.records = append(f.records, record)
+			inserted++
+		}
+	}
 	if f.cursors == nil {
 		f.cursors = map[string]time.Time{}
 	}
+	if f.states == nil {
+		f.states = map[string]string{}
+	}
 	for _, update := range cursors {
+		f.states["logs-state:"+strings.TrimPrefix(update.Key, "logs:")] = update.State
 		f.cursors[update.Key] = update.Cursor
 	}
-	return len(records), nil
+	return inserted, nil
 }
 
 func (f *fakeStore) DeleteOlderThan(_ context.Context, before time.Time) (int64, error) {
 	f.retentionBefore = before
 	return 0, nil
+}
+
+func (f *fakeSource) Verify(_ context.Context, _ Pod, _ identity.Scope) (time.Time, error) {
+	return time.Unix(1, 0), nil
+}
+
+func (f *fakeStore) Resolve(_ context.Context, id string) (identity.Scope, error) {
+	if scope, ok := f.scopes[id]; ok {
+		return scope, nil
+	}
+	service := strings.TrimPrefix(id, "dep:")
+	if id == "dep-1" {
+		service = "svc-1"
+	}
+	return identity.Scope{ServiceID: service, DeploymentID: id, Container: "app"}, nil
+}
+func (f *fakeStore) State(_ context.Context, key string) (string, error) { return f.states[key], nil }
+func (f *fakeStore) Existing(_ context.Context, keys []string) (map[string]bool, error) {
+	found := map[string]bool{}
+	for _, key := range keys {
+		for _, row := range f.records {
+			if key == row.SourceKey {
+				found[key] = true
+			}
+		}
+	}
+	return found, nil
 }
