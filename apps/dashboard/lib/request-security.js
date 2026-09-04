@@ -227,6 +227,17 @@ export function formMutationMethod(requestMethod, body = {}) {
 	return override;
 }
 
+export function resourceRecoveryPayloadFromForm(path, method, body = {}) {
+	if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+	const normalized = { ...body };
+	const isCreate = method === 'POST' && /^\/resources\/[^/]+\/backups$/.test(path);
+	const isRestore = method === 'POST' && /^\/backups\/[^/]+\/restores$/.test(path);
+	const isDelete = method === 'DELETE' && /^\/backups\/[^/]+$/.test(path);
+	if ((isCreate || isRestore) && normalized.formatVersion === '1') normalized.formatVersion = 1;
+	if (isDelete && normalized.confirmed === 'true') normalized.confirmed = true;
+	return normalized;
+}
+
 export function withFlashMessage(requestUrl, returnPath, kind, value) {
 	const safePath = safeReturnPath(requestUrl, returnPath, null);
 	const request = new URL(requestUrl);

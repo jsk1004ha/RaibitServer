@@ -71,6 +71,20 @@ const resourceConsole = {
   keys: [{ name: 'deployments_pkey', type: 'primary' }],
   browse: { rows: [{ id: 'row_fixture_001', status: 'READY' }], connectionInfo: { databaseUrl: 'postgresql://provider-managed@fixture.invalid/primary' } },
 };
+const resourceBackups = [
+  {
+    id: 'bak_fixture_ready', organizationId: project.organizationId, projectId: project.id, resourceId: resource.id, engine: resource.engine,
+    status: 'READY', createdAt: FIXED_TIME, readyAt: FIXED_TIME, errorCode: null, size: '1048576', expiresAt: '2026-09-07T03:00:00.000Z', recoverable: true,
+  },
+  {
+    id: 'bak_fixture_verifying', organizationId: project.organizationId, projectId: project.id, resourceId: resource.id, engine: resource.engine,
+    status: 'VERIFYING', createdAt: '2026-08-31T02:59:00.000Z', readyAt: null, errorCode: null, size: null, expiresAt: null, recoverable: false,
+  },
+  {
+    id: 'bak_fixture_failed', organizationId: project.organizationId, projectId: project.id, resourceId: resource.id, engine: resource.engine,
+    status: 'FAILED', createdAt: '2026-08-31T02:58:00.000Z', readyAt: null, errorCode: 'RECOVERY_SOURCE_UNAVAILABLE', size: null, expiresAt: null, recoverable: false,
+  },
+];
 
 export const FIXTURE_IDS = Object.freeze({
   project: project.id,
@@ -84,6 +98,9 @@ export const FIXTURE_IDS = Object.freeze({
   failedDeployment: failedDeployment.id,
   longDeployment: longDeployment.id,
   hostileDeployment: hostileDeployment.id,
+  readyBackup: resourceBackups[0].id,
+  verifyingBackup: resourceBackups[1].id,
+  failedBackup: resourceBackups[2].id,
 });
 
 const users = {
@@ -140,6 +157,8 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   const deploymentFixture = deploymentFixtureForPath(pathname);
   if (deploymentFixture) return deploymentResponse({ body, deploymentFixture, method, pathname, state });
   if (pathname === `/resources/${resource.id}`) return json(200, resource);
+  if (pathname === `/resources/${resource.id}/backups`) return resourceBackupResponse({ body, method, pathname, state });
+  if (pathname.startsWith('/backups/')) return resourceBackupResponse({ body, method, pathname, state });
   if (pathname.startsWith(`/resources/${resource.id}/console/`)) return resourceConsoleResponse({ body, method, pathname, state });
   if (pathname === `/services/${service.id}/logs`) return json(200, { logs: [{ timestamp: FIXED_TIME, line: longKoreanText }] });
   if (pathname === `/services/${workerService.id}/logs`) return json(200, { logs: [{ id: 'worker-initial', timestamp: FIXED_TIME, level: 'info', line: 'worker-only-initial-log' }, { id: 'worker-hostile', timestamp: FIXED_TIME, level: 'warn', line: hostileLogLine }] });
@@ -218,4 +237,35 @@ function resourceConsoleResponse({ body, method, pathname, state }) {
     return json(202, { operation: 'provider_command_requested', resourceId: resource.id });
   }
   return json(405, { error: 'fixture_resource_method_not_allowed' });
+}
+
+function resourceBackupResponse({ body, method, pathname, state }) {
+  const listPath = `/resources/${resource.id}/backups`;
+  if (state === 'partial' && pathname === listPath && method === 'GET') return json(503, { error: 'fixture_backup_data_unavailable' });
+  if (pathname === listPath && method === 'GET') return json(200, { backups: state === 'empty' ? [] : resourceBackups, nextCursor: null });
+  if (pathname === listPath && method === 'POST') {
+    if (body.formatVersion !== 1 || typeof body.requestIdempotencyKey !== 'string') return json(400, { error: 'fixture_backup_input_invalid' });
+    return json(202, {
+      id: 'bak_fixture_requested', organizationId: project.organizationId, projectId: project.id, resourceId: resource.id, engine: resource.engine,
+      status: 'QUEUED', createdAt: FIXED_TIME, readyAt: null, errorCode: null, size: null, expiresAt: null, recoverable: false,
+    });
+  }
+  const restoreMatch = /^\/backups\/([^/]+)\/restores$/.exec(pathname);
+  if (restoreMatch && method === 'POST') {
+    const backup = resourceBackups.find((candidate) => candidate.id === restoreMatch[1]);
+    if (!backup || backup.status !== 'READY' || !backup.recoverable) return json(409, { error: 'fixture_restore_not_available' });
+    if (body.formatVersion !== 1 || typeof body.requestIdempotencyKey !== 'string' || typeof body.name !== 'string') return json(400, { error: 'fixture_restore_input_invalid' });
+    return json(202, {
+      id: 'rst_fixture_requested', organizationId: project.organizationId, projectId: project.id, backupId: backup.id, sourceResourceId: resource.id,
+      targetResourceId: 'res_fixture_restored', engine: resource.engine, status: 'QUEUED', createdAt: FIXED_TIME, readyAt: null, errorCode: null,
+    });
+  }
+  const deleteMatch = /^\/backups\/([^/]+)$/.exec(pathname);
+  if (deleteMatch && method === 'DELETE') {
+    const backup = resourceBackups.find((candidate) => candidate.id === deleteMatch[1]);
+    if (!backup) return json(404, { error: 'RECOVERY_NOT_FOUND' });
+    if (body.confirmed !== true) return json(400, { error: 'fixture_delete_confirmation_required' });
+    return json(200, { ...backup, status: backup.status === 'DELETED' ? 'DELETED' : 'DELETING', recoverable: false });
+  }
+  return json(405, { error: 'fixture_backup_method_not_allowed' });
 }

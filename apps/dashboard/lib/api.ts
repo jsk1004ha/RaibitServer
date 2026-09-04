@@ -170,14 +170,16 @@ export async function loadResourceConsole(resourceId: string, view = 'overview',
   const resolved = context || await dashboardApiContext();
   const needsOverviewData = view === 'overview' || view === 'schema';
   const needsStructureData = view === 'schema';
+  const needsBackupsData = view === 'backups';
   const fallback = <T,>(body: T): DashboardApiResult<T> => ({ ok: true, status: 200, body });
-  const [resource, schema, tables, collections, keys, browse] = await Promise.all([
+  const [resource, schema, tables, collections, keys, browse, backups] = await Promise.all([
     getJson(`/resources/${encodeURIComponent(resourceId)}`, { id: resourceId }, resolved),
     needsOverviewData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/schema`, { schema: {} }, resolved) : fallback({ schema: {} }),
     needsStructureData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/tables`, { tables: [] }, resolved) : fallback({ tables: [] }),
     needsStructureData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/collections`, { collections: [] }, resolved) : fallback({ collections: [] }),
     needsStructureData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/keys`, { keys: [] }, resolved) : fallback({ keys: [] }),
     needsStructureData ? postJson(`/resources/${encodeURIComponent(resourceId)}/console/browse`, {}, {}, resolved) : fallback({}),
+    needsBackupsData ? getJson(`/resources/${encodeURIComponent(resourceId)}/backups`, { backups: [], nextCursor: null }, resolved) : fallback({ backups: [], nextCursor: null }),
   ]);
   return {
     context: resolved,
@@ -187,6 +189,7 @@ export async function loadResourceConsole(resourceId: string, view = 'overview',
     collections: collections.body,
     keys: keys.body,
     browse: browse.body,
+    backups: backups.body,
     loadErrors: collectLoadIssues([
       ['리소스 정보', resource],
       ['스키마', schema],
@@ -194,6 +197,7 @@ export async function loadResourceConsole(resourceId: string, view = 'overview',
       ['컬렉션', collections],
       ['키', keys],
       ['데이터 탐색', browse],
+      ['백업', backups],
     ]),
   };
 }

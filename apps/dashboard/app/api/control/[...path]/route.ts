@@ -19,6 +19,7 @@ import {
   isGitHubOAuthState,
   isSameOriginMutation,
   projectCreatePayloadFromForm,
+  resourceRecoveryPayloadFromForm,
   publicUpstreamErrorCode,
   readBoundedBody,
   responseStatusAllowsBody,
@@ -105,6 +106,7 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
       if (isFormSubmission && upstreamMethod === 'POST' && path === '/projects') body = projectCreatePayloadFromForm(body);
       if (isFormSubmission && upstreamMethod === 'POST' && /\/projects\/[^/]+\/services\/[^/]+\/env$/.test(path)) body = environmentPayloadFromForm(body);
       if (isFormSubmission && upstreamMethod === 'POST' && /\/projects\/[^/]+\/services\/[^/]+\/env-file$/.test(path)) body = environmentFilePayloadFromForm(body);
+      if (isFormSubmission) body = resourceRecoveryPayloadFromForm(path, upstreamMethod, body);
     } catch (error) {
       const code = requestBodyErrorCode(error);
       if (isFormSubmission) return formErrorRedirect(browserRequestUrl, returnPath, code);
