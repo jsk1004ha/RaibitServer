@@ -23,7 +23,7 @@ func (d Decoder) Decode(ctx context.Context, dst io.Writer, src io.Reader) (Deco
 	if dst == nil || src == nil || d.limits.maxBytes == 0 || d.limits.maxFrames == 0 {
 		return Decoded{}, ErrLimitExceeded
 	}
-	reader := bufio.NewReaderSize(src, MaxLineLength+1)
+	reader := bufio.NewReaderSize(cancelAwareReader{ctx: ctx, source: src}, MaxLineLength+1)
 	headerLine, err := readLine(ctx, reader)
 	if err != nil {
 		return Decoded{}, err
@@ -33,7 +33,7 @@ func (d Decoder) Decode(ctx context.Context, dst io.Writer, src io.Reader) (Deco
 		return Decoded{}, err
 	}
 
-	state := newDecodeState(d, dst)
+	state := newDecodeState(ctx, d, dst)
 	for {
 		line, lineErr := readLine(ctx, reader)
 		if lineErr != nil {
@@ -59,11 +59,30 @@ func (d Decoder) Decode(ctx context.Context, dst io.Writer, src io.Reader) (Deco
 	}
 }
 
+type cancelAwareReader struct {
+	ctx    context.Context
+	source io.Reader
+}
+
+func (r cancelAwareReader) Read(buffer []byte) (int, error) {
+	if err := cancellation(r.ctx, "decode"); err != nil {
+		return 0, err
+	}
+	n, readErr := r.source.Read(buffer)
+	if err := cancellation(r.ctx, "decode"); err != nil {
+		return n, err
+	}
+	return n, readErr
+}
+
 func readLine(ctx context.Context, reader *bufio.Reader) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("recovery wire: decode canceled: %w", err)
 	}
 	line, err := reader.ReadSlice('\n')
+	if cancelErr := cancellation(ctx, "decode"); cancelErr != nil {
+		return nil, cancelErr
+	}
 	if errors.Is(err, bufio.ErrBufferFull) || len(line) > MaxLineLength {
 		return nil, ErrLimitExceeded
 	}
@@ -71,10 +90,7 @@ func readLine(ctx context.Context, reader *bufio.Reader) ([]byte, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, invalid("truncated envelope")
 		}
-		return nil, ioError("read envelope", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("recovery wire: decode canceled: %w", err)
+		return nil, ioError("read envelope")
 	}
 	return line[:len(line)-1], nil
 }
@@ -171,11 +187,14 @@ func requireEOF(ctx context.Context, reader *bufio.Reader) error {
 		return fmt.Errorf("recovery wire: decode canceled: %w", err)
 	}
 	_, err := reader.ReadByte()
+	if cancelErr := cancellation(ctx, "decode"); cancelErr != nil {
+		return cancelErr
+	}
 	if err == nil {
 		return invalid("trailing frame")
 	}
 	if !errors.Is(err, io.EOF) {
-		return ioError("read envelope trailer", err)
+		return ioError("read envelope trailer")
 	}
 	return nil
 }

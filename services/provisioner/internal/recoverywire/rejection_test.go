@@ -145,7 +145,7 @@ func Test_Codec_honors_context_cancellation(t *testing.T) {
 	}
 
 	// When
-	_, encodeErr := NewEncoder().Encode(ctx, io.Discard, Envelope{Metadata: metadata, Payload: strings.NewReader("payload")})
+	_, encodeErr := NewEncoder(DefaultLimits()).Encode(ctx, io.Discard, Envelope{Metadata: metadata, Payload: strings.NewReader("payload")})
 	_, decodeErr := decodeEnvelope(ctx, encoded, DefaultLimits())
 
 	// Then
@@ -162,7 +162,7 @@ func Test_Codec_errors_never_echo_plaintext_or_secret_contents(t *testing.T) {
 
 	// When
 	_, decodeErr := decodeEnvelope(context.Background(), malformed, DefaultLimits())
-	_, encodeErr := NewEncoder().Encode(context.Background(), io.Discard, Envelope{
+	_, encodeErr := NewEncoder(DefaultLimits()).Encode(context.Background(), io.Discard, Envelope{
 		Metadata: metadata,
 		Payload:  errorReader{err: errors.New(secret)},
 	})

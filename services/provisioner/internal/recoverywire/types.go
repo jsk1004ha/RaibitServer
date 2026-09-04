@@ -1,24 +1,31 @@
 package recoverywire
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 )
 
 const (
-	PayloadChunkSize = 3072
-	MaxLineLength    = 8192
-	defaultMaxBytes  = 1 << 40
-	defaultMaxFrames = defaultMaxBytes/PayloadChunkSize + 1
+	PayloadChunkSize                   = 3072
+	MaxLineLength                      = 8192
+	DefaultFramedTransportLimit uint64 = 10 * 1024 * 1024 * 1024
+	FullFrameWireBytes          uint64 = 4110
+	maxSequenceFrames           uint64 = 9_999_999_999
+	framedFixedOverhead         uint64 = 2 * MaxLineLength
+	defaultMaxFrames            uint64 = (DefaultFramedTransportLimit - framedFixedOverhead) / FullFrameWireBytes
+	defaultMaxBytes             uint64 = defaultMaxFrames * PayloadChunkSize
 )
 
 var (
 	ErrInvalidMetadata = errors.New("recovery wire: invalid metadata")
 	ErrInvalidEnvelope = errors.New("recovery wire: invalid envelope")
 	ErrLimitExceeded   = errors.New("recovery wire: limit exceeded")
+	ErrIO              = errors.New("recovery wire: I/O failure")
 	versionPattern     = regexp.MustCompile(`\A[A-Za-z0-9][A-Za-z0-9._-]{0,31}\z`)
 )
 
@@ -133,11 +140,25 @@ type Limits struct {
 }
 
 func NewLimits(maxBytes, maxFrames uint64) (Limits, error) {
-	if maxBytes == 0 || maxFrames == 0 || maxFrames > 9_999_999_999 {
+	if maxBytes == 0 || maxFrames == 0 || maxFrames > maxSequenceFrames {
 		return Limits{}, ErrLimitExceeded
 	}
 	return Limits{maxBytes: maxBytes, maxFrames: maxFrames}, nil
 }
+
+func LimitsForFramedTransport(maxWireBytes uint64) (Limits, error) {
+	if maxWireBytes <= framedFixedOverhead {
+		return Limits{}, ErrLimitExceeded
+	}
+	maxFrames := (maxWireBytes - framedFixedOverhead) / FullFrameWireBytes
+	if maxFrames == 0 || maxFrames > maxSequenceFrames || maxFrames > math.MaxUint64/PayloadChunkSize {
+		return Limits{}, ErrLimitExceeded
+	}
+	return NewLimits(maxFrames*PayloadChunkSize, maxFrames)
+}
+
+func (l Limits) MaxBytes() uint64  { return l.maxBytes }
+func (l Limits) MaxFrames() uint64 { return l.maxFrames }
 
 func DefaultLimits() Limits {
 	return Limits{maxBytes: defaultMaxBytes, maxFrames: defaultMaxFrames}
@@ -145,16 +166,24 @@ func DefaultLimits() Limits {
 
 type safeIOError struct {
 	stage string
-	cause error
 }
 
 func (e *safeIOError) Error() string { return "recovery wire: " + e.stage }
-func (e *safeIOError) Unwrap() error { return e.cause }
+func (e *safeIOError) Is(target error) bool {
+	return target == ErrIO
+}
 
-func ioError(stage string, cause error) error {
-	return &safeIOError{stage: stage, cause: cause}
+func ioError(stage string) error {
+	return &safeIOError{stage: stage}
 }
 
 func invalid(stage string) error {
 	return fmt.Errorf("recovery wire: invalid %s: %w", stage, ErrInvalidEnvelope)
+}
+
+func cancellation(ctx context.Context, stage string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("recovery wire: %s canceled: %w", stage, err)
+	}
+	return nil
 }

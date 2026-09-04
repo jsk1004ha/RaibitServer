@@ -1,6 +1,7 @@
 package recoverywire
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 )
 
 type decodeState struct {
+	ctx          context.Context
 	decoder      Decoder
 	destination  io.Writer
 	digest       hash.Hash
@@ -19,8 +21,9 @@ type decodeState struct {
 	previousSize int
 }
 
-func newDecodeState(decoder Decoder, destination io.Writer) *decodeState {
+func newDecodeState(ctx context.Context, decoder Decoder, destination io.Writer) *decodeState {
 	return &decodeState{
+		ctx:          ctx,
 		decoder:      decoder,
 		destination:  destination,
 		digest:       sha256.New(),
@@ -51,8 +54,12 @@ func (s *decodeState) consumeDataFrame(line []byte) error {
 	if uint64(n) > s.decoder.limits.maxBytes-s.receipt.PlaintextBytes {
 		return ErrLimitExceeded
 	}
-	if err := writeAll(s.destination, s.buffer[:n]); err != nil {
-		return ioError("write payload", err)
+	writeErr := writeAll(s.ctx, s.destination, s.buffer[:n])
+	if err := cancellation(s.ctx, "decode"); err != nil {
+		return err
+	}
+	if writeErr != nil {
+		return ioError("write payload")
 	}
 	_, _ = s.digest.Write(s.buffer[:n])
 	s.receipt.Frames++

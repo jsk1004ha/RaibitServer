@@ -46,7 +46,7 @@ func Test_Envelope_round_trips_a_source_baseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	var encoded bytes.Buffer
-	_, err = NewEncoder().Encode(context.Background(), &encoded, Envelope{Metadata: metadata, Payload: strings.NewReader("dump")})
+	_, err = NewEncoder(DefaultLimits()).Encode(context.Background(), &encoded, Envelope{Metadata: metadata, Payload: strings.NewReader("dump")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,6 +136,10 @@ func Test_Encoder_produces_deterministic_output(t *testing.T) {
 
 func Test_Encoder_keeps_every_line_below_the_CRI_bound(t *testing.T) {
 	// Given
+	const (
+		criTransportLineLimit = 16 * 1024
+		fullDataLineBytes     = 4110
+	)
 	encoded, _, err := encodePayload(deterministicBytes(2*PayloadChunkSize + 1))
 	if err != nil {
 		t.Fatal(err)
@@ -145,10 +149,20 @@ func Test_Encoder_keeps_every_line_below_the_CRI_bound(t *testing.T) {
 	lines := strings.Split(encoded, "\n")
 
 	// Then
+	maxObserved := 0
 	for _, line := range lines[:len(lines)-1] {
-		if len(line)+1 > MaxLineLength {
+		if len(line)+1 > criTransportLineLimit {
 			t.Fatalf("line length=%d", len(line)+1)
 		}
+		if strings.HasPrefix(line, "D ") && len(line)+1 > maxObserved {
+			maxObserved = len(line) + 1
+		}
+	}
+	if MaxLineLength > criTransportLineLimit {
+		t.Fatalf("decoder line limit=%d", MaxLineLength)
+	}
+	if maxObserved != fullDataLineBytes {
+		t.Fatalf("full data line length=%d", maxObserved)
 	}
 }
 
@@ -159,7 +173,7 @@ func Test_Encoder_streams_with_bounded_reads(t *testing.T) {
 	var encoded bytes.Buffer
 
 	// When
-	_, err := NewEncoder().Encode(context.Background(), &encoded, Envelope{Metadata: metadata, Payload: reader})
+	_, err := NewEncoder(DefaultLimits()).Encode(context.Background(), &encoded, Envelope{Metadata: metadata, Payload: reader})
 
 	// Then
 	if err != nil {
@@ -238,7 +252,7 @@ func encodePayload(payload []byte) (string, Receipt, error) {
 		return "", Receipt{}, err
 	}
 	var encoded bytes.Buffer
-	receipt, err := NewEncoder().Encode(context.Background(), &encoded, Envelope{
+	receipt, err := NewEncoder(DefaultLimits()).Encode(context.Background(), &encoded, Envelope{
 		Metadata: metadata,
 		Payload:  bytes.NewReader(payload),
 	})
