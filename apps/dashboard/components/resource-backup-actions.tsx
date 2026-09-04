@@ -1,9 +1,11 @@
 'use client';
 
 import type { FormEvent } from 'react';
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ResourceBackupViewSchema, ResourceRestoreViewSchema } from '@raibitserver/schemas';
 import type { ResourceBackupView, ResourceRestoreView } from '@raibitserver/schemas';
+import { createBrowserIdempotencyKey, isRecoverableAt, resolveRecoveryIntent } from '@/lib/recovery-idempotency';
+import type { RecoveryIntent } from '@/lib/recovery-idempotency';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,11 +52,6 @@ function parseBackupList(value: unknown): PublicBackupList | null {
   return { backups: backups.flatMap((entry) => entry.success ? [entry.data] : []), nextCursor: cursor };
 }
 
-function requestKey(prefix: string, value: string): string {
-  const compact = value.replace(/[^A-Za-z0-9._:-]/g, '');
-  return `${prefix}-${compact || 'request'}`.slice(0, 128);
-}
-
 function statusProgress(status: string): number {
   switch (status.toUpperCase()) {
     case 'QUEUED': return 15;
@@ -63,13 +60,6 @@ function statusProgress(status: string): number {
     case 'DELETING': return 75;
     default: return 100;
   }
-}
-
-function isRestorable(backup: ResourceBackupView): boolean {
-  if (backup.status !== 'READY' || !backup.recoverable) return false;
-  if (!backup.expiresAt) return true;
-  const expiry = new Date(backup.expiresAt).getTime();
-  return Number.isNaN(expiry) || expiry > Date.now();
 }
 
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
@@ -102,20 +92,24 @@ function upsertBackup(backups: readonly ResourceBackupView[], next: ResourceBack
 
 export function ResourceBackupActions({
   createAction,
+  initialCreateKey,
   initialBackups,
   initialLoadFailed,
+  initialRestoreKeys,
   listAction,
   returnTo,
 }: Readonly<{
   readonly createAction: string;
+  readonly initialCreateKey: string;
   readonly initialBackups: readonly ResourceBackupView[];
   readonly initialLoadFailed: boolean;
+  readonly initialRestoreKeys: Readonly<Record<string, string>>;
   readonly listAction: string;
   readonly returnTo: string;
 }>) {
-  const generatedId = useId();
-  const createKey = useMemo(() => requestKey('backup', generatedId), [generatedId]);
+  const [backupIntent, setBackupIntent] = useState<RecoveryIntent>({ key: initialCreateKey, payload: 'backup-v1' });
   const [backups, setBackups] = useState<readonly ResourceBackupView[]>(initialBackups);
+  const [restoreKeys, setRestoreKeys] = useState<Readonly<Record<string, string>>>(initialRestoreKeys);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [state, setState] = useState<MutationState>({ kind: 'idle' });
   const hasActiveBackup = backups.some((backup) => !terminalStatuses.has(backup.status));
@@ -143,11 +137,13 @@ export function ResourceBackupActions({
   async function submitBackup(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (state.kind === 'pending') return;
+    const intent = resolveRecoveryIntent(backupIntent, 'backup-v1', 'backup', createBrowserIdempotencyKey);
+    if (intent !== backupIntent) setBackupIntent(intent);
     setState({ kind: 'pending', target: 'backup' });
     try {
       const response = await fetch(createAction, {
         method: 'POST', credentials: 'same-origin', headers: { accept: 'application/json', 'content-type': 'application/json' },
-        body: JSON.stringify({ requestIdempotencyKey: createKey, formatVersion: 1 }),
+        body: JSON.stringify({ requestIdempotencyKey: intent.key, formatVersion: 1 }),
       });
       const payload = await jsonPayload(response);
       const parsed = response.ok ? ResourceBackupViewSchema.safeParse(payload) : null;
@@ -156,6 +152,8 @@ export function ResourceBackupActions({
         return;
       }
       setBackups((current) => upsertBackup(current, parsed.data));
+      setRestoreKeys((current) => ({ ...current, [parsed.data.id]: createBrowserIdempotencyKey('restore') }));
+      setBackupIntent({ key: createBrowserIdempotencyKey('backup'), payload: 'backup-v1' });
       setState({ kind: 'success', message: '백업 요청을 접수했습니다. 진행 상태를 이 화면에서 확인할 수 있습니다.' });
     } catch (error) {
       if (error instanceof Error) {
@@ -175,7 +173,7 @@ export function ResourceBackupActions({
           <CardAction>
             <form action={createAction} method="post" onSubmit={submitBackup}>
               <input name="_returnTo" type="hidden" value={returnTo} />
-              <input name="requestIdempotencyKey" type="hidden" value={createKey} />
+              <input name="requestIdempotencyKey" type="hidden" value={backupIntent.key} />
               <input name="formatVersion" type="hidden" value="1" />
               <Button disabled={state.kind === 'pending'} type="submit">{state.kind === 'pending' && state.target === 'backup' ? '요청 중' : '백업 만들기'}</Button>
             </form>
@@ -189,43 +187,46 @@ export function ResourceBackupActions({
           </section>
           {initialLoadFailed ? <Alert><AlertTitle>백업 목록을 일부 불러오지 못했습니다.</AlertTitle><AlertDescription>기존 복구 지점의 상태가 최신이 아닐 수 있습니다. 잠시 후 다시 확인하세요.</AlertDescription></Alert> : null}
           {isRefreshing ? <div className="flex flex-col gap-2" aria-label="백업 상태 갱신 중"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-2/3" /></div> : null}
-          {backups.length === 0 ? <Empty><EmptyHeader><EmptyTitle>복구 지점이 없습니다.</EmptyTitle><EmptyDescription>백업을 만들면 이 리소스의 복구 지점과 만료 시간이 여기에 표시됩니다.</EmptyDescription></EmptyHeader></Empty> : <BackupHistory backups={backups} returnTo={returnTo} onMutation={setState} onBackup={setBackups} />}
+          {backups.length === 0 ? <Empty><EmptyHeader><EmptyTitle>복구 지점이 없습니다.</EmptyTitle><EmptyDescription>백업을 만들면 이 리소스의 복구 지점과 만료 시간이 여기에 표시됩니다.</EmptyDescription></EmptyHeader></Empty> : <BackupHistory backups={backups} initialRestoreKeys={restoreKeys} returnTo={returnTo} onMutation={setState} onBackup={setBackups} />}
         </CardContent>
       </Card>
     </section>
   );
 }
 
-function BackupHistory({ backups, onBackup, onMutation, returnTo }: Readonly<{
+function BackupHistory({ backups, initialRestoreKeys, onBackup, onMutation, returnTo }: Readonly<{
   readonly backups: readonly ResourceBackupView[];
+  readonly initialRestoreKeys: Readonly<Record<string, string>>;
   readonly onBackup: (updater: (backups: readonly ResourceBackupView[]) => readonly ResourceBackupView[]) => void;
   readonly onMutation: (state: MutationState) => void;
   readonly returnTo: string;
 }>) {
   return (
     <>
-      <div className="hidden min-w-0 md:block"><Table><TableHeader><TableRow><TableHead>생성 시각</TableHead><TableHead>상태</TableHead><TableHead>크기</TableHead><TableHead>만료</TableHead><TableHead className="text-right">작업</TableHead></TableRow></TableHeader><TableBody>{backups.map((backup) => <BackupRow backup={backup} key={backup.id} returnTo={returnTo} onBackup={onBackup} onMutation={onMutation} />)}</TableBody></Table></div>
-      <div className="flex flex-col gap-3 md:hidden">{backups.map((backup) => <BackupMobileRow backup={backup} key={backup.id} returnTo={returnTo} onBackup={onBackup} onMutation={onMutation} />)}</div>
+      <div className="hidden min-w-0 md:block"><Table><TableHeader><TableRow><TableHead>생성 시각</TableHead><TableHead>상태</TableHead><TableHead>크기</TableHead><TableHead>만료</TableHead><TableHead className="text-right">작업</TableHead></TableRow></TableHeader><TableBody>{backups.map((backup) => <BackupRow backup={backup} initialRestoreKey={initialRestoreKeys[backup.id]} key={backup.id} returnTo={returnTo} onBackup={onBackup} onMutation={onMutation} />)}</TableBody></Table></div>
+      <div className="flex flex-col gap-3 md:hidden">{backups.map((backup) => <BackupMobileRow backup={backup} initialRestoreKey={initialRestoreKeys[backup.id]} key={backup.id} returnTo={returnTo} onBackup={onBackup} onMutation={onMutation} />)}</div>
     </>
   );
 }
 
-function BackupRow({ backup, onBackup, onMutation, returnTo }: Readonly<{
+function BackupRow({ backup, initialRestoreKey, onBackup, onMutation, returnTo }: Readonly<{
   readonly backup: ResourceBackupView;
+  readonly initialRestoreKey: string;
   readonly onBackup: (updater: (backups: readonly ResourceBackupView[]) => readonly ResourceBackupView[]) => void;
   readonly onMutation: (state: MutationState) => void;
   readonly returnTo: string;
 }>) {
-  return <TableRow data-testid={`backup-row-${backup.id}`}><TableCell className="whitespace-normal"><time dateTime={backup.createdAt}>{dateLabel(backup.createdAt)}</time></TableCell><TableCell className="whitespace-normal"><BackupStatus backup={backup} /></TableCell><TableCell>{backup.size ?? '—'}</TableCell><TableCell className="whitespace-normal">{dateLabel(backup.expiresAt)}</TableCell><TableCell className="text-right"><BackupActions backup={backup} returnTo={returnTo} onBackup={onBackup} onMutation={onMutation} /></TableCell></TableRow>;
+  return <TableRow data-testid={`backup-row-${backup.id}`}><TableCell className="whitespace-normal"><time dateTime={backup.createdAt}>{dateLabel(backup.createdAt)}</time></TableCell><TableCell className="whitespace-normal"><BackupStatus backup={backup} /></TableCell><TableCell>{backup.size ?? '—'}</TableCell><TableCell className="whitespace-normal">{dateLabel(backup.expiresAt)}</TableCell><TableCell className="text-right"><BackupActions backup={backup} initialRestoreKey={initialRestoreKey} returnTo={returnTo} onBackup={onBackup} onMutation={onMutation} /></TableCell></TableRow>;
 }
 
-function BackupMobileRow({ backup, onBackup, onMutation, returnTo }: Readonly<{
+function BackupMobileRow({ backup, initialRestoreKey, onBackup, onMutation, returnTo }: Readonly<{
   readonly backup: ResourceBackupView;
+  readonly initialRestoreKey: string;
   readonly onBackup: (updater: (backups: readonly ResourceBackupView[]) => readonly ResourceBackupView[]) => void;
   readonly onMutation: (state: MutationState) => void;
   readonly returnTo: string;
 }>) {
-  return <article className="flex min-w-0 flex-col gap-3 rounded-md border border-border p-4" data-testid={`backup-row-${backup.id}`}><dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm"><div className="min-w-0"><dt className="text-muted-foreground">생성 시각</dt><dd className="break-words"><time dateTime={backup.createdAt}>{dateLabel(backup.createdAt)}</time></dd></div><div className="min-w-0"><dt className="text-muted-foreground">상태</dt><dd className="mt-1"><BackupStatus backup={backup} /></dd></div><div className="min-w-0"><dt className="text-muted-foreground">크기</dt><dd className="break-words">{backup.size ?? '—'}</dd></div><div className="min-w-0"><dt className="text-muted-foreground">만료</dt><dd className="break-words">{dateLabel(backup.expiresAt)}</dd></div></dl><BackupActions backup={backup} returnTo={returnTo} onBackup={onBackup} onMutation={onMutation} /></article>;
+  return <article className="flex min-w-0 flex-col gap-3 rounded-md border border-border p-4" data-testid={`backup-row-${backup.id}`}><dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm"><div className="min-w-0"><dt className="text-muted-foreground">생성 시각</dt><dd className="break-words"><time dateTime={backup.createdAt}>{dateLabel(backup.createdAt)}</time></dd></div><div className="min-w-0"><dt className="text-muted-foreground">상태</dt><dd className="mt-1"><BackupStatus backup={backup} /></dd></div><div className="min-w-0"><dt className="text-muted-foreground">크기</dt><dd className="break-words">{backup.size ?? '—'}</dd></div><div className="min-w-0"><dt className="text-muted-foreground">만료</dt><dd className="break-words">{dateLabel(backup.expiresAt)}</dd></div></dl><BackupActions backup={backup} initialRestoreKey={initialRestoreKey} returnTo={returnTo} onBackup={onBackup} onMutation={onMutation} /></article>;
 }
 
 function BackupStatus({ backup }: Readonly<{ readonly backup: ResourceBackupView }>) {
@@ -233,14 +234,15 @@ function BackupStatus({ backup }: Readonly<{ readonly backup: ResourceBackupView
   return <div className="flex min-w-32 flex-col gap-2"><Badge variant={statusVariant(backup.status)}>{backup.status}</Badge>{!terminalStatuses.has(backup.status) ? <Progress value={progress}><ProgressLabel>진행 상태</ProgressLabel><ProgressValue /></Progress> : null}{backup.status === 'FAILED' && backup.errorCode ? <span className="break-all font-mono text-xs text-muted-foreground">{backup.errorCode}</span> : null}</div>;
 }
 
-function BackupActions({ backup, onBackup, onMutation, returnTo }: Readonly<{
+function BackupActions({ backup, initialRestoreKey, onBackup, onMutation, returnTo }: Readonly<{
   readonly backup: ResourceBackupView;
+  readonly initialRestoreKey: string;
   readonly onBackup: (updater: (backups: readonly ResourceBackupView[]) => readonly ResourceBackupView[]) => void;
   readonly onMutation: (state: MutationState) => void;
   readonly returnTo: string;
 }>) {
-  const restoreKey = requestKey(`restore-${backup.id}`, useId());
-  const canRestore = isRestorable(backup);
+  const [restoreIntent, setRestoreIntent] = useState<RecoveryIntent>({ key: initialRestoreKey, payload: '' });
+  const canRestore = isRecoverableAt(backup.status, backup.recoverable, backup.expiresAt, Date.now());
   const canDelete = ['READY', 'FAILED', 'EXPIRED', 'DELETING', 'DELETED'].includes(backup.status);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -251,14 +253,17 @@ function BackupActions({ backup, onBackup, onMutation, returnTo }: Readonly<{
     const form = new FormData(event.currentTarget);
     const name = form.get('name');
     if (typeof name !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(name)) return;
+    const intent = resolveRecoveryIntent(restoreIntent, name, 'restore', createBrowserIdempotencyKey);
+    if (intent !== restoreIntent) setRestoreIntent(intent);
     setPending('restore');
     onMutation({ kind: 'pending', target: backup.id });
     try {
-      const response = await fetch(`/api/control/backups/${encodeURIComponent(backup.id)}/restores`, { method: 'POST', credentials: 'same-origin', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ requestIdempotencyKey: restoreKey, formatVersion: 1, name }) });
+      const response = await fetch(`/api/control/backups/${encodeURIComponent(backup.id)}/restores`, { method: 'POST', credentials: 'same-origin', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ requestIdempotencyKey: intent.key, formatVersion: 1, name }) });
       const payload = await jsonPayload(response);
       const parsed = response.ok ? ResourceRestoreViewSchema.safeParse(payload) : null;
       if (!parsed || !parsed.success) { onMutation({ kind: 'error', code: safeRequestCode(payload) }); return; }
       onMutation({ kind: 'success', message: restoreMessage(parsed.data) });
+      setRestoreIntent({ key: createBrowserIdempotencyKey('restore'), payload: '' });
       setRestoreDialogOpen(false);
     } catch (error) {
       if (error instanceof Error) {
@@ -291,7 +296,7 @@ function BackupActions({ backup, onBackup, onMutation, returnTo }: Readonly<{
     } finally { setPending(null); }
   }
 
-  return <div className="flex flex-wrap justify-end gap-2"><Dialog open={restoreDialogOpen} onOpenChange={setRestoreDialogOpen}><DialogTrigger render={<Button size="sm" variant="outline" disabled={!canRestore} />}>복구 준비</DialogTrigger><DialogContent><DialogHeader><DialogTitle>새 리소스로 복구</DialogTitle><DialogDescription>현재 리소스를 바꾸지 않고, 이 백업으로 새 관리형 리소스를 준비합니다.</DialogDescription></DialogHeader><form action={`/api/control/backups/${encodeURIComponent(backup.id)}/restores`} method="post" onSubmit={submitRestore}><input name="_returnTo" type="hidden" value={returnTo} /><input name="requestIdempotencyKey" type="hidden" value={restoreKey} /><input name="formatVersion" type="hidden" value="1" /><FieldGroup><Field><FieldLabel htmlFor={`restore-name-${backup.id}`}>새 리소스 이름</FieldLabel><Input id={`restore-name-${backup.id}`} name="name" pattern="[a-z][a-z0-9-]{0,47}" required autoComplete="off" /><FieldDescription>소문자, 숫자, 하이픈만 사용할 수 있습니다.</FieldDescription></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" />}>취소</DialogClose><Button disabled={pending !== null} type="submit">{pending === 'restore' ? '복구 요청 중' : '복구 요청'}</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog><Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}><DialogTrigger render={<Button size="sm" variant="destructive" disabled={!canDelete} />}>삭제 요청</DialogTrigger><DialogContent><DialogHeader><DialogTitle>백업 삭제 요청</DialogTitle><DialogDescription>이 복구 지점을 삭제하도록 요청합니다. 삭제가 시작되면 복구에 사용할 수 없습니다.</DialogDescription></DialogHeader><form action={`/api/control/backups/${encodeURIComponent(backup.id)}`} method="post" onSubmit={submitDelete}><input name="_returnTo" type="hidden" value={returnTo} /><input name="_method" type="hidden" value="DELETE" /><input name="confirmed" type="hidden" value="true" /><DialogFooter><DialogClose render={<Button type="button" variant="outline" />}>취소</DialogClose><Button disabled={pending !== null} type="submit">{pending === 'delete' ? '삭제 요청 중' : '삭제 요청 확인'}</Button></DialogFooter></form></DialogContent></Dialog></div>;
+  return <div className="flex flex-wrap justify-end gap-2"><Dialog open={restoreDialogOpen} onOpenChange={setRestoreDialogOpen}><DialogTrigger render={<Button size="sm" variant="outline" disabled={!canRestore} />}>복구 준비</DialogTrigger><DialogContent><DialogHeader><DialogTitle>새 리소스로 복구</DialogTitle><DialogDescription>현재 리소스를 바꾸지 않고, 이 백업으로 새 관리형 리소스를 준비합니다.</DialogDescription></DialogHeader><form action={`/api/control/backups/${encodeURIComponent(backup.id)}/restores`} method="post" onSubmit={submitRestore}><input name="_returnTo" type="hidden" value={returnTo} /><input name="requestIdempotencyKey" type="hidden" value={restoreIntent.key} /><input name="formatVersion" type="hidden" value="1" /><FieldGroup><Field><FieldLabel htmlFor={`restore-name-${backup.id}`}>새 리소스 이름</FieldLabel><Input id={`restore-name-${backup.id}`} name="name" pattern="[a-z][a-z0-9-]{0,47}" required autoComplete="off" /><FieldDescription>소문자, 숫자, 하이픈만 사용할 수 있습니다.</FieldDescription></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" />}>취소</DialogClose><Button disabled={pending !== null} type="submit">{pending === 'restore' ? '복구 요청 중' : '복구 요청'}</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog><Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}><DialogTrigger render={<Button size="sm" variant="destructive" disabled={!canDelete} />}>삭제 요청</DialogTrigger><DialogContent><DialogHeader><DialogTitle>백업 삭제 요청</DialogTitle><DialogDescription>이 복구 지점을 삭제하도록 요청합니다. 삭제가 시작되면 복구에 사용할 수 없습니다.</DialogDescription></DialogHeader><form action={`/api/control/backups/${encodeURIComponent(backup.id)}`} method="post" onSubmit={submitDelete}><input name="_returnTo" type="hidden" value={returnTo} /><input name="_method" type="hidden" value="DELETE" /><input name="confirmed" type="hidden" value="true" /><DialogFooter><DialogClose render={<Button type="button" variant="outline" />}>취소</DialogClose><Button disabled={pending !== null} type="submit">{pending === 'delete' ? '삭제 요청 중' : '삭제 요청 확인'}</Button></DialogFooter></form></DialogContent></Dialog></div>;
 }
 
 function restoreMessage(restore: ResourceRestoreView): string {
