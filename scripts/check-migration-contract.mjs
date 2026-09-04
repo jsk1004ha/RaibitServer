@@ -8,16 +8,31 @@ import { parse } from 'yaml';
 export const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 export const digest = (content) => createHash('sha256').update(content.replaceAll('\r\n', '\n')).digest('hex');
 const reviewedTriggerMigrations = new Set(['000014_resource_recovery', '000015_preview_lineage']);
+// Anchor manually reviewed schema DDL that precedes the closed trigger declarations.
+const reviewedTriggerContracts = new Map([
+  ['000014_resource_recovery', {
+    prefixDigest: 'dc3efe6158e92f3ffe4e23b667f38824280a9832e85cc0f6ea9b1f117e8ad907',
+    functions: ['recovery_attempt_guard', 'recovery_backup_guard', 'recovery_pin_guard', 'recovery_restore_guard'],
+    triggers: ['"ResourceBackup_guard"|INSERTORUPDATEORDELETE|"ResourceBackup"|recovery_backup_guard', '"ResourceRecoveryAttempt_guard"|INSERTORUPDATEORDELETE|"ResourceRecoveryAttempt"|recovery_attempt_guard', '"ResourceRecoveryPin_guard"|INSERTORUPDATE|"ResourceRecoveryPin"|recovery_pin_guard', '"ResourceRestore_guard"|INSERTORUPDATEORDELETE|"ResourceRestore"|recovery_restore_guard'],
+  }],
+  ['000015_preview_lineage', {
+    prefixDigest: '3b85ca152eaf0f0d33c024e4767b32b4645219df0a1a4404f1a9a4df9dbd8a7b',
+    functions: ['raibit_preview_attempt_guard', 'raibit_preview_lineage_guard'],
+    triggers: ['"Deployment_preview_guard"|UPDATE|"Deployment"|raibit_preview_attempt_guard', '"PreviewLineage_guard"|INSERTORUPDATE|"PreviewLineage"|raibit_preview_lineage_guard'],
+  }],
+]);
 
 function executableSql(sql) {
   let code = '';
   for (let index = 0; index < sql.length;) {
     const start = index;
     const quote = sql[index];
-    const dollar = quote === '$' ? /^\$[A-Za-z_0-9]*\$/.exec(sql.slice(index))?.[0] : undefined;
+    const dollar = quote === '$' ? /^(?:\$\$|\$[A-Za-z_][A-Za-z_0-9]*\$)/.exec(sql.slice(index))?.[0] : undefined;
     if (quote === "'" || quote === '"') {
+      const escaped = quote === "'" && index > 0 && /[eE]/.test(sql[index - 1]) && (index === 1 || !/[A-Za-z_0-9$]/.test(sql[index - 2]));
       let closed = false;
       for (index++; index < sql.length; index++) {
+        if (escaped && sql[index] === '\\') { index++; continue; }
         if (sql[index] !== quote) continue;
         if (sql[index + 1] === quote) index++;
         else { index++; closed = true; break; }
@@ -48,28 +63,63 @@ function executableSql(sql) {
   return code;
 }
 
-export function checkReviewedTriggerSql(sql) {
+function assertSqlTrivia(sql) {
+  for (let index = 0; index < sql.length;) {
+    if (/\s/.test(sql[index])) { index++; continue; }
+    if (sql.startsWith('--', index)) {
+      const end = sql.indexOf('\n', index + 2);
+      index = end < 0 ? sql.length : end + 1;
+      continue;
+    }
+    if (sql.startsWith('/*', index)) {
+      let depth = 1;
+      for (index += 2; index < sql.length && depth > 0;) {
+        if (sql.startsWith('/*', index)) { depth++; index += 2; }
+        else if (sql.startsWith('*/', index)) { depth--; index += 2; }
+        else index++;
+      }
+      assert.equal(depth, 0, 'unterminated SQL block comment');
+      continue;
+    }
+    assert.fail('reviewed trigger migration contains SQL outside approved declarations');
+  }
+}
+
+export function checkReviewedTriggerSql(sql, migrationId) {
   const functions = new Set();
-  const functionPattern = /CREATE\s+FUNCTION\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(\)\s+RETURNS\s+trigger\s+LANGUAGE\s+plpgsql\s+AS\s+\$\$([\s\S]*?)\$\$\s*;/gi;
-  let remaining = sql.replace(functionPattern, (_statement, name, body) => {
-    assert.match(body, /^\s*BEGIN[\s\S]*END\s*$/i, 'trigger function must be a bounded BEGIN/END body');
+  const firstFunction = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b/i.exec(sql);
+  assert.ok(firstFunction, 'reviewed trigger migration must define a trigger function');
+  const prefix = sql.slice(0, firstFunction.index);
+  const contract = migrationId ? reviewedTriggerContracts.get(migrationId) : [...reviewedTriggerContracts.values()].find(entry => entry.prefixDigest === digest(prefix));
+  if (migrationId) assert.ok(contract, 'reviewed trigger migration contract is missing');
+  if (contract) assert.equal(digest(prefix), contract.prefixDigest, 'reviewed pre-trigger DDL changed');
+  else assertSqlTrivia(prefix);
+  const functionPattern = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(\)\s+RETURNS\s+trigger\s+LANGUAGE\s+plpgsql\s+AS\s+(\$\$|\$[A-Za-z_][A-Za-z_0-9]*\$)([\s\S]*?)\2\s*;/gi;
+  let remaining = sql.slice(firstFunction.index).replace(functionPattern, (_statement, name, _delimiter, body) => {
     const code = executableSql(body);
+    assert.match(code, /^\s*BEGIN[\s\S]*END\s*$/i, 'trigger function must be a bounded BEGIN/END body');
     assert.doesNotMatch(code, /\b(?:WITH|INSERT|UPDATE|DELETE)\b/i, 'trigger function may not mutate rows');
     assert.doesNotMatch(code, /\b(EXECUTE|PERFORM|CALL|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i, 'trigger function may not execute dynamic or schema-changing SQL');
     functions.add(name.toLowerCase());
     return '';
   });
   assert.ok(functions.size > 0, 'reviewed trigger migration must define a trigger function');
+  if (contract) assert.deepEqual([...functions].sort(), contract.functions, 'reviewed trigger function set changed');
   const referencedFunctions = new Set();
-  const triggerPattern = /CREATE\s+TRIGGER\s+(?:"[A-Za-z_][A-Za-z_0-9]*"|[A-Za-z_][A-Za-z_0-9]*)\s+BEFORE\s+(?:INSERT|UPDATE|DELETE)(?:\s+OR\s+(?:INSERT|UPDATE|DELETE))*\s+ON\s+(?:"[A-Za-z_][A-Za-z_0-9]*"|[A-Za-z_][A-Za-z_0-9]*)\s+FOR\s+EACH\s+ROW\s+EXECUTE\s+FUNCTION\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(\)\s*;/gi;
-  remaining = remaining.replace(triggerPattern, (_statement, name) => {
+  const triggerSignatures = new Set();
+  const identifier = '(?:"(?:[^"]|"")*"|[A-Za-z_][A-Za-z_0-9]*)';
+  const triggerPattern = new RegExp(`CREATE\\s+TRIGGER\\s+(${identifier})\\s+BEFORE\\s+((?:INSERT|UPDATE|DELETE)(?:\\s+OR\\s+(?:INSERT|UPDATE|DELETE))*)\\s+ON\\s+(${identifier})\\s+FOR\\s+EACH\\s+ROW\\s+EXECUTE\\s+FUNCTION\\s+([A-Za-z_][A-Za-z_0-9]*)\\s*\\(\\)\\s*;`, 'gi');
+  remaining = remaining.replace(triggerPattern, (_statement, triggerName, events, tableName, name) => {
     const identity = name.toLowerCase();
     assert.ok(functions.has(identity), 'trigger must reference a function defined in the same migration');
     referencedFunctions.add(identity);
+    triggerSignatures.add(`${triggerName}|${events.replaceAll(/\s+/g, '').toUpperCase()}|${tableName}|${identity}`);
     return '';
   });
   assert.deepEqual(referencedFunctions, functions, 'every reviewed trigger function must have a matching trigger');
-  assert.doesNotMatch(remaining, /\b(CREATE\s+FUNCTION|CREATE\s+TRIGGER|DROP|TRUNCATE|RENAME|DO|GRANT|REVOKE|SECURITY\s+DEFINER)\b/i, 'unreviewed trigger or destructive SQL');
+  assert.equal(triggerSignatures.size, functions.size, 'every reviewed trigger function must have exactly one trigger');
+  if (contract) assert.deepEqual([...triggerSignatures].sort(), contract.triggers, 'reviewed trigger declaration set changed');
+  assertSqlTrivia(remaining);
 }
 
 // This is deliberately a narrow additive DDL gate, not a general SQL parser.
@@ -157,7 +207,7 @@ export function checkMigrationContract(root = projectRoot) {
     assert.equal(digest(sql), entry.sha256, `migration digest mismatch: ${entry.id}`);
     assert.doesNotMatch(sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, ' '), /\b(DROP|TRUNCATE|RENAME)\b/i, 'destructive SQL is forbidden');
     if (entry.id > manifest.historicalThrough) {
-      if (reviewedTriggerMigrations.has(entry.id)) checkReviewedTriggerSql(sql);
+      if (reviewedTriggerMigrations.has(entry.id)) checkReviewedTriggerSql(sql, entry.id);
       else checkAdditiveSql(sql);
     }
   }

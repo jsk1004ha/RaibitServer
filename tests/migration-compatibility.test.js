@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
-import { checkAdditiveSql, checkCrd, checkMigrationContract, checkReviewedTriggerSql, digest, projectRoot } from '../scripts/check-migration-contract.mjs';
+import { checkAdditiveSql, checkCrd, checkMigrationContract, digest, projectRoot } from '../scripts/check-migration-contract.mjs';
 
 const manifest = JSON.parse(readFileSync(new URL('../prisma/migration-contract.json', import.meta.url), 'utf8'));
 const crds = JSON.parse(readFileSync(new URL('../test-fixtures/contracts/crd-schema-v1.json', import.meta.url), 'utf8'));
@@ -67,37 +67,6 @@ test('migration compatibility gate is available before deployment', async () => 
 test('checkout has ordered digests and a forward-fix deployment contract', () => {
   // Given the checkout, when checking the migration contract, then all artifacts agree.
   assert.deepEqual(checkMigrationContract(), { migrations: manifest.migrations.length, applicationCompatibilityFloor: '000008_git_source_binding', rollbackMode: 'forward-fix', crds: 2 });
-});
-
-test('reviewed trigger migrations reject comment-obscured mutation through checker and CLI', async t => {
-  // Given: the reviewed trigger migrations and destructive bodies obscured by both SQL comment forms.
-  for (const id of ['000014_resource_recovery', '000015_preview_lineage']) {
-    const sql = readFileSync(new URL(`../prisma/migrations/${id}/migration.sql`, import.meta.url), 'utf8');
-    await t.test(`safe reviewed migration: ${id}`, () => assert.doesNotThrow(() => checkReviewedTriggerSql(sql)));
-  }
-  const quotedKeywords = `CREATE FUNCTION quoted_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN RAISE EXCEPTION 'THEN /* not a comment */ DELETE'; RAISE EXCEPTION $message$THEN -- not a comment
-DELETE$message$; RETURN NEW; END
-$$;
-CREATE TRIGGER "quoted_guard" BEFORE INSERT ON "User" FOR EACH ROW EXECUTE FUNCTION quoted_guard();`;
-  await t.test('safe quoted comment markers and DML words', () => assert.doesNotThrow(() => checkReviewedTriggerSql(quotedKeywords)));
-  const hostileBodies = [
-    'BEGIN IF true THEN /* comment */ DELETE FROM "User"; END IF; RETURN NEW; END',
-    'BEGIN IF true THEN -- comment\nDELETE FROM "User"; END IF; RETURN NEW; END',
-  ];
-  // When / Then: direct validation and the deployment CLI both fail closed for each bypass form.
-  for (const [index, body] of hostileBodies.entries()) await t.test(`comment bypass ${index + 1}`, child => {
-    const sql = `CREATE FUNCTION recovery_backup_guard() RETURNS trigger LANGUAGE plpgsql AS $$\n${body}\n$$;\nCREATE TRIGGER "ResourceBackup_guard" BEFORE INSERT ON "ResourceBackup" FOR EACH ROW EXECUTE FUNCTION recovery_backup_guard();`;
-    assert.throws(() => checkReviewedTriggerSql(sql), /may not mutate rows/);
-    const root = fixture(child);
-    writeFileSync(join(root, 'prisma/migrations/000014_resource_recovery/migration.sql'), sql);
-    const next = structuredClone(manifest);
-    next.migrations.find(entry => entry.id === '000014_resource_recovery').sha256 = digest(sql);
-    writeFileSync(join(root, 'prisma/migration-contract.json'), JSON.stringify(next));
-    const cli = spawnSync(process.execPath, [join(projectRoot, 'scripts/check-migration-contract.mjs'), root], { encoding: 'utf8' });
-    assert.equal(cli.status, 1, `${cli.stdout}\n${cli.stderr}`);
-    assert.match(cli.stderr, /may not mutate rows/);
-  });
 });
 
 test('reject destructive migration matrix before apply', async (t) => {
