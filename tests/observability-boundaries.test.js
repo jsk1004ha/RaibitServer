@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { PEM_CONTEXT_LIMITS, PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 import { boundedDnsLabel, identityDnsLabel, tenantProjectLabel } from '../packages/core/src/domain-router.ts';
 import { sanitizeObservationLine } from '../packages/core/src/observability-redaction.ts';
 import { createObservationProjectionContinuation, maskedObservationRows, projectObservationPayload } from '../packages/core/src/observability-projection.ts';
@@ -100,4 +101,33 @@ test('Given an SSE setup write failure, When close paths repeat, Then projection
   stream.stop();
   assert.equal(stream.closed,true);
   assert.equal(cleanup,1);
+});
+
+test('Given 128 immutable log sources, When predecessor context is read, Then database work stays batch- and byte-bounded', async () => {
+  let legacyQueries = 0;
+  let batchQueries = 0;
+  let statement = '';
+  const repository = new PrismaControlPlaneRepository({
+    runtimeLog: { findMany: async () => { legacyQueries += 1; return []; } },
+    buildLog: { findMany: async () => { legacyQueries += 1; return []; } },
+    $queryRaw: async (query) => { batchQueries += 1; statement = query.sql; return [{requestId:1,line:'x'.repeat(PEM_CONTEXT_LIMITS.lineCharacters+1),truncated:false,rank:1}]; },
+  });
+  const rows = Array.from({length:128},(_,index)=>({
+    id:'row-'+index,
+    timestamp:'2026-09-04T00:00:00.000Z',
+    serviceId:'service-1',
+    deploymentId:'deployment-1',
+    podUid:'pod-'+index,
+    containerName:'app',
+    line:'visible',
+  }));
+  const contexts = await repository.logPemContext(rows);
+  assert.equal(legacyQueries,0);
+  assert.equal(batchQueries<=2,true);
+  assert.equal(contexts.length<=16,true);
+  assert.equal(contexts.every((context)=>context.rows.length<=4),true);
+  assert.equal(contexts[0].complete,false);
+  assert.match(statement,/substring\(log\."line"/i);
+  assert.match(statement,/row_number\(\)/i);
+  assert.equal(PEM_CONTEXT_LIMITS.queryRows*PEM_CONTEXT_LIMITS.lineCharacters*4<PEM_CONTEXT_LIMITS.queryBytes,true);
 });

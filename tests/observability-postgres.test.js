@@ -113,6 +113,7 @@ test('Given legacy split PEM rows, When Nest reads JSON pages and SSE polls, The
   const {RAIBITSERVERService} = apiRequire('./src/raibitserver.service.ts');
   runtime.app.get(RAIBITSERVERService).repositoryPromise = Promise.resolve(repository);
   const ids = {org:randomUUID(),project:randomUUID(),service:randomUUID(),deployment:randomUUID(),user:randomUUID()};
+  let primaryFailure;
   try {
     const org = await repository.prisma.organization.create({data:{id:ids.org,name:'PEM projection',slug:'pem-'+ids.org.slice(0,8)}});
     const project = await repository.prisma.project.create({data:{id:ids.project,organizationId:org.id,name:'PEM',slug:'pem-'+ids.project.slice(0,8)}});
@@ -124,10 +125,12 @@ test('Given legacy split PEM rows, When Nest reads JSON pages and SSE polls, The
     const headers = {authorization:'Bearer '+token};
     const sourceA = {serviceId:service.id,deploymentId:deployment.id,podName:'pod-a',podUid:randomUUID(),containerName:'app'};
     const sourceB = {serviceId:service.id,deploymentId:deployment.id,podName:'pod-b',podUid:randomUUID(),containerName:'app'};
+    const sourceFill = {serviceId:service.id,deploymentId:deployment.id,podName:'pod-fill',podUid:randomUUID(),containerName:'app'};
     const at = new Date('2026-09-04T00:00:00.000Z');
     const append = async ({offset,...data}) => repository.prisma.runtimeLog.create({data:{id:randomUUID(),level:'info',timestamp:new Date(at.getTime()+offset),...data}});
     await append({...sourceA,offset:0,line:'before -----BEGIN RSA PRIVATE KEY-----'});
-    for (let offset = 1; offset <= 200; offset++) await append({...sourceB,offset,line:'SOURCE_B_VISIBLE_'+offset});
+    for (let offset = 1; offset < 200; offset++) await append({...sourceFill,offset,line:'SOURCE_FILL_'+offset});
+    await append({...sourceB,offset:200,line:'SOURCE_B_VISIBLE'});
     await append({...sourceA,offset:201,line:'FORBIDDEN_PEM_READ_BODY'});
 
     // When a fresh latest JSON window starts at a body row, its PEM BEGIN is outside that window.
@@ -142,7 +145,7 @@ test('Given legacy split PEM rows, When Nest reads JSON pages and SSE polls, The
     assert.equal(jsonResponse.status,200);
     assert.equal(jsonAll.includes('FORBIDDEN_PEM_READ_BODY'),false);
     assert.equal(jsonAll.includes('FORBIDDEN_MISSING_SOURCE'),false);
-    assert.equal(jsonAll.includes('SOURCE_B_VISIBLE_'),true);
+    assert.equal(jsonAll.includes('SOURCE_B_VISIBLE'),true);
     assert.equal(decodeKeysetCursor(firstPage.nextCursor).id,firstPage.logs.at(-1).id);
 
     // Given a snapshot that ends inside source A's PEM, when a later body row arrives on the same SSE connection.
@@ -166,7 +169,7 @@ test('Given legacy split PEM rows, When Nest reads JSON pages and SSE polls, The
     await reconnectReader.cancel().catch(()=>{});
     const sseAll = initial+delta+reconnectFrame;
     if (process.env.OBSERVABILITY_EVIDENCE_DIR) writeFileSync(process.env.OBSERVABILITY_EVIDENCE_DIR+'/pem-read-projection.json',JSON.stringify({
-      json:{status:jsonResponse.status,firstPageRows:firstPage.logs.length,secondPageRows:secondPage.logs.length,cursorMatchesLast:decodeKeysetCursor(firstPage.nextCursor).id===firstPage.logs.at(-1).id,sourceBVisible:jsonAll.includes('SOURCE_B_VISIBLE_'),freshWindowBeginOutside:true},
+      json:{status:jsonResponse.status,firstPageRows:firstPage.logs.length,secondPageRows:secondPage.logs.length,cursorMatchesLast:decodeKeysetCursor(firstPage.nextCursor).id===firstPage.logs.at(-1).id,sourceBVisible:jsonAll.includes('SOURCE_B_VISIBLE'),freshWindowBeginOutside:true},
       sse:{initialBytes:Buffer.byteLength(initial),deltaBytes:Buffer.byteLength(delta),reconnectBytes:Buffer.byteLength(reconnectFrame)},
       forbiddenMatches:0,
       uuidCleanup:true,
@@ -175,15 +178,27 @@ test('Given legacy split PEM rows, When Nest reads JSON pages and SSE polls, The
     assert.equal(sseAll.includes('FORBIDDEN_PEM_POLLED_BODY'),false);
     assert.equal(sseAll.includes('FORBIDDEN_MISSING_SOURCE'),false);
     assert.equal(Buffer.byteLength(sseAll)<=524288,true);
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
   } finally {
     if (previousRetry === undefined) delete process.env.RAIBITSERVER_SSE_RETRY_MS;
     else process.env.RAIBITSERVER_SSE_RETRY_MS = previousRetry;
-    await repository.prisma.organization.delete({where:{id:ids.org}}).catch(()=>{});
-    await repository.prisma.user.delete({where:{id:ids.user}}).catch(()=>{});
-    runtime.app.getHttpServer().closeAllConnections?.();
-    await runtime.app.close();
-    await repository.disconnect();
-    hooks.deregister();
+    const cleanupFailures = [];
+    const cleanup = async (name, operation) => {
+      try { await operation(); } catch (error) { cleanupFailures.push(new Error(name,{cause:error})); }
+    };
+    await cleanup('delete PEM projection organization',()=>repository.prisma.organization.delete({where:{id:ids.org}}));
+    await cleanup('delete PEM projection user',()=>repository.prisma.user.delete({where:{id:ids.user}}));
+    await cleanup('close PEM projection connections',()=>runtime.app.getHttpServer().closeAllConnections?.());
+    await cleanup('close PEM projection app',()=>runtime.app.close());
+    await cleanup('disconnect PEM projection repository',()=>repository.disconnect());
+    await cleanup('deregister PEM projection hooks',()=>hooks.deregister());
+    if (cleanupFailures.length) {
+      const aggregate = new AggregateError(cleanupFailures,'PEM projection cleanup failed');
+      if (primaryFailure) console.error(aggregate);
+      else throw aggregate;
+    }
   }
 });
 

@@ -295,6 +295,7 @@ model BuildLog {
 
   @@index([deploymentId, timestamp])
   @@index([deploymentId, timestamp, id])
+  @@index([deploymentId, step, timestamp, id])
 }
 
 model RuntimeLog {
@@ -315,6 +316,7 @@ model RuntimeLog {
   @@index([deploymentId, timestamp])
   @@index([serviceId, timestamp, id])
   @@index([deploymentId, timestamp, id])
+  @@index([serviceId, deploymentId, podUid, containerName, timestamp, id])
 	@@index([timestamp])
 }
 

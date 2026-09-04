@@ -800,18 +800,22 @@ export class ControlPlaneStore {
     return deepClone(boundedActivityRows(this.runtimeLogs.filter((row) => row.serviceId === serviceId), options));
   }
 
-  logPemContext(rows: Record<string, any>[]): ObservationLogContext[] {
-    const first = new Map<string, Record<string, any>>();
-    for (const row of rows.slice(0, 128)) {
+  logPemContext(rows: readonly Record<string, unknown>[]): ObservationLogContext[] {
+    const first = new Map<string, Record<string, unknown>>();
+    for (const row of rows.slice(0, 16)) {
       const source = observationLogSource(row);
       if (source && !first.has(source)) first.set(source, row);
     }
+    const scanLimit = 256;
+    const scanComplete = this.buildLogs.length <= scanLimit && this.runtimeLogs.length <= scanLimit;
+    const candidates = [...this.buildLogs.slice(-scanLimit), ...this.runtimeLogs.slice(-scanLimit)];
     return [...first.entries()].map(([source, row]) => {
-      const history = [...this.buildLogs, ...this.runtimeLogs]
+      const history = candidates
         .filter((candidate) => observationLogSource(candidate) === source && activityBefore(candidate, row))
         .sort((left, right) => dateMs(right.timestamp) - dateMs(left.timestamp) || String(right.id).localeCompare(String(left.id)))
-        .slice(0, 1001);
-      return { source, rows: deepClone(history.slice(0, 1000).reverse()), complete: history.length <= 1000 };
+        .slice(0, 5);
+      const complete = scanComplete && history.length <= 4 && history.every((candidate) => String(candidate.line || '').length <= 256);
+      return { source, rows: complete ? deepClone(history.reverse().map((candidate) => ({ line: candidate.line }))) : [], complete };
     });
   }
 
@@ -1998,7 +2002,7 @@ function uniqueRepositories(repositories: Array<Record<string, any> | null>) {
   return [...byName.values()];
 }
 
-function activityBefore(candidate: Record<string, any>, row: Record<string, any>) {
+function activityBefore(candidate: Record<string, unknown>, row: Record<string, unknown>) {
   const timestampDifference = dateMs(candidate.timestamp) - dateMs(row.timestamp);
   return timestampDifference < 0 || (timestampDifference === 0 && String(candidate.id).localeCompare(String(row.id)) < 0);
 }

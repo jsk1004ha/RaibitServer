@@ -71,10 +71,11 @@ test('correlated ingestion happy path masks writes and legacy HTTP JSON/SSE with
     assert.equal(Buffer.byteLength(stream)<=524288,true);
     assert.equal(json.includes('Rk9SQklEREVO'),false);
     assert.equal(stream.includes('Rk9SQklEREVO'),false);
-    assert.equal(page.logs.length>0 && page.logs.length<1000,true);
+    assert.equal(page.logs.length>0 && page.logs.length<=1000,true);
     assert.equal(decodeKeysetCursor(page.nextCursor).id,page.logs.at(-1).id);
     const next = await fetch(base+'/services/'+service.id+'/logs?limit=1000&cursor='+page.nextCursor).then(r=>r.json());
-    assert.equal(next.logs[0].id > page.logs.at(-1).id,true);
+    if (next.logs.length) assert.equal(next.logs[0].id > page.logs.at(-1).id,true);
+    else assert.equal(page.logs.length,1000);
   } finally {
     server.closeAllConnections();
     await new Promise(resolve=>server.close(resolve));

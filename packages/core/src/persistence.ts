@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { HEALTH_PATH_FIELDS, INITIAL_DEPLOYMENT_HEALTH, parseHealthPaths, publicDeploymentHealth } from './deployment-health.ts';
 import { assertOperationReplay, captureDeploymentSnapshot, deploymentSuccessor, DeploymentOperationError, eligibleDeploymentSource, successorWorkflow, type DeploymentOperation } from './deployment-operations.ts';
 import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
@@ -47,6 +47,28 @@ import {
 } from './store-helpers.ts';
 
 type QuotaRequirement = { metric: string; increment: number };
+type ObservationLogRow = Record<string, unknown>;
+type PemContextSource = {
+  readonly requestId: number;
+  readonly source: string;
+  readonly kind: 'runtime' | 'build';
+  readonly deploymentId: string;
+  readonly timestamp: Date;
+  readonly id: string;
+  readonly serviceId?: string;
+  readonly podUid?: string;
+  readonly containerName?: string;
+  readonly step?: string;
+};
+type PemContextQueryRow = { readonly requestId: number; readonly line: string; readonly truncated: boolean; readonly rank: number };
+
+export const PEM_CONTEXT_LIMITS = {
+  sources: 16,
+  rowsPerSource: 4,
+  lineCharacters: 256,
+  queryRows: 80,
+  queryBytes: 131_072,
+} as const;
 
 function combineQuotaRequirements(requirements: QuotaRequirement[]) {
   const combined = new Map<string, number>();
@@ -332,7 +354,7 @@ export class InMemoryControlPlaneRepository {
   async appendDeploymentEvent(input: Record<string, any>) { return this.store.appendDeploymentEvent(input); }
   async listDeploymentLogs(deploymentId: string, options: Record<string, any> = {}) { return this.store.listDeploymentLogs(deploymentId, options); }
   async listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) { return this.store.listRuntimeLogs(serviceId, options); }
-  async logPemContext(rows: Record<string, any>[]) { return this.store.logPemContext(rows); }
+  async logPemContext(rows: readonly ObservationLogRow[]) { return this.store.logPemContext(rows); }
   async listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) { return this.store.listDeploymentEvents(deploymentId, options); }
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleQuery(resourceId, query, options); }
   async runResourceConsoleCommand(resourceId: string, command: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleCommand(resourceId, command, options); }
@@ -1862,20 +1884,14 @@ export class PrismaControlPlaneRepository {
 
   async listDeploymentLogs(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.buildLog, { deploymentId }, options); }
   async listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.runtimeLog, { serviceId }, options); }
-  async logPemContext(rows: Record<string, any>[]): Promise<ObservationLogContext[]> {
-    const firstBySource = firstLogRowsBySource(rows);
-    return Promise.all([...firstBySource.entries()].map(async ([source, row]) => {
-      const model: any = row.serviceId ? this.prisma.runtimeLog : this.prisma.buildLog;
-      const scope = row.serviceId
-        ? { serviceId: row.serviceId, deploymentId: row.deploymentId, podUid: row.podUid, containerName: row.containerName }
-        : { deploymentId: row.deploymentId, step: row.step };
-      const history = await model.findMany({
-        where: { AND: [scope, beforeActivityRow(row)] },
-        orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
-        take: 1001,
-      });
-      return { rows: history.slice(0, 1000).reverse(), complete: history.length <= 1000, source };
-    }));
+  async logPemContext(rows: readonly ObservationLogRow[]): Promise<ObservationLogContext[]> {
+    const sources = pemContextSources(rows);
+    const runtimeSources = sources.filter((source) => source.kind === 'runtime');
+    const buildSources = sources.filter((source) => source.kind === 'build');
+    const queryRows: PemContextQueryRow[] = [];
+    if (runtimeSources.length) queryRows.push(...await this.prisma.$queryRaw<PemContextQueryRow[]>(runtimePemContextQuery(runtimeSources)));
+    if (buildSources.length) queryRows.push(...await this.prisma.$queryRaw<PemContextQueryRow[]>(buildPemContextQuery(buildSources)));
+    return pemContextsFromQuery(sources, queryRows);
   }
   async listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.deploymentEvent, { deploymentId }, options); }
 
@@ -2106,23 +2122,80 @@ async function findActivityRows(model: any, scope: Record<string, any>, options:
   return cursorFilter ? rows : rows.reverse();
 }
 
-function firstLogRowsBySource(rows: Record<string, any>[]) {
-  const first = new Map<string, Record<string, any>>();
-  for (const row of rows.slice(0, 128)) {
+function pemContextSources(rows: readonly ObservationLogRow[]): PemContextSource[] {
+  const sources = new Map<string, PemContextSource>();
+  for (const row of rows.slice(0, 1000)) {
+    if (sources.size >= PEM_CONTEXT_LIMITS.sources) break;
     const source = observationLogSource(row);
-    if (source && !first.has(source)) first.set(source, row);
+    const id = boundedPemIdentity(row.id);
+    const timestamp = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp || ''));
+    const deploymentId = boundedPemIdentity(row.deploymentId);
+    if (!source || !id || !deploymentId || !Number.isFinite(timestamp.getTime()) || sources.has(source)) continue;
+    const serviceId = boundedPemIdentity(row.serviceId);
+    if (serviceId) {
+      const podUid = boundedPemIdentity(row.podUid);
+      const containerName = boundedPemIdentity(row.containerName);
+      if (podUid && containerName) sources.set(source, { requestId: sources.size + 1, source, kind: 'runtime', serviceId, deploymentId, podUid, containerName, timestamp, id });
+      continue;
+    }
+    const step = boundedPemIdentity(row.step);
+    if (step) sources.set(source, { requestId: sources.size + 1, source, kind: 'build', deploymentId, step, timestamp, id });
   }
-  return first;
+  return [...sources.values()];
 }
 
-function beforeActivityRow(row: Record<string, any>) {
-  const timestamp = new Date(row.timestamp);
-  return {
-    OR: [
-      { timestamp: { lt: timestamp } },
-      { timestamp, id: { lt: String(row.id) } },
-    ],
-  };
+function runtimePemContextQuery(sources: readonly PemContextSource[]) {
+  const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.serviceId!} AS text), CAST(${source.deploymentId} AS text), CAST(${source.podUid!} AS text), CAST(${source.containerName!} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
+  return Prisma.sql`
+    WITH requested("requestId", "serviceId", "deploymentId", "podUid", "containerName", "timestamp", "id") AS (VALUES ${Prisma.join(values)}),
+    ranked AS (
+      SELECT requested."requestId", substring(log."line" FROM 1 FOR CAST(${PEM_CONTEXT_LIMITS.lineCharacters} AS integer)) AS "line",
+        char_length(log."line") > ${PEM_CONTEXT_LIMITS.lineCharacters} AS "truncated",
+        row_number() OVER (PARTITION BY requested."requestId" ORDER BY log."timestamp" DESC, log."id" DESC) AS "rank"
+      FROM requested JOIN "RuntimeLog" AS log ON log."serviceId" = requested."serviceId"
+        AND log."deploymentId" = requested."deploymentId" AND log."podUid" = requested."podUid" AND log."containerName" = requested."containerName"
+      WHERE log."timestamp" < requested."timestamp" OR (log."timestamp" = requested."timestamp" AND log."id" < requested."id")
+    )
+    SELECT "requestId", "line", "truncated", "rank" FROM ranked WHERE "rank" <= ${PEM_CONTEXT_LIMITS.rowsPerSource + 1}
+    ORDER BY "requestId", "rank" DESC
+  `;
+}
+
+function buildPemContextQuery(sources: readonly PemContextSource[]) {
+  const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.deploymentId} AS text), CAST(${source.step!} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
+  return Prisma.sql`
+    WITH requested("requestId", "deploymentId", "step", "timestamp", "id") AS (VALUES ${Prisma.join(values)}),
+    ranked AS (
+      SELECT requested."requestId", substring(log."line" FROM 1 FOR CAST(${PEM_CONTEXT_LIMITS.lineCharacters} AS integer)) AS "line",
+        char_length(log."line") > ${PEM_CONTEXT_LIMITS.lineCharacters} AS "truncated",
+        row_number() OVER (PARTITION BY requested."requestId" ORDER BY log."timestamp" DESC, log."id" DESC) AS "rank"
+      FROM requested JOIN "BuildLog" AS log ON log."deploymentId" = requested."deploymentId" AND log."step" = requested."step"
+      WHERE log."timestamp" < requested."timestamp" OR (log."timestamp" = requested."timestamp" AND log."id" < requested."id")
+    )
+    SELECT "requestId", "line", "truncated", "rank" FROM ranked WHERE "rank" <= ${PEM_CONTEXT_LIMITS.rowsPerSource + 1}
+    ORDER BY "requestId", "rank" DESC
+  `;
+}
+
+function pemContextsFromQuery(sources: readonly PemContextSource[], rows: readonly PemContextQueryRow[]): ObservationLogContext[] {
+  const histories = new Map<number, PemContextQueryRow[]>();
+  for (const row of rows.slice(0, PEM_CONTEXT_LIMITS.queryRows)) {
+    if (!Number.isInteger(row.requestId) || row.requestId < 1 || row.requestId > sources.length || typeof row.line !== 'string') continue;
+    const history = histories.get(row.requestId) || [];
+    if (history.length < PEM_CONTEXT_LIMITS.rowsPerSource + 1) history.push(row);
+    histories.set(row.requestId, history);
+  }
+  return sources.map((source) => {
+    const history = histories.get(source.requestId) || [];
+    const complete = history.length <= PEM_CONTEXT_LIMITS.rowsPerSource && history.every((row) => row.truncated !== true && row.line.length <= PEM_CONTEXT_LIMITS.lineCharacters);
+    return { source: source.source, rows: complete ? history.map((row) => ({ line: row.line })) : [], complete };
+  });
+}
+
+function boundedPemIdentity(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const identity = value.trim();
+  return identity.length > 0 && identity.length <= 256 && /^[A-Za-z0-9._:-]+$/.test(identity) ? identity : null;
 }
 
 async function findKeysetRows(model: any, scope: Record<string, any>, options: Record<string, any> = {}, query: Record<string, any> = {}) {

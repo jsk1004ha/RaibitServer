@@ -145,7 +145,7 @@ function logContextStates(contexts: readonly ObservationLogContext[] | undefined
     }
     let state: RedactionState = { v: 1, pem: false };
     for (const row of context.rows.slice(0, 1000)) {
-      if (observationLogSource(row) !== source || typeof row.line !== 'string') continue;
+      if (typeof row.line !== 'string') continue;
       state = sanitizeObservationLine(row.line, state).state;
     }
     states.set(source, state);
