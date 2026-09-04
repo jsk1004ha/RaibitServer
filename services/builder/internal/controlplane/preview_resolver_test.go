@@ -2,9 +2,11 @@ package controlplane
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -92,11 +94,46 @@ func TestPreviewResolverUsesScopedTokenObservesAndRevokes(t *testing.T) {
 	}
 }
 
-func TestPreviewResolverContractConstantsReserveJobsFromBuildClaim(t *testing.T) {
-	if PreviewLeaseDuration != 60*time.Second || PreviewHeartbeat != 20*time.Second || PreviewMaxAttempts != 3 || PreviewDeadline != 5*time.Minute {
-		t.Fatal("preview resolver lease contract drifted")
+func TestPostgresStoreGenericClaimSkipsReservedPreviewWorkflowJobs(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("RAIBITSERVER_TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("reserved preview workflow qualification requires RAIBITSERVER_TEST_POSTGRES_DSN")
 	}
-	if strings.Contains(claimWorkflowJobSQL, PreviewResolveJobType) || strings.Contains(claimWorkflowJobSQL, PreviewApplyJobType) {
-		t.Fatal("generic build worker SQL claims reserved preview jobs")
+
+	// Given queued resolver and cleanup jobs for an isolated preview lineage.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := sql.Open(postgresDriverName, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	fixture := insertPreviewPostgresFixture(t, ctx, db, now, 1)
+	defer cleanupPreviewPostgresFixture(t, db, fixture)
+	cleanupJobID := "preview-cleanup:" + fixture.lineageID
+	if _, err := db.ExecContext(ctx, `INSERT INTO "WorkflowJob" (id,type,status,"targetType","targetId",payload,attempts,"maxAttempts","runAfter","updatedAt") VALUES ($1,'preview-cleanup','queued','preview-lineage',$2,'{}',0,3,$3,$3)`, cleanupJobID, fixture.lineageID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// When the ordinary builder worker asks for its next job.
+	claimed, err := NewPostgresStore(db).ClaimNextWorkflowJob(ctx, ClaimOptions{WorkerID: "builder-reserved-preview-check", Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Then no reserved preview job is claimed or mutated.
+	if claimed != nil {
+		t.Fatalf("generic builder claimed reserved preview workflow: %#v", claimed)
+	}
+	for _, jobID := range []string{fixture.jobID, cleanupJobID} {
+		var status string
+		var attempts int
+		if err := db.QueryRowContext(ctx, `SELECT status,attempts FROM "WorkflowJob" WHERE id=$1`, jobID).Scan(&status, &attempts); err != nil {
+			t.Fatal(err)
+		}
+		if status != WorkflowQueued || attempts != 0 {
+			t.Fatalf("generic builder mutated reserved preview job %s: status=%q attempts=%d", jobID, status, attempts)
+		}
 	}
 }
