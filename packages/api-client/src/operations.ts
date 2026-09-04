@@ -1,4 +1,5 @@
 import { apiOperations, ErrorBody, z } from '@raibitserver/schemas';
+import { RuntimeLogStreamCursorSchema } from './runtime-log-stream.ts';
 
 export class ApiOperationError extends Error {
   readonly name = 'ApiOperationError';
@@ -11,7 +12,7 @@ export class ApiOperationError extends Error {
   }
 }
 export type OperationTransport = { readonly baseUrl: string; readonly token?: string };
-export type RequestOptions = { readonly signal?: AbortSignal; readonly headers?: Readonly<Record<string, string>> };
+export type RequestOptions = { readonly signal?: AbortSignal; readonly headers?: Readonly<Record<string, string>>; readonly lastEventId?: string };
 type WireInput = { readonly path: Readonly<Record<string, string>>; readonly query: Readonly<Record<string, string | number | undefined>>; readonly body: object };
 type Contract<I extends z.ZodType<WireInput>, O extends z.ZodType> = { readonly method: string; readonly path: string; readonly input: I; readonly response: O; readonly stream?: string };
 
@@ -22,13 +23,20 @@ export function createOperationsClient(transport: OperationTransport) {
       const path = contract.path.replace(/\{([^}]+)\}/g, (_match, key: string) => encodeURIComponent(parsed.path[key] ?? ''));
       const url = new URL(`${transport.baseUrl.replace(/\/$/, '')}${path}`);
       for (const [key, value] of Object.entries(parsed.query)) if (value !== undefined) url.searchParams.set(key, String(value));
-      const headers: Record<string, string> = { ...options.headers };
+      const headers: Record<string, string> = Object.fromEntries(
+        Object.entries(options.headers ?? {}).filter(([key]) => key.toLowerCase() !== 'last-event-id'),
+      );
       if (transport.token) headers.authorization = `Bearer ${transport.token}`;
+      if (contract.stream && options.lastEventId !== undefined) {
+        headers['last-event-id'] = RuntimeLogStreamCursorSchema.parse(options.lastEventId);
+      }
+      if (contract.stream) headers.accept = 'text/event-stream';
       const sendsBody = contract.method !== 'get' && contract.method !== 'delete';
       if (sendsBody) headers['content-type'] = 'application/json';
       // Native fetch matches the existing client transport; bounded cancellation
       // and typed HTTP errors are enforced here, including open SSE connections.
-      const response = await fetch(url, { method: contract.method.toUpperCase(), headers, body: sendsBody ? JSON.stringify(parsed.body) : undefined, signal: options.signal ?? AbortSignal.timeout(30_000) });
+      const signal = options.signal ?? (contract.stream ? undefined : AbortSignal.timeout(30_000));
+      const response = await fetch(url, { method: contract.method.toUpperCase(), headers, body: sendsBody ? JSON.stringify(parsed.body) : undefined, ...(signal ? { signal } : {}) });
       if (!response.ok) throw new ApiOperationError(response.status, ErrorBody.parse(await response.json()));
       if (!contract.stream) return contract.response.parse(await response.json());
       const reader = response.body?.getReader();
@@ -40,11 +48,12 @@ export function createOperationsClient(transport: OperationTransport) {
           const chunk = await reader.read();
           if (chunk.done) throw new TypeError('SSE ended before a snapshot');
           buffer += decoder.decode(chunk.value, { stream: true });
-          const frames = buffer.split('\n\n');
+          const frames = buffer.split(/(?:\r?\n){2}/);
           buffer = frames.pop() ?? '';
           for (const frame of frames) {
-            if (!frame.includes(`event: ${contract.stream}\n`)) continue;
-            const data = frame.split('\n').filter((line) => line.startsWith('data: ')).map((line) => line.slice(6)).join('\n');
+            const lines = frame.split(/\r?\n/);
+            if (!lines.some((line) => line === `event: ${contract.stream}`)) continue;
+            const data = lines.filter((line) => line.startsWith('data: ')).map((line) => line.slice(6)).join('\n');
             return contract.response.parse(JSON.parse(data));
           }
         }

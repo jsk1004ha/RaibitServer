@@ -1,8 +1,18 @@
 import type { DeploymentListResponse, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceListResponse, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
 import { createOperationsClient } from './operations.ts';
+import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
 import type { DeploymentOperationInput } from '@raibitserver/schemas';
 export { createOperationsClient, ApiOperationError } from './operations.ts';
+export {
+  createRuntimeLogStreamRequest,
+  runtimeLogStreamPath,
+  runtimeLogStreamUrl,
+  RuntimeLogStreamRequestSchema,
+  RuntimeLogStreamCursorSchema,
+  RUNTIME_LOG_STREAM_EVENT,
+} from './runtime-log-stream.ts';
+export type { RuntimeLogStreamRequest, RuntimeLogStreamResponse } from './runtime-log-stream.ts';
 
 export type PageOptions = { limit?: number; cursor?: string; after?: string };
 
@@ -105,6 +115,9 @@ export class RAIBITSERVERClient {
   listDeploymentLogs(deploymentId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/deployments/${encodeURIComponent(deploymentId)}/logs`, options)); }
   listDeploymentEvents(deploymentId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/deployments/${encodeURIComponent(deploymentId)}/events`, options)); }
   listRuntimeLogs(serviceId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/services/${encodeURIComponent(serviceId)}/logs`, options)); }
+  runtimeLogStreamUrl(serviceId: string): string {
+    return runtimeLogStreamUrl(this.baseUrl, { serviceId });
+  }
   getDeployment(deploymentId: string): Promise<DeploymentSpec> { return this.request(`/deployments/${encodeURIComponent(deploymentId)}`); }
   updateDeploymentStatus(deploymentId: string, input: Record<string, unknown>): Promise<DeploymentSpec> {
     return this.request(`/deployments/${encodeURIComponent(deploymentId)}/status`, { method: 'PATCH', body: input });
