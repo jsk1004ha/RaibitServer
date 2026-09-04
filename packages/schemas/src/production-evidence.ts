@@ -42,8 +42,8 @@ export const EvidenceBindingSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('github-repository'), installationId: IdentifierSchema,
     repositoryId: IdentifierSchema, repository: RepositorySchema, branch: BranchSchema }).readonly(),
   z.strictObject({ kind: z.literal('tenant-revision'), tenantRevisionId: IdentifierSchema,
-    purpose: z.enum(['candidate', 'failure']), repositoryId: IdentifierSchema, repository: RepositorySchema,
-    branch: BranchSchema, tenantCommitSha: TenantCommitShaSchema, controlled: z.literal(true) }).readonly(),
+    purpose: z.enum(['candidate', 'failure']), observationId: IdentifierSchema, repositoryId: IdentifierSchema,
+    repository: RepositorySchema, branch: BranchSchema, tenantCommitSha: TenantCommitShaSchema }).readonly(),
   z.strictObject({ kind: z.literal('project'), projectId: IdentifierSchema, organizationId: IdentifierSchema }).readonly(),
   z.strictObject({ kind: z.literal('service'), serviceId: IdentifierSchema, projectId: IdentifierSchema }).readonly(),
   z.strictObject({ kind: z.literal('deployment'), role: z.enum(['candidate', 'preview', 'failed', 'rollback']),
@@ -67,6 +67,21 @@ export const EvidenceArtifactSchema = z.strictObject({
   path: EvidenceArtifactPathSchema,
   sha256: Sha256Schema,
   redacted: z.literal(true),
+}).readonly();
+export const BindingJournalSnapshotSchema = z.strictObject({
+  schema: z.literal('raibitserver.binding-journal-snapshot/v1'), path: EvidenceArtifactPathSchema,
+  sha256: Sha256Schema, entriesDigest: Sha256Schema, entryCount: z.number().int().positive(),
+}).readonly();
+export const BindingObservationSchema = z.strictObject({
+  observationId: IdentifierSchema, kind: z.enum(['builder-deployment-observation', 'github-webhook-observation', 'controlled-fixture-observation']),
+  receiptPath: EvidenceArtifactPathSchema, receiptSha256: Sha256Schema, artifactPath: EvidenceArtifactPathSchema,
+  artifactSha256: Sha256Schema, identityDigest: Sha256Schema, repositoryId: IdentifierSchema,
+  repository: RepositorySchema, branch: BranchSchema, tenantCommitSha: TenantCommitShaSchema,
+}).readonly();
+export const VerifiedBindingJournalSchema = z.strictObject({
+  schema: z.literal('raibitserver.verified-binding-journal/v1'), journal: BindingJournalSnapshotSchema,
+  identityDigest: Sha256Schema, bindingsDigest: Sha256Schema, entries: EvidenceBindingsSchema,
+  observations: z.array(BindingObservationSchema).min(1).readonly(),
 }).readonly();
 export const EvidenceAssertionSchema = z.strictObject({
   id: IdentifierSchema,
@@ -112,7 +127,7 @@ export const ProductionEvidenceSchema = z.strictObject({
   fragments: z.array(EvidenceFragmentSchema).min(1).readonly(),
   cleanup: EvidenceCleanupSchema,
   capabilitySnapshot: EvidenceCapabilitySnapshotSchema.optional(),
-  bindings: EvidenceBindingsSchema.optional(),
+  bindingJournal: BindingJournalSnapshotSchema.optional(),
   bindingsDigest: Sha256Schema.optional(),
   fixture: z.boolean(),
 }).readonly();

@@ -13,7 +13,7 @@ import { createRun, writeFragment, verifyArtifacts } from '../scripts/production
 import { preflight, parseOperatorInputs as ciParser } from '../scripts/production-evidence/preflight.mjs';
 import { parseOperatorInputs, inputsFromEnvironment, loadOperatorContract, verifyApprovedSnapshot, digest, environmentFingerprint, assertRedacted, APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST } from '../scripts/production-evidence/lib/operator-inputs.mjs';
 import resourceCapabilities from '../packages/schemas/src/resource-capabilities-v1.json' with { type: 'json' };
-import { releaseBindings } from './fixtures/production-evidence/bindings-v1.mjs';
+import { bindingJournalVerification, releaseBindings, synchronizeJournal } from './fixtures/production-evidence/bindings-v1.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const contract = await loadOperatorContract();
@@ -27,12 +27,10 @@ function sample(observedAt = new Date(now).toISOString()) {
 // Synthetic contract specimens, never captured as actual L3 execution evidence.
 function fullManifest(profile = 'train-a') {
   const manifest = sample().manifest;
-  manifest.fixture = false;
-  manifest.profile = profile;
-  manifest.preflight.status = 'PASS';
-  manifest.capabilitySnapshot = structuredClone(capabilitySnapshot);
-  manifest.bindings = structuredClone(releaseBindings);
-  manifest.bindingsDigest = digest(manifest.bindings);
+  manifest.fixture = false; manifest.profile = profile;
+  manifest.preflight.status = 'PASS'; manifest.capabilitySnapshot = structuredClone(capabilitySnapshot);
+  manifest.bindingsDigest = digest(releaseBindings);
+  manifest.bindingJournal = { schema: 'raibitserver.binding-journal-snapshot/v1', path: 'bindings/journal.jsonl', sha256: 'd'.repeat(64), entriesDigest: manifest.bindingsDigest, entryCount: releaseBindings.length };
   manifest.fragments = ['local', 'cluster', 'lifecycle', 'resources', 'operations', ...(profile === 'final' ? ['domains'] : [])].map((component) => {
     const fragment = structuredClone(manifest.fragments[0]);
     fragment.component = component;
@@ -47,6 +45,7 @@ function fullManifest(profile = 'train-a') {
   manifest.cleanup.assertions[0].artifactPaths = ['resources.json'];
   return manifest;
 }
+const verified = (manifest, options = {}) => ({ now, bindingJournal: bindingJournalVerification(manifest, digest), ...options });
 function operatorInputs() {
   const values = ['fixture-context', 'fixture-prefix', 'fixture.example', 'registry.example/fixture', 'fixture/repository', '123', 'https://backup.example', 'fixture-backups'];
   return { schema: 'raibitserver.operator-input-values/v1', approvedInputSha256: APPROVED_INPUT_SHA256, operatorContractDigest: OPERATOR_CONTRACT_DIGEST,
@@ -63,7 +62,7 @@ async function sandbox(t) {
 function cli(args, cwd = root) { return spawnSync(process.execPath, [path.join(root, 'scripts/verify-production-evidence.mjs'), ...args], { cwd, encoding: 'utf8' }); }
 
 for (const profile of ['train-a', 'final']) test(`Given current unverified canonical capabilities and synthetic ${profile} observations, When aggregating, Then release stays NOT_RUN`, () => {
-  const result = verifyManifest(fullManifest(profile), { now });
+  const manifest = fullManifest(profile), result = verifyManifest(manifest, verified(manifest));
   assert.equal(result.releaseEligible, false); assert.equal(result.reason, 'release_capability_not_verified');
 });
 for (const component of ['resources', 'domains']) test(`Given a fresh ${component} fixture, When component verification runs, Then release is false`, () => {
@@ -108,26 +107,26 @@ test('Given immutable run identity, When tenant identifiers are embedded, Then t
   const manifest = fullManifest(); manifest.identity.projectId = 'ambient-project'; assert.equal(verifyManifest(manifest, { now }).reason, 'invalid_schema');
 });
 for (const [reason, mutate, options] of [
-  ['bindings_digest_mismatch', (m) => { m.bindingsDigest = 'a'.repeat(64); }],
-  ['bindings_digest_mismatch', (m) => { m.fragments[0].bindingsDigest = 'a'.repeat(64); }],
-  ['missing_bindings', (m) => { delete m.bindings; delete m.bindingsDigest; for (const fragment of m.fragments) delete fragment.bindingsDigest; }],
-  ['tenant_revision_mismatch', (m) => { m.bindings.find((binding) => binding.kind === 'tenant-revision').tenantCommitSha = m.identity.sourceCommitSha; m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
-  ['duplicate_binding', (m) => { m.bindings.push(structuredClone(m.bindings[0])); m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
-  ['binding_reassigned', (m) => { const project = m.bindings.find((binding) => binding.kind === 'project'); m.bindings.push({ ...project, organizationId: 'org-2' }); m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
-  ['binding_graph_mismatch', (m) => { m.bindings.find((binding) => binding.kind === 'service').projectId = 'other-project'; m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
+  ['binding_journal_mismatch', (m) => { m.bindingsDigest = 'a'.repeat(64); }],
+  ['binding_journal_mismatch', (m) => { m.fragments[0].bindingsDigest = 'a'.repeat(64); }],
+  ['missing_binding_journal', (m) => { delete m.bindingJournal; delete m.bindingsDigest; for (const fragment of m.fragments) delete fragment.bindingsDigest; }],
+  ['tenant_revision_mismatch', (m, j) => { j.entries.find((binding) => binding.kind === 'tenant-revision').tenantCommitSha = m.identity.sourceCommitSha; synchronizeJournal(m, j, digest); }],
+  ['duplicate_binding', (m, j) => { j.entries.push(structuredClone(j.entries[0])); synchronizeJournal(m, j, digest); }],
+  ['binding_reassigned', (m, j) => { const project = j.entries.find((binding) => binding.kind === 'project'); j.entries.push({ ...project, organizationId: 'org-2' }); synchronizeJournal(m, j, digest); }],
+  ['binding_graph_mismatch', (m, j) => { j.entries.find((binding) => binding.kind === 'service').projectId = 'other-project'; synchronizeJournal(m, j, digest); }],
   ['binding_graph_mismatch', () => {}, { repository: 'other/repository' }],
-  ['binding_graph_mismatch', (m) => { m.bindings.find((binding) => binding.kind === 'deployment' && binding.role === 'failed').tenantCommitSha = '3'.repeat(40); m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
-  ['invalid_schema', (m) => { m.bindings.find((binding) => binding.kind === 'tenant-revision' && binding.purpose === 'failure').controlled = false; }],
+  ['binding_graph_mismatch', (m, j) => { j.entries.find((binding) => binding.kind === 'deployment' && binding.role === 'failed').tenantCommitSha = '3'.repeat(40); synchronizeJournal(m, j, digest); }],
+  ['invalid_binding_journal', (_m, j) => { j.entries.find((binding) => binding.kind === 'tenant-revision').controlled = true; }],
+  ['missing_binding_provenance', (_m, j) => { j.observations.pop(); }],
+  ['binding_provenance_mismatch', (_m, j) => { j.observations[0].identityDigest = 'a'.repeat(64); }],
+  ['binding_provenance_mismatch', (_m, j) => { j.observations[0].repository = 'foreign/repository'; }],
   ['capability_snapshot_mismatch', (m) => { m.capabilitySnapshot.canonicalDigest = 'a'.repeat(64); }],
   ['capability_snapshot_mismatch', (m) => { m.capabilitySnapshot.requiredEngines.push('forged-engine'); }],
 ]) test(`Given ${reason}, When full release evidence is verified, Then it fails closed`, () => {
-  const manifest = fullManifest(); mutate(manifest); assert.equal(verifyManifest(manifest, { now, ...options }).reason, reason); });
+  const manifest = fullManifest(), journal = bindingJournalVerification(manifest, digest); mutate(manifest, journal); assert.equal(verifyManifest(manifest, { now, bindingJournal: journal, ...options }).reason, reason); });
 for (const [index, [reason, mutate]] of mutations.entries()) test(`Given ${reason} mutation ${index}, When verifying, Then fail closed`, () => {
-  const manifest = fullManifest();
-  mutate(manifest);
-  const result = verifyManifest(manifest, { now });
-  assert.equal(result.releaseEligible, false);
-  assert.equal(result.reason, reason);
+  const manifest = fullManifest(); mutate(manifest);
+  const result = verifyManifest(manifest, verified(manifest)); assert.equal(result.releaseEligible, false); assert.equal(result.reason, reason);
 });
 test('Given exact operator selectors and references, When local and CI parse, Then the same normalized contract is returned', () => {
   assert.equal(ciParser, parseOperatorInputs);
@@ -227,7 +226,7 @@ for (const [reason, mutate] of mutations.slice(0, 22)) test(`Given ${reason} in 
   else manifest.startedAt = new Date(Date.now() - MAX_RUN_AGE_MS - 60_000).toISOString();
   const file = path.join(directory, 'manifest.json'); await writeFile(file, JSON.stringify(manifest));
   const result = cli([file]);
-  assert.equal(result.status, 1); assert.equal(result.stdout, ''); assert.equal(result.stderr.trim(), reason);
+  const requiresJournalIntegration = ['not_run', 'assertion_failed', 'cleanup_failed', 'missing_credentials', 'level_mismatch', 'missing_assertion', 'missing_artifact', 'fixture_not_release_evidence'].includes(reason); assert.equal(result.status, 1); assert.equal(result.stdout, ''); assert.equal(result.stderr.trim(), requiresJournalIntegration ? 'missing_binding_journal' : reason);
 });
 test('Given only committed runtime files, When preflight runs in a copied tree without .omo, Then contract verification succeeds', async (t) => {
   const directory = await sandbox(t);

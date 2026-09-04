@@ -1,4 +1,4 @@
-import { ProductionEvidenceSchema } from '../../../packages/schemas/src/production-evidence.ts';
+import { ProductionEvidenceSchema, VerifiedBindingJournalSchema } from '../../../packages/schemas/src/production-evidence.ts';
 import { RESOURCE_LIFECYCLE_ASSERTIONS } from '../../../packages/schemas/src/resource-lifecycle-evidence.ts';
 import resourceCapabilities from '../../../packages/schemas/src/resource-capabilities-v1.json' with { type: 'json' };
 import { APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST, EvidenceError, assertRedacted, digest } from './operator-inputs.mjs';
@@ -49,22 +49,30 @@ function oneBinding(bindings, kind, predicate = () => true) {
   if (matches.length !== 1) throw new EvidenceError('missing_bindings');
   return matches[0];
 }
-function verifyBindingGraph(manifest, options) {
-  if (!manifest.bindings || !manifest.bindingsDigest || !manifest.capabilitySnapshot) throw new EvidenceError('missing_bindings');
-  if (digest(manifest.bindings) !== manifest.bindingsDigest
-    || manifest.fragments.some((fragment) => fragment.bindingsDigest !== manifest.bindingsDigest)) throw new EvidenceError('bindings_digest_mismatch');
+function verifyBindingJournal(manifest, options) {
+  if (!manifest.bindingJournal || !manifest.bindingsDigest || !manifest.capabilitySnapshot || !options.bindingJournal) throw new EvidenceError('missing_binding_journal');
+  const parsed = VerifiedBindingJournalSchema.safeParse(options.bindingJournal); if (!parsed.success) throw new EvidenceError('invalid_binding_journal');
+  const journal = parsed.data;
+  if (digest(journal.journal) !== digest(manifest.bindingJournal) || journal.identityDigest !== digest(manifest.identity)
+    || journal.bindingsDigest !== manifest.bindingsDigest || digest(journal.entries) !== journal.bindingsDigest
+    || journal.journal.entriesDigest !== journal.bindingsDigest || journal.entries.length !== journal.journal.entryCount
+    || manifest.fragments.some((fragment) => fragment.bindingsDigest !== manifest.bindingsDigest)) throw new EvidenceError('binding_journal_mismatch');
+  return journal;
+}
+function verifyBindingGraph(manifest, options, journal) {
+  const bindings = journal.entries;
   const assigned = new Map();
-  for (const binding of manifest.bindings) {
+  for (const binding of bindings) {
     const key = bindingKey(binding);
     if (assigned.has(key)) throw new EvidenceError(assigned.get(key) === digest(binding) ? 'duplicate_binding' : 'binding_reassigned');
     assigned.set(key, digest(binding));
   }
-  const membership = oneBinding(manifest.bindings, 'organization-membership');
-  const repository = oneBinding(manifest.bindings, 'github-repository');
-  const candidateRevision = oneBinding(manifest.bindings, 'tenant-revision', (binding) => binding.purpose === 'candidate');
-  const failureRevision = oneBinding(manifest.bindings, 'tenant-revision', (binding) => binding.purpose === 'failure');
-  const project = oneBinding(manifest.bindings, 'project');
-  const service = oneBinding(manifest.bindings, 'service');
+  const membership = oneBinding(bindings, 'organization-membership');
+  const repository = oneBinding(bindings, 'github-repository');
+  const candidateRevision = oneBinding(bindings, 'tenant-revision', (binding) => binding.purpose === 'candidate');
+  const failureRevision = oneBinding(bindings, 'tenant-revision', (binding) => binding.purpose === 'failure');
+  const project = oneBinding(bindings, 'project');
+  const service = oneBinding(bindings, 'service');
   if (options.repository && repository.repository !== options.repository) throw new EvidenceError('binding_graph_mismatch');
   if ([candidateRevision, failureRevision].some(({ tenantCommitSha }) => tenantCommitSha === manifest.identity.sourceCommitSha)
     || candidateRevision.tenantCommitSha === failureRevision.tenantCommitSha) throw new EvidenceError('tenant_revision_mismatch');
@@ -72,7 +80,17 @@ function verifyBindingGraph(manifest, options) {
     || candidateRevision.branch !== repository.branch || failureRevision.repositoryId !== repository.repositoryId
     || failureRevision.repository !== repository.repository
     || project.organizationId !== membership.organizationId || service.projectId !== project.projectId) throw new EvidenceError('binding_graph_mismatch');
-  const deployments = ['candidate', 'preview', 'failed', 'rollback'].map((role) => oneBinding(manifest.bindings, 'deployment', (binding) => binding.role === role));
+  const observations = new Map(journal.observations.map((observation) => [observation.observationId, observation])); if (observations.size !== journal.observations.length) throw new EvidenceError('binding_provenance_mismatch');
+  for (const revision of [candidateRevision, failureRevision]) {
+    const observation = observations.get(revision.observationId);
+    const expectedKind = revision.purpose === 'candidate' ? 'builder-deployment-observation' : 'github-webhook-observation';
+    if (!observation) throw new EvidenceError('missing_binding_provenance');
+    if (observation.kind !== expectedKind || observation.identityDigest !== digest(manifest.identity)
+      || observation.repositoryId !== revision.repositoryId || observation.repository !== revision.repository
+      || observation.branch !== revision.branch || observation.tenantCommitSha !== revision.tenantCommitSha) throw new EvidenceError('binding_provenance_mismatch');
+  }
+  if (new Set(journal.observations.flatMap(({ receiptPath, artifactPath }) => [receiptPath, artifactPath])).size !== journal.observations.length * 2) throw new EvidenceError('binding_provenance_mismatch');
+  const deployments = ['candidate', 'preview', 'failed', 'rollback'].map((role) => oneBinding(bindings, 'deployment', (binding) => binding.role === role));
   if (new Set(deployments.map(({ deploymentId }) => deploymentId)).size !== deployments.length
     || deployments.some((deployment) => deployment.serviceId !== service.serviceId)) throw new EvidenceError('binding_graph_mismatch');
   for (const deployment of deployments) {
@@ -82,10 +100,10 @@ function verifyBindingGraph(manifest, options) {
       || deployment.branch !== revision.branch) throw new EvidenceError('binding_graph_mismatch');
   }
   for (const engine of manifest.capabilitySnapshot.requiredEngines) {
-    const source = oneBinding(manifest.bindings, 'resource', (binding) => binding.engine === engine && binding.role === 'source');
-    const target = oneBinding(manifest.bindings, 'resource', (binding) => binding.engine === engine && binding.role === 'restore-target');
-    const backup = oneBinding(manifest.bindings, 'backup', (binding) => binding.engine === engine);
-    const restore = oneBinding(manifest.bindings, 'restore', (binding) => binding.engine === engine);
+    const source = oneBinding(bindings, 'resource', (binding) => binding.engine === engine && binding.role === 'source');
+    const target = oneBinding(bindings, 'resource', (binding) => binding.engine === engine && binding.role === 'restore-target');
+    const backup = oneBinding(bindings, 'backup', (binding) => binding.engine === engine);
+    const restore = oneBinding(bindings, 'restore', (binding) => binding.engine === engine);
     if (source.resourceId === target.resourceId || source.projectId !== project.projectId || target.projectId !== project.projectId
       || backup.sourceResourceId !== source.resourceId || restore.backupId !== backup.backupId
       || restore.targetResourceId !== target.resourceId) throw new EvidenceError('binding_graph_mismatch');
@@ -149,7 +167,7 @@ export function verifyManifest(value, options = {}) {
     if (manifest.status !== 'PASS') return fail('assertion_failed');
     if (!componentMode) {
       verifyCapabilitySnapshot(manifest.capabilitySnapshot);
-      verifyBindingGraph(manifest, options);
+      verifyBindingGraph(manifest, options, verifyBindingJournal(manifest, options));
     }
     if (manifest.cleanup.status !== 'PASS') return fail('cleanup_failed');
     const allPaths = manifest.fragments.flatMap(({ artifacts }) => artifacts.map(({ path }) => path));
@@ -231,6 +249,6 @@ export function assembleManifest(input) {
     status: aggregateStatus([...fragments.map(({ status }) => status), cleanupStatus]), preflight: input.preflight,
     fragments, cleanup: { status: cleanupStatus, assertions: [{ id: 'run_cleanup', status: cleanupStatus, artifactPaths: [input.cleanup.runArtifact.path] }] },
     ...(input.capabilitySnapshot ? { capabilitySnapshot: input.capabilitySnapshot } : {}),
-    ...(input.bindings && input.bindingsDigest ? { bindings: input.bindings, bindingsDigest: input.bindingsDigest } : {}),
+    ...(input.bindingJournal && input.bindingsDigest ? { bindingJournal: input.bindingJournal, bindingsDigest: input.bindingsDigest } : {}),
     fixture: input.fixture };
 }
