@@ -8,12 +8,7 @@
     "migrationDigest": "bdde7220bf71e00082950d9e70be1827cd850582cb1e9f149702cb92768b8e86",
     "approvedInputSha256": "0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2",
     "operatorContractDigest": "9018b7e14c139b64ce0df686901624c4238db4f8d60d987ef46b72ea0b0a4a6c",
-    "operatorInputFingerprint": "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb",
-    "organizationId": "fixture-org",
-    "projectId": "fixture-project",
-    "serviceId": "fixture-service",
-    "deploymentId": "fixture-deployment",
-    "resourceId": "fixture-resource"
+    "operatorInputFingerprint": "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb"
   },
   "startedAt": "2026-09-02T09:55:06.046Z",
   "observedAt": "2026-09-02T09:55:06.046Z",
@@ -36,12 +31,7 @@
         "migrationDigest": "bdde7220bf71e00082950d9e70be1827cd850582cb1e9f149702cb92768b8e86",
         "approvedInputSha256": "0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2",
         "operatorContractDigest": "9018b7e14c139b64ce0df686901624c4238db4f8d60d987ef46b72ea0b0a4a6c",
-        "operatorInputFingerprint": "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb",
-        "organizationId": "fixture-org",
-        "projectId": "fixture-project",
-        "serviceId": "fixture-service",
-        "deploymentId": "fixture-deployment",
-        "resourceId": "fixture-resource"
+        "operatorInputFingerprint": "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb"
       },
       "startedAt": "2026-09-02T09:55:06.046Z",
       "observedAt": "2026-09-02T09:55:06.046Z",

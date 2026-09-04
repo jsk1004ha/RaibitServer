@@ -31,8 +31,38 @@ export const EvidenceIdentitySchema = z.strictObject({
   approvedInputSha256: z.literal(APPROVED_INPUT_SHA256),
   operatorContractDigest: Sha256Schema,
   operatorInputFingerprint: Sha256Schema,
-  organizationId: IdentifierSchema, projectId: IdentifierSchema, serviceId: IdentifierSchema,
-  deploymentId: IdentifierSchema, resourceId: IdentifierSchema,
+}).readonly();
+const RepositorySchema = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/).max(256);
+const BranchSchema = z.string().min(1).max(256).regex(/^[^\u0000-\u001f\u007f]+$/);
+const TenantCommitShaSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).brand('TenantCommitSha');
+const ResourceEngineSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
+export const EvidenceBindingSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('organization-membership'), organizationId: IdentifierSchema,
+    membershipId: IdentifierSchema, userId: IdentifierSchema, role: IdentifierSchema }).readonly(),
+  z.strictObject({ kind: z.literal('github-repository'), installationId: IdentifierSchema,
+    repositoryId: IdentifierSchema, repository: RepositorySchema, branch: BranchSchema }).readonly(),
+  z.strictObject({ kind: z.literal('tenant-revision'), repositoryId: IdentifierSchema,
+    branch: BranchSchema, tenantCommitSha: TenantCommitShaSchema }).readonly(),
+  z.strictObject({ kind: z.literal('project'), projectId: IdentifierSchema, organizationId: IdentifierSchema }).readonly(),
+  z.strictObject({ kind: z.literal('service'), serviceId: IdentifierSchema, projectId: IdentifierSchema }).readonly(),
+  z.strictObject({ kind: z.literal('deployment'), role: z.enum(['candidate', 'preview', 'failed', 'rollback']),
+    deploymentId: IdentifierSchema, serviceId: IdentifierSchema }).readonly(),
+  z.strictObject({ kind: z.literal('resource'), role: z.enum(['source', 'restore-target']), engine: ResourceEngineSchema,
+    resourceId: IdentifierSchema, projectId: IdentifierSchema }).readonly(),
+  z.strictObject({ kind: z.literal('backup'), engine: ResourceEngineSchema,
+    backupId: IdentifierSchema, sourceResourceId: IdentifierSchema }).readonly(),
+  z.strictObject({ kind: z.literal('restore'), engine: ResourceEngineSchema,
+    restoreId: IdentifierSchema, backupId: IdentifierSchema, targetResourceId: IdentifierSchema }).readonly(),
+]);
+export const EvidenceBindingsSchema = z.array(EvidenceBindingSchema).readonly();
+const ReleaseCapabilitySchema = z.strictObject({
+  provision: z.boolean(), authenticatedHealth: z.boolean(), attach: z.boolean(), query: z.boolean(),
+  schema: z.boolean(), backup: z.boolean(), restore: z.boolean(),
+}).readonly();
+export const EvidenceCapabilitySnapshotSchema = z.strictObject({
+  digest: Sha256Schema,
+  engines: z.array(z.strictObject({ engine: ResourceEngineSchema, enabled: z.boolean(), required: z.boolean(),
+    release: ReleaseCapabilitySchema, liveEvidenceRelease: z.enum(['not-recorded', 'verified']) }).readonly()).min(1).readonly(),
 }).readonly();
 export const EvidenceArtifactPathSchema = z.string().regex(/^[a-zA-Z0-9_-][a-zA-Z0-9_./-]*$/).refine((v) => !v.split('/').includes('..'));
 export const EvidenceArtifactSchema = z.strictObject({
@@ -67,6 +97,7 @@ export const EvidenceFragmentSchema = z.strictObject({
   artifacts: z.array(EvidenceArtifactSchema).min(1).readonly(),
   cleanup: EvidenceCleanupSchema,
   resourceScope: ResourceEvidenceScopeSchema.optional(),
+  bindingsDigest: Sha256Schema.optional(),
 }).readonly();
 export const ProductionEvidenceSchema = z.strictObject({
   schema: z.literal('raibitserver.production-evidence/v1'),
@@ -82,6 +113,9 @@ export const ProductionEvidenceSchema = z.strictObject({
   }).readonly(),
   fragments: z.array(EvidenceFragmentSchema).min(1).readonly(),
   cleanup: EvidenceCleanupSchema,
+  capabilitySnapshot: EvidenceCapabilitySnapshotSchema.optional(),
+  bindings: EvidenceBindingsSchema.optional(),
+  bindingsDigest: Sha256Schema.optional(),
   fixture: z.boolean(),
 }).readonly();
 export type ProductionEvidence = z.infer<typeof ProductionEvidenceSchema>;
@@ -89,3 +123,4 @@ export type EvidenceIdentity = z.infer<typeof EvidenceIdentitySchema>;
 export type EvidenceFragment = z.infer<typeof EvidenceFragmentSchema>;
 export type EvidenceProfile = z.infer<typeof EvidenceProfileSchema>;
 export type EvidenceStatus = z.infer<typeof EvidenceStatusSchema>;
+export type EvidenceBinding = z.infer<typeof EvidenceBindingSchema>;

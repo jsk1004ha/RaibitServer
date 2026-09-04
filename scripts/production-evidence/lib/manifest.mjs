@@ -28,6 +28,64 @@ function checkAssertions(assertions, required, artifacts) {
   if (assertions.some(({ status }) => status !== 'PASS')) throw new EvidenceError('assertion_failed');
   if (assertions.some(({ artifactPaths }) => artifactPaths.some((path) => !artifacts.includes(path)))) throw new EvidenceError('missing_artifact');
 }
+const RELEASE_FEATURES = Object.freeze(['provision', 'authenticatedHealth', 'attach', 'query', 'schema', 'backup', 'restore']);
+function bindingKey(binding) {
+  switch (binding.kind) {
+    case 'organization-membership': return `${binding.kind}:${binding.membershipId}`;
+    case 'github-repository': return `${binding.kind}:${binding.repositoryId}`;
+    case 'tenant-revision': return `${binding.kind}:${binding.repositoryId}:${binding.branch}`;
+    case 'project': return `${binding.kind}:${binding.projectId}`;
+    case 'service': return `${binding.kind}:${binding.serviceId}`;
+    case 'deployment': return `${binding.kind}:${binding.role}`;
+    case 'resource': return `${binding.kind}:${binding.engine}:${binding.role}`;
+    case 'backup': return `${binding.kind}:${binding.engine}`;
+    case 'restore': return `${binding.kind}:${binding.engine}`;
+    default: throw new EvidenceError('invalid_schema');
+  }
+}
+function oneBinding(bindings, kind, predicate = () => true) {
+  const matches = bindings.filter((binding) => binding.kind === kind && predicate(binding));
+  if (matches.length !== 1) throw new EvidenceError('missing_bindings');
+  return matches[0];
+}
+function verifyReleaseBindings(manifest, options) {
+  if (!manifest.bindings || !manifest.bindingsDigest || !manifest.capabilitySnapshot) throw new EvidenceError('missing_bindings');
+  if (digest(manifest.bindings) !== manifest.bindingsDigest
+    || digest(manifest.capabilitySnapshot.engines) !== manifest.capabilitySnapshot.digest
+    || manifest.fragments.some((fragment) => fragment.bindingsDigest !== manifest.bindingsDigest)) throw new EvidenceError('bindings_digest_mismatch');
+  const assigned = new Map();
+  for (const binding of manifest.bindings) {
+    const key = bindingKey(binding);
+    if (assigned.has(key)) throw new EvidenceError(assigned.get(key) === digest(binding) ? 'duplicate_binding' : 'binding_reassigned');
+    assigned.set(key, digest(binding));
+  }
+  const engines = manifest.capabilitySnapshot.engines;
+  if (new Set(engines.map(({ engine }) => engine)).size !== engines.length) throw new EvidenceError('binding_reassigned');
+  const requiredEngines = engines.filter(({ enabled, required }) => enabled || required);
+  if (requiredEngines.some(({ release, liveEvidenceRelease }) => liveEvidenceRelease !== 'verified'
+    || RELEASE_FEATURES.some((feature) => release[feature] !== true))) throw new EvidenceError('release_capability_not_verified');
+  const membership = oneBinding(manifest.bindings, 'organization-membership');
+  const repository = oneBinding(manifest.bindings, 'github-repository');
+  const revision = oneBinding(manifest.bindings, 'tenant-revision');
+  const project = oneBinding(manifest.bindings, 'project');
+  const service = oneBinding(manifest.bindings, 'service');
+  if (options.repository && repository.repository !== options.repository) throw new EvidenceError('binding_graph_mismatch');
+  if (revision.tenantCommitSha === manifest.identity.sourceCommitSha) throw new EvidenceError('tenant_revision_mismatch');
+  if (revision.repositoryId !== repository.repositoryId || revision.branch !== repository.branch
+    || project.organizationId !== membership.organizationId || service.projectId !== project.projectId) throw new EvidenceError('binding_graph_mismatch');
+  const deployments = ['candidate', 'preview', 'failed', 'rollback'].map((role) => oneBinding(manifest.bindings, 'deployment', (binding) => binding.role === role));
+  if (new Set(deployments.map(({ deploymentId }) => deploymentId)).size !== deployments.length
+    || deployments.some((deployment) => deployment.serviceId !== service.serviceId)) throw new EvidenceError('binding_graph_mismatch');
+  for (const { engine } of requiredEngines) {
+    const source = oneBinding(manifest.bindings, 'resource', (binding) => binding.engine === engine && binding.role === 'source');
+    const target = oneBinding(manifest.bindings, 'resource', (binding) => binding.engine === engine && binding.role === 'restore-target');
+    const backup = oneBinding(manifest.bindings, 'backup', (binding) => binding.engine === engine);
+    const restore = oneBinding(manifest.bindings, 'restore', (binding) => binding.engine === engine);
+    if (source.resourceId === target.resourceId || source.projectId !== project.projectId || target.projectId !== project.projectId
+      || backup.sourceResourceId !== source.resourceId || restore.backupId !== backup.backupId
+      || restore.targetResourceId !== target.resourceId) throw new EvidenceError('binding_graph_mismatch');
+  }
+}
 export function verifyManifest(value, options = {}) {
   try {
     assertRedacted(value);
@@ -71,6 +129,7 @@ export function verifyManifest(value, options = {}) {
     if (required.some((component) => !components.includes(component))) return fail('missing_fragment');
     if (manifest.status === 'NOT_RUN') return fail('not_run');
     if (manifest.status !== 'PASS') return fail('assertion_failed');
+    if (!componentMode) verifyReleaseBindings(manifest, options);
     if (manifest.cleanup.status !== 'PASS') return fail('cleanup_failed');
     const allPaths = manifest.fragments.flatMap(({ artifacts }) => artifacts.map(({ path }) => path));
     if (new Set(allPaths).size !== allPaths.length) return fail('reused_artifact');
@@ -136,16 +195,20 @@ export function assembleManifest(input) {
       ...(component === 'operations' ? [input.cleanup.stepDescriptor, input.cleanup.runArtifact] : []),
     ].filter(Boolean));
     const cleanupStatus = aggregateStatus([input.cleanup.status, input.cleanup.componentArtifacts[component] ? 'PASS' : 'NOT_RUN']);
-    return { component, level: component === 'local' ? 'L1' : component === 'cluster' ? 'L2' : 'L3',
+    const fragment = { component, level: component === 'local' ? 'L1' : component === 'cluster' ? 'L2' : 'L3',
       provenance: input.fixture ? 'fixture' : component === 'local' ? 'local' : component === 'cluster' ? 'kind' : 'credentialed',
       identity: input.identity, startedAt: input.startedAt, observedAt: input.observedAt,
       status: aggregateStatus(assertions.map(({ status }) => status)), assertions, artifacts,
       cleanup: { status: cleanupStatus, assertions: [{ id: 'component_cleanup', status: cleanupStatus, artifactPaths: [input.cleanup.componentArtifacts[component].path] }] } };
+    if (input.bindingsDigest) fragment.bindingsDigest = input.bindingsDigest;
+    return fragment;
   });
   const cleanupStatus = aggregateStatus([input.cleanup.status, input.cleanup.runArtifact ? 'PASS' : 'NOT_RUN']);
   return { schema: 'raibitserver.production-evidence/v1', profile: 'train-a', identity: input.identity,
     startedAt: input.startedAt, observedAt: input.observedAt,
     status: aggregateStatus([...fragments.map(({ status }) => status), cleanupStatus]), preflight: input.preflight,
     fragments, cleanup: { status: cleanupStatus, assertions: [{ id: 'run_cleanup', status: cleanupStatus, artifactPaths: [input.cleanup.runArtifact.path] }] },
+    ...(input.capabilitySnapshot ? { capabilitySnapshot: input.capabilitySnapshot } : {}),
+    ...(input.bindings && input.bindingsDigest ? { bindings: input.bindings, bindingsDigest: input.bindingsDigest } : {}),
     fixture: input.fixture };
 }

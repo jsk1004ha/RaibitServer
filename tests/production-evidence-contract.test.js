@@ -12,17 +12,27 @@ import { componentSample, runComponent } from '../scripts/production-evidence/ru
 import { createRun, writeFragment, verifyArtifacts } from '../scripts/production-evidence/lib/run.mjs';
 import { preflight, parseOperatorInputs as ciParser } from '../scripts/production-evidence/preflight.mjs';
 import { parseOperatorInputs, inputsFromEnvironment, loadOperatorContract, verifyApprovedSnapshot, digest, environmentFingerprint, assertRedacted, APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST } from '../scripts/production-evidence/lib/operator-inputs.mjs';
+import { capabilityEngines, releaseBindings } from './fixtures/production-evidence/bindings-v1.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const contract = await loadOperatorContract();
 const now = Date.parse('2026-09-02T10:00:00.000Z');
-const sample = () => componentSample('resources', new Date(now).toISOString());
+const identityKeys = ['runId', 'environmentFingerprint', 'sourceCommitSha', 'migrationDigest', 'approvedInputSha256', 'operatorContractDigest', 'operatorInputFingerprint'];
+const capabilitySnapshot = { digest: digest(capabilityEngines), engines: capabilityEngines };
+function sample(observedAt = new Date(now).toISOString()) {
+  const result = componentSample('resources', observedAt);
+  result.manifest.identity = Object.fromEntries(Object.entries(result.manifest.identity).filter(([key]) => identityKeys.includes(key)));
+  result.manifest.fragments[0].identity = structuredClone(result.manifest.identity); return result;
+}
 // Synthetic contract specimens, never captured as actual L3 execution evidence.
 function fullManifest(profile = 'train-a') {
   const manifest = sample().manifest;
   manifest.fixture = false;
   manifest.profile = profile;
   manifest.preflight.status = 'PASS';
+  manifest.capabilitySnapshot = structuredClone(capabilitySnapshot);
+  manifest.bindings = structuredClone(releaseBindings);
+  manifest.bindingsDigest = digest(manifest.bindings);
   manifest.fragments = ['local', 'cluster', 'lifecycle', 'resources', 'operations', ...(profile === 'final' ? ['domains'] : [])].map((component) => {
     const fragment = structuredClone(manifest.fragments[0]);
     fragment.component = component;
@@ -31,6 +41,7 @@ function fullManifest(profile = 'train-a') {
     fragment.artifacts[0].path = `${component}.json`;
     fragment.assertions = REQUIRED_ASSERTIONS[component].map((id) => ({ id, status: 'PASS', artifactPaths: [`${component}.json`] }));
     fragment.cleanup.assertions[0].artifactPaths = [`${component}.json`];
+    fragment.bindingsDigest = manifest.bindingsDigest;
     return fragment;
   });
   manifest.cleanup.assertions[0].artifactPaths = ['resources.json'];
@@ -91,9 +102,26 @@ const mutations = [
   ['missing_artifact', (m) => { m.fragments[2].assertions[0].artifactPaths = ['absent.json']; }],
   ['fixture_not_release_evidence', (m) => { m.fixture = true; for (const f of m.fragments) f.provenance = 'fixture'; }],
 ];
-for (const field of ['runId', 'environmentFingerprint', 'sourceCommitSha', 'migrationDigest', 'operatorInputFingerprint', 'organizationId', 'projectId', 'serviceId', 'deploymentId', 'resourceId']) {
-  mutations.push(['identity_mismatch', (m) => { m.fragments[2].identity[field] = field === 'runId' ? 'e22c8e21-c069-44e6-a609-7fb140c52348' : field === 'sourceCommitSha' ? 'a'.repeat(40) : field.endsWith('Id') ? 'other-tenant' : 'a'.repeat(64); }]);
+for (const field of identityKeys.filter((field) => field !== 'approvedInputSha256')) {
+  mutations.push(['identity_mismatch', (m) => { m.fragments[2].identity[field] = field === 'runId' ? 'e22c8e21-c069-44e6-a609-7fb140c52348' : field === 'sourceCommitSha' ? 'a'.repeat(40) : 'a'.repeat(64); }]);
 }
+test('Given immutable run identity, When tenant identifiers are embedded, Then the schema rejects them', () => {
+  const manifest = fullManifest(); manifest.identity.projectId = 'ambient-project'; assert.equal(verifyManifest(manifest, { now }).reason, 'invalid_schema');
+});
+for (const [reason, mutate, options] of [
+  ['bindings_digest_mismatch', (m) => { m.bindingsDigest = 'a'.repeat(64); }],
+  ['bindings_digest_mismatch', (m) => { m.fragments[0].bindingsDigest = 'a'.repeat(64); }],
+  ['missing_bindings', (m) => { delete m.bindings; delete m.bindingsDigest; for (const fragment of m.fragments) delete fragment.bindingsDigest; }],
+  ['tenant_revision_mismatch', (m) => { m.bindings.find((binding) => binding.kind === 'tenant-revision').tenantCommitSha = m.identity.sourceCommitSha; m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
+  ['duplicate_binding', (m) => { m.bindings.push(structuredClone(m.bindings[0])); m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
+  ['binding_reassigned', (m) => { const project = m.bindings.find((binding) => binding.kind === 'project'); m.bindings.push({ ...project, organizationId: 'org-2' }); m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
+  ['binding_graph_mismatch', (m) => { m.bindings.find((binding) => binding.kind === 'service').projectId = 'other-project'; m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
+  ['binding_graph_mismatch', () => {}, { repository: 'other/repository' }],
+  ['release_capability_not_verified', (m) => { m.capabilitySnapshot.engines[0].release.backup = false; m.capabilitySnapshot.digest = digest(m.capabilitySnapshot.engines); }],
+]) test(`Given ${reason}, When full release evidence is verified, Then it fails closed`, () => {
+  const manifest = fullManifest(); mutate(manifest);
+  assert.equal(verifyManifest(manifest, { now, ...options }).reason, reason);
+});
 for (const [index, [reason, mutate]] of mutations.entries()) test(`Given ${reason} mutation ${index}, When verifying, Then fail closed`, () => {
   const manifest = fullManifest();
   mutate(manifest);
@@ -153,36 +181,36 @@ test('Given a metadata field change, When fingerprinted, Then environment identi
   assert.equal(environmentFingerprint(value), environmentFingerprint(Object.fromEntries(Object.entries(value).reverse())));
 });
 test('Given a used directory and fragment, When reused, Then both writes are rejected', async (t) => {
-  const parent = await sandbox(t), { manifest } = componentSample('resources');
+  const parent = await sandbox(t), { manifest } = sample(new Date().toISOString());
   const directory = await createRun(parent, manifest.identity, manifest.startedAt);
   await assert.rejects(createRun(parent, manifest.identity, manifest.startedAt), { reason: 'reused_directory' });
   await writeFragment(directory, manifest.fragments[0]);
   await assert.rejects(writeFragment(directory, manifest.fragments[0]), { reason: 'reused_fragment' });
 });
 test('Given an expired attempt, When creating a run, Then creation fails closed', async (t) => {
-  const parent = await sandbox(t), { manifest } = componentSample('resources');
+  const parent = await sandbox(t), { manifest } = sample();
   await assert.rejects(createRun(parent, manifest.identity, new Date(Date.now() - MAX_RUN_AGE_MS - 1).toISOString()), { reason: 'stale_state' });
 });
 test('Given fresh physical component evidence, When CLI runs outside .omo, Then component PASS never becomes release PASS', async (t) => {
-  const directory = await sandbox(t), { manifest, artifact } = componentSample('resources');
+  const directory = await sandbox(t), { manifest, artifact } = sample(new Date().toISOString());
   await writeFile(path.join(directory, 'manifest.json'), JSON.stringify(manifest)); await writeFile(path.join(directory, 'assertions.json'), artifact);
   const result = cli([path.join(directory, 'manifest.json')], directory);
   assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).releaseEligible, false);
   assert.equal(existsSync(path.join(directory, '.omo')), false);
 });
 test('Given missing or altered artifacts, When verifying physical evidence, Then hashes cannot be asserted by declaration', async (t) => {
-  const directory = await sandbox(t), { manifest } = componentSample('resources');
+  const directory = await sandbox(t), { manifest } = sample();
   await assert.rejects(verifyArtifacts(directory, manifest), { reason: 'missing_artifact' });
   await writeFile(path.join(directory, 'assertions.json'), 'altered');
   await assert.rejects(verifyArtifacts(directory, manifest), { reason: 'artifact_digest_mismatch' });
 });
 test('Given identity mismatch, When the CLI runs, Then stdout is empty and stderr contains only the typed reason', async (t) => {
-  const directory = await sandbox(t), manifest = fullManifest(); manifest.fragments[0].identity.projectId = 'other';
+  const directory = await sandbox(t), manifest = fullManifest(); manifest.fragments[0].identity.environmentFingerprint = 'a'.repeat(64);
   const file = path.join(directory, 'manifest.json'); await writeFile(file, JSON.stringify(manifest));
   const result = cli([file]); assert.equal(result.status, 1); assert.equal(result.stdout, ''); assert.equal(result.stderr.trim(), 'identity_mismatch');
 });
 test('Given no live credentials, When a component scaffold executes, Then NOT_RUN and cleanup are persisted', async (t) => {
-  const parent = await sandbox(t), { manifest } = componentSample('resources');
+  const parent = await sandbox(t), { manifest } = sample();
   const result = await runComponent({ parent, identity: manifest.identity, component: 'resources', inputs: operatorInputs() });
   assert.equal(result.status, 'NOT_RUN'); assert.equal(result.releaseEligible, false);
   const fragment = JSON.parse(await readFile(path.join(parent, manifest.identity.runId, 'resources.json'), 'utf8'));
