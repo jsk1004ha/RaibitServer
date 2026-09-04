@@ -10,11 +10,12 @@ const SEGMENT = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const WINDOWS_DEVICE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 export const PRIVATE_WRITER_SESSION_PATH = '.raibit-evidence-writer-session';
 const SESSION_BYTES = Buffer.from('{"schema":"raibitserver.production-evidence-writer-session/v1","privateMetadata":true,"redacted":true}\n');
-const genuineWriters = new WeakSet();
+const genuineWriters = new WeakMap();
 
 export const isPrivateArtifactWriterMetadata = (relativePath) => relativePath === PRIVATE_WRITER_SESSION_PATH;
-export function assertSafeArtifactWriter(writer) {
-  if ((typeof writer !== 'object' && typeof writer !== 'function') || writer === null || !genuineWriters.has(writer)) {
+export function assertSafeArtifactWriter(writer, expectedRunDirectory = undefined) {
+  if ((typeof writer !== 'object' && typeof writer !== 'function') || writer === null || !genuineWriters.has(writer)
+    || (expectedRunDirectory !== undefined && genuineWriters.get(writer) !== path.resolve(expectedRunDirectory))) {
     throw new EvidenceError('invalid_artifact_writer');
   }
   return writer;
@@ -221,7 +222,7 @@ async function createArtifactWriter({ runDirectory, allowedPaths, unsafeFixture,
       return Object.freeze({ path: relativePath, sha256: digest(bytes), redacted: true });
     },
   });
-  genuineWriters.add(writer);
+  genuineWriters.set(writer, root);
   return writer;
 }
 

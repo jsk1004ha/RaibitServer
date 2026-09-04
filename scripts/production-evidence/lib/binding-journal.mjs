@@ -59,11 +59,11 @@ async function readBindings(options, create = false) {
 async function load(options) { return (await readBindings(options)).entries; }
 export async function loadBindings(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => load({ ...options, unsafeFixture: false }));
+  return withJournalTransaction(options?.writer, () => load({ ...options, unsafeFixture: false }), options?.runDirectory);
 }
 export async function loadBindingsFixtureUnsafe(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => load({ ...options, unsafeFixture: true }));
+  return withJournalTransaction(options?.writer, () => load({ ...options, unsafeFixture: true }), options?.runDirectory);
 }
 
 async function append(options) {
@@ -89,10 +89,10 @@ async function append(options) {
   return Object.freeze({ ...(await exclusiveJournalWrite(options.runDirectory, `bindings/${name}`, entry, options.writer, options.unsafeFixture === true)), entry });
 }
 export async function appendBinding(options) {
-  return withJournalTransaction(options?.writer, () => append({ ...options, unsafeFixture: false }));
+  return withJournalTransaction(options?.writer, () => append({ ...options, unsafeFixture: false }), options?.runDirectory);
 }
 export async function appendBindingFixtureUnsafe(options) {
-  return withJournalTransaction(options?.writer, () => append({ ...options, unsafeFixture: true }));
+  return withJournalTransaction(options?.writer, () => append({ ...options, unsafeFixture: true }), options?.runDirectory);
 }
 
 async function snapshot(options) {
@@ -102,11 +102,11 @@ async function snapshot(options) {
 }
 export async function bindingJournalSnapshot(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => snapshot({ ...options, unsafeFixture: false }));
+  return withJournalTransaction(options?.writer, () => snapshot({ ...options, unsafeFixture: false }), options?.runDirectory);
 }
 export async function bindingJournalSnapshotFixtureUnsafe(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => snapshot({ ...options, unsafeFixture: true }));
+  return withJournalTransaction(options?.writer, () => snapshot({ ...options, unsafeFixture: true }), options?.runDirectory);
 }
 
 export function reduceBindings(entries) {

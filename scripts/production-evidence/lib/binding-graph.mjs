@@ -1,4 +1,5 @@
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
+import { EvidenceBindingSchema } from '../../../packages/schemas/src/production-evidence.ts';
 
 const SAFE_PART = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -76,7 +77,7 @@ function primaryId(binding) {
   switch (binding.kind) {
     case 'organization-membership': return binding.membershipId;
     case 'github-repository': return binding.repositoryId;
-    case 'tenant-revision': return binding.tenantCommitSha;
+    case 'tenant-revision': return binding.tenantRevisionId;
     case 'project': return binding.projectId;
     case 'service': return binding.serviceId;
     case 'deployment': return binding.deploymentId;
@@ -88,21 +89,9 @@ function primaryId(binding) {
 }
 
 export function parseEvidenceBindingPayload(value) {
-  if (!isRecord(value) || typeof value.kind !== 'string') fail('invalid_journal');
-  const contracts = {
-    'organization-membership': ['kind', 'organizationId', 'membershipId', 'userId', 'role'],
-    'github-repository': ['kind', 'repositoryId', 'owner', 'name'],
-    'tenant-revision': ['kind', 'repositoryId', 'tenantCommitSha'],
-    project: ['kind', 'projectId', 'organizationId'],
-    service: ['kind', 'serviceId', 'projectId'],
-    deployment: ['kind', 'deploymentId', 'serviceId'],
-    resource: ['kind', 'role', 'engine', 'resourceId', 'projectId'],
-    backup: ['kind', 'engine', 'backupId', 'sourceResourceId'],
-    restore: ['kind', 'restoreId', 'backupId', 'targetResourceId'],
-  };
-  const keys = contracts[value.kind];
-  if (!keys || !exactKeys(value, keys) || keys.slice(1).some((key) => !SAFE_ID.test(value[key]))) fail('invalid_journal');
-  return immutable(value);
+  const parsed = EvidenceBindingSchema.safeParse(value);
+  if (!parsed.success) fail('invalid_journal');
+  return immutable(parsed.data);
 }
 
 export function resolveBindingGraph(entries, references) {
@@ -117,13 +106,23 @@ export function resolveBindingGraph(entries, references) {
   for (const { payload: binding } of entries) {
     switch (binding.kind) {
       case 'organization-membership': case 'github-repository': break;
-      case 'tenant-revision': if (!domain.has(`github-repository:${binding.repositoryId}`)) fail(); break;
+      case 'tenant-revision': {
+        const repository = domain.get(`github-repository:${binding.repositoryId}`);
+        if (!repository || repository.repository !== binding.repository || repository.branch !== binding.branch) fail();
+        break;
+      }
       case 'project': if (entries.filter(({ payload }) => payload.kind === 'organization-membership' && payload.organizationId === binding.organizationId).length !== 1) fail(); break;
       case 'service': if (!domain.has(`project:${binding.projectId}`)) fail(); break;
-      case 'deployment': if (!domain.has(`service:${binding.serviceId}`)) fail(); break;
+      case 'deployment': {
+        const revision = domain.get(`tenant-revision:${binding.tenantRevisionId}`);
+        if (!domain.has(`service:${binding.serviceId}`) || !revision || revision.tenantCommitSha !== binding.tenantCommitSha
+          || revision.repositoryId !== binding.repositoryId || revision.repository !== binding.repository || revision.branch !== binding.branch) fail();
+        break;
+      }
       case 'resource': if (!domain.has(`project:${binding.projectId}`)) fail(); break;
-      case 'backup': if (!domain.has(`resource:${binding.sourceResourceId}`)) fail(); break;
-      case 'restore': if (!domain.has(`backup:${binding.backupId}`) || !domain.has(`resource:${binding.targetResourceId}`)) fail(); break;
+      case 'backup': if (domain.get(`resource:${binding.sourceResourceId}`)?.engine !== binding.engine) fail(); break;
+      case 'restore': if (domain.get(`backup:${binding.backupId}`)?.engine !== binding.engine
+        || domain.get(`resource:${binding.targetResourceId}`)?.engine !== binding.engine) fail(); break;
       default: fail();
     }
   }

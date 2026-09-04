@@ -4,13 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { copyFile, mkdtemp, mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { appendBindingFixtureUnsafe, bindingJournalSnapshotFixtureUnsafe, isPrivateJournalMetadata, loadBindingsFixtureUnsafe } from '../scripts/production-evidence/lib/binding-journal.mjs';
+import { appendBindingFixtureUnsafe, bindingJournalSnapshotFixtureUnsafe, isPrivateJournalMetadata, loadBindingsFixtureUnsafe, resolveBindingGraph } from '../scripts/production-evidence/lib/binding-journal.mjs';
 import {
   appendCleanupIntentFixtureUnsafe, appendCleanupOutcomeFixtureUnsafe, deriveRunResourceName,
   loadCleanupJournalFixtureUnsafe, productionEvidenceJournalSnapshotFixtureUnsafe, resolveCleanupRecovery,
 } from '../scripts/production-evidence/lib/cleanup-intent-journal.mjs';
 import { digest } from '../scripts/production-evidence/lib/operator-inputs.mjs';
 import { createSafeArtifactWriter, createUnsafeFixtureArtifactWriter, PRIVATE_WRITER_SESSION_PATH } from '../scripts/production-evidence/lib/safe-artifact-writer.mjs';
+import { assertJournalAuthority, createJournalAuthorityFixtureUnsafe } from '../scripts/production-evidence/lib/journal-authority.mjs';
+import { releaseBindings } from './fixtures/production-evidence/bindings-v1.mjs';
 
 const identity = () => ({ runId: randomUUID() });
 async function sandbox(t, runIdentity = identity(), testHooks = undefined) {
@@ -91,9 +93,51 @@ test('Given a forged writer-shaped object, When a journal API is called, Then th
     { reason: 'invalid_artifact_writer' });
 });
 
+test('Given a genuine writer and physical run, When one authority is created, Then consumers receive frozen serialized views', async (t) => {
+  const ctx = await sandbox(t);
+  const authority = await createJournalAuthorityFixtureUnsafe({ runDirectory: ctx.runDirectory, identity: ctx.identity, genuineSafeWriter: ctx.writer });
+  assert.equal(assertJournalAuthority(authority), authority);
+  await authority.appendBinding({ role: 'identity', bindingId: 'membership',
+    payload: { kind: 'organization-membership', organizationId: 'org-a', membershipId: 'membership-a', userId: 'user-a', role: 'OWNER' },
+    createdAt: '2026-09-04T00:00:01.000Z' });
+  const entries = await authority.loadBindings();
+  assert.equal(Object.isFrozen(entries), true);
+  assert.equal(Object.isFrozen(entries[0].payload), true);
+  assert.throws(() => assertJournalAuthority({}), { reason: 'invalid_journal_authority' });
+  await assert.rejects(createJournalAuthorityFixtureUnsafe({ runDirectory: ctx.runDirectory, identity: ctx.identity,
+    genuineSafeWriter: { writeJson: async () => ({}) } }), { reason: 'invalid_artifact_writer' });
+  const foreign = await sandbox(t);
+  await assert.rejects(createJournalAuthorityFixtureUnsafe({ runDirectory: ctx.runDirectory, identity: ctx.identity,
+    genuineSafeWriter: foreign.writer }), { reason: 'invalid_artifact_writer' });
+});
+
 test('Given an unknown binding shape, When appended, Then the internal strict schema rejects it', async (t) => {
   const ctx = await sandbox(t);
   await assert.rejects(appendBindingFixtureUnsafe({ ...ctx, role: 'identity', bindingId: 'membership', payload: {}, createdAt: '2026-09-04T00:00:01.000Z' }), { reason: 'invalid_journal' });
+});
+
+test('Given canonical binding kinds, When journaled, Then exact provenance round-trips and malformed contracts fail', async (t) => {
+  const ctx = await sandbox(t); const appended = [];
+  for (const [index, payload] of releaseBindings.entries()) {
+    appended.push(await appendBindingFixtureUnsafe({ ...ctx, role: payload.kind, bindingId: `entry-${index}`, payload,
+      createdAt: `2026-09-04T00:00:${String(index + 1).padStart(2, '0')}.000Z` }));
+  }
+  assert.deepEqual((await loadBindingsFixtureUnsafe(ctx)).map(({ payload }) => payload), releaseBindings);
+  for (const payload of [
+    { ...releaseBindings[1], repository: 'missing-slash' },
+    { ...releaseBindings[2], tenantCommitSha: 'x' },
+    { ...releaseBindings[6], unexpected: 'field' },
+  ]) {
+    await assert.rejects(appendBindingFixtureUnsafe({ ...ctx, role: 'malformed', bindingId: randomUUID(), payload,
+      createdAt: '2026-09-04T00:00:59.000Z' }), { reason: 'invalid_journal' });
+  }
+  const entries = await loadBindingsFixtureUnsafe(ctx);
+  const badDeployment = { ...entries[6], payload: { ...entries[6].payload, tenantCommitSha: '3'.repeat(40) } };
+  const { entrySha256: ignored, ...unsigned } = badDeployment;
+  badDeployment.entrySha256 = digest(unsigned);
+  assert.throws(() => resolveBindingGraph([...entries.slice(0, 6), badDeployment],
+    [...entries.slice(0, 6), badDeployment].map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))),
+  { reason: 'invalid_binding_graph' });
 });
 
 test('Given conflicting, spliced, or noncanonical binding state, When loaded, Then validation fails closed', async (t) => {
@@ -253,7 +297,7 @@ test('Given no restore target yet, When restore is requested, Then intent preced
     payload: { kind: 'resource', role: 'restore-target', engine: 'postgresql', resourceId: 'resource-target', projectId: 'project-a' },
     createdAt: '2026-09-04T00:00:06.000Z' });
   await appendBindingFixtureUnsafe({ ...ctx, role: 'restore', bindingId: 'restore-a',
-    payload: { kind: 'restore', restoreId: 'restore-a', backupId: 'backup-a', targetResourceId: 'resource-target' },
+    payload: { kind: 'restore', engine: 'postgresql', restoreId: 'restore-a', backupId: 'backup-a', targetResourceId: 'resource-target' },
     createdAt: '2026-09-04T00:00:07.000Z' });
   await assert.rejects(appendCleanupOutcomeFixtureUnsafe({ ...ctx, intentId: intent.intentId, actualId: 'foreign-restore', actualUid: null,
     responseSha256: 'b'.repeat(64), resolvedAt: '2026-09-04T00:00:08.000Z', approvedRuntimeSelector: null }), { reason: 'outcome_conflict' });
@@ -265,7 +309,8 @@ test('Given no restore target yet, When restore is requested, Then intent preced
 test('Given secret content or a junction escape, When persistence is attempted, Then durable commit fails', async (t) => {
   const ctx = await sandbox(t);
   await assert.rejects(appendBindingFixtureUnsafe({ ...ctx, role: 'repository', bindingId: 'primary',
-    payload: { kind: 'github-repository', repositoryId: 'repo-a', owner: 'github_pat_abcdefghijklmnop', name: 'repo' },
+    payload: { kind: 'github-repository', installationId: 'installation-a', repositoryId: 'repo-a',
+      repository: 'github_pat_abcdefghijklmnop/repo', branch: 'main' },
     createdAt: '2026-09-04T00:00:01.000Z' }), { reason: 'redaction' });
   const outside = await mkdtemp(path.join(tmpdir(), 'raibit-journal-outside-'));
   t.after(async () => rm(outside, { recursive: true, force: true }));

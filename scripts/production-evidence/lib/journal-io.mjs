@@ -16,8 +16,8 @@ function fail(reason = 'invalid_journal') { throw new EvidenceError(reason); }
 export const isPrivateJournalMetadata = (relativePath) => isPrivateArtifactWriterMetadata(relativePath)
   || /^(?:bindings\/\d{6}--[a-f0-9]{16}|cleanup-intents\/\d{6}--(?:intent|outcome)--[a-f0-9]{12})\.json\.(?:pending|commit)$/.test(relativePath);
 
-export async function withJournalTransaction(writer, operation) {
-  assertSafeArtifactWriter(writer);
+export async function withJournalTransaction(writer, operation, runDirectory) {
+  assertSafeArtifactWriter(writer, runDirectory);
   if (typeof operation !== 'function') fail();
   if (activeTransaction.getStore() === writer) return operation();
   const previous = transactions.get(writer) ?? Promise.resolve();
@@ -80,6 +80,18 @@ export async function journalScope(runDirectory, identity, directoryName, create
   return Object.freeze({ directory, runIdentitySha256: digest(identity) });
 }
 
+export async function validateJournalRoot(runDirectory, identity, writer, unsafeFixture = false) {
+  assertSafeArtifactWriter(writer, runDirectory);
+  if (!unsafeFixture && (process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number')) fail('journal_platform_not_release_safe');
+  if (!isRecord(identity) || typeof identity.runId !== 'string' || !SAFE_PART.test(identity.runId)) fail();
+  await physicalDirectory(runDirectory, false);
+  let run;
+  try { run = JSON.parse((await physicalFile(path.join(runDirectory, 'run.json'))).toString('utf8')); }
+  catch (error) { if (error instanceof SyntaxError) fail(); throw error; }
+  if (!isRecord(run) || run.schema !== 'raibitserver.evidence-run/v1' || !isRecord(run.identity)
+    || digest(run.identity) !== digest(identity) || path.basename(runDirectory) !== identity.runId) fail('identity_mismatch');
+}
+
 async function syncDirectory(directory) {
   const handle = await open(directory, 'r');
   try { await handle.sync(); } finally { await handle.close(); }
@@ -94,7 +106,7 @@ function parseMarker(bytes, schema, relative, sha256) {
 }
 
 export async function exclusiveJournalWrite(runDirectory, relative, value, writer, unsafeFixture = false) {
-  assertSafeArtifactWriter(writer);
+  assertSafeArtifactWriter(writer, runDirectory);
   const parts = relative.split('/');
   const [directoryName, fileName] = parts;
   if (parts.length !== 2 || !SAFE_PART.test(fileName.replace(/\.json$/, '').replaceAll('--', '-')) || !fileName.endsWith('.json')) fail();

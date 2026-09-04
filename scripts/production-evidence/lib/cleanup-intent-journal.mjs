@@ -82,11 +82,11 @@ async function loadJournal(options) {
 }
 export async function loadCleanupJournal(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => loadJournal({ ...options, unsafeFixture: false }));
+  return withJournalTransaction(options?.writer, () => loadJournal({ ...options, unsafeFixture: false }), options?.runDirectory);
 }
 export async function loadCleanupJournalFixtureUnsafe(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => loadJournal({ ...options, unsafeFixture: true }));
+  return withJournalTransaction(options?.writer, () => loadJournal({ ...options, unsafeFixture: true }), options?.runDirectory);
 }
 
 async function cleanupSnapshot(options) {
@@ -96,11 +96,11 @@ async function cleanupSnapshot(options) {
 }
 export async function cleanupJournalSnapshot(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => cleanupSnapshot({ ...options, unsafeFixture: false }));
+  return withJournalTransaction(options?.writer, () => cleanupSnapshot({ ...options, unsafeFixture: false }), options?.runDirectory);
 }
 export async function cleanupJournalSnapshotFixtureUnsafe(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => cleanupSnapshot({ ...options, unsafeFixture: true }));
+  return withJournalTransaction(options?.writer, () => cleanupSnapshot({ ...options, unsafeFixture: true }), options?.runDirectory);
 }
 
 async function journalSetSnapshot(options) {
@@ -116,11 +116,11 @@ async function journalSetSnapshot(options) {
 }
 export async function productionEvidenceJournalSnapshot(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => journalSetSnapshot({ ...options, unsafeFixture: false }));
+  return withJournalTransaction(options?.writer, () => journalSetSnapshot({ ...options, unsafeFixture: false }), options?.runDirectory);
 }
 export async function productionEvidenceJournalSnapshotFixtureUnsafe(options) {
   validateReadOptions(options);
-  return withJournalTransaction(options?.writer, () => journalSetSnapshot({ ...options, unsafeFixture: true }));
+  return withJournalTransaction(options?.writer, () => journalSetSnapshot({ ...options, unsafeFixture: true }), options?.runDirectory);
 }
 
 async function appendIntent(options) {
@@ -166,10 +166,10 @@ async function appendIntent(options) {
   return entry;
 }
 export async function appendCleanupIntent(options) {
-  return withJournalTransaction(options?.writer, () => appendIntent({ ...options, unsafeFixture: false }));
+  return withJournalTransaction(options?.writer, () => appendIntent({ ...options, unsafeFixture: false }), options?.runDirectory);
 }
 export async function appendCleanupIntentFixtureUnsafe(options) {
-  return withJournalTransaction(options?.writer, () => appendIntent({ ...options, unsafeFixture: true }));
+  return withJournalTransaction(options?.writer, () => appendIntent({ ...options, unsafeFixture: true }), options?.runDirectory);
 }
 
 async function appendOutcome(options) {
@@ -211,10 +211,10 @@ async function appendOutcome(options) {
   return entry;
 }
 export async function appendCleanupOutcome(options) {
-  return withJournalTransaction(options?.writer, () => appendOutcome({ ...options, unsafeFixture: false }));
+  return withJournalTransaction(options?.writer, () => appendOutcome({ ...options, unsafeFixture: false }), options?.runDirectory);
 }
 export async function appendCleanupOutcomeFixtureUnsafe(options) {
-  return withJournalTransaction(options?.writer, () => appendOutcome({ ...options, unsafeFixture: true }));
+  return withJournalTransaction(options?.writer, () => appendOutcome({ ...options, unsafeFixture: true }), options?.runDirectory);
 }
 
 export function resolveCleanupRecovery(options) {
