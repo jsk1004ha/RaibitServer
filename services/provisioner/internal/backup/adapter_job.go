@@ -139,6 +139,21 @@ type FenceIdentity struct {
 func (f FenceIdentity) OperationID() string { return f.operationID }
 func (f FenceIdentity) Attempt() int        { return f.attempt }
 
+const (
+	recoveryScratchName = "recovery-scratch"
+	recoveryScratchPath = "/var/run/raibit-recovery/scratch"
+)
+
+type SharedScratch struct {
+	name, mountPath string
+	sizeMiB         int64
+}
+
+func (s SharedScratch) Name() string      { return s.name }
+func (s SharedScratch) MountPath() string { return s.mountPath }
+func (s SharedScratch) SizeMiB() int64    { return s.sizeMiB }
+func (s SharedScratch) SizeLimit() string { return strconv.FormatInt(s.sizeMiB, 10) + "Mi" }
+
 type IsolatedJobSpec struct {
 	Namespace, Image, OperationID                string
 	Attempt                                      int
@@ -151,11 +166,14 @@ type IsolatedJobSpec struct {
 }
 
 type IsolatedJob struct {
-	spec     IsolatedJobSpec
-	security RuntimeSecurity
-	policy   NetworkPolicy
-	labels   map[string]string
-	fence    FenceIdentity
+	spec              IsolatedJobSpec
+	security          RuntimeSecurity
+	policy            NetworkPolicy
+	endpoint          EndpointProjection
+	endpointProjected bool
+	scratch           SharedScratch
+	labels            map[string]string
+	fence             FenceIdentity
 }
 
 func NewIsolatedJob(spec IsolatedJobSpec) (IsolatedJob, error) {
@@ -178,11 +196,13 @@ func NewIsolatedJob(spec IsolatedJobSpec) (IsolatedJob, error) {
 	if policy == nil {
 		return IsolatedJob{}, ErrRecoveryJob
 	}
+	endpoint, endpointProjected := projectEndpoint(spec.Connection.Endpoint())
 	spec.Steps, spec.Secrets, spec.SecretFiles = slices.Clone(spec.Steps), slices.Clone(spec.Secrets), slices.Clone(spec.SecretFiles)
 	fence := FenceIdentity{operationID: spec.OperationID, attempt: spec.Attempt}
 	labels := map[string]string{"raibitserver.io/owned-by": "recovery", "raibitserver.io/operation": spec.OperationID, "raibitserver.io/resource": spec.Connection.ResourceID(), "raibitserver.io/attempt": strconv.Itoa(spec.Attempt)}
 	security := RuntimeSecurity{runAsUser: spec.RunAsUser, runAsNonRoot: true, readOnlyRootFilesystem: true, dropAllCapabilities: true}
-	job := IsolatedJob{spec: spec, security: security, policy: policy, labels: labels, fence: fence}
+	scratch := SharedScratch{name: recoveryScratchName, mountPath: recoveryScratchPath, sizeMiB: spec.EphemeralMiB}
+	job := IsolatedJob{spec: spec, security: security, policy: policy, endpoint: endpoint, endpointProjected: endpointProjected, scratch: scratch, labels: labels, fence: fence}
 	job.labels["raibitserver.io/spec-identity"] = isolatedJobIdentity(job)
 	return job, nil
 }
@@ -197,6 +217,10 @@ func validJobSecrets(spec IsolatedJobSpec) bool {
 		if secret.ref.namespace != spec.Namespace || !secretEnvName.MatchString(secret.name) || !validSecretRef(secret.ref) {
 			return false
 		}
+		switch secret.name {
+		case endpointHostEnv, endpointPortEnv, endpointDatabaseEnv, endpointUsernameEnv, endpointIndexEnv:
+			return false
+		}
 		if _, exists := seen["env:"+secret.name]; exists {
 			return false
 		}
@@ -204,7 +228,8 @@ func validJobSecrets(spec IsolatedJobSpec) bool {
 		seen["env:"+secret.name] = struct{}{}
 	}
 	for _, secret := range spec.SecretFiles {
-		if secret.ref.namespace != spec.Namespace || !strings.HasPrefix(secret.mountPath, "/var/run/raibit-recovery/") || !validSecretRef(secret.ref) {
+		shadowsScratch := secret.mountPath == recoveryScratchPath || strings.HasPrefix(secret.mountPath, recoveryScratchPath + "/")
+		if secret.ref.namespace != spec.Namespace || !strings.HasPrefix(secret.mountPath, "/var/run/raibit-recovery/") || shadowsScratch || !validSecretRef(secret.ref) {
 			return false
 		}
 		if _, exists := seen["file:"+secret.mountPath]; exists {
@@ -233,6 +258,10 @@ func (j IsolatedJob) Spec() IsolatedJobSpec {
 }
 func (j IsolatedJob) Security() RuntimeSecurity    { return j.security }
 func (j IsolatedJob) NetworkPolicy() NetworkPolicy { return j.policy }
+func (j IsolatedJob) EndpointProjection() (EndpointProjection, bool) {
+	return j.endpoint, j.endpointProjected
+}
+func (j IsolatedJob) SharedScratch() SharedScratch { return j.scratch }
 func (j IsolatedJob) Fence() FenceIdentity         { return j.fence }
 func (j IsolatedJob) Labels() map[string]string    { return cloneMap(j.labels) }
 

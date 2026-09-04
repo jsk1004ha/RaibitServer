@@ -49,7 +49,10 @@ func recoveryJobManifest(job IsolatedJob, name, snapshotName, snapshotUID string
 	podSpec := map[string]any{
 		"automountServiceAccountToken": false, "restartPolicy": "Never", "terminationGracePeriodSeconds": 10,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": job.security.runAsUser, "runAsGroup": job.security.runAsUser, "fsGroup": job.security.runAsUser, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
-		"containers":      []any{containers[len(containers)-1]},
+		"containers": []any{containers[len(containers)-1]},
+		"volumes": []any{map[string]any{
+			"name": job.scratch.name, "emptyDir": map[string]any{"sizeLimit": job.scratch.SizeLimit()},
+		}},
 	}
 	if len(containers) > 1 {
 		podSpec["initContainers"] = containers[:len(containers)-1]
@@ -59,7 +62,7 @@ func recoveryJobManifest(job IsolatedJob, name, snapshotName, snapshotUID string
 		for i, secret := range job.spec.SecretFiles {
 			items[i] = map[string]any{"key": secret.ref.key, "path": fmt.Sprintf("secret-%d", i)}
 		}
-		podSpec["volumes"] = []any{map[string]any{"name": "credentials", "secret": map[string]any{"secretName": snapshotName, "items": items, "defaultMode": 0400}}}
+		podSpec["volumes"] = append(podSpec["volumes"].([]any), map[string]any{"name": "credentials", "secret": map[string]any{"secretName": snapshotName, "items": items, "defaultMode": 0400}})
 	}
 	labels := expectedJobLabels(job)
 	labels["raibitserver.io/credential-snapshot"] = snapshotName
@@ -78,24 +81,32 @@ func recoveryStepContainer(job IsolatedJob, step CommandStep, index int, snapsho
 		"stdin": step.binding == StreamStdin, "stdinOnce": step.binding == StreamStdin,
 		"resources":       map[string]any{"requests": map[string]any{"cpu": strconv.FormatInt(job.spec.CPUMilli, 10) + "m", "memory": strconv.FormatInt(job.spec.MemoryMiB, 10) + "Mi", "ephemeral-storage": strconv.FormatInt(job.spec.EphemeralMiB, 10) + "Mi"}, "limits": map[string]any{"cpu": strconv.FormatInt(job.spec.CPUMilli, 10) + "m", "memory": strconv.FormatInt(job.spec.MemoryMiB, 10) + "Mi", "ephemeral-storage": strconv.FormatInt(job.spec.EphemeralMiB, 10) + "Mi"}},
 		"securityContext": map[string]any{"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "runAsNonRoot": true, "runAsUser": job.security.runAsUser, "capabilities": map[string]any{"drop": []any{"ALL"}}},
+		"volumeMounts": []any{map[string]any{"name": job.scratch.name, "mountPath": job.scratch.mountPath, "readOnly": false}},
 	}
-	if len(job.spec.Secrets) > 0 {
-		env := make([]any, len(job.spec.Secrets))
-		for i, secret := range job.spec.Secrets {
+	projection, projected := job.EndpointProjection()
+	projectedEnvironment := projection.environment()
+	if projected || len(job.spec.Secrets) > 0 {
+		env := make([]any, 0, len(projectedEnvironment)+len(job.spec.Secrets))
+		if projected {
+			for _, variable := range projectedEnvironment {
+				env = append(env, map[string]any{"name": variable.name, "value": variable.value})
+			}
+		}
+		for _, secret := range job.spec.Secrets {
 			if !secret.ref.sameRef(job.spec.Connection.spec.Secret) {
 				return nil, ErrRecoveryJob
 			}
-			env[i] = map[string]any{"name": secret.name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": snapshotName, "key": secret.ref.key}}}
+			env = append(env, map[string]any{"name": secret.name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": snapshotName, "key": secret.ref.key}}})
 		}
 		container["env"] = env
 	}
 	if len(job.spec.SecretFiles) > 0 {
-		mounts := make([]any, len(job.spec.SecretFiles))
+		mounts := container["volumeMounts"].([]any)
 		for i, secret := range job.spec.SecretFiles {
 			if !secret.ref.sameRef(job.spec.Connection.spec.Secret) {
 				return nil, ErrRecoveryJob
 			}
-			mounts[i] = map[string]any{"name": "credentials", "mountPath": secret.mountPath, "subPath": fmt.Sprintf("secret-%d", i), "readOnly": true}
+			mounts = append(mounts, map[string]any{"name": "credentials", "mountPath": secret.mountPath, "subPath": fmt.Sprintf("secret-%d", i), "readOnly": true})
 		}
 		container["volumeMounts"] = mounts
 	}
