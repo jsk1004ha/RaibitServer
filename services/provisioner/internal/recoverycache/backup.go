@@ -12,14 +12,24 @@ import (
 	"time"
 )
 
-func (h *helper) backup(ctx context.Context, engine engine, output io.Writer) (resultErr error) {
+type backupResult struct {
+	metadata artifactMetadata
+	transfer artifactTransfer
+}
+
+func (h *helper) backup(ctx context.Context, engine engine, output io.Writer) error {
+	_, err := h.backupArtifact(ctx, engine, output)
+	return err
+}
+
+func (h *helper) backupArtifact(ctx context.Context, engine engine, output io.Writer) (result backupResult, resultErr error) {
 	credential, err := h.readPassword()
 	if err != nil {
-		return err
+		return backupResult{}, err
 	}
 	remote, err := h.dialer.dialTarget(ctx, h.config, credential)
 	if err != nil {
-		return safeStep("connect", ErrOperation)
+		return backupResult{}, safeStep("connect", ErrOperation)
 	}
 	defer func() {
 		if closeErr := remote.close(); closeErr != nil {
@@ -28,33 +38,33 @@ func (h *helper) backup(ctx context.Context, engine engine, output io.Writer) (r
 	}()
 	usedMemory, err := remote.usedMemory(ctx)
 	if err != nil || usedMemory > MaxSourceMemoryBytes {
-		return safeStep("check source memory", ErrLimit)
+		return backupResult{}, safeStep("check source memory", ErrLimit)
 	}
 	sourceVersion, err := remote.version(ctx, engine)
 	if err != nil {
-		return safeStep("read source version", ErrOperation)
+		return backupResult{}, safeStep("read source version", ErrOperation)
 	}
 	before, err := remote.lastSave(ctx)
 	if err != nil {
-		return safeStep("read persistence marker", ErrOperation)
+		return backupResult{}, safeStep("read persistence marker", ErrOperation)
 	}
 	if delay := time.Unix(before+1, 0).Sub(h.now()); delay > 0 {
 		if err := h.waiter.wait(ctx, delay); err != nil {
-			return safeStep("wait for persistence epoch", ErrOperation)
+			return backupResult{}, safeStep("wait for persistence epoch", ErrOperation)
 		}
 	}
 	if err := remote.bgSave(ctx); err != nil {
-		return safeStep("request persistence", ErrOperation)
+		return backupResult{}, safeStep("request persistence", ErrOperation)
 	}
 	if err := h.awaitLastSave(ctx, remote, before); err != nil {
-		return err
+		return backupResult{}, err
 	}
 	if err := os.MkdirAll(h.config.scratchPath, 0o700); err != nil {
-		return safeStep("prepare scratch", ErrOperation)
+		return backupResult{}, safeStep("prepare scratch", ErrOperation)
 	}
 	rdbPath := filepath.Join(h.config.scratchPath, backupRDBName)
 	if err := replaceScratchFile(h.config.scratchPath, rdbPath); err != nil {
-		return err
+		return backupResult{}, err
 	}
 	defer func() {
 		if removeErr := os.Remove(rdbPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -63,35 +73,36 @@ func (h *helper) backup(ctx context.Context, engine engine, output io.Writer) (r
 	}()
 	request := processRequest{kind: processCapture, engine: engine, config: h.config, path: rdbPath}
 	if err := h.processes.run(ctx, request); err != nil {
-		return safeStep("capture", ErrOperation)
+		return backupResult{}, safeStep("capture", ErrOperation)
 	}
 	if err := validateArtifactFile(rdbPath, h.config.maxArtifactBytes); err != nil {
-		return err
+		return backupResult{}, err
 	}
 	request.kind = processValidate
 	if err := h.processes.run(ctx, request); err != nil {
-		return safeStep("validate", ErrOperation)
+		return backupResult{}, safeStep("validate", ErrOperation)
 	}
 	metadata, err := h.metadataFromRDB(ctx, engine, sourceVersion, rdbPath)
 	if err != nil {
-		return err
+		return backupResult{}, err
 	}
 	file, err := os.Open(rdbPath)
 	if err != nil {
-		return safeStep("open artifact", ErrOperation)
+		return backupResult{}, safeStep("open artifact", ErrOperation)
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
 			resultErr = errors.Join(resultErr, safeStep("close artifact", ErrOperation))
 		}
 	}()
-	if _, err := h.codec.encode(ctx, metadata, file, output, h.config.maxArtifactBytes); err != nil {
+	transfer, err := h.codec.encode(ctx, metadata, file, output, h.config.maxArtifactBytes)
+	if err != nil {
 		if errors.Is(err, ErrLimit) {
-			return ErrLimit
+			return backupResult{}, ErrLimit
 		}
-		return safeStep("encode artifact", ErrOperation)
+		return backupResult{}, safeStep("encode artifact", ErrOperation)
 	}
-	return nil
+	return backupResult{metadata: metadata, transfer: transfer}, nil
 }
 
 func (h *helper) awaitLastSave(ctx context.Context, remote cacheClient, before int64) error {

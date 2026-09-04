@@ -13,7 +13,16 @@ import (
 	"time"
 )
 
-func (h *helper) restore(ctx context.Context, engine engine, input io.Reader) (resultErr error) {
+type restoreHooks struct {
+	beforeMutation func(artifactMetadata, artifactTransfer, string) error
+	afterCopy      func(cacheClient, [][]byte) error
+}
+
+func (h *helper) restore(ctx context.Context, engine engine, input io.Reader) error {
+	return h.restoreWithHooks(ctx, engine, input, restoreHooks{})
+}
+
+func (h *helper) restoreWithHooks(ctx context.Context, engine engine, input io.Reader, hooks restoreHooks) (resultErr error) {
 	credential, err := h.readPassword()
 	if err != nil {
 		return err
@@ -34,7 +43,7 @@ func (h *helper) restore(ctx context.Context, engine engine, input io.Reader) (r
 			resultErr = errors.Join(resultErr, safeStep("clean restore scratch", ErrOperation))
 		}
 	}()
-	metadata, _, decodeErr := h.codec.decode(ctx, engine, input, file, h.config.maxArtifactBytes)
+	metadata, transfer, decodeErr := h.codec.decode(ctx, engine, input, file, h.config.maxArtifactBytes)
 	closeErr := file.Close()
 	if decodeErr != nil || closeErr != nil {
 		if errors.Is(decodeErr, ErrLimit) {
@@ -84,8 +93,22 @@ func (h *helper) restore(ctx context.Context, engine engine, input io.Reader) (r
 	if err != nil || usedMemory > MaxSourceMemoryBytes {
 		return safeStep("check restored memory", ErrLimit)
 	}
-	if err := h.restoreDataset(ctx, engine, source, target, credential, metadata); err != nil {
+	keys, err := h.prepareRestoreDataset(ctx, engine, source, metadata)
+	if err != nil {
 		return err
+	}
+	if hooks.beforeMutation != nil {
+		if err := hooks.beforeMutation(metadata, transfer, targetVersion); err != nil {
+			return safeStep("write restore intent", ErrOperation)
+		}
+	}
+	if err := h.copyRestoreDataset(ctx, source, target, credential, keys); err != nil {
+		return err
+	}
+	if hooks.afterCopy != nil {
+		if err := hooks.afterCopy(target, keys); err != nil {
+			return safeStep("write restore evidence", ErrOperation)
+		}
 	}
 	versionAfter, err := target.version(ctx, engine)
 	if err != nil || versionAfter != targetVersion {
@@ -97,27 +120,31 @@ func (h *helper) restore(ctx context.Context, engine engine, input io.Reader) (r
 	return nil
 }
 
-func (h *helper) restoreDataset(ctx context.Context, engine engine, source, target cacheClient, credential []byte, metadata artifactMetadata) error {
+func (h *helper) prepareRestoreDataset(ctx context.Context, engine engine, source cacheClient, metadata artifactMetadata) ([][]byte, error) {
 	if _, err := source.version(ctx, engine); err != nil {
-		return safeStep("verify source version", ErrOperation)
+		return nil, safeStep("verify source version", ErrOperation)
 	}
 	indexes, err := source.databaseIndexes(ctx)
 	if err != nil {
-		return safeStep("inspect source databases", ErrOperation)
+		return nil, safeStep("inspect source databases", ErrOperation)
 	}
 	for _, index := range indexes {
 		if index != h.config.index {
-			return safeStep("reject cross-database artifact", ErrOperation)
+			return nil, safeStep("reject cross-database artifact", ErrOperation)
 		}
 	}
 	keys, err := scanAll(ctx, source, h.config.batchSize)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	count, digest, err := datasetSummary(ctx, source, keys)
 	if err != nil || count != metadata.keyCount || digest != metadata.datasetSHA256 {
-		return safeStep("verify dataset identity", ErrOperation)
+		return nil, safeStep("verify dataset identity", ErrOperation)
 	}
+	return keys, nil
+}
+
+func (h *helper) copyRestoreDataset(ctx context.Context, source, target cacheClient, credential []byte, keys [][]byte) error {
 	for offset := 0; offset < len(keys); offset += h.config.batchSize {
 		end := min(offset+h.config.batchSize, len(keys))
 		batch := keys[offset:end]
@@ -220,28 +247,5 @@ func (h *helper) probeTargetSentinel(ctx context.Context, target cacheClient) (r
 		return safeStep("delete sentinel", ErrOperation)
 	}
 	deleted = true
-	return nil
-}
-
-func (h *helper) verify(ctx context.Context, engine engine) (resultErr error) {
-	credential, err := h.readPassword()
-	if err != nil {
-		return err
-	}
-	target, err := h.dialer.dialTarget(ctx, h.config, credential)
-	if err != nil {
-		return safeStep("connect target", ErrOperation)
-	}
-	defer func() {
-		if closeErr := target.close(); closeErr != nil {
-			resultErr = errors.Join(resultErr, safeStep("close target", ErrOperation))
-		}
-	}()
-	if err := target.ping(ctx); err != nil {
-		return safeStep("ping target", ErrOperation)
-	}
-	if _, err := target.version(ctx, engine); err != nil {
-		return safeStep("read target version", ErrOperation)
-	}
 	return nil
 }

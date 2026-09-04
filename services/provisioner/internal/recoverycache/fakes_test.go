@@ -17,10 +17,14 @@ type fakeProcessExecutor struct {
 	runErr   error
 	probeErr error
 	process  *fakeManagedProcess
+	onRun    func(processRequest)
 }
 
 func (f *fakeProcessExecutor) run(_ context.Context, request processRequest) error {
 	f.requests = append(f.requests, request)
+	if f.onRun != nil {
+		f.onRun(request)
+	}
 	if request.kind == processCapture && f.runErr == nil {
 		return os.WriteFile(request.path, f.rdb, 0o600)
 	}
@@ -103,6 +107,7 @@ type fakeCache struct {
 	serverTimeErr            error
 	expiryTimes              map[string]int64
 	expireTimeErr            error
+	onMigrate                func()
 }
 
 func newFakeCache(values map[string]keySnapshot) *fakeCache {
@@ -204,6 +209,9 @@ func (f *fakeCache) scan(_ context.Context, cursor string, _ int) (string, [][]b
 }
 func (f *fakeCache) migrate(_ context.Context, _ config, _ []byte, keys [][]byte, _ time.Duration) error {
 	f.migrateCalls++
+	if f.onMigrate != nil {
+		f.onMigrate()
+	}
 	if f.migrateErr == nil || f.migrateWritesBeforeError {
 		for _, key := range keys {
 			f.migrateTarget.values[string(key)] = f.values[string(key)]

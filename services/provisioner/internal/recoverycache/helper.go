@@ -18,6 +18,7 @@ type helper struct {
 	random       io.Reader
 	now          func() time.Time
 	readPassword func() ([]byte, error)
+	receipts     receiptController
 }
 
 type dependencies struct {
@@ -58,7 +59,8 @@ func Run(ctx context.Context, action Action, stdin io.Reader, stdout io.Writer) 
 		waiter:    timerWaiter{},
 		random:    rand.Reader,
 	})
-	return helper.runAction(ctx, action, stdin, stdout)
+	helper.receipts = osReceiptController{index: config.index}
+	return helper.runReceiptAction(ctx, action, stdin, stdout)
 }
 
 func (h *helper) run(ctx context.Context, token string, stdin io.Reader, stdout io.Writer) error {
