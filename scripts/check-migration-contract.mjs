@@ -9,13 +9,53 @@ export const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 export const digest = (content) => createHash('sha256').update(content.replaceAll('\r\n', '\n')).digest('hex');
 const reviewedTriggerMigrations = new Set(['000014_resource_recovery', '000015_preview_lineage']);
 
+function executableSql(sql) {
+  let code = '';
+  for (let index = 0; index < sql.length;) {
+    const start = index;
+    const quote = sql[index];
+    const dollar = quote === '$' ? /^\$[A-Za-z_0-9]*\$/.exec(sql.slice(index))?.[0] : undefined;
+    if (quote === "'" || quote === '"') {
+      let closed = false;
+      for (index++; index < sql.length; index++) {
+        if (sql[index] !== quote) continue;
+        if (sql[index + 1] === quote) index++;
+        else { index++; closed = true; break; }
+      }
+      assert.ok(closed, 'unterminated SQL quote');
+    } else if (dollar) {
+      const end = sql.indexOf(dollar, index + dollar.length);
+      assert.notEqual(end, -1, 'unterminated SQL dollar quote');
+      index = end + dollar.length;
+    } else if (sql.startsWith('--', index)) {
+      const end = sql.indexOf('\n', index + 2);
+      index = end < 0 ? sql.length : end;
+    } else if (sql.startsWith('/*', index)) {
+      let depth = 1;
+      for (index += 2; index < sql.length && depth > 0;) {
+        if (sql.startsWith('/*', index)) { depth++; index += 2; }
+        else if (sql.startsWith('*/', index)) { depth--; index += 2; }
+        else index++;
+      }
+      assert.equal(depth, 0, 'unterminated SQL block comment');
+    } else {
+      code += quote;
+      index++;
+      continue;
+    }
+    code += sql.slice(start, index).replace(/[^\r\n]/g, ' ');
+  }
+  return code;
+}
+
 export function checkReviewedTriggerSql(sql) {
   const functions = new Set();
   const functionPattern = /CREATE\s+FUNCTION\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(\)\s+RETURNS\s+trigger\s+LANGUAGE\s+plpgsql\s+AS\s+\$\$([\s\S]*?)\$\$\s*;/gi;
   let remaining = sql.replace(functionPattern, (_statement, name, body) => {
     assert.match(body, /^\s*BEGIN[\s\S]*END\s*$/i, 'trigger function must be a bounded BEGIN/END body');
-    assert.doesNotMatch(body, /(?:^|;|\bTHEN)\s*(?:WITH|INSERT|UPDATE|DELETE)\b/im, 'trigger function may not mutate rows');
-    assert.doesNotMatch(body, /\b(EXECUTE|PERFORM|CALL|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i, 'trigger function may not execute dynamic or schema-changing SQL');
+    const code = executableSql(body);
+    assert.doesNotMatch(code, /\b(?:WITH|INSERT|UPDATE|DELETE)\b/i, 'trigger function may not mutate rows');
+    assert.doesNotMatch(code, /\b(EXECUTE|PERFORM|CALL|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i, 'trigger function may not execute dynamic or schema-changing SQL');
     functions.add(name.toLowerCase());
     return '';
   });
