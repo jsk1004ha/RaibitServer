@@ -35,4 +35,10 @@ test('memory admission commits one immutable lineage and rolls back an enqueue f
   assert.equal(result.actions[0].type, 'preview-deployment-enqueued');
   assert.deepEqual([store.previewLineages.size, store.deployments.size, store.workflowJobs.length], [1, 1, 1]);
   assert.equal(store.handleGitHubWebhook(input).duplicate, true);
+  const lineage = [...store.previewLineages.values()][0];
+  const project = store.projects.get(lineage.projectId);
+  store.projects.set(project.id, { ...project, status: 'DELETING' });
+  const inactive = store.handleGitHubWebhook(signed('closed', '2026-09-03T00:00:01Z'));
+  assert.equal(inactive.matchedServiceCount, 0);
+  assert.equal(store.previewLineages.get(lineage.id).state, 'OPEN');
 });

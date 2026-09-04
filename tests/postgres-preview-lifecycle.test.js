@@ -4,8 +4,8 @@ import test from 'node:test';
 import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 
 const secret = 'task18-local-only-secret';
-function signed(action, updatedAt, deliveryId = randomUUID(), headSha = 'a'.repeat(40), before) {
-  const value = { action, number: 7, installation: { id: 900 }, repository: { id: 101, full_name: 'club/repo' }, pull_request: { number: 7, state: action === 'closed' ? 'closed' : 'open', head: { sha: headSha, ref: 'topic' }, base: { ref: 'main' }, updated_at: updatedAt }, ...(before ? { before } : {}) };
+function signed(action, updatedAt, deliveryId = randomUUID(), headSha = 'a'.repeat(40), before, repository = { id: 101, full_name: 'club/repo' }) {
+  const value = { action, number: 7, installation: { id: 900 }, repository, pull_request: { number: 7, state: action === 'closed' ? 'closed' : 'open', head: { sha: headSha, ref: 'topic' }, base: { ref: 'main' }, updated_at: updatedAt }, ...(before ? { before } : {}) };
   const body = JSON.stringify(value);
   return { event: 'pull_request', deliveryId, body, payload: { malicious: true }, secret, signature: `sha256=${createHmac('sha256', secret).update(body).digest('hex')}` };
 }
@@ -71,5 +71,20 @@ test('signed preview admission dedupes twenty clients and fences close resolver 
   const closedCounts = [await db.deployment.count(), await db.workflowJob.count()];
   await assert.rejects(repositories[7].createDeploymentOperation({ operation: 'retry', sourceDeploymentId: source.id, serviceId: 'service', requestIdempotencyKey: 'closed-retry', snapshotVersion: 1, requestedByUserId: 'user' }), error => error.code === 'PREVIEW_CLOSED');
   assert.deepEqual([await db.deployment.count(), await db.workflowJob.count()], closedCounts);
-  t.diagnostic(JSON.stringify({ clients: 20, lineages: 1, initialDeployments: 1, resolverJobs: 1, resolvedClose: true, reopenedGeneration: 2, oldCleanupFenced: true, databaseCheckRollback: true, deliveryRetryable: true, retryGeneration: 4, closedRetryAtomic: true }));
+  const protectedState = await db.previewLineage.findUnique({ where: { id: lineage.id } });
+  const protectedCounts = [await db.previewLineage.count(), await db.deployment.count(), await db.workflowJob.count()];
+  await db.quota.update({ where: { id: 'quota' }, data: { maxPreviewDeployments: 0 } });
+  const quotaBlocked = await repositories[8].handleGitHubWebhook(signed('reopened', '2026-09-03T00:00:05Z', randomUUID(), 'd'.repeat(40)));
+  assert.equal(quotaBlocked.actions[0].type, 'github-webhook-quota-blocked');
+  assert.deepEqual([await db.previewLineage.count(), await db.deployment.count(), await db.workflowJob.count()], protectedCounts);
+  assert.deepEqual(await db.previewLineage.findUnique({ where: { id: lineage.id } }), protectedState);
+  const foreign = await repositories[9].handleGitHubWebhook(signed('reopened', '2026-09-03T00:00:06Z', randomUUID(), 'e'.repeat(40), undefined, { id: 102, full_name: 'other/repo' }));
+  assert.equal(foreign.matchedServiceCount, 0);
+  assert.deepEqual([await db.previewLineage.count(), await db.deployment.count(), await db.workflowJob.count()], protectedCounts);
+  await db.project.update({ where: { id: 'project' }, data: { status: 'DELETING' } });
+  const inactive = await repositories[10].handleGitHubWebhook(signed('closed', '2026-09-03T00:00:07Z'));
+  assert.equal(inactive.matchedServiceCount, 0);
+  assert.deepEqual([await db.previewLineage.count(), await db.deployment.count(), await db.workflowJob.count()], protectedCounts);
+  assert.deepEqual(await db.previewLineage.findUnique({ where: { id: lineage.id } }), protectedState);
+  t.diagnostic(JSON.stringify({ clients: 20, lineages: 1, initialDeployments: 1, resolverJobs: 1, resolvedClose: true, reopenedGeneration: 2, oldCleanupFenced: true, databaseCheckRollback: true, deliveryRetryable: true, retryGeneration: 4, closedRetryAtomic: true, quotaBlockedAtomic: true, foreignRepositoryMutation: false, inactiveParentMutation: false }));
 });

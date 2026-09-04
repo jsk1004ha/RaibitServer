@@ -3115,7 +3115,13 @@ async function servicesForPrismaGitHubWebhook(prisma: any, actionPlan: Record<st
     where: { githubRepositoryId: String(actionPlan.repositoryId) },
     include: { project: { include: { organization: true } } },
   });
-  return services.filter((service: Record<string, any>) => serviceMatchesGitHubWebhook(service, actionPlan));
+  return services.filter((service: Record<string, any>) => previewParentIsActive(service) && serviceMatchesGitHubWebhook(service, actionPlan));
+}
+
+function previewParentIsActive(service: Record<string, any>) {
+  const inactive = new Set(['DELETE_REQUESTED', 'DELETING', 'DELETED']);
+  return !inactive.has(String(service.status).toUpperCase())
+    && !inactive.has(String(service.project?.status).toUpperCase());
 }
 
 function serviceMatchesGitHubWebhook(service: Record<string, any>, actionPlan: Record<string, any>) {

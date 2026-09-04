@@ -1630,7 +1630,13 @@ export class ControlPlaneStore {
 
   servicesForGitHubWebhook(actionPlan: Record<string, any>) {
     if (actionPlan.kind === 'ignored' || !actionPlan.repositoryId || !actionPlan.installationId || !actionPlan.repository) return [];
-    return [...this.services.values()].filter((service) => serviceMatchesGitHubWebhook(service, actionPlan, this.githubRepositories));
+    const inactive = new Set(['DELETE_REQUESTED', 'DELETING', 'DELETED']);
+    return [...this.services.values()].filter((service) => {
+      const project = this.projects.get(String(service.projectId));
+      return !inactive.has(String(service.status).toUpperCase())
+        && !inactive.has(String(project?.status).toUpperCase())
+        && serviceMatchesGitHubWebhook(service, actionPlan, this.githubRepositories);
+    });
   }
 
   resourceForConsole(resource: Record<string, any>) {
