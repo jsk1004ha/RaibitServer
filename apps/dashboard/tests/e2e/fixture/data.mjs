@@ -12,10 +12,14 @@ const longUnbrokenLog = `build-output-${'x'.repeat(768)}`;
 const hostileLogLine = '<img src=x onerror="fixture-hostile-log">';
 const project = {
   id: 'prj_fixture_001', organizationId: 'org_fixture_001', organizationSlug: 'raibit',
-  name: '결정적 운영 프로젝트', slug: 'deterministic-app', status: 'active', serviceCount: 1, resourceCount: 1,
+  name: '결정적 운영 프로젝트', slug: 'deterministic-app', status: 'active', serviceCount: 2, resourceCount: 1,
 };
 const service = {
   id: 'svc_fixture_web', projectId: project.id, name: 'web', slug: 'web', type: 'web', status: 'running',
+  sourceType: 'github', repoUrl: 'https://github.com/raibit/fixture-app', branch: 'main', dockerfilePath: 'Dockerfile', port: 3000,
+};
+const workerService = {
+  id: 'svc_fixture_worker', projectId: project.id, name: 'worker', slug: 'worker', type: 'worker', status: 'running',
   sourceType: 'github', repoUrl: 'https://github.com/raibit/fixture-app', branch: 'main', dockerfilePath: 'Dockerfile', port: 3000,
 };
 const githubIntegration = { id: 'ghi_fixture', provider: 'github', status: 'connected', login: 'raibit-fixture' };
@@ -71,6 +75,7 @@ const resourceConsole = {
 export const FIXTURE_IDS = Object.freeze({
   project: project.id,
   service: service.id,
+  workerService: workerService.id,
   resource: resource.id,
   readyDeployment: deployment.id,
   queuedDeployment: queuedDeployment.id,
@@ -120,7 +125,7 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   if (pathname === '/github/install') return json(200, { installUrl: 'https://github.com/apps/raibit-fixture/installations/new?state=public-fixture-state' });
   if (pathname === '/github/installations') return json(200, { installations: state === 'empty' ? [] : [githubInstallation] });
   if (pathname === '/github/installations/9001/repositories') return json(200, { repositories: [githubRepository] });
-  if (pathname === `/projects/${project.id}/services`) return json(200, { services: [service] });
+  if (pathname === `/projects/${project.id}/services`) return json(200, { services: [service, workerService] });
   if (method === 'POST' && pathname === '/github/repositories/import') return json(201, {
     projectId: project.id, serviceId: service.id, integrationId: githubIntegration.id, repositoryId: githubRepository.id,
   });
@@ -131,12 +136,13 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
     installationId: githubInstallation.installationId, repositoryId: githubRepository.id,
     fullName: githubRepository.fullName, defaultBranch: githubRepository.defaultBranch, synced: true,
   });
-  if (pathname === `/projects/${project.id}/overview`) return json(200, { project, services: [service], deployments: [deployment], resources: [resource] });
+  if (pathname === `/projects/${project.id}/overview`) return json(200, { project, services: [service, workerService], deployments: [deployment], resources: [resource] });
   const deploymentFixture = deploymentFixtureForPath(pathname);
   if (deploymentFixture) return deploymentResponse({ body, deploymentFixture, method, pathname, state });
   if (pathname === `/resources/${resource.id}`) return json(200, resource);
   if (pathname.startsWith(`/resources/${resource.id}/console/`)) return resourceConsoleResponse({ body, method, pathname, state });
   if (pathname === `/services/${service.id}/logs`) return json(200, { logs: [{ timestamp: FIXED_TIME, line: longKoreanText }] });
+  if (pathname === `/services/${workerService.id}/logs`) return json(200, { logs: [{ id: 'worker-initial', timestamp: FIXED_TIME, level: 'info', line: 'worker-only-initial-log' }, { id: 'worker-hostile', timestamp: FIXED_TIME, level: 'warn', line: hostileLogLine }] });
   if (pathname === '/snapshot') {
     if (actor.role !== 'ADMIN') return json(403, { error: 'forbidden' });
     const snapshotUsers = state === 'empty'

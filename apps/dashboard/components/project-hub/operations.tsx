@@ -7,7 +7,8 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { HubEmpty, MetricGrid, Panel, ProjectStatusBadge, RuntimeLogViewer } from './shared';
+import { HubEmpty, MetricGrid, Panel, ProjectStatusBadge } from './shared';
+import { LogServiceSelector, RuntimeLogStream } from './runtime-log-stream';
 import type { AgentPlan, ProjectHubData } from './types';
 
 export function DeploymentsView({ data }: Readonly<{ data: ProjectHubData }>) {
@@ -90,5 +91,5 @@ function NewResourceView({ data }: Readonly<{ data: ProjectHubData }>) {
 }
 
 export function LogsView({ data }: Readonly<{ data: ProjectHubData }>) {
-  return <Panel title="런타임 로그" description={data.logService?.name || '서비스'}>{data.logService ? <RuntimeLogViewer rows={data.runtimeLogs} /> : <HubEmpty title="서비스 없음" description="로그를 확인할 서비스를 먼저 만드세요." action={<a className={buttonVariants()} href={`${data.base}?view=new-service`}>서비스 만들기</a>} />}</Panel>;
+  return <Panel title="런타임 로그" description="선택한 서비스의 초기 로그와 실시간 스트림" action={data.logService ? <LogServiceSelector base={data.base} selectedServiceId={data.logService.id} services={data.services} /> : undefined}>{data.logService ? <RuntimeLogStream initialRows={data.runtimeLogs} serviceId={data.logService.id} /> : <HubEmpty title="서비스 없음" description="로그를 확인할 서비스를 먼저 만드세요." action={<a className={buttonVariants()} href={`${data.base}?view=new-service`}>서비스 만들기</a>} />}</Panel>;
 }

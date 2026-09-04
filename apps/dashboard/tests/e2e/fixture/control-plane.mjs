@@ -11,6 +11,7 @@ import { createFixtureState } from './state.mjs';
 const port = 3411;
 const requests = [];
 const fixtureState = createFixtureState();
+const streamAttempts = new Map();
 
 function send(response, status, body) {
   const payload = JSON.stringify(body);
@@ -38,7 +39,9 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/__fixture/reset' && request.method === 'POST') {
     return send(response, 200, fixtureState.reset());
   }
-  requests.push({ method: request.method, path: url.pathname, query: url.search, authorization: request.headers.authorization ? 'Bearer [MASKED]' : null, body: redactFixtureRequestBody(body, url.pathname) });
+  const streamMatch = /^\/api\/services\/([^/]+)\/logs\/stream$/.exec(url.pathname);
+  if (streamMatch && request.method === 'GET') return sendRuntimeLogStream(request, response, decodeURIComponent(streamMatch[1]));
+  requests.push({ method: request.method, path: url.pathname, query: url.search, authorization: request.headers.authorization ? 'Bearer [MASKED]' : null, lastEventId: request.headers['last-event-id'] || null, body: redactFixtureRequestBody(body, url.pathname) });
   if (url.pathname === '/api/auth/login' && request.method === 'POST') {
     const account = loginAccounts.get(String(body.email || '').toLowerCase());
     if (body.email === 'failure@fixture.test') return send(response, 500, { error: 'fixture_upstream_secret_must_not_escape' });
@@ -52,3 +55,15 @@ const server = createServer(async (request, response) => {
 
 server.listen(port, '127.0.0.1', () => process.stdout.write(`fixture-control-plane:${port}\n`));
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));
+
+function sendRuntimeLogStream(request, response, serviceId) {
+  const attempt = (streamAttempts.get(serviceId) || 0) + 1;
+  streamAttempts.set(serviceId, attempt);
+  requests.push({ method: request.method, path: new URL(request.url || '/', `http://127.0.0.1:${port}`).pathname, query: '', authorization: request.headers.authorization ? 'Bearer [MASKED]' : null, lastEventId: request.headers['last-event-id'] || null, body: {} });
+  const logs = serviceId === 'svc_fixture_worker'
+    ? [{ id: 'worker-initial', timestamp: FIXED_TIME, level: 'info', line: 'worker-only-initial-log' }, { id: 'worker-hostile', timestamp: FIXED_TIME, level: 'warn', line: '<img src=x onerror="fixture-hostile-log">' }, ...(attempt > 1 ? [{ id: 'worker-live', timestamp: '2026-08-31T03:00:01.000Z', level: 'info', line: 'worker-only-live-log' }] : [])]
+    : [{ id: 'web-initial', timestamp: FIXED_TIME, level: 'info', line: 'web-only-initial-log' }];
+  const payload = JSON.stringify({ logs });
+  response.writeHead(200, { 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'content-type': 'text/event-stream; charset=utf-8' });
+  response.end(`retry: 1000\nid: ${serviceId}-snapshot-${attempt}\nevent: service.logs.snapshot\ndata: ${payload}\n\n`);
+}

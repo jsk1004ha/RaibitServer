@@ -18,7 +18,7 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
     ? await getJson(`/projects/${encodeURIComponent(projectId)}/resources`, { resourceOptions: [] }, state.context)
     : null;
   const selectedServiceId = queryText(query.serviceId);
-  const selectedService = state.services.find((service: ServiceRecord) => service.id === selectedServiceId) || null;
+  const selectedService = state.services.find((service: ServiceRecord) => service.id === selectedServiceId) || state.services[0] || null;
   const serviceSettings = selectedService ? { ...selectedService.desiredState, ...selectedService.desiredSpec, ...selectedService } : null;
   const environmentService = selectedService || state.services[0] || null;
   const environment = view === 'environment' && environmentService
@@ -32,7 +32,7 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
       version: 'v1', generatedBy: 'deterministic', summary: '배포 계획을 불러오지 못했습니다.', blocked: true, canApply: false, deploymentOrder: [], services: [], security: { highestSeverity: 'none', critical: 0, high: 0, medium: 0, low: 0 },
     }, state.context)
     : null;
-  const logService = state.services[0] || null;
+  const logService = selectedService;
   const runtimeLogsResult = view === 'logs' && logService
     ? await getJson(`/services/${encodeURIComponent(logService.id)}/logs`, { logs: [] }, state.context)
     : null;
