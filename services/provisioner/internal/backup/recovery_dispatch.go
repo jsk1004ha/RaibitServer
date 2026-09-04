@@ -39,13 +39,14 @@ type recoveryDispatchStore interface {
 }
 
 type RecoveryDispatcher struct {
-	store    recoveryDispatchStore
-	policy   RecoveryToolPolicy
-	runner   JobRunner
-	handlers map[Engine]RecoveryHandler
-	worker   string
-	services []*Service
-	cleanup  recoveryCleanupHandler
+	store       recoveryDispatchStore
+	policy      RecoveryToolPolicy
+	runner      JobRunner
+	handlers    map[Engine]RecoveryHandler
+	worker      string
+	services    []*Service
+	cleanup     recoveryCleanupHandler
+	cleanupNext bool
 }
 
 func NewRecoveryDispatcher(state recoveryDispatchStore, policy RecoveryToolPolicy, runner JobRunner, handlers []RecoveryHandler, worker string) (*RecoveryDispatcher, error) {
@@ -104,6 +105,12 @@ func registerRecoveryHandlers(policy RecoveryToolPolicy, handlers []RecoveryHand
 }
 
 func (d *RecoveryDispatcher) RunOnce(ctx context.Context) (bool, error) {
+	if d.cleanupNext {
+		d.cleanupNext = false
+		if processed, err := d.runCleanup(ctx); err != nil || processed {
+			return processed, err
+		}
+	}
 	claim, err := d.store.ClaimNextRecovery(ctx, d.worker)
 	if err != nil {
 		return false, err
@@ -111,6 +118,7 @@ func (d *RecoveryDispatcher) RunOnce(ctx context.Context) (bool, error) {
 	if claim == nil {
 		return d.runCleanup(ctx)
 	}
+	d.cleanupNext = true
 	execution, err := d.store.ReadRecoveryExecution(ctx, *claim)
 	if err != nil {
 		return true, errors.Join(err, d.durableTransition(ctx, func(transitionCtx context.Context) error {

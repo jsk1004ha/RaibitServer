@@ -159,6 +159,21 @@ func Test_RecoveryLifecycle_backup_cleanup_fence_loss_blocks_remote_deletion_and
 	}
 }
 
+func Test_RecoveryLifecycle_backup_cleanup_with_no_attempt_finishes_without_remote_io(t *testing.T) {
+	factory, state, wire, attempt := newLifecycleForTest(t, "")
+	state.attempts = nil
+	wire.object = []byte("must-not-delete")
+	binding, _ := NewSQLRecoveryAdapterBinding(NewPostgreSQLAdapter())
+	handler, _ := factory.Handler(binding)
+
+	if err := handler.(*RecoveryLifecycle).Cleanup(context.Background(), backupExecution(attempt).Identity); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(state.snapshot(), []string{"cleanup-claim", "cleanup-fence", "cleanup-read", "cleanup-finish"}) || string(wire.object) != "must-not-delete" {
+		t.Fatalf("events=%v remote object=%q", state.snapshot(), wire.object)
+	}
+}
+
 func Test_RecoveryLifecycle_restore_cleanup_releases_only_target_after_fenced_finish(t *testing.T) {
 	factory, state, _, attempt := newLifecycleForTest(t, "")
 	state.targetPinned = true

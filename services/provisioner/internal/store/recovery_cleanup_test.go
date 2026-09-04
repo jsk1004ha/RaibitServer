@@ -99,6 +99,37 @@ func TestRecoveryPostgresCleanupRetainsUncertainAttemptsAndFencesLease(t *testin
 	}
 }
 
+func TestRecoveryPostgresCleanupSelectorIncludesFailureBeforeIntent(t *testing.T) {
+	f := recoveryDB(t)
+	f.backup(t)
+	f.job(t)
+	claim := f.claim(t)
+	if err := f.s.FailRecovery(f.ctx, claim); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := f.s.NextRecoveryCleanup(f.ctx)
+	if err != nil || identity == nil || identity.Kind != RecoveryBackup || identity.OperationID != f.id {
+		t.Fatalf("pre-intent failure was not selected: %+v %v", identity, err)
+	}
+	cleanup, err := f.s.ClaimRecoveryCleanup(f.ctx, *identity, "cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts, readErr := f.s.ReadRecoveryCleanup(f.ctx, cleanup); readErr != nil || len(attempts) != 0 {
+		t.Fatalf("unexpected remote attempts: %+v %v", attempts, readErr)
+	}
+	if err = f.s.FinishRecoveryCleanup(f.ctx, cleanup); err != nil {
+		t.Fatal(err)
+	}
+	var deleted, pinned bool
+	if err = f.s.db.QueryRowContext(f.ctx, `SELECT status='DELETED',EXISTS(SELECT 1 FROM "ResourceRecoveryPin" WHERE "backupId"=$1 AND kind='ARTIFACT_SOURCE') FROM "ResourceBackup" WHERE id=$1`, f.id).Scan(&deleted, &pinned); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted || pinned {
+		t.Fatalf("deleted=%v source pinned=%v", deleted, pinned)
+	}
+}
+
 func TestRecoveryPostgresParentDeletionPinBarrier(t *testing.T) {
 	for _, table := range []string{"Resource", "Project", "Organization"} {
 		t.Run(table, func(t *testing.T) {

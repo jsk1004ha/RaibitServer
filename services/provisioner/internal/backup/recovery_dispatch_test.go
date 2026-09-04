@@ -148,6 +148,22 @@ func Test_RecoveryDispatcher_cleanup_failure_remains_retryable(t *testing.T) {
 	}
 }
 
+func Test_RecoveryDispatcher_gives_cleanup_bounded_fairness_during_recovery_backlog(t *testing.T) {
+	state := &fakeRecoveryDispatchStore{execution: testRecoveryExecution()}
+	handler := &fakeRecoveryHandler{}
+	dispatcher, err := NewRecoveryDispatcher(state, postgresqlOnlyPolicy(t), writeRunner{payload: "dump"}, []RecoveryHandler{handler}, "worker-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed, runErr := dispatcher.RunOnce(context.Background()); !processed || runErr != nil {
+		t.Fatalf("recovery processed=%v err=%v", processed, runErr)
+	}
+	state.cleanup = &store.RecoveryIdentity{Kind: store.RecoveryBackup, OperationID: "failed-before-intent"}
+	if processed, runErr := dispatcher.RunOnce(context.Background()); !processed || runErr != nil || state.claims != 1 || len(handler.cleanupKinds) != 1 {
+		t.Fatalf("cleanup processed=%v claims=%d cleanup=%v err=%v", processed, state.claims, handler.cleanupKinds, runErr)
+	}
+}
+
 type failingRecoveryHandler struct{ err error }
 
 func (failingRecoveryHandler) Engine() Engine                               { return EnginePostgreSQL }
