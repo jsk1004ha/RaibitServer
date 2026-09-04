@@ -80,6 +80,7 @@ type RecoveryStore interface {
 	ClaimRecoveryCleanup(context.Context, RecoveryIdentity, string) (RecoveryCleanupClaim, error)
 	FenceRecoveryCleanup(context.Context, RecoveryCleanupClaim) error
 	ReadRecoveryCleanup(context.Context, RecoveryCleanupClaim) ([]RecoveryAttempt, error)
+	RecordRecoveryCleanupRemoteCompletion(context.Context, RecoveryCleanupClaim, RecoveryArtifact) error
 	MarkRecoveryAttemptCleaned(context.Context, RecoveryCleanupClaim, int) error
 	FinishRecoveryCleanup(context.Context, RecoveryCleanupClaim) error
 }

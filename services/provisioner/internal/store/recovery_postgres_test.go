@@ -16,6 +16,15 @@ type recoveryFixture struct {
 
 func recoveryDB(t *testing.T) recoveryFixture {
 	t.Helper()
+	id := strings.ReplaceAll(t.Name(), "/", "_")
+	if len(id) > 85 {
+		id = id[:85]
+	}
+	return recoveryDBWithID(t, id)
+}
+
+func recoveryDBWithID(t *testing.T, id string) recoveryFixture {
+	t.Helper()
 	dsn := os.Getenv("RAIBITSERVER_RECOVERY_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("requires isolated recovery PostgreSQL database")
@@ -31,10 +40,6 @@ func recoveryDB(t *testing.T) recoveryFixture {
 			t.Error(err)
 		}
 	})
-	id := strings.ReplaceAll(t.Name(), "/", "_")
-	if len(id) > 85 {
-		id = id[:85]
-	}
 	f := recoveryFixture{s: s, ctx: ctx, id: id}
 	t.Cleanup(func() {
 		if _, err := s.db.Exec(`UPDATE "WorkflowJob" SET status='cancelled',"lockedAt"=NULL,"lockedBy"=NULL WHERE "targetId" IN ($1,$2)`, id, id+"-restore"); err != nil {

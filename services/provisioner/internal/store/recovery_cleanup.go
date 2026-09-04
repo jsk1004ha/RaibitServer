@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
+	"time"
 )
 
 func (s *PostgresStore) ClaimRecoveryCleanup(ctx context.Context, identity RecoveryIdentity, worker string) (RecoveryCleanupClaim, error) {
@@ -121,6 +123,41 @@ func (s *PostgresStore) ReadRecoveryCleanup(ctx context.Context, c RecoveryClean
 		return err
 	})
 	return attempts, err
+}
+
+func (s *PostgresStore) RecordRecoveryCleanupRemoteCompletion(ctx context.Context, c RecoveryCleanupClaim, a RecoveryArtifact) error {
+	if c.kind != RecoveryBackup || a.Attempt < 1 || a.Attempt > RecoveryMaxAttempts {
+		return ErrRecoveryInput
+	}
+	return s.withRecoveryCleanup(ctx, c, func(tx *sql.Tx, l *recoveryLocked) error {
+		var state, keyVersion string
+		var firstClaimAt time.Time
+		var storedBytes, plaintextBytes sql.NullInt64
+		var checksum sql.NullString
+		err := tx.QueryRowContext(ctx, `SELECT state,"keyVersion","firstClaimAt","candidateStoredBytes","candidatePlaintextBytes","candidateChecksum"
+ FROM "ResourceRecoveryAttempt" WHERE "backupId"=$1 AND attempt=$2`, l.claim.backupID, a.Attempt).
+			Scan(&state, &keyVersion, &firstClaimAt, &storedBytes, &plaintextBytes, &checksum)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrRecoveryFence
+		}
+		if err != nil {
+			return ErrRecoveryStorage
+		}
+		if a.OrganizationID != l.claim.organizationID || a.ResourceID != l.claim.sourceID || a.BackupID != l.claim.backupID ||
+			a.KeyVersion != keyVersion || !a.FirstClaimAt.Equal(firstClaimAt) || !storedBytes.Valid || a.StoredBytes != storedBytes.Int64 ||
+			!plaintextBytes.Valid || a.PlaintextBytes != plaintextBytes.Int64 || !checksum.Valid || hex.EncodeToString(a.SHA256[:]) != checksum.String {
+			return ErrRecoveryFence
+		}
+		switch state {
+		case "PREPARED":
+			result, err := tx.ExecContext(ctx, `UPDATE "ResourceRecoveryAttempt" SET state='COMPLETE',"updatedAt"=$3 WHERE "backupId"=$1 AND attempt=$2 AND state='PREPARED'`, l.claim.backupID, a.Attempt, l.now)
+			return recoveryAffected(result, err)
+		case "COMPLETE", "VERIFIED":
+			return nil
+		default:
+			return ErrRecoveryFence
+		}
+	})
 }
 
 func (s *PostgresStore) MarkRecoveryAttemptCleaned(ctx context.Context, c RecoveryCleanupClaim, attempt int) error {
