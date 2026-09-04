@@ -11,7 +11,33 @@ const (
 	endpointDatabaseEnv = "RAIBIT_RECOVERY_DATABASE"
 	endpointUsernameEnv = "RAIBIT_RECOVERY_USERNAME"
 	endpointIndexEnv    = "RAIBIT_RECOVERY_INDEX"
+
+	recoveryDatabaseHelper = "raibit-recovery-db"
+	recoveryCacheHelper    = "raibit-recovery-cache"
 )
+
+type recoveryHelperOperation string
+
+const (
+	recoveryHelperVerify  recoveryHelperOperation = "verify"
+	recoveryHelperDump    recoveryHelperOperation = "dump"
+	recoveryHelperRestore recoveryHelperOperation = "restore"
+	recoveryHelperBackup  recoveryHelperOperation = "backup"
+)
+
+type recoveryHelperStepContract struct {
+	action  string
+	binding StreamBinding
+}
+
+type recoveryHelperSequenceContract struct {
+	first, second recoveryHelperStepContract
+}
+
+type recoveryHelperContract struct {
+	executable    string
+	dump, restore recoveryHelperSequenceContract
+}
 
 type EndpointProjection struct {
 	host, database, username string
@@ -60,11 +86,76 @@ func (p EndpointProjection) environment() []endpointEnvironmentVariable {
 	return variables
 }
 
+// recoveryHelperCommand classifies the narrowly reserved helper protocol.
+// Every other executable remains subject to normal endpoint-leak detection.
+func recoveryHelperCommand(steps []CommandStep, engine Engine) (present, valid bool) {
+	for _, step := range steps {
+		if strings.HasPrefix(step.command.executable, "raibit-recovery-") {
+			present = true
+		}
+	}
+	if !present || len(steps) != 2 {
+		return present, false
+	}
+	expected, ok := recoveryHelperContractFor(engine)
+	if !ok {
+		return true, false
+	}
+	return true, helperSequenceMatches(steps, expected.executable, expected.dump) || helperSequenceMatches(steps, expected.executable, expected.restore)
+}
+
+func recoveryHelperContractFor(engine Engine) (recoveryHelperContract, bool) {
+	var executable, prefix string
+	var streamedOperation recoveryHelperOperation
+	switch engine {
+	case EnginePostgreSQL, EngineMySQL, EngineMariaDB, EngineMongoDB:
+		executable, prefix, streamedOperation = recoveryDatabaseHelper, string(engine), recoveryHelperDump
+	case EngineRedis, EngineValkey:
+		executable, prefix, streamedOperation = recoveryCacheHelper, string(engine), recoveryHelperBackup
+	default:
+		return recoveryHelperContract{}, false
+	}
+	verify := helperAction(prefix, recoveryHelperVerify)
+	streamed := helperAction(prefix, streamedOperation)
+	restore := helperAction(prefix, recoveryHelperRestore)
+	return recoveryHelperContract{
+		executable: executable,
+		dump: recoveryHelperSequenceContract{
+			first:  recoveryHelperStepContract{action: verify, binding: StreamNone},
+			second: recoveryHelperStepContract{action: streamed, binding: StreamStdout},
+		},
+		restore: recoveryHelperSequenceContract{
+			first:  recoveryHelperStepContract{action: restore, binding: StreamStdin},
+			second: recoveryHelperStepContract{action: verify, binding: StreamNone},
+		},
+	}, true
+}
+
+func helperAction(prefix string, operation recoveryHelperOperation) string {
+	return prefix + "-" + string(operation)
+}
+
+func helperSequenceMatches(steps []CommandStep, executable string, sequence recoveryHelperSequenceContract) bool {
+	return helperStepMatches(steps[0], executable, sequence.first) && helperStepMatches(steps[1], executable, sequence.second)
+}
+
+func helperStepMatches(step CommandStep, executable string, expected recoveryHelperStepContract) bool {
+	command := step.command
+	return command.executable == executable && len(command.args) == 1 && command.args[0] == expected.action && step.binding == expected.binding
+}
+
 // commandLeaksEndpoint keeps server-owned host and volume paths out of argv.
 // Runners project the tagged endpoint directly into their runtime representation.
-func commandLeaksEndpoint(steps []CommandStep, endpoint Endpoint) bool {
-	identities := endpointIdentities(endpoint)
+func commandLeaksEndpoint(steps []CommandStep, connection Connection) bool {
+	helperPresent, helperValid := recoveryHelperCommand(steps, connection.Engine())
+	if helperPresent && !helperValid {
+		return true
+	}
+	identities := endpointIdentities(connection.Endpoint())
 	for _, step := range steps {
+		if helperValid {
+			continue
+		}
 		for _, identity := range identities {
 			if strings.Contains(step.command.executable, identity) {
 				return true

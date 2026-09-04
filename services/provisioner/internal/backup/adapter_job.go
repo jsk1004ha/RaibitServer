@@ -189,7 +189,8 @@ func NewIsolatedJob(spec IsolatedJobSpec) (IsolatedJob, error) {
 			streamBindings++
 		}
 	}
-	if streamBindings != 1 || !validJobSecrets(spec) || commandLeaksEndpoint(spec.Steps, spec.Connection.Endpoint()) {
+	helperPresent, helperValid := recoveryHelperCommand(spec.Steps, spec.Connection.Engine())
+	if streamBindings != 1 || (helperPresent && !helperValid) || !validJobSecrets(spec) || commandLeaksEndpoint(spec.Steps, spec.Connection) {
 		return IsolatedJob{}, ErrRecoveryJob
 	}
 	policy := policyFor(spec.Connection.Endpoint())
@@ -228,7 +229,7 @@ func validJobSecrets(spec IsolatedJobSpec) bool {
 		seen["env:"+secret.name] = struct{}{}
 	}
 	for _, secret := range spec.SecretFiles {
-		shadowsScratch := secret.mountPath == recoveryScratchPath || strings.HasPrefix(secret.mountPath, recoveryScratchPath + "/")
+		shadowsScratch := secret.mountPath == recoveryScratchPath || strings.HasPrefix(secret.mountPath, recoveryScratchPath+"/")
 		if secret.ref.namespace != spec.Namespace || !strings.HasPrefix(secret.mountPath, "/var/run/raibit-recovery/") || shadowsScratch || !validSecretRef(secret.ref) {
 			return false
 		}
