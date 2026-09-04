@@ -44,7 +44,7 @@ func TestRecoveryStartupFailsClosedBeforeClaimsWhenObjectEncryptionConfigIsUnava
 	}
 }
 
-func TestRecoveryHandlersRegistersEveryImplementedSQLAdapter(t *testing.T) {
+func TestRecoveryHandlersRegistersEveryImplementedAdapter(t *testing.T) {
 	service := registrationService(t)
 	state := &registrationStore{}
 	factory, err := backup.NewRecoveryHandlerFactory(state, service)
@@ -55,6 +55,9 @@ func TestRecoveryHandlersRegistersEveryImplementedSQLAdapter(t *testing.T) {
 		"RAIBITSERVER_RECOVERY_TOOL_POSTGRESQL_IMAGE": "registry.example/recovery/postgresql@sha256:" + strings.Repeat("1", 64),
 		"RAIBITSERVER_RECOVERY_TOOL_MYSQL_IMAGE":      "registry.example/recovery/mysql@sha256:" + strings.Repeat("2", 64),
 		"RAIBITSERVER_RECOVERY_TOOL_MARIADB_IMAGE":    "registry.example/recovery/mariadb@sha256:" + strings.Repeat("3", 64),
+		"RAIBITSERVER_RECOVERY_TOOL_MONGODB_IMAGE":    "registry.example/recovery/mongodb@sha256:" + strings.Repeat("4", 64),
+		"RAIBITSERVER_RECOVERY_TOOL_REDIS_IMAGE":      "registry.example/recovery/redis@sha256:" + strings.Repeat("5", 64),
+		"RAIBITSERVER_RECOVERY_TOOL_VALKEY_IMAGE":     "registry.example/recovery/valkey@sha256:" + strings.Repeat("6", 64),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +67,17 @@ func TestRecoveryHandlersRegistersEveryImplementedSQLAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[backup.Engine]bool{backup.EnginePostgreSQL: false, backup.EngineMySQL: false, backup.EngineMariaDB: false}
+	if len(handlers) != 6 {
+		t.Fatalf("registered handlers=%d", len(handlers))
+	}
+	want := map[backup.Engine]bool{
+		backup.EnginePostgreSQL: false,
+		backup.EngineMySQL:      false,
+		backup.EngineMariaDB:    false,
+		backup.EngineMongoDB:    false,
+		backup.EngineRedis:      false,
+		backup.EngineValkey:     false,
+	}
 	for _, handler := range handlers {
 		if handler == nil {
 			t.Fatal("nil production handler")

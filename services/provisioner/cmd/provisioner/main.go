@@ -142,13 +142,29 @@ func recoveryHandlers(factory *backup.RecoveryHandlerFactory, policy backup.Reco
 		backup.NewPostgreSQLAdapter(),
 		backup.NewMySQLRecoveryAdapter(),
 		backup.NewMariaDBRecoveryAdapter(),
+		backup.NewMongoDBRecoveryAdapter(),
+		backup.NewRedisRecoveryAdapter(),
+		backup.NewValkeyRecoveryAdapter(),
 	}
 	handlers := make([]backup.RecoveryHandler, 0, len(adapters))
 	for _, adapter := range adapters {
 		if !policy.Enabled(adapter.Engine()) {
 			continue
 		}
-		binding, err := backup.NewSQLRecoveryAdapterBinding(adapter)
+		var (
+			binding backup.RecoveryAdapterBinding
+			err     error
+		)
+		switch adapter.Engine() {
+		case backup.EnginePostgreSQL, backup.EngineMySQL, backup.EngineMariaDB:
+			binding, err = backup.NewSQLRecoveryAdapterBinding(adapter)
+		case backup.EngineMongoDB:
+			binding, err = backup.NewMongoDBRecoveryAdapterBinding(adapter)
+		case backup.EngineRedis, backup.EngineValkey:
+			binding, err = backup.NewCacheRecoveryAdapterBinding(adapter)
+		default:
+			return nil, backup.ErrConfig
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -158,8 +174,6 @@ func recoveryHandlers(factory *backup.RecoveryHandlerFactory, policy backup.Reco
 		}
 		handlers = append(handlers, handler)
 	}
-	// Task 25 engines join this registry through an adapter binding; the durable
-	// lifecycle and Task 23 journal bridge remain engine-neutral.
 	return handlers, nil
 }
 

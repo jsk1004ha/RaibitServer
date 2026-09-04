@@ -52,6 +52,39 @@ func NewSQLRecoveryAdapterBinding(adapter RecoveryAdapter) (RecoveryAdapterBindi
 	return NewRecoveryAdapterBinding(adapter, rehydrator)
 }
 
+func NewMongoDBRecoveryAdapterBinding(adapter RecoveryAdapter) (RecoveryAdapterBinding, error) {
+	if adapter == nil || adapter.Engine() != EngineMongoDB {
+		return RecoveryAdapterBinding{}, ErrConfig
+	}
+	rehydrator := recoveryRehydratorFunc(func(source Connection, verified VerifiedArtifact) (RecoveryArtifact, error) {
+		format, metadata, err := mongoDBMetadata(source)
+		if err != nil {
+			return RecoveryArtifact{}, err
+		}
+		return newStoredRecoveryArtifact(source, format, metadata, verified)
+	})
+	return NewRecoveryAdapterBinding(adapter, rehydrator)
+}
+
+func NewCacheRecoveryAdapterBinding(adapter RecoveryAdapter) (RecoveryAdapterBinding, error) {
+	if adapter == nil {
+		return RecoveryAdapterBinding{}, ErrConfig
+	}
+	switch adapter.Engine() {
+	case EngineRedis, EngineValkey:
+	default:
+		return RecoveryAdapterBinding{}, ErrConfig
+	}
+	rehydrator := recoveryRehydratorFunc(func(source Connection, verified VerifiedArtifact) (RecoveryArtifact, error) {
+		format, metadata, err := cacheMetadata(source)
+		if err != nil {
+			return RecoveryArtifact{}, err
+		}
+		return newStoredRecoveryArtifact(source, format, metadata, verified)
+	})
+	return NewRecoveryAdapterBinding(adapter, rehydrator)
+}
+
 func newStoredRecoveryArtifact(source Connection, format EngineFormat, baseline VerificationMetadata, verified VerifiedArtifact) (RecoveryArtifact, error) {
 	record := verified.Record()
 	if source.spec.ResourceID == "" || source.Engine() != format.spec.Engine || baseline.spec.Schema == "" || record.Attempt.OrganizationID != source.spec.OrganizationID || record.Attempt.ResourceID != source.ResourceID() || record.StoredBytes < 1 || record.PlaintextBytes < 1 || record.SHA256 == [32]byte{} {
