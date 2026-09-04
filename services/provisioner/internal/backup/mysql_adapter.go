@@ -3,56 +3,38 @@ package backup
 const (
 	mysqlLogicalFormat   = "mysql-logical"
 	mariaDBLogicalFormat = "mariadb-logical"
-	mysqlVerifySQL       = `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE(); SELECT 1 FROM raibitserver_restore_sentinel LIMIT 1;`
 )
 
 type MySQLAdapter struct{ sqlAdapter }
 
 func NewMySQLRecoveryAdapter() MySQLAdapter {
-	return MySQLAdapter{sqlAdapter{engine: EngineMySQL, formatName: mysqlLogicalFormat, passwordEnv: "MYSQL_PWD", dumpPlan: mysqlDumpPlan, restorePlan: mysqlRestorePlan}}
+	return MySQLAdapter{sqlAdapter{engine: EngineMySQL, formatName: mysqlLogicalFormat, dumpPlan: mysqlDumpPlan, restorePlan: mysqlRestorePlan}}
 }
 
 func NewMariaDBRecoveryAdapter() MySQLAdapter {
-	return MySQLAdapter{sqlAdapter{engine: EngineMariaDB, formatName: mariaDBLogicalFormat, passwordEnv: "MYSQL_PWD", dumpPlan: mysqlDumpPlan, restorePlan: mysqlRestorePlan}}
+	return MySQLAdapter{sqlAdapter{engine: EngineMariaDB, formatName: mariaDBLogicalFormat, dumpPlan: mysqlDumpPlan, restorePlan: mysqlRestorePlan}}
 }
 
 func mysqlDumpPlan(connection Connection) ([]sqlCommandPlan, error) {
-	endpoint, err := sqlEndpoint(connection)
-	if err != nil {
+	if _, err := sqlEndpoint(connection); err != nil {
 		return nil, err
 	}
-	connectionArgs := mysqlConnectionArgs(endpoint)
-	dumpArgs := []string{"--single-transaction", "--routines", "--events", "--triggers", "--hex-blob"}
-	dumpArgs = append(dumpArgs, connectionArgs...)
-	dumpArgs = append(dumpArgs, "--databases", endpoint.Database)
+	engine := connection.Engine()
 	return []sqlCommandPlan{
-		{executable: "mysql", args: mysqlVerificationArgs(endpoint), binding: StreamNone},
-		{executable: "mysqldump", args: dumpArgs, binding: StreamStdout},
+		{executable: sqlRecoveryHelper, args: []string{string(engine) + "-verify"}, binding: StreamNone},
+		{executable: sqlRecoveryHelper, args: []string{string(engine) + "-dump"}, binding: StreamStdout},
 	}, nil
 }
 
 func mysqlRestorePlan(connection Connection) ([]sqlCommandPlan, error) {
-	endpoint, err := sqlEndpoint(connection)
-	if err != nil {
+	if _, err := sqlEndpoint(connection); err != nil {
 		return nil, err
 	}
-	restoreArgs := []string{"--binary-mode"}
-	restoreArgs = append(restoreArgs, mysqlConnectionArgs(endpoint)...)
-	restoreArgs = append(restoreArgs, "--database", endpoint.Database)
+	engine := connection.Engine()
 	return []sqlCommandPlan{
-		{executable: "mysql", args: restoreArgs, binding: StreamStdin},
-		{executable: "mysql", args: mysqlVerificationArgs(endpoint), binding: StreamNone},
+		{executable: sqlRecoveryHelper, args: []string{string(engine) + "-restore"}, binding: StreamStdin},
+		{executable: sqlRecoveryHelper, args: []string{string(engine) + "-verify"}, binding: StreamNone},
 	}, nil
-}
-
-func mysqlConnectionArgs(endpoint NetworkEndpointSpec) []string {
-	return []string{"--protocol=TCP", "--port", sqlPort(endpoint.Port), "--user", endpoint.User}
-}
-
-func mysqlVerificationArgs(endpoint NetworkEndpointSpec) []string {
-	args := []string{"--batch", "--skip-column-names", "--raw"}
-	args = append(args, mysqlConnectionArgs(endpoint)...)
-	return append(args, "--database", endpoint.Database, "--execute", mysqlVerifySQL)
 }
 
 var _ RecoveryAdapter = MySQLAdapter{}

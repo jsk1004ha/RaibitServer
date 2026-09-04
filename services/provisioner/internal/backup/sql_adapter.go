@@ -3,13 +3,14 @@ package backup
 import (
 	"context"
 	"errors"
-	"strconv"
 	"time"
 )
 
 const (
 	sqlRecoverySchema  = "sql-recovery"
 	sqlRecoveryVersion = 1
+	// sqlRecoveryHelper is installed by recovery tool images at /usr/local/bin/raibit-recovery-db.
+	sqlRecoveryHelper = "raibit-recovery-db"
 )
 
 type sqlCommandPlan struct {
@@ -19,9 +20,9 @@ type sqlCommandPlan struct {
 }
 
 type sqlAdapter struct {
-	engine                  Engine
-	formatName, passwordEnv string
-	dumpPlan, restorePlan   func(Connection) ([]sqlCommandPlan, error)
+	engine                Engine
+	formatName            string
+	dumpPlan, restorePlan func(Connection) ([]sqlCommandPlan, error)
 }
 
 func (a sqlAdapter) Engine() Engine { return a.engine }
@@ -39,7 +40,7 @@ func (a sqlAdapter) Dump(ctx context.Context, request DumpRequest, handoff *Stre
 	if err != nil {
 		return DumpResult{}, err
 	}
-	job, err := newSQLJob(request.Source(), a.passwordEnv, plans)
+	job, err := newSQLJob(request.Source(), plans)
 	if err != nil {
 		return DumpResult{}, err
 	}
@@ -67,7 +68,7 @@ func (a sqlAdapter) Restore(ctx context.Context, request RestoreRequest, handoff
 	if err != nil {
 		return VerificationReceipt{}, err
 	}
-	job, err := newSQLJob(request.Target(), a.passwordEnv, plans)
+	job, err := newSQLJob(request.Target(), plans)
 	if err != nil {
 		return VerificationReceipt{}, err
 	}
@@ -82,7 +83,7 @@ func (a sqlAdapter) Restore(ctx context.Context, request RestoreRequest, handoff
 	return verified, nil
 }
 
-func newSQLJob(connection Connection, passwordEnv string, plans []sqlCommandPlan) (IsolatedJob, error) {
+func newSQLJob(connection Connection, plans []sqlCommandPlan) (IsolatedJob, error) {
 	steps := make([]CommandStep, len(plans))
 	for index, plan := range plans {
 		command, err := newDirectCommand(plan.executable, plan.args...)
@@ -94,19 +95,14 @@ func newSQLJob(connection Connection, passwordEnv string, plans []sqlCommandPlan
 			return IsolatedJob{}, err
 		}
 	}
-	secret := connection.spec.Secret
-	environment, err := NewSecretEnv(passwordEnv, secret)
-	if err != nil {
-		return IsolatedJob{}, err
-	}
-	secretFile, err := NewSecretFile("/var/run/raibit-recovery/sql/password", secret)
+	secretFile, err := NewSecretFile("/var/run/raibit-recovery/credential", connection.spec.Secret)
 	if err != nil {
 		return IsolatedJob{}, err
 	}
 	return NewIsolatedJob(IsolatedJobSpec{
 		Namespace: connection.spec.Provenance.spec.Namespace, Image: connection.toolImage,
 		OperationID: connection.operationID, Attempt: connection.attempt, Connection: connection,
-		Steps: steps, Secrets: []SecretEnv{environment}, SecretFiles: []SecretFile{secretFile},
+		Steps: steps, SecretFiles: []SecretFile{secretFile},
 		RunAsUser: 65532, CPUMilli: 250, MemoryMiB: 256, EphemeralMiB: 512, Deadline: 15 * time.Minute,
 	})
 }
@@ -139,5 +135,3 @@ func sqlEndpoint(connection Connection) (NetworkEndpointSpec, error) {
 	}
 	return endpoint.Spec(), nil
 }
-
-func sqlPort(port uint16) string { return strconv.Itoa(int(port)) }

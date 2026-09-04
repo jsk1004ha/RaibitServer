@@ -60,6 +60,18 @@ func (r *corruptSQLInput) Read(payload []byte) (int, error) {
 
 func (*corruptSQLInput) Close() error { return nil }
 
+type trackedSQLInput struct {
+	reader io.Reader
+	closed bool
+}
+
+func (r *trackedSQLInput) Read(payload []byte) (int, error) { return r.reader.Read(payload) }
+
+func (r *trackedSQLInput) Close() error {
+	r.closed = true
+	return nil
+}
+
 func sqlConnection(t *testing.T, engine Engine, resource, host, database, user, version string) Connection {
 	t.Helper()
 	generation, err := NewSourceGeneration(testGeneration)
@@ -163,17 +175,4 @@ func cancelledSQLContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	return ctx
-}
-
-func expectedSQLArgs(engine Engine, database, user string) (dump, restore []string) {
-	if engine == EnginePostgreSQL {
-		return []string{"--format=custom", "--no-owner", "--no-privileges", "--port", "5432", "--username", user, "--dbname", database},
-			[]string{"--exit-on-error", "--no-owner", "--no-privileges", "--port", "5432", "--username", user, "--dbname", database}
-	}
-	connection := []string{"--protocol=TCP", "--port", "3306", "--user", user}
-	dump = append([]string{"--single-transaction", "--routines", "--events", "--triggers", "--hex-blob"}, connection...)
-	dump = append(dump, "--databases", database)
-	restore = append([]string{"--binary-mode"}, connection...)
-	restore = append(restore, "--database", database)
-	return dump, restore
 }

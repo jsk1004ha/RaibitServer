@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -59,30 +57,32 @@ func Test_SQLAdapter_dump_stream_is_encrypted_and_authenticated_before_artifact(
 	}
 }
 
-func Test_SQLAdapters_build_fixed_direct_commands_with_bounded_runtime(t *testing.T) {
+func Test_SQLAdapters_route_sql_steps_through_fixed_helper_without_endpoint_argv(t *testing.T) {
 	tests := []struct {
-		name        string
-		adapter     RecoveryAdapter
-		engine      Engine
-		version     string
-		format      string
-		dumpExec    string
-		restoreExec string
-		dumpFlags   []string
+		name    string
+		adapter RecoveryAdapter
+		engine  Engine
+		version string
+		format  string
 	}{
-		{"postgresql", NewPostgreSQLAdapter(), EnginePostgreSQL, "16.4", postgresqlCustomFormat, "pg_dump", "pg_restore", []string{"--format=custom", "--no-owner", "--no-privileges"}},
-		{"mysql", NewMySQLRecoveryAdapter(), EngineMySQL, "8.4.1", mysqlLogicalFormat, "mysqldump", "mysql", []string{"--single-transaction", "--routines", "--events", "--triggers", "--hex-blob"}},
-		{"mariadb", NewMariaDBRecoveryAdapter(), EngineMariaDB, "11.4.2", mariaDBLogicalFormat, "mysqldump", "mysql", []string{"--single-transaction", "--routines", "--events", "--triggers", "--hex-blob"}},
+		{"postgresql", NewPostgreSQLAdapter(), EnginePostgreSQL, "16.4", postgresqlCustomFormat},
+		{"mysql", NewMySQLRecoveryAdapter(), EngineMySQL, "8.4.1", mysqlLogicalFormat},
+		{"mariadb", NewMariaDBRecoveryAdapter(), EngineMariaDB, "11.4.2", mariaDBLogicalFormat},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			// Given: endpoint values that must stay in the typed projection, not executable tokens.
+			host := "source-tenant.example.internal"
 			injection := "tenant;DROP TABLE raibitserver_restore_sentinel--"
-			source := sqlConnection(t, test.engine, "source", "source.db.internal", injection, "owner --execute=evil", test.version)
+			user := "owner --execute=evil"
+			source := sqlConnection(t, test.engine, "source", host, injection, user, test.version)
+
+			// When: the source dump and distinct target restore jobs are planned.
 			artifact, dumpJob := sqlArtifactWithJob(t, test.adapter, source)
 			if artifact.Format().Spec() != (EngineFormatSpec{Engine: test.engine, Name: test.format, Version: 1}) {
 				t.Fatalf("format=%+v", artifact.Format().Spec())
 			}
-			target := sqlConnection(t, test.engine, "target", "target.db.internal", injection, "owner --execute=evil", test.version)
+			target := sqlConnection(t, test.engine, "target", "target-tenant.example.internal", injection, user, test.version)
 			restore := sqlRestore(t, source, target, artifact)
 			handoff, err := NewRestoreHandoff(context.Background(), ioNopCloser("dump"), 32)
 			if err != nil {
@@ -96,32 +96,10 @@ func Test_SQLAdapters_build_fixed_direct_commands_with_bounded_runtime(t *testin
 			if receipt.Target().ResourceID() != "target" || len(runner.runs) != 1 {
 				t.Fatalf("receipt=%+v runs=%d", receipt, len(runner.runs))
 			}
-			assertSQLJob(t, runner.runs[0].job, test.restoreExec, StreamStdin)
-			assertSQLJob(t, dumpJob, test.dumpExec, StreamStdout)
-			steps := runner.runs[0].job.Spec().Steps
-			wantDump, wantRestore := expectedSQLArgs(test.engine, injection, "owner --execute=evil")
-			if !reflect.DeepEqual(dumpJob.Spec().Steps[1].Command().Args(), wantDump) || !reflect.DeepEqual(steps[0].Command().Args(), wantRestore) {
-				t.Fatalf("dump=%#v restore=%#v", dumpJob.Spec().Steps[1].Command().Args(), steps[0].Command().Args())
-			}
-			if !slices.Contains(steps[0].Command().Args(), injection) {
-				t.Fatalf("database was not preserved as one argv element: %#v", steps[0].Command().Args())
-			}
-			for _, step := range steps {
-				args := step.Command().Args()
-				for index, arg := range args {
-					if (arg == "--command" || arg == "--execute") && index+1 < len(args) && strings.Contains(args[index+1], "DROP TABLE") {
-						t.Fatalf("tenant input entered verification SQL: %#v", args)
-					}
-				}
-			}
-			for _, flag := range test.dumpFlags {
-				if !slices.Contains(dumpJob.Spec().Steps[1].Command().Args(), flag) {
-					t.Fatalf("missing dump flag %q", flag)
-				}
-			}
-			if dumpJob.Spec().Steps[1].Command().Executable() != test.dumpExec {
-				t.Fatalf("dump executable=%q", dumpJob.Spec().Steps[1].Command().Executable())
-			}
+
+			// Then: every step uses exactly one fixed helper action; source and target credentials stay isolated.
+			assertSQLHelperJob(t, dumpJob, []string{string(test.engine) + "-verify", string(test.engine) + "-dump"}, []StreamBinding{StreamNone, StreamStdout}, source.spec.Secret, []string{host, "5432", "3306", injection, user})
+			assertSQLHelperJob(t, runner.runs[0].job, []string{string(test.engine) + "-restore", string(test.engine) + "-verify"}, []StreamBinding{StreamStdin, StreamNone}, target.spec.Secret, []string{"target-tenant.example.internal", "5432", "3306", injection, user})
 		})
 	}
 }
@@ -140,16 +118,9 @@ func Test_SQLAdapters_restore_verifies_schema_and_sentinel_before_receipt(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
-		steps := runner.runs[0].job.Spec().Steps
-		if len(steps) != 2 || steps[0].Binding() != StreamStdin || steps[1].Binding() != StreamNone {
-			t.Fatalf("restore/verify order=%+v", steps)
-		}
-		query := strings.Join(steps[1].Command().Args(), " ")
-		if !strings.Contains(query, "information_schema") || !strings.Contains(query, "raibitserver_restore_sentinel") {
-			t.Fatalf("verification query lacks schema/sentinel checks: %q", query)
-		}
+		assertSQLHelperJob(t, runner.runs[0].job, []string{string(engine) + "-restore", string(engine) + "-verify"}, []StreamBinding{StreamStdin, StreamNone}, target.spec.Secret, []string{"target.db.internal", "5432", "3306", "app_restore", "provider"})
 		metadata := receipt.Observed().Spec()
-		if metadata.Schema != "sql-recovery" || len(metadata.Fields) < 3 || artifact.Format().Spec().Engine != engine {
+		if metadata.Schema != "sql-recovery" || len(metadata.Fields) != 5 || metadata.Fields[3] != (VerificationField{Name: "schema_check", Value: "information-schema"}) || metadata.Fields[4] != (VerificationField{Name: "sentinel_check", Value: "raibitserver-restore-sentinel"}) || artifact.Format().Spec().Engine != engine {
 			t.Fatalf("metadata=%+v format=%+v", metadata, artifact.Format().Spec())
 		}
 	}
@@ -168,44 +139,46 @@ func Test_SQLAdapters_fail_closed_for_wrong_version_corruption_and_cancel(t *tes
 	for _, test := range []struct {
 		name  string
 		ctx   context.Context
-		input *StreamHandoff
+		input *trackedSQLInput
 	}{
-		{"corrupt", context.Background(), restoreHandoff(t, &corruptSQLInput{})},
-		{"cancelled", cancelledSQLContext(), restoreHandoff(t, ioNopCloser("dump"))},
+		{"corrupt", context.Background(), &trackedSQLInput{reader: &corruptSQLInput{}}},
+		{"cancelled", cancelledSQLContext(), &trackedSQLInput{reader: strings.NewReader("dump")}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			handoff := restoreHandoff(t, test.input)
 			runner := &sqlRunner{}
-			receipt, err := adapter.Restore(test.ctx, restore, test.input, runner)
-			if err == nil || receipt.Target().ResourceID() != "" || runner.completed != 0 {
-				t.Fatalf("receipt=%+v completed=%d err=%v", receipt, runner.completed, err)
+			receipt, err := adapter.Restore(test.ctx, restore, handoff, runner)
+			if err == nil || receipt.Target().ResourceID() != "" || runner.completed != 0 || !test.input.closed {
+				t.Fatalf("receipt=%+v completed=%d closed=%t err=%v", receipt, runner.completed, test.input.closed, err)
 			}
 		})
 	}
 }
 
-func assertSQLJob(t *testing.T, job IsolatedJob, executable string, binding StreamBinding) {
+func assertSQLHelperJob(t *testing.T, job IsolatedJob, actions []string, bindings []StreamBinding, secret SecretRef, endpointValues []string) {
 	t.Helper()
 	spec := job.Spec()
-	streamStep := spec.Steps[0]
-	for _, step := range spec.Steps {
-		if step.Binding() == binding {
-			streamStep = step
-		}
+	if len(spec.Steps) != len(actions) || len(actions) != len(bindings) {
+		t.Fatalf("steps=%+v actions=%v bindings=%v", spec.Steps, actions, bindings)
 	}
-	if streamStep.Command().Executable() != executable || streamStep.Binding() != binding {
-		t.Fatalf("steps=%+v", spec.Steps)
+	for index, step := range spec.Steps {
+		command := step.Command()
+		if command.Executable() != sqlRecoveryHelper || len(command.Args()) != 1 || command.Args()[0] != actions[index] || step.Binding() != bindings[index] {
+			t.Fatalf("step=%d executable=%q args=%q binding=%d", index, command.Executable(), command.Args(), step.Binding())
+		}
+		for _, endpointValue := range endpointValues {
+			if strings.Contains(command.Executable(), endpointValue) || strings.Contains(command.Args()[0], endpointValue) {
+				t.Fatalf("endpoint value %q entered command=%q args=%q", endpointValue, command.Executable(), command.Args())
+			}
+		}
 	}
 	if spec.RunAsUser != 65532 || spec.CPUMilli != 250 || spec.MemoryMiB != 256 || spec.EphemeralMiB != 512 || spec.Deadline != 15*time.Minute {
 		t.Fatalf("unbounded runtime=%+v", spec)
 	}
-	if len(spec.Secrets) != 1 || len(spec.SecretFiles) != 1 || !spec.SecretFiles[0].ReadOnly() || spec.SecretFiles[0].Ref() != spec.Connection.spec.Secret {
+	if len(spec.Secrets) != 0 || len(spec.SecretFiles) != 1 || !spec.SecretFiles[0].ReadOnly() || spec.SecretFiles[0].Ref() != secret {
 		t.Fatalf("credential projections=%+v/%+v", spec.Secrets, spec.SecretFiles)
 	}
-	wantEnv := "PGPASSWORD"
-	if spec.Connection.Engine() == EngineMySQL || spec.Connection.Engine() == EngineMariaDB {
-		wantEnv = "MYSQL_PWD"
-	}
-	if spec.Secrets[0].Name() != wantEnv || spec.Secrets[0].Ref() != spec.Connection.spec.Secret || spec.SecretFiles[0].MountPath() != "/var/run/raibit-recovery/sql/password" {
-		t.Fatalf("credential identity=%+v/%+v", spec.Secrets[0], spec.SecretFiles[0])
+	if spec.SecretFiles[0].MountPath() != "/var/run/raibit-recovery/credential" {
+		t.Fatalf("credential identity=%+v/%+v", spec.Secrets, spec.SecretFiles)
 	}
 }
