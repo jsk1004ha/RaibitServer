@@ -158,7 +158,7 @@ func testJobSpec(t *testing.T, connection Connection, binding StreamBinding) Iso
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := IsolatedJobSpec{Namespace: "project-1", Image: testImage, OperationID: "operation-1", Attempt: 2, Connection: connection, Steps: []CommandStep{step}, RunAsUser: 65532, CPUMilli: 100, MemoryMiB: 128, EphemeralMiB: 256, Deadline: time.Minute}
+	spec := IsolatedJobSpec{Namespace: "project-1", Image: connection.toolImage, OperationID: connection.operationID, Attempt: connection.attempt, Connection: connection, Steps: []CommandStep{step}, RunAsUser: 65532, CPUMilli: 100, MemoryMiB: 128, EphemeralMiB: 256, Deadline: time.Minute}
 	if connection.Engine() != EngineSQLite {
 		env, envErr := NewSecretEnv("DATABASE_URL", connection.spec.Secret)
 		if envErr != nil {

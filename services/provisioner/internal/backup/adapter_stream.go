@@ -21,6 +21,8 @@ type streamState struct {
 	max       int64
 	bytes     atomic.Int64
 	done      chan struct{}
+	ioMu      sync.Mutex
+	endpoint  sync.Once
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -43,6 +45,8 @@ func (s *streamState) close() error {
 type boundedInput struct{ state *streamState }
 
 func (r boundedInput) Read(buffer []byte) (int, error) {
+	r.state.ioMu.Lock()
+	defer r.state.ioMu.Unlock()
 	used := r.state.bytes.Load()
 	if used >= r.state.max {
 		var probe [1]byte
@@ -66,6 +70,8 @@ func (r boundedInput) Close() error { return r.state.close() }
 type boundedOutput struct{ state *streamState }
 
 func (w boundedOutput) Write(buffer []byte) (int, error) {
+	w.state.ioMu.Lock()
+	defer w.state.ioMu.Unlock()
 	used := w.state.bytes.Load()
 	remaining := w.state.max - used
 	if remaining <= 0 {
@@ -91,17 +97,23 @@ type JobStream struct {
 }
 
 func (s JobStream) Input() io.ReadCloser {
-	if s.direction != restoreDirection {
+	if s.direction != restoreDirection || !s.acquireEndpoint() {
 		return nil
 	}
 	return boundedInput{state: s.state}
 }
 
 func (s JobStream) Output() io.WriteCloser {
-	if s.direction != dumpDirection {
+	if s.direction != dumpDirection || !s.acquireEndpoint() {
 		return nil
 	}
 	return boundedOutput{state: s.state}
+}
+
+func (s JobStream) acquireEndpoint() bool {
+	acquired := false
+	s.state.endpoint.Do(func() { acquired = true })
+	return acquired
 }
 
 func (s JobStream) Close() error { return s.state.close() }
@@ -110,20 +122,21 @@ func (s JobStream) Bytes() int64 { return s.state.bytes.Load() }
 // StreamHandoff owns a stream until Execute succeeds in handing it to a runner.
 // Adapters defer Abort before building jobs, covering every failure-before-run path.
 type StreamHandoff struct {
-	stream JobStream
-	mu     sync.Mutex
-	used   bool
+	stream         JobStream
+	constructorCtx context.Context
+	mu             sync.Mutex
+	used           bool
 }
 
 func NewDumpHandoff(ctx context.Context, output io.WriteCloser, maxBytes int64) (*StreamHandoff, error) {
-	if output == nil || maxBytes < 1 || maxBytes > MaxStoredBytes {
+	if ctx == nil || output == nil || maxBytes < 1 || maxBytes > MaxStoredBytes {
 		return nil, ErrRecoveryStream
 	}
 	return newStreamHandoff(ctx, nil, output, maxBytes, dumpDirection), nil
 }
 
 func NewRestoreHandoff(ctx context.Context, input io.ReadCloser, maxBytes int64) (*StreamHandoff, error) {
-	if input == nil || maxBytes < 1 || maxBytes > MaxStoredBytes {
+	if ctx == nil || input == nil || maxBytes < 1 || maxBytes > MaxStoredBytes {
 		return nil, ErrRecoveryStream
 	}
 	return newStreamHandoff(ctx, input, nil, maxBytes, restoreDirection), nil
@@ -131,15 +144,7 @@ func NewRestoreHandoff(ctx context.Context, input io.ReadCloser, maxBytes int64)
 
 func newStreamHandoff(ctx context.Context, input io.ReadCloser, output io.WriteCloser, maxBytes int64, direction streamDirection) *StreamHandoff {
 	state := &streamState{input: input, output: output, max: maxBytes, done: make(chan struct{})}
-	handoff := &StreamHandoff{stream: JobStream{state: state, direction: direction}}
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = state.close()
-		case <-state.done:
-		}
-	}()
-	return handoff
+	return &StreamHandoff{stream: JobStream{state: state, direction: direction}, constructorCtx: ctx}
 }
 
 func (h *StreamHandoff) Abort() error {
@@ -154,16 +159,28 @@ func (h *StreamHandoff) Abort() error {
 }
 
 func (h *StreamHandoff) Execute(ctx context.Context, job IsolatedJob, runner JobRunner) (receipt JobReceipt, resultErr error) {
-	if runner == nil || !h.claim() || !bindingMatches(job, h.stream.direction) {
-		_ = h.stream.Close()
+	if ctx == nil || runner == nil || !bindingMatches(job, h.stream.direction) {
+		_ = h.Abort()
 		return JobReceipt{}, ErrRecoveryStream
 	}
-	defer func() { resultErr = errors.Join(resultErr, h.stream.Close()) }()
+	if !h.claim() {
+		return JobReceipt{}, ErrRecoveryStream
+	}
+	stopConstructor := context.AfterFunc(h.constructorCtx, func() { _ = h.stream.Close() })
+	stopExecution := context.AfterFunc(ctx, func() { _ = h.stream.Close() })
+	defer func() {
+		stopExecution()
+		stopConstructor()
+		resultErr = errors.Join(resultErr, h.stream.Close())
+	}()
 	execution, err := runner.Run(ctx, job, h.stream)
 	if err != nil {
 		return JobReceipt{}, err
 	}
-	return newJobReceipt(execution.name, h.stream.Bytes())
+	if err := errors.Join(ctx.Err(), h.constructorCtx.Err()); err != nil {
+		return JobReceipt{}, err
+	}
+	return newJobReceipt(execution.name, h.stream.Bytes(), job, h.stream.direction)
 }
 
 func (h *StreamHandoff) claim() bool {
@@ -201,15 +218,18 @@ func NewJobExecution(name string) (JobExecution, error) {
 func (e JobExecution) Name() string { return e.name }
 
 type JobReceipt struct {
-	name  string
-	bytes int64
+	name       string
+	bytes      int64
+	resourceID string
+	fence      FenceIdentity
+	direction  streamDirection
 }
 
-func newJobReceipt(name string, streamedBytes int64) (JobReceipt, error) {
-	if !recoveryPart.MatchString(name) || streamedBytes < 0 || streamedBytes > MaxStoredBytes {
+func newJobReceipt(name string, streamedBytes int64, job IsolatedJob, direction streamDirection) (JobReceipt, error) {
+	if !recoveryPart.MatchString(name) || streamedBytes < 0 || streamedBytes > MaxStoredBytes || job.spec.Connection.spec.ResourceID == "" || job.fence.attempt < 1 || direction < dumpDirection || direction > restoreDirection {
 		return JobReceipt{}, ErrRecoveryJob
 	}
-	return JobReceipt{name: name, bytes: streamedBytes}, nil
+	return JobReceipt{name: name, bytes: streamedBytes, resourceID: job.spec.Connection.ResourceID(), fence: job.fence, direction: direction}, nil
 }
 
 func (r JobReceipt) Name() string { return r.name }

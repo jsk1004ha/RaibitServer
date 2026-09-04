@@ -53,7 +53,8 @@ func recoveryDBWithID(t *testing.T, id string) recoveryFixture {
 }
 
 func recoveryState() string {
-	return `{"providerIdentity":{"namespace":"tenant","name":"db"},"credentialSecretUID":"secret-uid","credentialSecretGeneration":"` + strings.Repeat("a", 43) + `","providerImageProvenance":{"schema":"raibitserver.provider-image/v1","image":"registry.invalid/postgres@sha256:` + strings.Repeat("1", 64) + `","workloadUid":"workload-uid","workloadGeneration":1,"observedAt":"2026-09-03T00:00:00Z"}}`
+	keys := `"DATABASE_URL","PGDATABASE","PGHOST","PGPASSWORD","PGPORT","PGUSER","POSTGRES_URL"`
+	return `{"providerIdentity":{"namespace":"tenant","name":"db"},"providerResult":{"engine":"postgresql","provider":"raibitserver","name":"db","namespace":"tenant","secretName":"db-connection","endpoint":"db.tenant.svc.cluster.local:5432","environmentKeys":[` + keys + `]},"providerConnection":{"secretName":"db-connection","endpoint":"db.tenant.svc.cluster.local:5432","environmentKeys":[` + keys + `]},"credentialSecretUID":"secret-uid","credentialSecretGeneration":"` + strings.Repeat("a", 43) + `","providerImageProvenance":{"schema":"raibitserver.provider-image/v1","image":"registry.invalid/postgres@sha256:` + strings.Repeat("1", 64) + `","workloadUid":"workload-uid","workloadGeneration":1,"observedAt":"2026-09-03T00:00:00Z"}}`
 }
 
 func (f recoveryFixture) exec(t *testing.T, q string, args ...any) {

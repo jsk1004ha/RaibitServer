@@ -48,11 +48,11 @@ func Test_ArtifactLifecycle_when_dump_is_uploaded_then_restored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := NewAttempt(AttemptSpec{OrganizationID: "org-1", ResourceID: "source", BackupID: "backup-1", KeyVersion: "key-1", Number: 1, FirstClaimAt: time.Unix(1, 0)})
+	attempt, err := NewAttempt(AttemptSpec{OrganizationID: "org-1", ResourceID: "source", BackupID: "operation-1", KeyVersion: "key-1", Number: 2, FirstClaimAt: time.Unix(1, 0)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact, err := NewRecoveryArtifact(dumpResult, ArtifactRecord{Attempt: attempt.Spec(), StoredBytes: 24, PlaintextBytes: 4, SHA256: [32]byte{9}})
+	artifact, err := NewRecoveryArtifact(dumpResult, VerifiedArtifact{record: ArtifactRecord{Attempt: attempt.Spec(), StoredBytes: 24, PlaintextBytes: 4, SHA256: [32]byte{9}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func Test_ArtifactLifecycle_when_dump_is_uploaded_then_restored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verification, err := NewVerificationReceipt(restore, testBaseline(t))
+	verification, err := NewVerificationReceipt(restore, testRestoreReceipt(t, target), testBaseline(t))
 	// Then: durable bytes/checksum and observed typed metadata are composed without publication authority.
 	if err != nil || artifact.Record().StoredBytes != 24 || artifact.Record().PlaintextBytes != 4 || verification.Observed().Spec().Schema != "postgres-catalog" {
 		t.Fatalf("artifact=%+v verification=%+v err=%v", artifact.Record(), verification, err)
@@ -75,7 +75,11 @@ func Test_NewRecoveryArtifact_when_Task23_bytes_do_not_match_stream(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := newJobReceipt("job-1", 4)
+	job, err := NewIsolatedJob(testJobSpec(t, source, StreamStdout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := newJobReceipt("job-1", 4, job, dumpDirection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,15 +87,62 @@ func Test_NewRecoveryArtifact_when_Task23_bytes_do_not_match_stream(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := NewAttempt(AttemptSpec{OrganizationID: "org-1", ResourceID: "source", BackupID: "backup-1", KeyVersion: "key-1", Number: 1, FirstClaimAt: time.Unix(1, 0)})
+	attempt, err := NewAttempt(AttemptSpec{OrganizationID: "org-1", ResourceID: "source", BackupID: "operation-1", KeyVersion: "key-1", Number: 2, FirstClaimAt: time.Unix(1, 0)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// When: Task23 reports a different plaintext count.
-	_, err = NewRecoveryArtifact(result, ArtifactRecord{Attempt: attempt.Spec(), StoredBytes: 24, PlaintextBytes: 5, SHA256: [32]byte{9}})
+	_, err = NewRecoveryArtifact(result, VerifiedArtifact{record: ArtifactRecord{Attempt: attempt.Spec(), StoredBytes: 24, PlaintextBytes: 5, SHA256: [32]byte{9}}})
 	// Then: the lifecycle cannot splice unrelated upload metadata.
 	if !errors.Is(err, ErrRecoveryRequest) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func Test_NewRecoveryArtifact_when_Task23_authenticated_readback_succeeds(t *testing.T) {
+	// Given: Task23 uploads and fully authenticates an encrypted artifact by readback.
+	service, _, journal, attempt := fixture(t, "", Options{})
+	candidate := uploadFixture(t, service, journal, attempt, 4)
+	verified, err := service.Readback(readbackContext(t), candidate, &bufferSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := testNetworkConnection(t, attempt.Spec().ResourceID, "source.db.internal", "source-secret", "DATABASE_URL", "16.4")
+	source, err = newConnection(source.Spec(), source.toolImage, attempt.Spec().BackupID, attempt.Spec().Number)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := NewDumpRequest(source, source.Generation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := NewIsolatedJob(testJobSpec(t, source, StreamStdout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := newJobReceipt("job-1", 4, job, dumpDirection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newDumpResult(request, receipt, testFormat(t, EnginePostgreSQL), testBaseline(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// When: the opaque authentication capability is joined to the dump result.
+	artifact, err := NewRecoveryArtifact(result, verified)
+	// Then: its exact Task23 attempt/fence identity survives the boundary.
+	if err != nil || artifact.Record().Attempt != attempt.Spec() {
+		t.Fatalf("attempt=%+v err=%v", artifact.Record().Attempt, err)
+	}
+}
+
+func Test_NewRecoveryArtifact_when_constructor_signature_is_inspected(t *testing.T) {
+	// Given: raw Task23 Candidate/ArtifactRecord values and the recovery constructor type.
+	constructor := reflect.TypeOf(NewRecoveryArtifact)
+	verifiedType := reflect.TypeOf(VerifiedArtifact{})
+	// When / Then: only the opaque verified capability can cross parameter two.
+	if constructor.In(1) != verifiedType || constructor.In(1) == reflect.TypeOf(Candidate{}) || constructor.In(1) == reflect.TypeOf(ArtifactRecord{}) {
+		t.Fatalf("artifact input=%v", constructor.In(1))
 	}
 }
 
@@ -101,7 +152,7 @@ func Test_NewRestoreRequest_when_durable_source_generation_changed(t *testing.T)
 	artifact := testArtifact(t, source)
 	changedSpec := source.Spec()
 	changedSpec.Generation, _ = NewSourceGeneration("resource-incarnation/v1:sha256:" + strings.Repeat("d", 64))
-	changed, err := NewConnection(changedSpec)
+	changed, err := newConnection(changedSpec, source.toolImage, source.operationID, source.attempt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,9 +179,41 @@ func Test_NewVerificationReceipt_when_observation_differs_from_baseline(t *testi
 		t.Fatal(err)
 	}
 	// When: the adapter submits actual observed typed fields.
-	_, err = NewVerificationReceipt(restore, observed)
+	_, err = NewVerificationReceipt(restore, testRestoreReceipt(t, target), observed)
 	// Then: an arbitrary mismatching observation cannot become a receipt.
 	if !errors.Is(err, ErrRecoveryRequest) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func Test_NewVerificationReceipt_when_target_job_did_not_run(t *testing.T) {
+	// Given: a valid restore request and matching observed metadata but no completed target job.
+	source := testNetworkConnection(t, "source", "source.db.internal", "source-secret", "DATABASE_URL", "16.4")
+	target := testNetworkConnection(t, "target", "target.db.internal", "target-secret", "DATABASE_URL", "16.7")
+	artifact := testArtifact(t, source)
+	restore, err := NewRestoreRequest(source, target, artifact, NewMajorVersionCompatibility(artifact.Format()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// When: a no-run adapter attempts to mint verification.
+	_, err = NewVerificationReceipt(restore, JobReceipt{}, testBaseline(t))
+	// Then: missing target execution proof is rejected.
+	if !errors.Is(err, ErrRecoveryRequest) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func Test_NewVerificationReceipt_when_completed_job_is_from_another_attempt(t *testing.T) {
+	source := testNetworkConnection(t, "source", "source.db.internal", "source-secret", "DATABASE_URL", "16.4")
+	target := testNetworkConnection(t, "target", "target.db.internal", "target-secret", "DATABASE_URL", "16.7")
+	artifact := testArtifact(t, source)
+	restore, err := NewRestoreRequest(source, target, artifact, NewMajorVersionCompatibility(artifact.Format()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := testRestoreReceipt(t, target)
+	receipt.fence.attempt++
+	if _, err = NewVerificationReceipt(restore, receipt, testBaseline(t)); !errors.Is(err, ErrRecoveryRequest) {
+		t.Fatalf("receipt from another attempt accepted: %v", err)
 	}
 }

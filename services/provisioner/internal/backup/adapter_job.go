@@ -158,7 +158,7 @@ type IsolatedJob struct {
 }
 
 func NewIsolatedJob(spec IsolatedJobSpec) (IsolatedJob, error) {
-	if !recoveryPart.MatchString(spec.Namespace) || !digestImagePattern.MatchString(spec.Image) || !recoveryPart.MatchString(spec.OperationID) || spec.Attempt < 1 || spec.Connection.spec.ResourceID == "" || spec.RunAsUser < 1 || spec.CPUMilli < 1 || spec.CPUMilli > 4000 || spec.MemoryMiB < 16 || spec.MemoryMiB > 8192 || spec.EphemeralMiB < 16 || spec.EphemeralMiB > 16384 || spec.Deadline < time.Second || spec.Deadline > MaxDuration || len(spec.Steps) == 0 || len(spec.Steps) > 8 || len(spec.Secrets) > 16 || len(spec.SecretFiles) > 8 {
+	if !recoveryPart.MatchString(spec.Namespace) || spec.Image != spec.Connection.toolImage || spec.OperationID != spec.Connection.operationID || spec.Attempt != spec.Connection.attempt || spec.Connection.spec.ResourceID == "" || spec.RunAsUser < 1 || spec.CPUMilli < 1 || spec.CPUMilli > 4000 || spec.MemoryMiB < 16 || spec.MemoryMiB > 8192 || spec.EphemeralMiB < 16 || spec.EphemeralMiB > 16384 || spec.Deadline < time.Second || spec.Deadline > MaxDuration || len(spec.Steps) == 0 || len(spec.Steps) > 8 || len(spec.Secrets) > 16 || len(spec.SecretFiles) > 8 {
 		return IsolatedJob{}, ErrRecoveryJob
 	}
 	streamBindings := 0
@@ -197,7 +197,7 @@ func validJobSecrets(spec IsolatedJobSpec) bool {
 		if _, exists := seen["env:"+secret.name]; exists {
 			return false
 		}
-		boundCredential = boundCredential || secret.ref.sameObject(spec.Connection.spec.Secret)
+		boundCredential = boundCredential || secret.ref.sameRef(spec.Connection.spec.Secret)
 		seen["env:"+secret.name] = struct{}{}
 	}
 	for _, secret := range spec.SecretFiles {
@@ -207,7 +207,7 @@ func validJobSecrets(spec IsolatedJobSpec) bool {
 		if _, exists := seen["file:"+secret.mountPath]; exists {
 			return false
 		}
-		boundCredential = boundCredential || secret.ref.sameObject(spec.Connection.spec.Secret)
+		boundCredential = boundCredential || secret.ref.sameRef(spec.Connection.spec.Secret)
 		seen["file:"+secret.mountPath] = struct{}{}
 	}
 	return boundCredential

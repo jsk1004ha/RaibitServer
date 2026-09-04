@@ -218,6 +218,13 @@ provisioner:
     minio: ""
     qdrant: ""
     nats: ""
+  recoveryToolImages:
+    postgresql: ""
+    mysql: ""
+    mariadb: ""
+    mongodb: ""
+    redis: ""
+    valkey: ""
 observability:
   logIngester:
     enabled: false

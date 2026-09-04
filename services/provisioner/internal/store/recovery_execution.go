@@ -4,11 +4,27 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"net"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/raibitserver/provisioner/internal/providercontract"
 )
+
+type RecoveryConnectionProjection struct {
+	Host, Database, User, SecretNamespace, SecretName, SecretKey, CredentialUID, CredentialGeneration string
+	Port                                                                                              uint16
+	Index                                                                                             *uint16
+}
 
 type RecoveryResourceMetadata struct {
 	ID, ProjectID, Engine, Provider, Version, Namespace, Name, SecretName, SecretUID, SecretGeneration, Image, WorkloadUID string
 	WorkloadGeneration                                                                                                     int64
+	Generation                                                                                                             string
+	Connection                                                                                                             RecoveryConnectionProjection
 }
 
 type RecoveryExecution struct {
@@ -50,8 +66,62 @@ func recoveryResourceMetadata(r *Resource) (RecoveryResourceMetadata, error) {
 	if json.Unmarshal(state, &p) != nil {
 		return RecoveryResourceMetadata{}, ErrRecoverySource
 	}
-	if _, err = recoverySourceGeneration(r); err != nil {
+	generation, err := recoverySourceGeneration(r)
+	if err != nil {
 		return RecoveryResourceMetadata{}, err
 	}
-	return RecoveryResourceMetadata{r.ID, r.ProjectID, r.Engine, r.Provider, r.Version, p.ProviderIdentity.Namespace, p.ProviderIdentity.Name, r.ConnectionSecretName, p.CredentialUID, p.CredentialGeneration, p.ProviderImage.Image, p.ProviderImage.WorkloadUID, p.ProviderImage.WorkloadGeneration}, nil
+	connection, err := recoveryConnection(r, p)
+	if err != nil {
+		return RecoveryResourceMetadata{}, err
+	}
+	return RecoveryResourceMetadata{ID: r.ID, ProjectID: r.ProjectID, Engine: r.Engine, Provider: r.Provider, Version: r.Version, Namespace: p.ProviderIdentity.Namespace, Name: p.ProviderIdentity.Name, SecretName: r.ConnectionSecretName, SecretUID: p.CredentialUID, SecretGeneration: p.CredentialGeneration, Image: p.ProviderImage.Image, WorkloadUID: p.ProviderImage.WorkloadUID, WorkloadGeneration: p.ProviderImage.WorkloadGeneration, Generation: generation, Connection: connection}, nil
+}
+
+func recoveryConnection(r *Resource, provenance recoveryProvenance) (RecoveryConnectionProjection, error) {
+	if strings.EqualFold(r.Engine, "sqlite") {
+		return RecoveryConnectionProjection{}, fmt.Errorf("%w: SQLite recovery volume authority is not configured", ErrRecoverySource)
+	}
+	contract, err := providercontract.RecoveryFor(r.Engine, provenance.ProviderIdentity.Name, provenance.ProviderIdentity.Namespace, r.Name, r.DesiredSpec)
+	if err != nil {
+		return RecoveryConnectionProjection{}, ErrRecoverySource
+	}
+	state, ok := r.DesiredState["providerConnection"].(map[string]any)
+	if !ok {
+		return RecoveryConnectionProjection{}, ErrRecoverySource
+	}
+	keys, ok := stringSlice(state["environmentKeys"])
+	sort.Strings(keys)
+	endpoint := strings.TrimSpace(stringMapValue(state, "endpoint"))
+	secret := strings.TrimSpace(stringMapValue(state, "secretName"))
+	wantEndpoint := net.JoinHostPort(contract.Host, strconv.Itoa(int(contract.Port)))
+	providerResult, resultOK := r.DesiredState["providerResult"].(map[string]any)
+	resultKeys, keysOK := stringSlice(providerResult["environmentKeys"])
+	sort.Strings(resultKeys)
+	if !ok || !resultOK || !keysOK || endpoint != wantEndpoint || secret != r.ConnectionSecretName || secret != provenance.ProviderIdentity.Name+"-connection" || !slices.Equal(keys, contract.EnvironmentKeys) || !slices.Equal(resultKeys, contract.EnvironmentKeys) || stringMapValue(providerResult, "engine") != strings.ToLower(r.Engine) || stringMapValue(providerResult, "provider") != r.Provider || stringMapValue(providerResult, "endpoint") != wantEndpoint || stringMapValue(providerResult, "namespace") != provenance.ProviderIdentity.Namespace || stringMapValue(providerResult, "name") != provenance.ProviderIdentity.Name || stringMapValue(providerResult, "secretName") != secret || provenance.CredentialUID == "" || provenance.CredentialGeneration == "" {
+		return RecoveryConnectionProjection{}, ErrRecoverySource
+	}
+	return RecoveryConnectionProjection{Host: contract.Host, Port: contract.Port, Database: contract.Database, User: contract.User, Index: contract.Index, SecretNamespace: provenance.ProviderIdentity.Namespace, SecretName: secret, SecretKey: contract.CredentialKey, CredentialUID: provenance.CredentialUID, CredentialGeneration: provenance.CredentialGeneration}, nil
+}
+
+func stringMapValue(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return value
+}
+
+func stringSlice(value any) ([]string, bool) {
+	values, ok := value.([]any)
+	if !ok {
+		if direct, directOK := value.([]string); directOK {
+			return slices.Clone(direct), true
+		}
+		return nil, false
+	}
+	result := make([]string, len(values))
+	for i, value := range values {
+		result[i], ok = value.(string)
+		if !ok {
+			return nil, false
+		}
+	}
+	return result, true
 }

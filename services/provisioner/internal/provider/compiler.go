@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/raibitserver/provisioner/internal/providercontract"
 	"github.com/raibitserver/provisioner/internal/store"
 )
 
@@ -91,6 +92,14 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 		return nil, fmt.Errorf("provider username %q is reserved by the %s image", username, engine)
 	}
 	host := name + "." + namespace + ".svc.cluster.local"
+	if engine == "postgresql" || engine == "mysql" || engine == "mariadb" || engine == "mongodb" || engine == "redis" || engine == "valkey" {
+		recovery, recoveryErr := providercontract.RecoveryFor(engine, name, namespace, resource.Name, resource.DesiredSpec)
+		if recoveryErr != nil {
+			return nil, recoveryErr
+		}
+		database, username = recovery.Database, recovery.User
+		host = recovery.Host
+	}
 	port, data, connectionKeys, container := providerContract(engine, host, target, username, password, secondary, secretName)
 	endpoint := fmt.Sprintf("%s:%d", host, port)
 	labels := map[string]any{

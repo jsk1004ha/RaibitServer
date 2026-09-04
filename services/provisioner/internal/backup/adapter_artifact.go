@@ -71,7 +71,7 @@ type DumpResult struct {
 }
 
 func newDumpResult(request DumpRequest, receipt JobReceipt, format EngineFormat, baseline VerificationMetadata) (DumpResult, error) {
-	if request.source.spec.ResourceID == "" || receipt.name == "" || request.source.Engine() != format.spec.Engine || baseline.spec.Schema == "" {
+	if request.source.spec.ResourceID == "" || receipt.name == "" || receipt.direction != dumpDirection || receipt.resourceID != request.source.ResourceID() || receipt.fence.operationID != request.source.operationID || receipt.fence.attempt != request.source.attempt || request.source.Engine() != format.spec.Engine || baseline.spec.Schema == "" {
 		return DumpResult{}, ErrRecoveryRequest
 	}
 	return DumpResult{request: request, receipt: receipt, format: format, baseline: baseline}, nil
@@ -87,9 +87,10 @@ type RecoveryArtifact struct {
 	record ArtifactRecord
 }
 
-func NewRecoveryArtifact(dump DumpResult, record ArtifactRecord) (RecoveryArtifact, error) {
+func NewRecoveryArtifact(dump DumpResult, verified VerifiedArtifact) (RecoveryArtifact, error) {
+	record := verified.Record()
 	source := dump.request.source
-	if source.spec.ResourceID == "" || record.Attempt.OrganizationID != source.spec.OrganizationID || record.Attempt.ResourceID != source.ResourceID() || record.PlaintextBytes != dump.receipt.Bytes() || record.StoredBytes < 1 || record.StoredBytes > MaxStoredBytes || record.PlaintextBytes < 1 || record.PlaintextBytes > MaxStoredBytes || record.SHA256 == [32]byte{} {
+	if source.spec.ResourceID == "" || record.Attempt.OrganizationID != source.spec.OrganizationID || record.Attempt.ResourceID != source.ResourceID() || record.Attempt.BackupID != dump.receipt.fence.operationID || record.Attempt.Number != dump.receipt.fence.attempt || record.PlaintextBytes != dump.receipt.Bytes() || record.StoredBytes < 1 || record.StoredBytes > MaxStoredBytes || record.PlaintextBytes < 1 || record.PlaintextBytes > MaxStoredBytes || record.SHA256 == [32]byte{} {
 		return RecoveryArtifact{}, ErrRecoveryRequest
 	}
 	if _, err := NewAttempt(record.Attempt); err != nil {
@@ -131,7 +132,7 @@ type RestoreRequest struct {
 }
 
 func NewRestoreRequest(source, target Connection, artifact RecoveryArtifact, policy VersionCompatibility) (RestoreRequest, error) {
-	if source.spec.ResourceID == "" || target.spec.ResourceID == "" || policy == nil || artifact.Source().ResourceID() != source.ResourceID() || artifact.Source().Generation() != source.Generation() || source.spec.OrganizationID != target.spec.OrganizationID || source.spec.ProjectID != target.spec.ProjectID || source.Engine() != target.Engine() || source.ResourceID() == target.ResourceID() || source.spec.Provenance.spec.UID == target.spec.Provenance.spec.UID || !policy.compatible(source.Version(), target.Version(), artifact.Format()) || endpointsOverlap(source.Endpoint(), target.Endpoint()) {
+	if source.spec.ResourceID == "" || target.spec.ResourceID == "" || policy == nil || artifact.Source().ResourceID() != source.ResourceID() || artifact.Source().Generation() != source.Generation() || source.operationID != target.operationID || source.attempt != target.attempt || source.spec.OrganizationID != target.spec.OrganizationID || source.spec.ProjectID != target.spec.ProjectID || source.Engine() != target.Engine() || source.ResourceID() == target.ResourceID() || source.spec.Provenance.spec.UID == target.spec.Provenance.spec.UID || !policy.compatible(source.Version(), target.Version(), artifact.Format()) || endpointsOverlap(source.Endpoint(), target.Endpoint()) {
 		return RestoreRequest{}, ErrRecoveryRequest
 	}
 	if source.Engine() != EngineSQLite && source.spec.Secret.sameObject(target.spec.Secret) {
@@ -170,9 +171,9 @@ type VerificationReceipt struct {
 	observed VerificationMetadata
 }
 
-func NewVerificationReceipt(request RestoreRequest, observed VerificationMetadata) (VerificationReceipt, error) {
+func NewVerificationReceipt(request RestoreRequest, targetJob JobReceipt, observed VerificationMetadata) (VerificationReceipt, error) {
 	want := request.artifact.dump.baseline
-	if observed.spec.Schema == "" || observed.spec.Schema != want.spec.Schema || observed.spec.Version != want.spec.Version || !slices.Equal(observed.spec.Fields, want.spec.Fields) {
+	if targetJob.direction != restoreDirection || targetJob.resourceID != request.target.ResourceID() || targetJob.fence.operationID != request.target.operationID || targetJob.fence.attempt != request.target.attempt || observed.spec.Schema == "" || observed.spec.Schema != want.spec.Schema || observed.spec.Version != want.spec.Version || !slices.Equal(observed.spec.Fields, want.spec.Fields) {
 		return VerificationReceipt{}, ErrRecoveryRequest
 	}
 	return VerificationReceipt{target: request.target, artifact: request.artifact, observed: observed}, nil

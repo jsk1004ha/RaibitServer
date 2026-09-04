@@ -31,7 +31,7 @@ func testNetworkConnection(t *testing.T, resource, host, secretName, secretKey, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := NewConnection(ConnectionSpec{OrganizationID: "org-1", ProjectID: "project-1", ResourceID: resource, Engine: EngineVersion{Engine: EnginePostgreSQL, Version: version}, Generation: generation, Provenance: provenance, Endpoint: endpoint, Secret: secret})
+	connection, err := newConnection(ConnectionSpec{OrganizationID: "org-1", ProjectID: "project-1", ResourceID: resource, Engine: EngineVersion{Engine: EnginePostgreSQL, Version: version}, Generation: generation, Provenance: provenance, Endpoint: endpoint, Secret: secret}, testImage, "operation-1", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func testSQLiteConnection(t *testing.T, resource, file string) Connection {
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := NewConnection(ConnectionSpec{OrganizationID: "org-1", ProjectID: "project-1", ResourceID: resource, Engine: EngineVersion{Engine: EngineSQLite, Version: "3.46.1"}, Generation: generation, Provenance: provenance, Endpoint: endpoint})
+	connection, err := newConnection(ConnectionSpec{OrganizationID: "org-1", ProjectID: "project-1", ResourceID: resource, Engine: EngineVersion{Engine: EngineSQLite, Version: "3.46.1"}, Generation: generation, Provenance: provenance, Endpoint: endpoint}, testImage, "operation-1", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,11 @@ func testArtifact(t *testing.T, source Connection) RecoveryArtifact {
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := newJobReceipt("dump-job", 4)
+	job, err := NewIsolatedJob(testJobSpec(t, source, StreamStdout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := newJobReceipt("dump-job", 4, job, dumpDirection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,15 +95,28 @@ func testArtifact(t *testing.T, source Connection) RecoveryArtifact {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := NewAttempt(AttemptSpec{OrganizationID: "org-1", ResourceID: source.ResourceID(), BackupID: "backup-1", KeyVersion: "key-1", Number: 1, FirstClaimAt: time.Unix(1, 0)})
+	attempt, err := NewAttempt(AttemptSpec{OrganizationID: "org-1", ResourceID: source.ResourceID(), BackupID: "operation-1", KeyVersion: "key-1", Number: 2, FirstClaimAt: time.Unix(1, 0)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact, err := NewRecoveryArtifact(result, ArtifactRecord{Attempt: attempt.Spec(), StoredBytes: 20, PlaintextBytes: 4, SHA256: [32]byte{1}})
+	artifact, err := NewRecoveryArtifact(result, VerifiedArtifact{record: ArtifactRecord{Attempt: attempt.Spec(), StoredBytes: 20, PlaintextBytes: 4, SHA256: [32]byte{1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return artifact
+}
+
+func testRestoreReceipt(t *testing.T, target Connection) JobReceipt {
+	t.Helper()
+	job, err := NewIsolatedJob(testJobSpec(t, target, StreamStdin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := newJobReceipt("restore-job", 4, job, restoreDirection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipt
 }
 
 type writeRunner struct{ payload string }

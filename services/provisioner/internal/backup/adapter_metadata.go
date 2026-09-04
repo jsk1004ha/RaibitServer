@@ -62,6 +62,9 @@ func (r SecretRef) Key() string       { return r.key }
 func (r SecretRef) sameObject(other SecretRef) bool {
 	return r.namespace == other.namespace && r.name == other.name
 }
+func (r SecretRef) sameRef(other SecretRef) bool {
+	return r.sameObject(other) && r.key == other.key
+}
 
 type SourceGeneration struct{ value string }
 
@@ -139,10 +142,14 @@ type ConnectionSpec struct {
 	Secret                                SecretRef
 }
 
-type Connection struct{ spec ConnectionSpec }
+type Connection struct {
+	spec                   ConnectionSpec
+	toolImage, operationID string
+	attempt                int
+}
 
-func NewConnection(spec ConnectionSpec) (Connection, error) {
-	if !recoveryPart.MatchString(spec.OrganizationID) || !recoveryPart.MatchString(spec.ProjectID) || !recoveryPart.MatchString(spec.ResourceID) || !supportedEngine(spec.Engine.Engine) || !recoveryVersion.MatchString(spec.Engine.Version) || spec.Generation.value == "" || spec.Provenance.spec.Name == "" || spec.Provenance.spec.Namespace != spec.ProjectID {
+func newConnection(spec ConnectionSpec, toolImage, operationID string, attempt int) (Connection, error) {
+	if !recoveryPart.MatchString(spec.OrganizationID) || !recoveryPart.MatchString(spec.ProjectID) || !recoveryPart.MatchString(spec.ResourceID) || !supportedEngine(spec.Engine.Engine) || !recoveryVersion.MatchString(spec.Engine.Version) || spec.Generation.value == "" || spec.Provenance.spec.Name == "" || !digestImagePattern.MatchString(toolImage) || !recoveryPart.MatchString(operationID) || attempt < 1 {
 		return Connection{}, ErrRecoveryRequest
 	}
 	switch endpoint := spec.Endpoint.(type) {
@@ -158,7 +165,7 @@ func NewConnection(spec ConnectionSpec) (Connection, error) {
 	default:
 		return Connection{}, ErrRecoveryRequest
 	}
-	return Connection{spec: spec}, nil
+	return Connection{spec: spec, toolImage: toolImage, operationID: operationID, attempt: attempt}, nil
 }
 
 func (c Connection) Spec() ConnectionSpec         { return c.spec }

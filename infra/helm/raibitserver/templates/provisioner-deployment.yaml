@@ -6,6 +6,14 @@
 {{- end }}
 {{- end }}
 {{- end }}
+{{- if .Values.provisioner.backups.enabled }}
+{{- range $engine := list "postgresql" "mysql" "mariadb" "mongodb" "redis" "valkey" }}
+{{- $toolImage := default "" (index $.Values.provisioner.recoveryToolImages $engine) }}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$" $toolImage) }}
+{{- fail (printf "recovery tool image %s requires a valid sha256 digest-pinned reference" $engine) }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -75,6 +83,18 @@ spec:
               value: {{ .Values.provisioner.providerImages.qdrant | quote }}
             - name: RAIBITSERVER_PROVIDER_NATS_IMAGE
               value: {{ .Values.provisioner.providerImages.nats | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_POSTGRESQL_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.postgresql | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_MYSQL_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.mysql | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_MARIADB_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.mariadb | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_MONGODB_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.mongodb | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_REDIS_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.redis | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_VALKEY_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.valkey | quote }}
 {{- if .Values.provisioner.backups.enabled }}
             - name: RAIBITSERVER_PROVISIONER_BACKUP_ENABLED
               value: "true"
