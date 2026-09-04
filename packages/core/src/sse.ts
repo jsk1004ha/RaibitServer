@@ -14,6 +14,17 @@ export type ServiceLogResumeCursor = {
   readonly logCursorToken: string | null;
 };
 
+export type DeploymentActivityResumeScope = {
+  readonly projectId: string;
+  readonly deploymentId: string;
+};
+
+export type DeploymentActivityResumeCursor = {
+  readonly deploymentCursor: string | null;
+  readonly logCursorToken: string | null;
+  readonly eventCursorToken: string | null;
+};
+
 type ResumeTokenPayload = {
   readonly v: 1;
   readonly p: string;
@@ -22,9 +33,19 @@ type ResumeTokenPayload = {
   readonly lc: string | null;
 };
 
+type DeploymentResumeTokenPayload = {
+  readonly v: 1;
+  readonly p: string;
+  readonly d: string;
+  readonly dc: string | null;
+  readonly lc: string | null;
+  readonly ec: string | null;
+};
+
 const MAX_RESUME_TOKEN_LENGTH = 2_048;
 const MAX_SCOPE_LENGTH = 512;
 const MAX_SERVICE_CURSOR_LENGTH = 1_024;
+const MAX_DEPLOYMENT_RESUME_TOKEN_LENGTH = 4_096;
 
 export class ServiceLogResumeTokenError extends Error {
   readonly name = 'ServiceLogResumeTokenError';
@@ -32,6 +53,16 @@ export class ServiceLogResumeTokenError extends Error {
 
   constructor() {
     super('invalid service log resume token');
+  }
+}
+
+export class DeploymentActivityResumeTokenError extends Error {
+  readonly name = 'DeploymentActivityResumeTokenError';
+  readonly code = 'INVALID_DEPLOYMENT_RESUME_CURSOR';
+  readonly statusCode = 400;
+
+  constructor() {
+    super('invalid deployment activity resume cursor');
   }
 }
 
@@ -63,6 +94,48 @@ export function decodeServiceLogResumeToken(value: unknown, scope: ServiceLogRes
   } catch (error) {
     if (error instanceof ServiceLogResumeTokenError) throw error;
     throw new ServiceLogResumeTokenError();
+  }
+}
+
+export function encodeDeploymentActivityResumeToken(scope: DeploymentActivityResumeScope, cursors: { readonly deploymentCursor?: unknown; readonly logCursor?: unknown; readonly eventCursor?: unknown }): string {
+  try {
+    const deploymentCursor = boundedOptionalString(cursors.deploymentCursor, MAX_SERVICE_CURSOR_LENGTH);
+    const logCursor = boundedOptionalString(cursors.logCursor, 1_024);
+    const eventCursor = boundedOptionalString(cursors.eventCursor, 1_024);
+    if (logCursor !== null) decodeKeysetCursor(logCursor);
+    if (eventCursor !== null) decodeKeysetCursor(eventCursor);
+    const payload: DeploymentResumeTokenPayload = {
+      v: 1,
+      p: boundedRequiredString(scope.projectId, MAX_SCOPE_LENGTH),
+      d: boundedRequiredString(scope.deploymentId, MAX_SCOPE_LENGTH),
+      dc: deploymentCursor,
+      lc: logCursor,
+      ec: eventCursor,
+    };
+    const token = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+    if (token.length > MAX_DEPLOYMENT_RESUME_TOKEN_LENGTH) throw new DeploymentActivityResumeTokenError();
+    return token;
+  } catch (error) {
+    if (error instanceof DeploymentActivityResumeTokenError) throw error;
+    throw new DeploymentActivityResumeTokenError();
+  }
+}
+
+export function decodeDeploymentActivityResumeToken(value: unknown, scope: DeploymentActivityResumeScope): DeploymentActivityResumeCursor {
+  if (typeof value !== 'string' || !value || value.length > MAX_DEPLOYMENT_RESUME_TOKEN_LENGTH || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new DeploymentActivityResumeTokenError();
+  }
+  try {
+    const decoded: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+    if (!isDeploymentResumeTokenPayload(decoded) || decoded.p !== scope.projectId || decoded.d !== scope.deploymentId) {
+      throw new DeploymentActivityResumeTokenError();
+    }
+    if (decoded.lc !== null) decodeKeysetCursor(decoded.lc);
+    if (decoded.ec !== null) decodeKeysetCursor(decoded.ec);
+    return { deploymentCursor: decoded.dc, logCursorToken: decoded.lc, eventCursorToken: decoded.ec };
+  } catch (error) {
+    if (error instanceof DeploymentActivityResumeTokenError) throw error;
+    throw new DeploymentActivityResumeTokenError();
   }
 }
 
@@ -221,6 +294,18 @@ function isResumeTokenPayload(value: unknown): value is ResumeTokenPayload {
     && typeof serviceId === 'string' && serviceId.length > 0 && serviceId.length <= MAX_SCOPE_LENGTH
     && (serviceCursor === null || (typeof serviceCursor === 'string' && serviceCursor.length > 0 && serviceCursor.length <= MAX_SERVICE_CURSOR_LENGTH))
     && (logCursor === null || (typeof logCursor === 'string' && logCursor.length > 0 && logCursor.length <= 1_024));
+}
+
+function isDeploymentResumeTokenPayload(value: unknown): value is DeploymentResumeTokenPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  if (Object.keys(value).sort().join(',') !== 'd,dc,ec,lc,p,v') return false;
+  const stringOrNull = (candidate: unknown, maximum: number) => candidate === null || (typeof candidate === 'string' && candidate.length > 0 && candidate.length <= maximum);
+  return Reflect.get(value, 'v') === 1
+    && stringOrNull(Reflect.get(value, 'p'), MAX_SCOPE_LENGTH) && Reflect.get(value, 'p') !== null
+    && stringOrNull(Reflect.get(value, 'd'), MAX_SCOPE_LENGTH) && Reflect.get(value, 'd') !== null
+    && stringOrNull(Reflect.get(value, 'dc'), MAX_SERVICE_CURSOR_LENGTH)
+    && stringOrNull(Reflect.get(value, 'lc'), 1_024)
+    && stringOrNull(Reflect.get(value, 'ec'), 1_024);
 }
 
 function boundedRequiredString(value: unknown, maximum: number): string {

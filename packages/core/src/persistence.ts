@@ -199,6 +199,7 @@ export class InMemoryControlPlaneRepository {
     const deployment = this.store.deployments.get(deploymentId);
     return this.runQuotaMutation(input.actorUserId, 'deployment:create', deploymentQuotaRequirements(deployment?.deploymentType), () => this.store.rollbackDeployment(deploymentId, input));
   }
+  async requestPreviewCleanup(deploymentId: string, input: Record<string, any> = {}) { return this.store.requestPreviewCleanup(deploymentId, input); }
   async createSecret(input: Record<string, any>) { return this.store.createSecret(input); }
   async createDeploymentOperation(input: DeploymentOperation) {
     const service = this.store.services.get(input.serviceId);
@@ -208,7 +209,7 @@ export class InMemoryControlPlaneRepository {
       const workflowJob = [...this.store.workflowJobs.values()].find(row => row.targetId === existing.id && row.targetType === 'deployment');
       if (!workflowJob) throw new DeploymentOperationError('LINEAGE_JOB_MISSING');
       assertOperationReplay(input, workflowJob.payload);
-      return deepClone({ deployment: existing, workflowJob });
+      return deepClone({ deployment: existing, workflowJob, operationId: workflowJob.id, status: existing.status, streamHref: `/deployments/${existing.id}/stream` });
     }
     const rows = [...this.store.deployments.values()].filter(row => row.serviceId === input.serviceId);
     const source = input.operation === 'retry' ? this.store.deployments.get(input.sourceDeploymentId || '') : rows.filter(eligibleDeploymentSource).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || b.id.localeCompare(a.id))[0];
@@ -221,7 +222,7 @@ export class InMemoryControlPlaneRepository {
     return this.runQuotaMutation(input.requestedByUserId === 'system' ? null : input.requestedByUserId, 'deployment:create', deploymentQuotaRequirements(candidate.deploymentType), () => {
       const deployment = this.store.createDeployment(candidate);
       const workflowJob = this.store.enqueueWorkflowJob(successorWorkflow(candidate, input));
-      return { deployment, workflowJob };
+      return { deployment, workflowJob, operationId: workflowJob.id, status: deployment.status, streamHref: `/deployments/${deployment.id}/stream` };
     });
   }
   async createDeploymentWorkflow(input: Record<string, any>) {
@@ -1109,6 +1110,33 @@ export class PrismaControlPlaneRepository {
     });
   }
 
+  async requestPreviewCleanup(deploymentId: string, input: Record<string, any> = {}) {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const deployment = await tx.deployment.findUnique({ where: { id: deploymentId } });
+      if (!deployment) throw notFoundError(`deployment not found: ${deploymentId}`);
+      if (String(deployment.deploymentType).toLowerCase() !== 'preview' || !deployment.previewLineageId) throw conflictError('PREVIEW_CLEANUP_UNAVAILABLE');
+      const lineageRow = await tx.previewLineage.findUnique({ where: { id: deployment.previewLineageId } });
+      if (!lineageRow || lineageRow.projectId !== deployment.projectId || lineageRow.serviceId !== deployment.serviceId) throw conflictError('PREVIEW_CLEANUP_UNAVAILABLE');
+      const lineage = previewLineageRecord(lineageRow);
+      const operationId = `preview-cleanup:${lineage.id}`;
+      const attempts = await tx.deployment.findMany({ where: { previewLineageId: lineage.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+      const deploymentIds = attempts.map((candidate: Record<string, any>) => candidate.id);
+      const status = attempts.every((candidate: Record<string, any>) => normalizeDeploymentStatus(candidate.status) === 'CLEANED_UP') ? 'CLEANED_UP' : 'PREVIEW_CLEANUP_REQUESTED';
+      if (lineage.state !== 'CLOSED') {
+        const closed = { ...lineage, state: 'CLOSED' as const, version: lineage.version + 1, candidateDeploymentId: null, candidateGeneration: null, currentDeploymentId: null, currentGeneration: null };
+        await tx.previewLineage.update({ where: { id: lineage.id }, data: { ...previewLineageData(closed), routeIntent: previewCloseIntent(closed), reconcileToken: null, reconcileWorker: null, reconcileLeaseUntil: null } });
+        await tx.deployment.updateMany({ where: { previewLineageId: lineage.id, status: { notIn: ['CLEANED_UP', 'cleaned_up'] } }, data: { status: 'PREVIEW_CLEANUP_REQUESTED' } });
+        await tx.workflowJob.updateMany({ where: { status: { in: ['queued', 'running'] }, OR: [{ targetId: lineage.id }, { targetId: { in: deploymentIds } }] }, data: { status: 'cancelled', lockedBy: null, lockedAt: null } });
+        for (const attempt of attempts) if (normalizeDeploymentStatus(attempt.status) !== 'CLEANED_UP') {
+          const eventId = stableId('devevt', attempt.id, operationId);
+          await tx.deploymentEvent.upsert({ where: { id: eventId }, update: {}, create: { id: eventId, deploymentId: attempt.id, type: 'preview.cleanup.requested', message: 'Preview cleanup requested', metadata: { operationId, lineageId: lineage.id } } });
+        }
+        await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'preview:cleanup-requested', targetType: 'preview-lineage', targetId: lineage.id, metadata: { operationId, deploymentIds } } });
+      }
+      return { operationId, status, streamHref: `/deployments/${deploymentId}/stream`, lineageId: lineage.id, deploymentIds };
+    });
+  }
+
   async createDeploymentWorkflow(input: Record<string, any>) {
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const requestedDeployment = input.deployment || input;
@@ -1152,7 +1180,7 @@ export class PrismaControlPlaneRepository {
         const workflowJob = await tx.workflowJob.findFirst({ where: { targetId: existing.id, targetType: 'deployment' } });
         if (!workflowJob) throw new DeploymentOperationError('LINEAGE_JOB_MISSING');
         assertOperationReplay(input, workflowJob.payload);
-        return { deployment: existing, workflowJob };
+        return { deployment: existing, workflowJob, operationId: workflowJob.id, status: existing.status, streamHref: `/deployments/${existing.id}/stream` };
       }
       const source = input.operation === 'retry'
         ? await tx.deployment.findUnique({ where: { id: input.sourceDeploymentId || '' } })
@@ -1178,7 +1206,7 @@ export class PrismaControlPlaneRepository {
       const workflowJob = await tx.workflowJob.create({ data: workflowJobData(successorWorkflow(candidate, input)) });
       if (candidate.previewLineageId) await tx.previewLineage.update({ where: { id: candidate.previewLineageId }, data: { candidateDeploymentId: deployment.id, candidateGeneration: candidate.previewGeneration } });
       await tx.deploymentEvent.create({ data: { deploymentId: deployment.id, type: 'deployment.queued', message: 'Immutable deployment operation queued', metadata: { sourceDeploymentId: candidate.sourceDeploymentId } } });
-      return { deployment, workflowJob };
+      return { deployment, workflowJob, operationId: workflowJob.id, status: deployment.status, streamHref: `/deployments/${deployment.id}/stream` };
     }, { isolationLevel: 'ReadCommitted', maxWait: 30000, timeout: 30000 });
   }
 

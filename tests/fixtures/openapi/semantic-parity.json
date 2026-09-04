@@ -11,6 +11,7 @@
     "deployments-status": {"status":"BUILDING"},
     "deployments-status-post": {"status":"BUILDING"},
     "deployments-rollback": {"confirmed":true},
+    "deployments-preview-cleanup": {"confirmed":true},
     "resources-create": {"name":"database","engine":"postgresql"},
     "resources-attach": {"serviceId":"service /+?"},
     "resources-provision": {"intent":"preview-plan"},

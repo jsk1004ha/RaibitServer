@@ -19,7 +19,7 @@ import { consumeGitHubOAuthIdentity, startGitHubOAuth } from './github-oauth-flo
 import { createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, resolveGitHubAppInstallationSelection, verifyGitHubAppInstallationState } from './github-app.ts';
 import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
 import { publicSitesFromSnapshot } from './public-sites.ts';
-import { decodeServiceLogResumeToken, encodeServiceLogResumeToken } from './sse.ts';
+import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, encodeDeploymentActivityResumeToken, encodeServiceLogResumeToken, DeploymentActivityResumeTokenError } from './sse.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = {
@@ -386,7 +386,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const resource = controlPlane.store.getResource(resourceId);
         if (!resource) return send(res, 404, { error: 'resource_not_found' });
         await assertProjectAccess(controlPlane.store, resource.projectId, subject);
-        return send(res, 202, await controlPlane.store.provisionResourceProvider({ ...(await readJson(req)), resourceId, actorUserId: subject.id }));
+        const input = await readJson(req);
+        const result = await controlPlane.store.provisionResourceProvider({ ...input, resourceId, actorUserId: subject.id });
+        return send(res, 202, input.intent === 'live-provision' ? { ...result, operationId: `resource-provision:${resourceId}`, status: result.resource?.status || result.result?.status } : result);
       }
       const resourceAttachMatch = url.pathname.match(/^\/resources\/([^/]+)\/attach$/);
       if (resourceAttachMatch && method === 'POST') {
@@ -396,7 +398,8 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (!resource) return send(res, 404, { error: 'resource_not_found' });
         await assertProjectAccess(controlPlane.store, resource.projectId, subject);
         const body = await readJson(req);
-        return send(res, 200, controlPlane.store.attachResource({ ...body, resourceId, actorUserId: subject.id }));
+        const result = controlPlane.store.attachResource({ ...body, resourceId, actorUserId: subject.id });
+        return send(res, 200, { ...result, operationId: result.id, status: 'ATTACHED' });
       }
       const lineageMatch = url.pathname.match(/^\/(deployments|services)\/([^/]+)\/(retry|redeploy)$/);
       if (lineageMatch && method === 'POST' && ((lineageMatch[1] === 'deployments' && lineageMatch[3] === 'retry') || (lineageMatch[1] === 'services' && lineageMatch[3] === 'redeploy'))) {
@@ -407,9 +410,10 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (!service || (lineageMatch[3] === 'retry' && !source)) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404);
         try { await assertProjectAccess(controlPlane.store, service.projectId, subject); }
         catch (error) { if (error instanceof Error && 'statusCode' in error && error.statusCode === 403) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404); throw error; }
+        const operation = lineageMatch[3] === 'retry' ? 'retry' : 'redeploy';
         const body = parseDeploymentOperationBody(await readJson(req));
-        const result = await new InMemoryControlPlaneRepository(controlPlane.store).createDeploymentOperation({ ...body, operation: lineageMatch[3] === 'retry' ? 'retry' : 'redeploy', serviceId: service.id, ...(source ? { sourceDeploymentId: source.id } : {}), requestedByUserId: subject.id });
-        return send(res, 202, result);
+        const result = await new InMemoryControlPlaneRepository(controlPlane.store).createDeploymentOperation({ ...body, operation, serviceId: service.id, ...(source ? { sourceDeploymentId: source.id } : {}), requestedByUserId: subject.id });
+        return send(res, 202, { ...result, operationId: result.workflowJob.id, status: result.deployment.status, streamHref: `/deployments/${result.deployment.id}/stream` });
       }
       const serviceDeploymentsMatch = url.pathname.match(/^\/services\/([^/]+)\/deployments$/);
       if (serviceDeploymentsMatch && method === 'GET') {
@@ -436,7 +440,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const branch = body.branch || service.branch || 'main';
         const deployment = controlPlane.store.createDeployment({ ...sanitizeTenantDeploymentCreate(body), serviceId, deploymentType, status: 'queued', branch });
         const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId: service.projectId, deploymentId: deployment.id, branch, commitSha: body.commitSha || body.commitHash || null } });
-        return send(res, 202, { ...deployment, workflowJob });
+        return send(res, 202, { ...deployment, workflowJob, operationId: workflowJob.id, streamHref: `/deployments/${deployment.id}/stream` });
       }
       const projectServiceDeploymentsMatch = url.pathname.match(/^\/projects\/([^/]+)\/services\/([^/]+)\/deployments$/);
       if (projectServiceDeploymentsMatch && method === 'GET') {
@@ -460,7 +464,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const branch = body.branch || service?.branch || 'main';
         const deployment = controlPlane.store.createDeployment({ ...sanitizeTenantDeploymentCreate(body), serviceId, deploymentType, status: 'queued', branch });
         const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId, deploymentId: deployment.id, branch, commitSha: body.commitSha || body.commitHash || null } });
-        return send(res, 202, { ...deployment, workflowJob });
+        return send(res, 202, { ...deployment, workflowJob, operationId: workflowJob.id, streamHref: `/deployments/${deployment.id}/stream` });
       }
       const deploymentMatch = url.pathname.match(/^\/deployments\/([^/]+)$/);
       if (deploymentMatch && method === 'GET') {
@@ -486,7 +490,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         }
         return send(res, 200, controlPlane.store.updateDeployment(deploymentId, body, { actorUserId: subject.id }));
       }
-      const deploymentActionMatch = url.pathname.match(/^\/deployments\/([^/]+)\/(cancel|rollback)$/);
+      const deploymentActionMatch = url.pathname.match(/^\/deployments\/([^/]+)\/(cancel|rollback|preview-cleanup)$/);
       if (deploymentActionMatch && method === 'POST') {
         const subject = authorizeAction(req, 'deploy:run', auth);
         const [deploymentId, action] = deploymentActionMatch.slice(1).map(decodeURIComponent);
@@ -494,15 +498,19 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
         await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
         const body = await readJson(req);
-        if (action === 'rollback') {
+        if (action === 'rollback' || action === 'preview-cleanup') {
           requireExplicitConfirmation(body);
+        }
+        if (action === 'rollback') {
           controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
           if ((deployment.deploymentType || body.deploymentType || body.type) === 'preview') controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
         }
+        if (action === 'preview-cleanup') return send(res, 202, controlPlane.store.requestPreviewCleanup(deploymentId, { actorUserId: subject.id }));
         const result = action === 'cancel'
           ? controlPlane.store.cancelDeployment(deploymentId, { ...body, actorUserId: subject.id })
           : controlPlane.store.rollbackDeployment(deploymentId, { ...body, actorUserId: subject.id });
-        return send(res, action === 'cancel' ? 200 : 202, result);
+        const operationId = action === 'cancel' ? `deployment-cancel:${deploymentId}` : result.workflowJob?.id || `deployment-rollback:${deploymentId}`;
+        return send(res, action === 'cancel' ? 200 : 202, { ...result, operationId, status: result.deployment?.status, streamHref: `/deployments/${result.deployment?.id || deploymentId}/stream` });
       }
       const deploymentLogsMatch = url.pathname.match(/^\/deployments\/([^/]+)\/(logs|events)$/);
       if (deploymentLogsMatch && method === 'GET') {
@@ -522,13 +530,22 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const deployment = controlPlane.store.getDeployment(deploymentId);
         if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
         await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
-        const logs = controlPlane.store.listDeploymentLogs(deploymentId);
-        return sendSseSnapshot(res, 'deployment.snapshot', {
-          deployment,
+        const scope = { projectId: String(deployment.projectId), deploymentId: String(deployment.id) };
+        const lastEventId = req.headers?.['last-event-id'];
+        const resume = lastEventId === undefined ? null : decodeDeploymentActivityResumeToken(lastEventId, scope);
+        const deploymentCursor = entityStreamCursor(deployment);
+        const logs = controlPlane.store.listDeploymentLogs(deploymentId, { cursor: resume?.logCursorToken || undefined });
+        const events = controlPlane.store.listDeploymentEvents(deploymentId, { cursor: resume?.eventCursorToken || undefined });
+        const body = projectObservationPayload({
+          deployment: resume?.deploymentCursor === deploymentCursor ? null : deployment,
           logs,
-          events: controlPlane.store.listDeploymentEvents(deploymentId),
+          events,
+          deploymentCursor,
+          logCursor: resume?.logCursorToken || null,
+          eventCursor: resume?.eventCursorToken || null,
           stream: { mode: 'sse-snapshot', retryMs: 3000 },
-        }, { projectionOptions: { logContexts: controlPlane.store.logPemContext(logs), unknownLogState: true } });
+        }, { logContexts: controlPlane.store.logPemContext(logs), unknownLogState: true });
+        return sendSseSnapshot(res, 'deployment.snapshot', body, { eventId: encodeDeploymentActivityResumeToken(scope, body), preprojected: true });
       }
       const runtimeLogsMatch = url.pathname.match(/^\/services\/([^/]+)\/logs$/);
       if (runtimeLogsMatch && method === 'GET') {
@@ -799,8 +816,13 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (safe.statusCode === 429) res.setHeader('Retry-After', String(safe.retryAfterSeconds));
         return send(res, safe.statusCode, { statusCode: safe.statusCode, message: safe.code, error: safe.code });
       }
-      if (error instanceof DeploymentOperationError) return send(res, error.statusCode, { statusCode: error.statusCode, message: error.message, code: error.code });
-      return send(res, error.statusCode || 500, { error: error.message || 'internal_error', ...(error.code ? { code: error.code } : {}), ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) });
+      if (error instanceof DeploymentActivityResumeTokenError) return send(res, 400, { statusCode: 400, message: error.code, code: error.code, retryable: false, terminal: true, permission: false });
+      if (error instanceof DeploymentOperationError) return send(res, error.statusCode, { statusCode: error.statusCode, message: error.message, code: error.code, retryable: error.code === 'ACTIVE_DEPLOYMENT', terminal: error.code !== 'ACTIVE_DEPLOYMENT', permission: false });
+      const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+      const permission = statusCode === 401 || statusCode === 403;
+      const retryable = !permission && (statusCode === 408 || statusCode === 429 || statusCode >= 500);
+      const message = error.message || 'internal_error';
+      return send(res, statusCode, { statusCode, message, error: message, retryable, terminal: !retryable, permission, ...(error.code ? { code: error.code } : {}), ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) });
     }
   };
 }

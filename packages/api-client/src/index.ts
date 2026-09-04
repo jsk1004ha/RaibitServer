@@ -1,9 +1,8 @@
-import type { DeploymentListResponse, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceListResponse, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
-import { createOperationsClient } from './operations.ts';
+import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceListResponse, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
+import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
-import type { DeploymentOperationInput } from '@raibitserver/schemas';
-export { createOperationsClient, ApiOperationError } from './operations.ts';
+export { apiOperationError, createOperationsClient, ApiOperationError, ApiPermissionError, ApiRetryableError, ApiTerminalError } from './operations.ts';
 export {
   createRuntimeLogStreamRequest,
   runtimeLogStreamPath,
@@ -13,6 +12,17 @@ export {
   RUNTIME_LOG_STREAM_EVENT,
 } from './runtime-log-stream.ts';
 export type { RuntimeLogStreamRequest, RuntimeLogStreamResponse } from './runtime-log-stream.ts';
+
+export type DeploymentMutationResult = ApiOutput<'deployments-create'>;
+export type DeploymentOperationResult = ApiOutput<'deployments-retry'>;
+export type DeploymentCancelResult = ApiOutput<'deployments-cancel'>;
+export type DeploymentRollbackResult = ApiOutput<'deployments-rollback'>;
+export type DeploymentPreviewCleanupResult = ApiOutput<'deployments-preview-cleanup'>;
+export type DeploymentLogsResult = ApiOutput<'deployments-logs'>;
+export type DeploymentEventsResult = ApiOutput<'deployments-events'>;
+export type DeploymentActivityStreamResult = ApiOutput<'deployments-stream'>;
+export type ResourceAttachmentResult = ApiOutput<'resources-attach'>;
+export type ResourceProvisionResult = ApiOutput<'resources-provision'>;
 
 export type PageOptions = { limit?: number; cursor?: string; after?: string };
 
@@ -86,15 +96,15 @@ export class RAIBITSERVERClient {
   getResource(resourceId: string): Promise<ResourceSpec> { return this.request(`/resources/${encodeURIComponent(resourceId)}`); }
   updateResource(resourceId: string, input: Partial<ResourceSpec> & Record<string, unknown>): Promise<ResourceSpec> { return this.request(`/resources/${encodeURIComponent(resourceId)}`, { method: 'PATCH', body: input }); }
   deleteResource(resourceId: string): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}`, { method: 'DELETE' }); }
-  attachResource(resourceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/attach`, { method: 'POST', body: input }); }
-  provisionResource(resourceId: string, input: { intent: 'preview-plan' | 'live-provision' }): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/provision`, { method: 'POST', body: input }); }
+  attachResource(resourceId: string, input: { readonly serviceId: string; readonly envPrefix?: string }): Promise<ResourceAttachmentResult> { return this.operations['resources-attach']({ path: { resourceId }, query: {}, body: input }); }
+  provisionResource(resourceId: string, input: { readonly intent: 'preview-plan' | 'live-provision' }): Promise<ResourceProvisionResult> { return this.operations['resources-provision']({ path: { resourceId }, query: {}, body: input }); }
 
   retryDeployment(deploymentId: string, body: DeploymentOperationInput) { return this.operations['deployments-retry']({ path: { deploymentId }, query: {}, body }); }
   redeployService(serviceId: string, body: DeploymentOperationInput) { return this.operations['services-redeploy']({ path: { serviceId }, query: {}, body }); }
 
-  createDeployment(projectId: string, serviceId: string, request?: DeploymentRequest): Promise<DeploymentSpec>;
-  createDeployment(serviceId: string, request?: DeploymentRequest): Promise<DeploymentSpec>;
-  createDeployment(projectIdOrServiceId: string, serviceIdOrRequest: string | DeploymentRequest = {}, request: DeploymentRequest = {}): Promise<DeploymentSpec> {
+  createDeployment(projectId: string, serviceId: string, request?: DeploymentRequest): Promise<DeploymentMutationResult>;
+  createDeployment(serviceId: string, request?: DeploymentRequest): Promise<DeploymentMutationResult>;
+  createDeployment(projectIdOrServiceId: string, serviceIdOrRequest: string | DeploymentRequest = {}, request: DeploymentRequest = {}): Promise<DeploymentMutationResult> {
     if (typeof serviceIdOrRequest === 'string') {
       return this.request(`/projects/${encodeURIComponent(projectIdOrServiceId)}/services/${encodeURIComponent(serviceIdOrRequest)}/deployments`, { method: 'POST', body: request });
     }
@@ -112,8 +122,11 @@ export class RAIBITSERVERClient {
     return this.request(withPageQuery(path, page));
   }
 
-  listDeploymentLogs(deploymentId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/deployments/${encodeURIComponent(deploymentId)}/logs`, options)); }
-  listDeploymentEvents(deploymentId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/deployments/${encodeURIComponent(deploymentId)}/events`, options)); }
+  listDeploymentLogs(deploymentId: string, options: PageOptions = {}): Promise<DeploymentLogsResult> { return this.operations['deployments-logs']({ path: { deploymentId }, query: options, body: {} }); }
+  listDeploymentEvents(deploymentId: string, options: PageOptions = {}): Promise<DeploymentEventsResult> { return this.operations['deployments-events']({ path: { deploymentId }, query: options, body: {} }); }
+  deploymentActivityStream(deploymentId: string, options: { readonly lastEventId?: string; readonly signal?: AbortSignal } = {}): Promise<DeploymentActivityStreamResult> {
+    return this.operations['deployments-stream']({ path: { deploymentId }, query: {}, body: {} }, options);
+  }
   listRuntimeLogs(serviceId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/services/${encodeURIComponent(serviceId)}/logs`, options)); }
   runtimeLogStreamUrl(serviceId: string): string {
     return runtimeLogStreamUrl(this.baseUrl, { serviceId });
@@ -122,11 +135,14 @@ export class RAIBITSERVERClient {
   updateDeploymentStatus(deploymentId: string, input: Record<string, unknown>): Promise<DeploymentSpec> {
     return this.request(`/deployments/${encodeURIComponent(deploymentId)}/status`, { method: 'PATCH', body: input });
   }
-  cancelDeployment(deploymentId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-    return this.request(`/deployments/${encodeURIComponent(deploymentId)}/cancel`, { method: 'POST', body: input });
+  cancelDeployment(deploymentId: string): Promise<DeploymentCancelResult> {
+    return this.operations['deployments-cancel']({ path: { deploymentId }, query: {}, body: {} });
   }
-  rollbackDeployment(deploymentId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-    return this.request(`/deployments/${encodeURIComponent(deploymentId)}/rollback`, { method: 'POST', body: input });
+  rollbackDeployment(deploymentId: string, input: { readonly confirmed: true; readonly previousDeploymentId?: string; readonly imageUrl?: string }): Promise<DeploymentRollbackResult> {
+    return this.operations['deployments-rollback']({ path: { deploymentId }, query: {}, body: input });
+  }
+  cleanupPreview(deploymentId: string, input: { readonly confirmed: true }): Promise<DeploymentPreviewCleanupResult> {
+    return this.operations['deployments-preview-cleanup']({ path: { deploymentId }, query: {}, body: input });
   }
 
   uploadEnvFile(projectId: string, serviceId: string, filename: string, content: string): Promise<Record<string, unknown>> {
@@ -179,7 +195,7 @@ export class RAIBITSERVERClient {
     });
     const text = await response.text();
     const body = text ? JSON.parse(text) : null;
-    if (!response.ok) throw new Error(`RAIBITSERVER API ${response.status}: ${body?.error || text}`);
+    if (!response.ok) throw apiOperationError(response.status, body);
     return body as T;
   }
 }

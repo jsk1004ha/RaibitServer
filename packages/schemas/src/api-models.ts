@@ -24,14 +24,16 @@ export const QuotaInput = z.strictObject(quotaFields).partial();
 export const Quota = z.strictObject({ ...quotaFields, id, userId: id, createdAt: z.iso.datetime(), updatedAt: z.iso.datetime() });
 export const PageQuery = z.object({ limit: z.number().int().min(1).max(1000).optional(), cursor: z.string().max(1024).optional(), after: z.string().max(1024).optional() }).strict();
 export const ErrorBody = z.union([
-  z.object({ statusCode: z.number().int().min(400).max(599), message: z.union([z.string(), z.array(z.string())]), error: z.string().optional(), code: z.string().optional(), reasonCode: z.string().optional() }),
+  z.object({ statusCode: z.number().int().min(400).max(599), message: z.union([z.string(), z.array(z.string())]), error: z.string().optional(), code: z.string().optional(), reasonCode: z.string().optional(), retryable: z.boolean().optional(), terminal: z.boolean().optional(), permission: z.boolean().optional() }),
   z.object({ message: z.string(), plan: JsonFields }),
 ]);
 export const Project = z.object({ id, name: z.string(), organizationId: id, slug: z.string() }).catchall(json);
 export const Service = z.object({ id, projectId: id, name: z.string(), type: z.string(), status: z.string().optional(), ...ServiceHealthFields }).catchall(json);
 export const Resource = z.object({ id, projectId: id, name: z.string(), engine: z.string(), status: z.string() }).catchall(json);
 export const Deployment = z.object({ id, serviceId: id, status: DeploymentStatusSchema, projectId: id.optional(), imageDigest: z.string().nullable().optional(), errorCode: z.string().nullable().optional(), errorMessage: z.string().nullable().optional(), ...DeploymentLineageFields, ...DeploymentHealthFields }).catchall(json);
-export const DeploymentOperationResult = z.object({ deployment: Deployment, workflowJob: z.object({ id, targetId: id, targetType: z.literal('deployment'), type: z.string(), status: z.string(), payload: JsonFields }).catchall(json) });
+export const WorkflowJob = z.object({ id, targetId: id, targetType: z.literal('deployment'), type: z.string(), status: z.string(), payload: JsonFields }).catchall(json);
+export const DeploymentMutationResult = Deployment.extend({ operationId: id, streamHref: z.string(), workflowJob: WorkflowJob });
+export const DeploymentOperationResult = z.object({ operationId: id, status: z.string(), streamHref: z.string(), deployment: Deployment, workflowJob: WorkflowJob });
 export const User = z.object({ id, email: z.string(), name: z.string().nullable().optional(), role: z.string(), approvalStatus: z.string() }).catchall(json);
 export const Membership = z.object({ id: id.optional(), userId: id, organizationId: id, role: z.string() }).catchall(json);
 export const Session = z.object({ user: User, memberships: z.array(Membership), token: z.string() });
@@ -48,6 +50,7 @@ export const Events = z.object({ events: z.array(Event), nextCursor: z.string().
 export const StreamConfig = z.object({ retryMs: z.number(), heartbeatMs: z.number(), maxLifetimeMs: z.number(), slowClientTimeoutMs: z.number() });
 export const ServiceStream = z.object({ service: Service.nullable(), logs: z.array(Log), serviceCursor: z.string(), logCursor: z.string().nullable(), stream: StreamConfig });
 export const DeploymentStream = z.object({ deployment: Deployment.nullable(), logs: z.array(Log), events: z.array(Event), deploymentCursor: z.string(), logCursor: z.string().nullable(), eventCursor: z.string().nullable(), stream: StreamConfig });
+export const PreviewCleanupResult = z.object({ operationId: id, status: z.enum(['PREVIEW_CLEANUP_REQUESTED', 'CLEANED_UP']), streamHref: z.string(), lineageId: id, deploymentIds: z.array(id) });
 export const StreamError = z.object({ error: z.string() });
 export const Environment = z.object({ serviceId: id, entries: z.array(z.object({ key: z.string(), value: z.string().nullable(), isSecret: z.boolean(), valueMasked: z.string() }).catchall(json)), plainCount: z.number().int(), secretCount: z.number().int() }).catchall(json);
 export const ConsoleResult = z.object({ engine: z.string(), rows: z.array(json).optional(), fields: z.array(json).optional(), rowCount: z.number().optional(), mode: z.string().optional(), warning: z.string().optional() }).catchall(json);
@@ -60,7 +63,7 @@ export const ProjectInput = z.object({ name: z.string().min(1), slug: z.string()
 export const ServiceInput = z.object({ name: z.string().min(1), type: z.enum(['web', 'private', 'worker', 'cron', 'job']).optional(), image: z.string().optional(), sourceType: z.string().optional(), port: z.number().int().positive().optional(), ...ServiceHealthFields }).catchall(json).superRefine(refineServiceHealth);
 export const LocalResourceEngine = z.enum(resourceCapabilities.engines.filter(entry => entry.local.provision).map(entry => entry.engine));
 export const ResourceInput = z.object({ name: z.string().min(1), engine: LocalResourceEngine, provider: z.string().optional(), plan: z.string().optional() }).catchall(json);
-export const DeploymentInput = z.object({ deploymentType: z.enum(['production', 'preview', 'manual']).optional(), triggerType: z.string().optional(), branch: z.string().optional(), commitSha: z.string().optional(), pullRequestNumber: z.number().int().positive().optional(), imageUrl: z.string().optional() });
+export const DeploymentInput = z.object({ deploymentType: z.enum(['production', 'preview', 'manual', 'PRODUCTION', 'PREVIEW', 'MANUAL']).optional(), triggerType: z.string().optional(), branch: z.string().optional(), commitSha: z.string().optional(), pullRequestNumber: z.number().int().positive().optional(), imageUrl: z.string().optional() });
 export const StatusInput = z.object({ status: DeploymentStatusSchema, imageUrl: z.string().optional(), imageDigest: z.string().optional(), errorCode: z.string().nullable().optional(), errorMessage: z.string().nullable().optional() });
 export const Confirmation = z.object({ confirmed: z.literal(true) });
 export const AgentInput = z.object({ serviceIds: z.array(id).max(100).optional(), deploymentType: z.enum(['production', 'preview']).optional(), branch: z.string().optional(), commitSha: z.string().optional() });

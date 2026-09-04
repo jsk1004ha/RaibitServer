@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, HttpException, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
-import { clearObservationProjectionContinuation, createObservationProjectionContinuation, encodeServiceLogResumeToken, startBoundedSseStream } from '@raibitserver/core';
+import { clearObservationProjectionContinuation, createObservationProjectionContinuation, encodeDeploymentActivityResumeToken, encodeServiceLogResumeToken, startBoundedSseStream } from '@raibitserver/core';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { DeploymentsService } from './deployments.service';
 
@@ -89,6 +89,13 @@ export class DeploymentLogsController {
     return this.deploymentsService.rollbackDeployment(deploymentId, input || {}, req.raibitSubject);
   }
 
+  @RequirePermission('deploy:run')
+  @Post('deployments/:deploymentId/preview-cleanup')
+  @HttpCode(202)
+  previewCleanup(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.requestPreviewCleanup(deploymentId, input || {}, req.raibitSubject);
+  }
+
   @RequirePermission('logs:read')
   @Get('deployments/:deploymentId/logs')
   logs(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Req() req: any) {
@@ -105,13 +112,18 @@ export class DeploymentLogsController {
   @Get('deployments/:deploymentId/stream')
   async deploymentStream(@Param('deploymentId') deploymentId: string, @Req() req: any, @Res() res: any) {
     const continuation = createObservationProjectionContinuation();
-    const snapshot = await this.deploymentsService.deploymentActivitySnapshot(deploymentId, req.raibitSubject, { observationContinuation: continuation });
+    const { snapshot, resumeScope } = await this.deploymentsService.openDeploymentActivityStream(deploymentId, req.raibitSubject, {
+      lastEventId: req.headers?.['last-event-id'],
+      observationContinuation: continuation,
+    });
     startBoundedSseStream({
       req,
       res,
       event: 'deployment.snapshot',
       initialPayload: snapshot,
       preprojected: true,
+      eventId: (payload) => encodeDeploymentActivityResumeToken(resumeScope, payload),
+      terminalError: (error) => error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500,
       onClose: () => clearObservationProjectionContinuation(continuation),
       load: (cursors) => this.deploymentsService.deploymentActivitySnapshot(deploymentId, req.raibitSubject, {
         deploymentCursor: cursors.deploymentCursor,

@@ -774,6 +774,29 @@ export class ControlPlaneStore {
     return { deployment: rollback, rollbackOfDeploymentId: current.id, previousDeployment: previous ? deepClone(previous) : null, workflowJob };
   }
 
+  requestPreviewCleanup(deploymentId: string, input: Record<string, any> = {}) {
+    const deployment = this.deployments.get(deploymentId);
+    if (!deployment) throw notFound(`deployment not found: ${deploymentId}`);
+    if (String(deployment.deploymentType).toLowerCase() !== 'preview' || !deployment.previewLineageId) throw conflict('PREVIEW_CLEANUP_UNAVAILABLE');
+    const lineage = this.previewLineages.get(deployment.previewLineageId);
+    if (!lineage || lineage.projectId !== deployment.projectId || lineage.serviceId !== deployment.serviceId) throw conflict('PREVIEW_CLEANUP_UNAVAILABLE');
+    const operationId = `preview-cleanup:${lineage.id}`;
+    const attempts = [...this.deployments.values()].filter((candidate) => candidate.previewLineageId === lineage.id);
+    const deploymentIds = attempts.map((candidate) => candidate.id);
+    const status = attempts.every((candidate) => normalizeDeploymentStatus(candidate.status) === 'CLEANED_UP') ? 'CLEANED_UP' : 'PREVIEW_CLEANUP_REQUESTED';
+    if (lineage.state !== 'CLOSED') {
+      const closed = { ...lineage, state: 'CLOSED', version: lineage.version + 1, candidateDeploymentId: null, candidateGeneration: null, currentDeploymentId: null, currentGeneration: null };
+      this.previewLineages.set(lineage.id, { ...closed, routeIntent: previewCloseIntent(closed) });
+      for (const attempt of attempts) if (normalizeDeploymentStatus(attempt.status) !== 'CLEANED_UP') {
+        this.deployments.set(attempt.id, { ...attempt, status: 'PREVIEW_CLEANUP_REQUESTED', updatedAt: nowIso() });
+        this.appendDeploymentEvent({ deploymentId: attempt.id, type: 'preview.cleanup.requested', message: 'Preview cleanup requested', metadata: { operationId, lineageId: lineage.id } });
+      }
+      for (let index = 0; index < this.workflowJobs.length; index += 1) if ((this.workflowJobs[index].targetId === lineage.id || deploymentIds.includes(this.workflowJobs[index].targetId)) && ['queued', 'running'].includes(this.workflowJobs[index].status)) this.workflowJobs[index] = { ...this.workflowJobs[index], status: 'cancelled', lockedBy: null, lockedAt: null };
+      this.audit(input.actorUserId || 'system', 'preview:cleanup-requested', 'preview-lineage', lineage.id, { operationId, deploymentIds });
+    }
+    return { operationId, status, streamHref: `/deployments/${deploymentId}/stream`, lineageId: lineage.id, deploymentIds };
+  }
+
   appendBuildLog({ deploymentId, step = 'build', line, level = 'info' }: Record<string, any>) {
     const row = { id: stableId('blog', deploymentId, this.buildLogs.length), deploymentId, step, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
     this.buildLogs.push(row);

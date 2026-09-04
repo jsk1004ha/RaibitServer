@@ -126,6 +126,7 @@ for (const transport of ['core', 'nest']) {
       const result = await runtime.post(target, input, token);
       assert.equal(result.status, status, JSON.stringify(result));
       if (code) assert.equal(result.body.code, code);
+      if (status === 403) assert.equal('operationId' in result.body, false, 'permission denial must not disclose operation metadata');
     }
     for (const status of ['QUEUED', 'BUILDING', 'IMAGE_READY', 'DEPLOYING', 'READY', 'CANCELLED', 'CLEANED_UP']) {
       repository.store.deployments.get(source.id).status = status;
