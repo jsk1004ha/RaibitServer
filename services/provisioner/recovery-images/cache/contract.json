@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "entrypoint": "/usr/local/bin/raibit-recovery-cache",
+  "actions": [
+    "redis-backup",
+    "redis-restore",
+    "redis-verify",
+    "valkey-backup",
+    "valkey-restore",
+    "valkey-verify"
+  ],
+  "credentialPath": "/var/run/raibit-recovery/credential",
+  "scratchPath": "/var/run/raibit-recovery/scratch",
+  "baseImagePolicy": "sha256-digest-required",
+  "runAsUser": 65532,
+  "readOnlyRootFilesystem": true,
+  "maxRDBBytes": 536870912,
+  "maxSourceMemoryBytes": 1073741824,
+  "jobMemoryMiB": 4096,
+  "jobEphemeralMiB": 2048,
+  "requiredBinaries": [
+    "redis-cli",
+    "redis-check-rdb",
+    "redis-server",
+    "valkey-cli",
+    "valkey-check-rdb",
+    "valkey-server"
+  ]
+}

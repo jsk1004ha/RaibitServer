@@ -2,12 +2,16 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/raibitserver/provisioner/internal/recoverycache"
 )
 
 type cacheRun struct {
@@ -238,7 +242,29 @@ func assertCacheJob(t *testing.T, job IsolatedJob, actions []string, stream Stre
 			t.Fatalf("step[%d]=%q/%q/%d", index, step.Command().Executable(), step.Command().Args(), step.Binding())
 		}
 	}
-	if spec.RunAsUser != 65532 || spec.CPUMilli != 250 || spec.MemoryMiB != 256 || spec.EphemeralMiB != 512 || spec.Deadline != 15*time.Minute || len(spec.Secrets) != 0 || len(spec.SecretFiles) != 1 || spec.SecretFiles[0].MountPath() != "/var/run/raibit-recovery/credential" || spec.SecretFiles[0].Ref() != spec.Connection.spec.Secret || !spec.SecretFiles[0].ReadOnly() {
+	if spec.RunAsUser != 65532 || spec.CPUMilli != 250 || spec.MemoryMiB != cacheRecoveryMemoryMiB || spec.EphemeralMiB != cacheRecoveryScratchMiB || spec.Deadline != 15*time.Minute || len(spec.Secrets) != 0 || len(spec.SecretFiles) != 1 || spec.SecretFiles[0].MountPath() != "/var/run/raibit-recovery/credential" || spec.SecretFiles[0].Ref() != spec.Connection.spec.Secret || !spec.SecretFiles[0].ReadOnly() {
 		t.Fatalf("spec=%+v", spec)
+	}
+}
+
+func Test_CacheAdapter_resources_match_helper_image_contract(t *testing.T) {
+	// Given
+	payload, err := os.ReadFile("../../recovery-images/cache/contract.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contract struct {
+		MaxRDBBytes          int64 `json:"maxRDBBytes"`
+		MaxSourceMemoryBytes int64 `json:"maxSourceMemoryBytes"`
+		JobMemoryMiB         int64 `json:"jobMemoryMiB"`
+		JobEphemeralMiB      int64 `json:"jobEphemeralMiB"`
+	}
+
+	// When
+	err = json.Unmarshal(payload, &contract)
+
+	// Then
+	if err != nil || contract.MaxRDBBytes != recoverycache.MaxRDBBytes || contract.MaxSourceMemoryBytes != recoverycache.MaxSourceMemoryBytes || contract.JobMemoryMiB != cacheRecoveryMemoryMiB || contract.JobEphemeralMiB != cacheRecoveryScratchMiB {
+		t.Fatalf("contract=%+v error=%v", contract, err)
 	}
 }

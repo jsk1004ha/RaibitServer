@@ -7,12 +7,14 @@ import (
 )
 
 const (
-	cacheHelperExecutable        = "raibit-recovery-cache"
-	cacheRecoverySchema          = "cache-recovery"
-	cacheRecoveryVersion  uint16 = 1
-	cacheSentinelKey             = "raibitserver-restore-sentinel"
-	cacheSentinelValue           = "raibitserver-recovery-sentinel"
-	cacheSentinelTTL             = "positive-preserved"
+	cacheHelperExecutable          = "raibit-recovery-cache"
+	cacheRecoverySchema            = "cache-recovery"
+	cacheRecoveryVersion    uint16 = 1
+	cacheSentinelKey               = "raibitserver-restore-sentinel"
+	cacheSentinelValue             = "raibitserver-recovery-sentinel"
+	cacheSentinelTTL               = "positive-preserved"
+	cacheRecoveryMemoryMiB  int64  = 4096
+	cacheRecoveryScratchMiB int64  = 2048
 )
 
 type CacheAdapter struct{ engine Engine }
@@ -122,7 +124,7 @@ func newCacheJob(connection Connection, plan []cacheJobStep) (IsolatedJob, error
 		Namespace: connection.spec.Provenance.spec.Namespace, Image: connection.toolImage,
 		OperationID: connection.operationID, Attempt: connection.attempt, Connection: connection,
 		Steps: steps, SecretFiles: []SecretFile{credential},
-		RunAsUser: 65532, CPUMilli: 250, MemoryMiB: 256, EphemeralMiB: 512, Deadline: 15 * time.Minute,
+		RunAsUser: 65532, CPUMilli: 250, MemoryMiB: cacheRecoveryMemoryMiB, EphemeralMiB: cacheRecoveryScratchMiB, Deadline: 15 * time.Minute,
 	})
 }
 
