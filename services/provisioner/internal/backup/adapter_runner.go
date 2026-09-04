@@ -3,7 +3,6 @@ package backup
 import (
 	"context"
 	"errors"
-	"slices"
 	"time"
 )
 
@@ -25,13 +24,17 @@ type CompletedJobObservation struct {
 	Labels                         map[string]string
 }
 
-type CreatedJobObservation struct{ Name, UID string }
+type CreatedJobObservation struct {
+	Name, UID                 string
+	Namespace                 string
+	snapshotName, snapshotUID string
+	policyName, policyUID     string
+}
 
 type KubernetesJobClient interface {
-	ObserveProviderWorkload(context.Context, string, string) (LiveWorkloadObservation, error)
-	ObserveSecret(context.Context, string, string) (LiveSecretObservation, error)
-	CreateJob(context.Context, IsolatedJob, JobStream) (CreatedJobObservation, error)
-	WaitJob(context.Context, string, string, string) (CompletedJobObservation, error)
+	CreateAuthorizedJob(context.Context, IsolatedJob, JobStream) (CreatedJobObservation, error)
+	WaitJob(context.Context, CreatedJobObservation) (CompletedJobObservation, error)
+	CleanupJob(context.Context, CreatedJobObservation) error
 }
 
 type KubernetesJobRunner struct{ client KubernetesJobClient }
@@ -43,36 +46,18 @@ func NewKubernetesJobRunner(client KubernetesJobClient) (*KubernetesJobRunner, e
 	return &KubernetesJobRunner{client: client}, nil
 }
 
-func (r *KubernetesJobRunner) Run(ctx context.Context, job IsolatedJob, stream JobStream) (completedJobObservation, error) {
+func (r *KubernetesJobRunner) Run(ctx context.Context, job IsolatedJob, stream JobStream) (result completedJobObservation, resultErr error) {
 	runContext, cancel := context.WithTimeout(ctx, job.spec.Deadline)
 	defer cancel()
-	connection := job.spec.Connection
-	provider := connection.spec.Provenance.spec
-	workload, err := r.client.ObserveProviderWorkload(runContext, provider.Namespace, provider.Name)
+	created, err := r.client.CreateAuthorizedJob(runContext, job, stream)
 	if err != nil {
 		return completedJobObservation{}, errors.Join(ErrRecoveryJob, err)
 	}
-	if workload.Namespace != provider.Namespace || workload.Name != provider.Name || workload.UID != provider.UID || workload.Generation != provider.Generation || workload.Image != provider.Image {
-		return completedJobObservation{}, ErrRecoveryJob
-	}
-	if connection.Engine() != EngineSQLite {
-		secret := connection.spec.Secret
-		live, observeErr := r.client.ObserveSecret(runContext, secret.namespace, secret.name)
-		if observeErr != nil {
-			return completedJobObservation{}, errors.Join(ErrRecoveryJob, observeErr)
-		}
-		if live.Namespace != secret.namespace || live.Name != secret.name || live.UID != provider.CredentialUID || live.Annotations["raibitserver.io/credential-generation"] != provider.CredentialGeneration || live.Annotations["raibitserver.io/credential-owner"] != "raibitserver-provisioner" || live.Annotations["raibitserver.io/resource-id"] != connection.ResourceID() || live.Annotations["raibitserver.io/project-id"] != connection.spec.ProjectID || !slices.Contains(live.Keys, secret.key) {
-			return completedJobObservation{}, ErrRecoveryJob
-		}
-	}
-	created, err := r.client.CreateJob(runContext, job, stream)
-	if err != nil {
-		return completedJobObservation{}, errors.Join(ErrRecoveryJob, err)
-	}
+	defer func() { resultErr = errors.Join(resultErr, r.client.CleanupJob(context.WithoutCancel(ctx), created)) }()
 	if !recoveryPart.MatchString(created.Name) || !providerUIDPattern.MatchString(created.UID) {
 		return completedJobObservation{}, ErrRecoveryJob
 	}
-	observed, err := r.client.WaitJob(runContext, job.spec.Namespace, created.Name, created.UID)
+	observed, err := r.client.WaitJob(runContext, created)
 	if err != nil {
 		return completedJobObservation{}, err
 	}

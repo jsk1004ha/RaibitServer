@@ -54,6 +54,13 @@ type Runner interface {
 	DeleteObjectUID(ctx context.Context, resource, namespace, name, uid string, timeout time.Duration) (string, error)
 }
 
+// StreamingRunner transfers recovery payloads through subprocess pipes without
+// retaining the artifact in memory. It is intentionally separate from Runner so
+// existing resource-reconcile fakes do not gain an unused method.
+type StreamingRunner interface {
+	RunStream(context.Context, string, []string, io.Reader, io.Writer, time.Duration) (string, error)
+}
+
 type OSRunner struct {
 	KubernetesAPIURL        string
 	ServiceAccountTokenFile string
@@ -82,6 +89,23 @@ func (*OSRunner) RunCreateInputUID(ctx context.Context, name string, args []stri
 
 func (*OSRunner) RunSensitiveOutput(ctx context.Context, name string, args []string, timeout time.Duration) (string, []byte, error) {
 	return runSensitiveOutput(ctx, name, args, timeout)
+}
+
+func (*OSRunner) RunStream(ctx context.Context, name string, args []string, input io.Reader, output io.Writer, timeout time.Duration) (string, error) {
+	printable := name + " " + strings.Join(args, " ")
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	commandContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(commandContext, name, args...)
+	cmd.Stdin, cmd.Stdout = input, output
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return printable, fmt.Errorf("%s failed: %w (sensitive command output withheld)", printable, err)
+	}
+	return printable, nil
 }
 
 func (r *OSRunner) GetSecretMetadata(ctx context.Context, namespace, secretName string, timeout time.Duration) (string, *SecretMetadata, error) {
@@ -349,6 +373,8 @@ func namespacedResourceAPIPath(resource, namespace, name string) (string, error)
 		prefix, plural = "/apis/apps/v1", "statefulsets"
 	case "networkpolicy":
 		prefix, plural = "/apis/networking.k8s.io/v1", "networkpolicies"
+	case "job":
+		prefix, plural = "/apis/batch/v1", "jobs"
 	default:
 		return "", fmt.Errorf("resource %q is not allowed for UID-fenced deletion", resource)
 	}

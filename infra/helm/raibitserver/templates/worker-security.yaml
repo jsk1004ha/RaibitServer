@@ -470,7 +470,19 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["create", "patch", "delete"]
+    verbs: ["get", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/attach"]
+    verbs: ["create"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "watch", "create", "delete"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims", "services"]
     verbs: ["get", "create", "patch", "update", "delete"]
@@ -965,7 +977,7 @@ spec:
         resources: ["networkpolicies"]
   matchConditions:
     - name: provisioner-service-account
-      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner' && object.metadata.name.endsWith('-provider')" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
   variables:
     - name: providerName
       expression: "object.metadata.labels['app.kubernetes.io/name']"
@@ -1033,8 +1045,8 @@ spec:
     # Reserve the connection suffix from every actor, and also route every
     # provisioner Secret mutation through the exact provider contract. Without
     # the latter, its metadata-patch/create/delete RBAC could target unrelated tenant Secrets.
-    - name: provisioner-service-account-or-connection-reservation
-      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner' || (request.operation == 'CREATE' ? object.metadata.name.endsWith('-connection') : oldObject.metadata.name.endsWith('-connection'))" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+    - name: connection-reservation
+      expression: "request.operation == 'CREATE' ? object.metadata.name.endsWith('-connection') : oldObject.metadata.name.endsWith('-connection')"
   variables:
     - name: target
       expression: "request.operation == 'DELETE' ? oldObject : object"
@@ -1102,6 +1114,123 @@ metadata:
   name: {{ include "raibitserver.fullname" . }}-provisioner-provider-secrets
 spec:
   policyName: {{ include "raibitserver.fullname" . }}-provisioner-provider-secrets
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-secrets
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["secrets"]
+  matchConditions:
+    - name: recovery-secret-name
+      expression: "request.operation == 'CREATE' ? object.metadata.name.startsWith('recovery-credential-') : oldObject.metadata.name.startsWith('recovery-credential-')"
+  validations:
+    - expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+      message: "recovery credential snapshots are reserved for the provisioner"
+    - expression: >-
+        request.operation == 'DELETE' || (request.operation == 'CREATE' && object.type == 'Opaque' && object.immutable == true &&
+        object.metadata.labels['raibitserver.io/owned-by'] == 'recovery' && object.metadata.labels['raibitserver.io/spec-identity'].startsWith('recovery-job/v1:sha256:') &&
+        has(object.metadata.annotations) && object.metadata.annotations['raibitserver.io/source-secret-uid'] != '' &&
+        object.metadata.annotations['raibitserver.io/source-secret-resource-version'] != '' && object.metadata.annotations['raibitserver.io/source-secret-key'] != '' &&
+        has(object.data) && object.data.size() == 1 && object.metadata.annotations['raibitserver.io/source-secret-key'] in object.data && !has(object.stringData))
+      message: "recovery snapshots must be immutable, single-key, source-bound Secrets"
+    - expression: "request.operation != 'UPDATE'"
+      message: "recovery credential snapshots cannot be updated"
+    - expression: >-
+        request.operation != 'DELETE' || (has(request.options) && has(request.options.preconditions) &&
+        request.options.preconditions.uid == oldObject.metadata.uid)
+      message: "recovery snapshot deletion requires its exact UID"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-secrets
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-provisioner-recovery-secrets
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-jobs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["jobs"]
+  matchConditions:
+    - name: recovery-job-name
+      expression: "request.operation == 'CREATE' ? object.metadata.name.startsWith('recovery-job-') : oldObject.metadata.name.startsWith('recovery-job-')"
+  validations:
+    - expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+      message: "recovery Jobs are reserved for the provisioner"
+    - expression: >-
+        request.operation == 'DELETE' || (request.operation == 'CREATE' && object.metadata.labels['raibitserver.io/owned-by'] == 'recovery' &&
+        object.metadata.labels['raibitserver.io/spec-identity'].startsWith('recovery-job/v1:sha256:') && object.spec.backoffLimit == 0 &&
+        object.spec.activeDeadlineSeconds > 0 && object.spec.activeDeadlineSeconds <= 1800 && object.spec.template.spec.automountServiceAccountToken == false &&
+        object.spec.template.spec.restartPolicy == 'Never' && object.spec.template.spec.containers.all(c,
+        c.image.contains('@sha256:') && c.securityContext.runAsNonRoot == true && c.securityContext.readOnlyRootFilesystem == true &&
+        c.securityContext.allowPrivilegeEscalation == false && c.securityContext.capabilities.drop == ['ALL']))
+      message: "recovery Jobs must retain the bounded restricted execution contract"
+    - expression: "request.operation != 'UPDATE'"
+      message: "recovery Jobs are immutable"
+    - expression: >-
+        request.operation != 'DELETE' || (has(request.options) && has(request.options.preconditions) && request.options.preconditions.uid == oldObject.metadata.uid)
+      message: "recovery Job deletion requires its exact UID"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-jobs
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-provisioner-recovery-jobs
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-networkpolicies
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["networkpolicies"]
+  matchConditions:
+    - name: recovery-policy-name
+      expression: "request.operation == 'CREATE' ? object.metadata.name.startsWith('recovery-egress-') : oldObject.metadata.name.startsWith('recovery-egress-')"
+  validations:
+    - expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+      message: "recovery NetworkPolicies are reserved for the provisioner"
+    - expression: >-
+        request.operation == 'DELETE' || (request.operation == 'CREATE' && object.metadata.labels['raibitserver.io/owned-by'] == 'recovery' &&
+        object.spec.policyTypes == ['Ingress', 'Egress'] && object.spec.ingress == [] && object.spec.egress.size() == 2 &&
+        object.spec.podSelector.matchLabels['raibitserver.io/spec-identity'] == object.metadata.labels['raibitserver.io/spec-identity'])
+      message: "recovery NetworkPolicies must default deny and select only their exact Job"
+    - expression: "request.operation != 'UPDATE'"
+      message: "recovery NetworkPolicies are immutable"
+    - expression: >-
+        request.operation != 'DELETE' || (has(request.options) && has(request.options.preconditions) && request.options.preconditions.uid == oldObject.metadata.uid)
+      message: "recovery NetworkPolicy deletion requires its exact UID"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-networkpolicies
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-provisioner-recovery-networkpolicies
   validationActions: ["Deny"]
   matchResources:
     namespaceSelector:

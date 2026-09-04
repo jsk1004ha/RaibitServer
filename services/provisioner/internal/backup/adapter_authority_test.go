@@ -50,6 +50,12 @@ func Test_ParseRecoveryToolPolicy_when_image_is_mutable(t *testing.T) {
 	}
 }
 
+func Test_ParseRequiredRecoveryToolPolicy_when_enabled_engine_image_is_missing(t *testing.T) {
+	if _, err := ParseRequiredRecoveryToolPolicy(map[string]string{"RAIBITSERVER_RECOVERY_TOOL_POSTGRESQL_IMAGE": "registry.example/recovery/postgresql@sha256:" + strings.Repeat("1", 64)}); !errors.Is(err, ErrRecoveryRequest) {
+		t.Fatalf("partial enabled policy accepted: %v", err)
+	}
+}
+
 func Test_BindRecoverySource_when_credential_projection_is_stale_or_wrong_key(t *testing.T) {
 	for _, mutate := range []func(*store.RecoveryExecution){
 		func(value *store.RecoveryExecution) { value.Source.Connection.SecretKey = "DATABASE_URL" },

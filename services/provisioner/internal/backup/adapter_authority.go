@@ -28,6 +28,14 @@ func ParseRecoveryToolPolicy(env map[string]string) (RecoveryToolPolicy, error) 
 	return RecoveryToolPolicy{images: images}, nil
 }
 
+func ParseRequiredRecoveryToolPolicy(env map[string]string) (RecoveryToolPolicy, error) {
+	policy, err := ParseRecoveryToolPolicy(env)
+	if err != nil || len(policy.images) != 6 {
+		return RecoveryToolPolicy{}, ErrRecoveryRequest
+	}
+	return policy, nil
+}
+
 func BindRecoverySource(execution store.RecoveryExecution, policy RecoveryToolPolicy) (Connection, error) {
 	if execution.Source.ID != execution.Identity.SourceID {
 		return Connection{}, ErrRecoveryRequest

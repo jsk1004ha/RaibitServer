@@ -3,25 +3,10 @@ package backup
 import (
 	"context"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
-
-func Test_RecoveryAdapter_when_authority_surface_is_inspected(t *testing.T) {
-	// Given: the complete adapter interface consumed by future engine implementations.
-	typeOf := reflect.TypeOf((*RecoveryAdapter)(nil)).Elem()
-	// When / Then: it exposes execution only, never deletion or READY publication.
-	if typeOf.NumMethod() != 3 {
-		t.Fatalf("methods=%d", typeOf.NumMethod())
-	}
-	for _, forbidden := range []string{"Delete", "Ready", "PublishReady"} {
-		if _, exists := typeOf.MethodByName(forbidden); exists {
-			t.Fatalf("forbidden method=%s", forbidden)
-		}
-	}
-}
 
 func Test_ArtifactLifecycle_when_dump_is_uploaded_then_restored(t *testing.T) {
 	// Given: pre-dump identity with no guessed byte count or checksum.

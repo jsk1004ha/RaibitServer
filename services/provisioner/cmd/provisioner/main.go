@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/raibitserver/provisioner/internal/backup"
+	"github.com/raibitserver/provisioner/internal/command"
 	"github.com/raibitserver/provisioner/internal/provider"
 	"github.com/raibitserver/provisioner/internal/reconciler"
 	"github.com/raibitserver/provisioner/internal/store"
@@ -32,6 +34,12 @@ func main() {
 	}
 	defer closeStore()
 	state.ConfigureResourceClaims(resourceEnvironment, eligibleImages)
+	commandRunner := &command.OSRunner{}
+	recovery, err := configureRecovery(state, commandRunner, processEnvironment())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "provisioner recovery configuration failed: %v\n", err)
+		os.Exit(1)
+	}
 	dryRun := os.Getenv("RAIBITSERVER_DRY_RUN") != "0" && os.Getenv("RAIBITSERVER_EXECUTE") != "1"
 	interval := secondsEnv("RAIBITSERVER_RECONCILE_INTERVAL_SECONDS", 5*time.Second)
 	worker := reconciler.New(reconciler.Config{
@@ -45,8 +53,17 @@ func main() {
 		ServiceAccountName:      os.Getenv("RAIBITSERVER_PROVISIONER_SERVICE_ACCOUNT_NAME"),
 		ServiceAccountNamespace: os.Getenv("RAIBITSERVER_PROVISIONER_SERVICE_ACCOUNT_NAMESPACE"),
 		TenantRoleName:          os.Getenv("RAIBITSERVER_PROVISIONER_TENANT_ROLE_NAME"),
-	}, state, nil)
+	}, state, commandRunner)
 	for {
+		if recovery != nil {
+			processed, recoveryErr := recovery.RunOnce(ctx)
+			if recoveryErr != nil {
+				fmt.Fprintf(os.Stderr, "provisioner recovery dispatch failed: %v\n", recoveryErr)
+			}
+			if processed {
+				continue
+			}
+		}
 		result, err := worker.RunOnce(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "provisioner reconcile failed: %v\n", err)
@@ -64,6 +81,43 @@ func main() {
 		case <-timer.C:
 		}
 	}
+}
+
+func configureRecovery(state *store.PostgresStore, runner *command.OSRunner, env map[string]string) (*backup.RecoveryDispatcher, error) {
+	operator, err := backup.ParseOperator(env)
+	if err != nil || !operator.Enabled() {
+		return nil, err
+	}
+	policy, err := backup.ParseRequiredRecoveryToolPolicy(env)
+	if err != nil {
+		return nil, err
+	}
+	client, err := backup.NewCommandKubernetesJobClient(runner, secondsEnv("RAIBITSERVER_RECOVERY_JOB_TIMEOUT_SECONDS", 30*time.Minute))
+	if err != nil {
+		return nil, err
+	}
+	jobRunner, err := backup.NewKubernetesJobRunner(client)
+	if err != nil {
+		return nil, err
+	}
+	return backup.NewRecoveryDispatcher(state, policy, jobRunner, recoveryHandlers(), "provisioner-recovery")
+}
+
+// Tasks 24/25 register fixed-command engine handlers here. An enabled recovery
+// configuration fails startup while any configured engine has no handler.
+func recoveryHandlers() []backup.RecoveryHandler { return nil }
+
+func processEnvironment() map[string]string {
+	result := make(map[string]string)
+	for _, entry := range os.Environ() {
+		for index := range entry {
+			if entry[index] == '=' {
+				result[entry[:index]] = entry[index+1:]
+				break
+			}
+		}
+	}
+	return result
 }
 
 func shouldWait(result *reconciler.Result, reconcileErr error) bool {

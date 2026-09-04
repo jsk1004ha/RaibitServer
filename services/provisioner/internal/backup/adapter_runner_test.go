@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,18 +19,13 @@ type fakeRecoveryKubernetes struct {
 	calls      []string
 }
 
-func (f *fakeRecoveryKubernetes) ObserveProviderWorkload(_ context.Context, _, _ string) (LiveWorkloadObservation, error) {
-	f.calls = append(f.calls, "workload")
-	return f.workload, nil
-}
-
-func (f *fakeRecoveryKubernetes) ObserveSecret(_ context.Context, _, _ string) (LiveSecretObservation, error) {
-	f.calls = append(f.calls, "secret")
-	return f.secret, nil
-}
-
-func (f *fakeRecoveryKubernetes) CreateJob(_ context.Context, job IsolatedJob, stream JobStream) (CreatedJobObservation, error) {
-	f.calls = append(f.calls, "create")
+func (f *fakeRecoveryKubernetes) CreateAuthorizedJob(_ context.Context, job IsolatedJob, stream JobStream) (CreatedJobObservation, error) {
+	f.calls = append(f.calls, "authorize")
+	provider := job.spec.Connection.spec.Provenance.spec
+	secret := job.spec.Connection.spec.Secret
+	if f.workload.Namespace != provider.Namespace || f.workload.Name != provider.Name || f.workload.UID != provider.UID || f.workload.Generation != provider.Generation || f.workload.Image != provider.Image || f.secret.Namespace != secret.namespace || f.secret.Name != secret.name || f.secret.UID != provider.CredentialUID || f.secret.Annotations["raibitserver.io/credential-generation"] != provider.CredentialGeneration || !slices.Contains(f.secret.Keys, secret.key) {
+		return CreatedJobObservation{}, ErrRecoveryJob
+	}
 	f.job = job
 	if bindingMatches(job, dumpDirection) {
 		if _, err := io.WriteString(stream.Output(), "dump"); err != nil {
@@ -43,7 +39,12 @@ func (f *fakeRecoveryKubernetes) CreateJob(_ context.Context, job IsolatedJob, s
 	return f.created, nil
 }
 
-func (f *fakeRecoveryKubernetes) WaitJob(_ context.Context, _, _, _ string) (CompletedJobObservation, error) {
+func (f *fakeRecoveryKubernetes) CleanupJob(_ context.Context, _ CreatedJobObservation) error {
+	f.calls = append(f.calls, "cleanup")
+	return nil
+}
+
+func (f *fakeRecoveryKubernetes) WaitJob(_ context.Context, _ CreatedJobObservation) (CompletedJobObservation, error) {
 	f.calls = append(f.calls, "wait")
 	return f.completion(f.job), nil
 }
@@ -77,7 +78,7 @@ func Test_KubernetesJobRunner_when_same_name_secret_was_replaced(t *testing.T) {
 	runner, _ := NewKubernetesJobRunner(client)
 	output := &countingWriteCloser{}
 	handoff, _ := NewDumpHandoff(context.Background(), output, 16)
-	if receipt, runErr := handoff.Execute(context.Background(), job, runner); !errors.Is(runErr, ErrRecoveryJob) || receipt.Name() != "" || strings.Join(client.calls, ",") != "workload,secret" || output.closes.Load() != 1 {
+	if receipt, runErr := handoff.Execute(context.Background(), job, runner); !errors.Is(runErr, ErrRecoveryJob) || receipt.Name() != "" || strings.Join(client.calls, ",") != "authorize" || output.closes.Load() != 1 {
 		t.Fatalf("receipt=%+v calls=%v closes=%d err=%v", receipt, client.calls, output.closes.Load(), runErr)
 	}
 }
@@ -98,7 +99,7 @@ func Test_KubernetesJobRunner_when_secret_generation_or_key_differs(t *testing.T
 		mutate(&client.secret)
 		runner, _ := NewKubernetesJobRunner(client)
 		handoff, _ := NewDumpHandoff(context.Background(), &countingWriteCloser{}, 16)
-		if _, runErr := handoff.Execute(context.Background(), job, runner); !errors.Is(runErr, ErrRecoveryJob) || strings.Contains(strings.Join(client.calls, ","), "create") {
+		if _, runErr := handoff.Execute(context.Background(), job, runner); !errors.Is(runErr, ErrRecoveryJob) || strings.Join(client.calls, ",") != "authorize" {
 			t.Fatalf("stale Secret authority reached create: calls=%v err=%v", client.calls, runErr)
 		}
 	}
@@ -114,7 +115,7 @@ func Test_KubernetesJobRunner_when_live_authority_and_completion_are_exact(t *te
 	runner, _ := NewKubernetesJobRunner(client)
 	handoff, _ := NewDumpHandoff(context.Background(), &countingWriteCloser{}, 16)
 	receipt, err := handoff.Execute(context.Background(), job, runner)
-	if err != nil || receipt.UID() != "recovery-job-uid" || receipt.Bytes() != 4 || strings.Join(client.calls, ",") != "workload,secret,create,wait" {
+	if err != nil || receipt.UID() != "recovery-job-uid" || receipt.Bytes() != 4 || strings.Join(client.calls, ",") != "authorize,wait,cleanup" {
 		t.Fatalf("receipt=%+v calls=%v err=%v", receipt, client.calls, err)
 	}
 }
