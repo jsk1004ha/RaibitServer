@@ -59,11 +59,19 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.clos
 function sendRuntimeLogStream(request, response, serviceId) {
   const attempt = (streamAttempts.get(serviceId) || 0) + 1;
   streamAttempts.set(serviceId, attempt);
-  requests.push({ method: request.method, path: new URL(request.url || '/', `http://127.0.0.1:${port}`).pathname, query: '', authorization: request.headers.authorization ? 'Bearer [MASKED]' : null, lastEventId: request.headers['last-event-id'] || null, body: {} });
+  const streamRequest = { method: request.method, path: new URL(request.url || '/', `http://127.0.0.1:${port}`).pathname, query: '', authorization: request.headers.authorization ? 'Bearer [MASKED]' : null, lastEventId: request.headers['last-event-id'] || null, body: {}, streamClosed: false };
+  requests.push(streamRequest);
   const logs = serviceId === 'svc_fixture_worker'
     ? [{ id: 'worker-initial', timestamp: FIXED_TIME, level: 'info', line: 'worker-only-initial-log' }, { id: 'worker-hostile', timestamp: FIXED_TIME, level: 'warn', line: '<img src=x onerror="fixture-hostile-log">' }, ...(attempt > 1 ? [{ id: 'worker-live', timestamp: '2026-08-31T03:00:01.000Z', level: 'info', line: 'worker-only-live-log' }] : [])]
     : [{ id: 'web-initial', timestamp: FIXED_TIME, level: 'info', line: 'web-only-initial-log' }];
   const payload = JSON.stringify({ logs });
   response.writeHead(200, { 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'content-type': 'text/event-stream; charset=utf-8' });
-  response.end(`retry: 1000\nid: ${serviceId}-snapshot-${attempt}\nevent: service.logs.snapshot\ndata: ${payload}\n\n`);
+  response.write(`retry: 1000\nid: ${serviceId}-snapshot-${attempt}\nevent: service.logs.snapshot\ndata: ${payload}\n\n`);
+  response.once('close', () => { streamRequest.streamClosed = true; });
+  if (serviceId === 'svc_fixture_worker') {
+    const delta = JSON.stringify({ logs: [{ id: 'worker-live', timestamp: '2026-08-31T03:00:01.000Z', level: 'info', line: 'worker-only-live-log' }] });
+    setTimeout(() => {
+      if (!response.writableEnded) response.write(`id: ${serviceId}-delta-${attempt}\nevent: service.logs.delta\ndata: ${delta}\n\n`);
+    }, 50);
+  }
 }

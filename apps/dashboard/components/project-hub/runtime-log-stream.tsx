@@ -141,7 +141,7 @@ export function RuntimeLogStream({ initialRows, serviceId }: Readonly<{ initialR
     }
     setStatus(followingRef.current ? 'connecting' : 'stopped');
     const source = new EventSource(`/api/control/services/${encodeURIComponent(serviceId)}/logs/stream`);
-    const onSnapshot = (event: Event) => {
+    const onLogEvent = (event: Event) => {
       if (!(event instanceof MessageEvent) || typeof event.data !== 'string') return;
       if (event.lastEventId) lastEventId.current = event.lastEventId;
       const snapshot = parseSnapshot(event.data);
@@ -169,9 +169,11 @@ export function RuntimeLogStream({ initialRows, serviceId }: Readonly<{ initialR
       }
       setStatus(source.readyState === EventSource.CLOSED ? 'stopped' : 'reconnecting');
     };
-    source.addEventListener('service.logs.snapshot', onSnapshot);
+    source.addEventListener('service.logs.snapshot', onLogEvent);
+    source.addEventListener('service.logs.delta', onLogEvent);
     return () => {
-      source.removeEventListener('service.logs.snapshot', onSnapshot);
+      source.removeEventListener('service.logs.snapshot', onLogEvent);
+      source.removeEventListener('service.logs.delta', onLogEvent);
       source.close();
     };
   }, [fallbackPolling, serviceId]);
