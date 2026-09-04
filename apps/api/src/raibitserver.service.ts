@@ -1,11 +1,11 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
 import { projectObservationPayload } from '@raibitserver/core';
-import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
+import { ResourceBackupListSchema, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
-import { ResourceCapabilityUnavailable, ResourceIntentInvalid, resourceAvailability, can, listCatalog } from '@raibitserver/core';
+import { RecoveryError, ResourceCapabilityUnavailable, ResourceIntentInvalid, publicRecovery, resourceAvailability, resourceStorageMb, can, listCatalog } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -247,6 +247,40 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
     await assertProjectAccess(repository, resource.projectId, subject);
     return { ...resource, availability: { ...resourceAvailability(resource.engine), permitted: can(subject.role, 'db:create') } };
+  }
+
+  async createResourceBackup(resourceId: string, input: ResourceBackupCreate, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    return repositoryMutation(() => this.withRecoveryScope(repository, subject, async (recovery, scope) => {
+      const result = await recovery.createBackup({ ...scope, sourceId: resourceId, body: input });
+      return publicRecovery(result.operation);
+    }));
+  }
+
+  async listResourceBackups(resourceId: string, input: Record<string, unknown>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    return repositoryMutation(() => {
+      const options = parseRecoveryListOptions(input);
+      return this.withRecoveryScope(repository, subject, (recovery, scope) => recovery.listBackups(scope, resourceId, options));
+    });
+  }
+
+  async deleteResourceBackup(backupId: string, input: ResourceBackupDelete, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    return repositoryMutation(() => this.withRecoveryScope(repository, subject, (recovery, scope) => recovery.requestBackupDeletion(scope, backupId, input)));
+  }
+
+  async createBackupRestore(backupId: string, input: ResourceRestoreCreate, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    return repositoryMutation(() => this.withRecoveryScope(repository, subject, async (recovery, scope) => {
+      const result = await recovery.createRestore({ ...scope, sourceId: backupId, body: input });
+      return publicRecovery(result.operation);
+    }));
+  }
+
+  async getRecoveryRestore(restoreId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    return repositoryMutation(() => this.withRecoveryScope(repository, subject, (recovery, scope) => recovery.getRestore(scope, restoreId)));
   }
 
   async updateResource(resourceId: string, updates: Record<string, any>, subject: Record<string, any>) {
@@ -890,6 +924,32 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     return repository.applyNextPreviewObservation(input);
   }
+
+  private async withRecoveryScope<T>(repository: any, subject: Record<string, any>, work: (recovery: any, scope: { readonly organizationId: string; readonly actorUserId: string }) => Promise<T>): Promise<T> {
+    for (const organizationId of recoveryOrganizationIds(subject)) {
+      const scope = { organizationId, actorUserId: String(subject.id) };
+      const recovery = repository.resourceRecovery((state: any, request: any, kind: 'backup' | 'restore') => this.enforceRecoveryQuota(repository, state, request, kind));
+      try {
+        return await work(recovery, scope);
+      } catch (error) {
+        if (error instanceof RecoveryError && error.code === 'RECOVERY_NOT_FOUND') continue;
+        throw error;
+      }
+    }
+    throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
+  }
+
+  private async enforceRecoveryQuota(repository: any, state: any, request: any, kind: 'backup' | 'restore') {
+    await repository.enforceUserCan({ userId: request.actorUserId, action: kind === 'backup' ? 'resource.backup:create' : 'resource.restore:create' });
+    if (kind !== 'restore') return;
+    const backup = state.backups.find((candidate: Record<string, unknown>) => candidate.id === request.sourceId);
+    await repository.enforceUserCan({
+      userId: request.actorUserId,
+      action: 'resource.restore:create',
+      metric: 'maxDbStorageMb',
+      increment: resourceStorageMb(backup?.sourceSpec ?? {}, { includeDesiredState: true }),
+    });
+  }
 }
 
 async function assertProjectAccess(repository: any, projectId: string, subject: Record<string, any>) {
@@ -992,6 +1052,7 @@ async function repositoryMutation<T>(operation: () => T | Promise<T>): Promise<T
 }
 
 function nestAuthError(error: any) {
+  if (error instanceof RecoveryError) return new HttpException({ statusCode: error.statusCode, code: error.code, message: error.code }, error.statusCode);
   if (error instanceof DeploymentOperationError) return typedOperationException(error.statusCode, error.code, error.code === 'ACTIVE_DEPLOYMENT');
   if (error instanceof ResourceCapabilityUnavailable) return new BadRequestException({ ...typedOperationBody(400, error.code, false), reasonCode: error.reasonCode });
   if (error instanceof ResourceIntentInvalid) return new BadRequestException(typedOperationBody(400, error.code, false));
@@ -1004,6 +1065,22 @@ function nestAuthError(error: any) {
   if (error?.statusCode === 429) return new HttpException(message, 429);
   if (Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode <= 599) return new HttpException(message, error.statusCode);
   return error;
+}
+
+function parseRecoveryListOptions(input: Record<string, unknown>): ResourceBackupList {
+  const limit = input.limit;
+  const candidate = {
+    ...input,
+    ...(typeof limit === 'string' && /^[0-9]+$/.test(limit) ? { limit: Number(limit) } : {}),
+  };
+  const parsed = ResourceBackupListSchema.safeParse(candidate);
+  if (!parsed.success) throw new RecoveryError('RECOVERY_INPUT_INVALID', 400);
+  return parsed.data;
+}
+
+function recoveryOrganizationIds(subject: Record<string, any>): readonly string[] {
+  return [...new Set([subject.organizationId, ...(Array.isArray(subject.organizationIds) ? subject.organizationIds : [])]
+    .filter((organizationId): organizationId is string => typeof organizationId === 'string' && organizationId.length > 0))];
 }
 
 function typedOperationBody(statusCode: number, code: string, retryable: boolean, permission = false) {

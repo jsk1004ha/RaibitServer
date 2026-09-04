@@ -49,7 +49,7 @@ export function createOperationsClient(transport: OperationTransport) {
         headers['last-event-id'] = cursorSchema.parse(options.lastEventId);
       }
       if (contract.stream) headers.accept = 'text/event-stream';
-      const sendsBody = contract.method !== 'get' && contract.method !== 'delete';
+      const sendsBody = contract.method !== 'get' && Object.keys(parsed.body).length > 0;
       if (sendsBody) headers['content-type'] = 'application/json';
       // Native fetch matches the existing client transport; bounded cancellation
       // and typed HTTP errors are enforced here, including open SSE connections.
@@ -128,6 +128,11 @@ export function createOperationsClient(transport: OperationTransport) {
     'resources-delete': bind(apiOperations['resources-delete']),
     'resources-attach': bind(apiOperations['resources-attach']),
     'resources-provision': bind(apiOperations['resources-provision']),
+    'resource-backups-create': bind(apiOperations['resource-backups-create']),
+    'resource-backups-list': bind(apiOperations['resource-backups-list']),
+    'resource-backups-delete': bind(apiOperations['resource-backups-delete']),
+    'backup-restores-create': bind(apiOperations['backup-restores-create']),
+    'restores-get': bind(apiOperations['restores-get']),
     'console-schema': bind(apiOperations['console-schema']),
     'console-tables': bind(apiOperations['console-tables']),
     'console-table': bind(apiOperations['console-table']),

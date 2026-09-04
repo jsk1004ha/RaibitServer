@@ -1,4 +1,4 @@
-import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceListResponse, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
+import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
 import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
@@ -23,6 +23,10 @@ export type DeploymentEventsResult = ApiOutput<'deployments-events'>;
 export type DeploymentActivityStreamResult = ApiOutput<'deployments-stream'>;
 export type ResourceAttachmentResult = ApiOutput<'resources-attach'>;
 export type ResourceProvisionResult = ApiOutput<'resources-provision'>;
+export type ResourceBackupResult = ApiOutput<'resource-backups-create'>;
+export type ResourceBackupHistory = ApiOutput<'resource-backups-list'>;
+export type ResourceBackupDeletionResult = ApiOutput<'resource-backups-delete'>;
+export type ResourceRestoreResult = ApiOutput<'backup-restores-create'>;
 
 export type PageOptions = { limit?: number; cursor?: string; after?: string };
 
@@ -98,6 +102,11 @@ export class RAIBITSERVERClient {
   deleteResource(resourceId: string): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}`, { method: 'DELETE' }); }
   attachResource(resourceId: string, input: { readonly serviceId: string; readonly envPrefix?: string }): Promise<ResourceAttachmentResult> { return this.operations['resources-attach']({ path: { resourceId }, query: {}, body: input }); }
   provisionResource(resourceId: string, input: { readonly intent: 'preview-plan' | 'live-provision' }): Promise<ResourceProvisionResult> { return this.operations['resources-provision']({ path: { resourceId }, query: {}, body: input }); }
+  createBackup(resourceId: string, input: ResourceBackupCreate): Promise<ResourceBackupView> { return this.operations['resource-backups-create']({ path: { resourceId }, query: {}, body: input }); }
+  listBackups(resourceId: string, options: ResourceBackupList = {}): Promise<ResourceBackupListView> { return this.operations['resource-backups-list']({ path: { resourceId }, query: options, body: {} }); }
+  deleteBackup(backupId: string, input: ResourceBackupDelete): Promise<ResourceBackupView> { return this.operations['resource-backups-delete']({ path: { backupId }, query: {}, body: input }); }
+  createRestore(backupId: string, input: ResourceRestoreCreate): Promise<ResourceRestoreView> { return this.operations['backup-restores-create']({ path: { backupId }, query: {}, body: input }); }
+  getRestore(restoreId: string): Promise<ResourceRestoreView> { return this.operations['restores-get']({ path: { restoreId }, query: {}, body: {} }); }
 
   retryDeployment(deploymentId: string, body: DeploymentOperationInput) { return this.operations['deployments-retry']({ path: { deploymentId }, query: {}, body }); }
   redeployService(serviceId: string, body: DeploymentOperationInput) { return this.operations['services-redeploy']({ path: { serviceId }, query: {}, body }); }

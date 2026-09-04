@@ -15,6 +15,9 @@
     "resources-create": {"name":"database","engine":"postgresql"},
     "resources-attach": {"serviceId":"service /+?"},
     "resources-provision": {"intent":"preview-plan"},
+    "resource-backups-create": {"requestIdempotencyKey":"parity-backup","formatVersion":1},
+    "resource-backups-delete": {"confirmed":true},
+    "backup-restores-create": {"requestIdempotencyKey":"parity-restore","formatVersion":1,"name":"restored-db"},
     "console-query": {"query":"SELECT 1"},
     "console-command": {"command":"PING"},
     "environment-upsert": {"entries":[{"key":"HELLO","value":"world"}]},
@@ -33,6 +36,7 @@
     "github-authorize":{"installation_id":"123","setup_action":"install","state":"state +/?"},
     "github-callback":{"code":"code +/?","state":"state +/?"},
     "projects-list":{"limit":2,"cursor":"cursor +/?"},
+    "resource-backups-list":{"limit":1,"cursor":"cursor +/?"},
     "services-logs":{"limit":1,"after":"cursor +/?"},
     "github-integrations-list":{"organizationId":"organization +/?"}
   },

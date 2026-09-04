@@ -1623,6 +1623,292 @@ paths:
       security:
         - bearerAuth: []
       x-permission: db:create
+  /resources/{resourceId}/backups:
+    post:
+      operationId: resource-backups-create
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/resource-backups-createBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/resource-backups-createResponse"
+        "400":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: backup:manage
+    get:
+      operationId: resource-backups-list
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 1024
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/resource-backups-listResponse"
+        "400":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: backup:manage
+  /backups/{backupId}:
+    delete:
+      operationId: resource-backups-delete
+      parameters:
+        - name: backupId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/resource-backups-deleteBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/resource-backups-createResponse"
+        "400":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: backup:manage
+  /backups/{backupId}/restores:
+    post:
+      operationId: backup-restores-create
+      parameters:
+        - name: backupId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/backup-restores-createBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/backup-restores-createResponse"
+        "400":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: backup:restore
+  /restores/{restoreId}:
+    get:
+      operationId: restores-get
+      parameters:
+        - name: restoreId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/backup-restores-createResponse"
+        "400":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Stable recovery error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: backup:restore
   /resources/{resourceId}/console/schema:
     get:
       operationId: console-schema
@@ -4873,6 +5159,191 @@ components:
       required:
         - resource
         - result
+      additionalProperties: false
+    resource-backups-createResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      readOnly: true
+      type: object
+      properties:
+        id:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        organizationId:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        projectId:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        resourceId:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        engine:
+          type: string
+        status:
+          type: string
+          enum:
+            - QUEUED
+            - RUNNING
+            - VERIFYING
+            - READY
+            - FAILED
+            - EXPIRED
+            - DELETING
+            - DELETED
+        createdAt:
+          type: string
+        readyAt:
+          anyOf:
+            - type: string
+            - type: "null"
+        errorCode:
+          anyOf:
+            - type: string
+            - type: "null"
+        size:
+          anyOf:
+            - type: string
+              pattern: ^[1-9][0-9]*$
+            - type: "null"
+        expiresAt:
+          anyOf:
+            - type: string
+            - type: "null"
+        recoverable:
+          type: boolean
+      required:
+        - id
+        - organizationId
+        - projectId
+        - resourceId
+        - engine
+        - status
+        - createdAt
+        - readyAt
+        - errorCode
+        - size
+        - expiresAt
+        - recoverable
+      additionalProperties: false
+    resource-backups-createBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      readOnly: true
+      type: object
+      properties:
+        requestIdempotencyKey:
+          type: string
+          pattern: ^[A-Za-z0-9._:-]{1,128}$
+        formatVersion:
+          type: number
+          const: 1
+      required:
+        - requestIdempotencyKey
+        - formatVersion
+      additionalProperties: false
+    resource-backups-listResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      readOnly: true
+      type: object
+      properties:
+        backups:
+          readOnly: true
+          type: array
+          items:
+            $ref: "#/components/schemas/resource-backups-createResponse"
+        nextCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - backups
+        - nextCursor
+      additionalProperties: false
+    resource-backups-deleteBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      readOnly: true
+      type: object
+      properties:
+        confirmed:
+          type: boolean
+          const: true
+      required:
+        - confirmed
+      additionalProperties: false
+    backup-restores-createResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      readOnly: true
+      type: object
+      properties:
+        id:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        organizationId:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        projectId:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        backupId:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        sourceResourceId:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        targetResourceId:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$
+        engine:
+          type: string
+        status:
+          type: string
+          enum:
+            - QUEUED
+            - RUNNING
+            - VERIFYING
+            - READY
+            - FAILED
+            - CANCELLED
+        createdAt:
+          type: string
+        readyAt:
+          anyOf:
+            - type: string
+            - type: "null"
+        errorCode:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - id
+        - organizationId
+        - projectId
+        - backupId
+        - sourceResourceId
+        - targetResourceId
+        - engine
+        - status
+        - createdAt
+        - readyAt
+        - errorCode
+      additionalProperties: false
+    backup-restores-createBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      readOnly: true
+      type: object
+      properties:
+        requestIdempotencyKey:
+          type: string
+          pattern: ^[A-Za-z0-9._:-]{1,128}$
+        formatVersion:
+          type: number
+          const: 1
+        name:
+          type: string
+          pattern: ^[a-z][a-z0-9-]{0,47}$
+      required:
+        - requestIdempotencyKey
+        - formatVersion
+        - name
       additionalProperties: false
     console-schemaResponse:
       $schema: https://json-schema.org/draft/2020-12/schema

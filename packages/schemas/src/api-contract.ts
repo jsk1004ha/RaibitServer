@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { DeploymentOperationInputSchema } from './deployment-operation.ts';
+import { ResourceBackupCreateSchema, ResourceBackupDeleteSchema, ResourceBackupListSchema, ResourceBackupListViewSchema, ResourceBackupViewSchema, ResourceRestoreCreateSchema, ResourceRestoreViewSchema } from './resource-recovery.ts';
 import * as M from './api-models.ts';
 import { ProjectUpdateSchema, ServiceUpdateSchema, ResourceUpdateSchema } from './desired-state-mutations.ts';
 
@@ -8,6 +9,8 @@ const project = z.object({ projectId: id });
 const service = z.object({ serviceId: id });
 const deployment = z.object({ deploymentId: id });
 const resource = z.object({ resourceId: id });
+const backup = z.object({ backupId: id });
+const restore = z.object({ restoreId: id });
 const user = z.object({ userId: id });
 const scopedService = project.extend({ serviceId: id });
 const orgQuery = z.object({ organizationId: id.optional() });
@@ -79,6 +82,11 @@ export const apiOperations = {
   'resources-delete': operation({ method: 'delete', path: '/resources/{resourceId}', status: 200, permission: 'db:delete', input: input(resource, M.Empty, M.Empty), response: M.Deletion }),
   'resources-attach': operation({ method: 'post', path: '/resources/{resourceId}/attach', status: 201, permission: 'db:create', input: input(resource, M.Empty, z.object({ serviceId: id, envPrefix: z.string().optional() })), response: z.object({ operationId: id, status: z.literal('ATTACHED'), resourceId: id, serviceId: id }).catchall(z.json()) }),
   'resources-provision': operation({ method: 'post', path: '/resources/{resourceId}/provision', status: 201, permission: 'db:create', input: input(resource, M.Empty, M.ResourceProvisionInput), response: z.object({ operationId: id.optional(), status: z.string().optional(), resource: M.Resource, result: M.ResourceProvisionResult }) }),
+  'resource-backups-create': operation({ method: 'post', path: '/resources/{resourceId}/backups', status: 202, permission: 'backup:manage', input: input(resource, M.Empty, ResourceBackupCreateSchema), response: ResourceBackupViewSchema }),
+  'resource-backups-list': operation({ method: 'get', path: '/resources/{resourceId}/backups', status: 200, permission: 'backup:manage', input: input(resource, ResourceBackupListSchema, M.Empty), response: ResourceBackupListViewSchema }),
+  'resource-backups-delete': operation({ method: 'delete', path: '/backups/{backupId}', status: 200, permission: 'backup:manage', input: input(backup, M.Empty, ResourceBackupDeleteSchema), response: ResourceBackupViewSchema }),
+  'backup-restores-create': operation({ method: 'post', path: '/backups/{backupId}/restores', status: 202, permission: 'backup:restore', input: input(backup, M.Empty, ResourceRestoreCreateSchema), response: ResourceRestoreViewSchema }),
+  'restores-get': operation({ method: 'get', path: '/restores/{restoreId}', status: 200, permission: 'backup:restore', input: input(restore, M.Empty, M.Empty), response: ResourceRestoreViewSchema }),
   'console-schema': operation({ method: 'get', path: '/resources/{resourceId}/console/schema', status: 200, permission: 'db:schema:read', input: input(resource, M.BrowseInput, M.Empty), response: M.ConsoleResult.extend({ schema: M.JsonFields }) }),
   'console-tables': operation({ method: 'get', path: '/resources/{resourceId}/console/tables', status: 200, permission: 'db:schema:read', input: input(resource, M.BrowseInput, M.Empty), response: M.ConsoleResult.extend({ tables: z.array(z.json()) }) }),
   'console-table': operation({ method: 'get', path: '/resources/{resourceId}/console/tables/{table}', status: 200, permission: 'db:data:read', input: input(resource.extend({ table: id }), M.BrowseInput, M.Empty), response: M.ConsoleResult.extend({ rows: z.array(z.json()), rowCount: z.number() }) }),
@@ -144,8 +152,15 @@ export function createOpenApiDocument() {
     const response = { description: resourceCreate ? 'Resource desired state created; this does not confirm runtime readiness or release support.' : 'Successful response', content: { [stream ? 'text/event-stream' : 'application/json']: { schema: reference(contract.response) } } };
     const responses: Record<string, object> = { [contract.status]: response, default: { description: 'Typed error response', content: { 'application/json': { schema: reference(contract.error) } } } };
     if (resourceCreate) responses['400'] = { description: 'Unsupported engine or managed backup/restore request rejected before desired-state persistence.', content: { 'application/json': { schema: reference(contract.error) } } };
+    if (operationId.startsWith('resource-backups-') || operationId === 'backup-restores-create' || operationId === 'restores-get') {
+      for (const status of ['400', '403', '404', '409']) {
+        responses[status] = { description: 'Stable recovery error response', content: { 'application/json': { schema: reference(contract.error) } } };
+      }
+    }
     const body = z.toJSONSchema(shape.body);
-    const requestBody = ['post', 'patch'].includes(contract.method) ? { required: (body.required?.length ?? 0) > 0, content: { 'application/json': { schema: reference(shape.body) } } } : undefined;
+    const requestBody = ['post', 'patch'].includes(contract.method) || (contract.method === 'delete' && (body.required?.length ?? 0) > 0)
+      ? { required: (body.required?.length ?? 0) > 0, content: { 'application/json': { schema: reference(shape.body) } } }
+      : undefined;
     const webhook = operationId === 'github-webhooks';
     paths[contract.path] ??= {};
     paths[contract.path][contract.method] = {
