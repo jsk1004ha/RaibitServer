@@ -42,6 +42,35 @@ func Test_TTLSidecar_natural_countdown_round_trips_and_verifies(t *testing.T) {
 	}
 }
 
+func Test_TTLSidecar_round_trips_and_verifies_arbitrary_binary_key(t *testing.T) {
+	// Given
+	key := []byte{0x00, 0xff, '\n', '\r', 0x80, 'k'}
+	deadline := int64(1_800_000_010_000)
+	source := newFakeCache(map[string]keySnapshot{string(key): {kind: "string", dump: []byte{0x00, 0xff, 0x01}, pttl: 10_000}})
+	source.serverTimeValue = deadline - 10_000
+	source.expiryTimes = map[string]int64{string(key): deadline}
+	records, err := captureTTLRecords(t.Context(), source, [][]byte{key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, descriptor, err := encodeTTLRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := newFakeCache(map[string]keySnapshot{string(key): {kind: "string", dump: []byte{0x00, 0xff, 0x01}, pttl: 8_000}})
+	target.serverTimeValue = deadline - 8_000
+	target.expiryTimes = map[string]int64{string(key): deadline}
+
+	// When
+	decoded, decodeErr := decodeTTLRecords(bytes.NewReader(payload), descriptor)
+	verifyErr := verifyTTLRecords(t.Context(), target, decoded, 1)
+
+	// Then
+	if decodeErr != nil || verifyErr != nil || len(decoded) != 1 || !bytes.Equal(decoded[0].key, key) {
+		t.Fatalf("decoded=%v decodeErr=%v verifyErr=%v", decoded, decodeErr, verifyErr)
+	}
+}
+
 func Test_TTLSidecar_rejects_value_type_deadline_state_and_extra_drift(t *testing.T) {
 	// Given
 	deadline := int64(1_800_000_010_000)
@@ -110,8 +139,12 @@ func Test_TTLSidecar_rejects_malformed_unsorted_truncated_oversized_and_wrong_di
 		t.Fatal(err)
 	}
 	unsorted := bytes.Clone(payload)
-	secondKeyOffset := 12 + 4 + 1 + sha256.Size + 1 + 8 + 4
-	unsorted[secondKeyOffset] = 'a'
+	secondKey := []byte{0, 0, 0, 1, 'b'}
+	secondKeyOffset := bytes.LastIndex(unsorted, secondKey)
+	if secondKeyOffset < 0 {
+		t.Fatal("encoded second key not found")
+	}
+	unsorted[secondKeyOffset+len(secondKey)-1] = 'a'
 	unsortedDescriptor := ttlDescriptor{bytes: uint64(len(unsorted)), sha256: sha256.Sum256(unsorted)}
 	wantWrong := descriptor
 	wantWrong.sha256 = sha256.Sum256([]byte("wrong"))

@@ -3,6 +3,7 @@ package recoverycache
 import (
 	"bytes"
 	"context"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -85,10 +86,11 @@ func (c *respClient) serverTime(ctx context.Context) (int64, error) {
 	}
 	seconds, secondsErr := strconv.ParseInt(string(value.array[0].data), 10, 64)
 	micros, microsErr := strconv.ParseInt(string(value.array[1].data), 10, 64)
-	if secondsErr != nil || microsErr != nil || seconds < 0 || micros < 0 || micros >= 1_000_000 || seconds > (1<<63-1)/1000 {
+	millis := micros / 1000
+	if secondsErr != nil || microsErr != nil || seconds < 0 || micros < 0 || micros >= 1_000_000 || seconds > (math.MaxInt64-millis)/1000 {
 		return 0, ErrOperation
 	}
-	return seconds*1000 + micros/1000, nil
+	return seconds*1000 + millis, nil
 }
 
 func (c *respClient) expireTime(ctx context.Context, key []byte) (int64, error) {

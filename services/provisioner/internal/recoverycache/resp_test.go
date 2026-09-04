@@ -165,6 +165,20 @@ func Test_RESP_rejects_malformed_TIME_and_PEXPIRETIME(t *testing.T) {
 	}
 }
 
+func Test_RESP_rejects_TIME_millisecond_addition_overflow(t *testing.T) {
+	// Given
+	transport := &trackingReadWriteCloser{reader: bytes.NewBufferString("*2\r\n$16\r\n9223372036854775\r\n$6\r\n999999\r\n")}
+	client := newRESPClient(transport)
+
+	// When
+	_, err := client.serverTime(t.Context())
+
+	// Then
+	if !errors.Is(err, ErrOperation) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 type trackingReadWriteCloser struct {
 	reader io.Reader
 	writes bytes.Buffer
