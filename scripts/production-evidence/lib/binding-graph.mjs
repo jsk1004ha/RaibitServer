@@ -96,14 +96,27 @@ export function parseEvidenceBindingPayload(value) {
 
 export function resolveBindingGraph(entries, references) {
   if (!Array.isArray(entries) || !Array.isArray(references) || references.length === 0) fail();
+  const bindingKeys = ['schema', 'sequence', 'runIdentitySha256', 'role', 'bindingId', 'payload', 'payloadSha256', 'createdAt', 'entrySha256'];
+  const normalizedEntries = entries.map((entry, index) => {
+    if (!exactKeys(entry, bindingKeys) || entry.schema !== 'raibitserver.production-evidence-binding/v1'
+      || entry.sequence !== index + 1 || !SHA256.test(entry.runIdentitySha256) || !SAFE_PART.test(entry.role)
+      || !SAFE_PART.test(entry.bindingId) || !SHA256.test(entry.payloadSha256) || entry.payloadSha256 !== digest(entry.payload)
+      || !isIso(entry.createdAt) || !SHA256.test(entry.entrySha256)) fail('invalid_journal');
+    const { entrySha256, ...unsigned } = entry;
+    if (entrySha256 !== digest(unsigned)) fail('journal_digest_mismatch');
+    return immutable({ ...entry, payload: parseEvidenceBindingPayload(entry.payload) });
+  });
+  if (normalizedEntries.some((entry, index) => index > 0
+    && (entry.runIdentitySha256 !== normalizedEntries[0].runIdentitySha256
+      || Date.parse(entry.createdAt) <= Date.parse(normalizedEntries[index - 1].createdAt)))) fail('invalid_journal');
   const logical = new Map(); const domain = new Map();
-  for (const entry of entries) {
+  for (const entry of normalizedEntries) {
     if (!isRecord(entry) || !SAFE_PART.test(entry.role) || !SAFE_PART.test(entry.bindingId) || !SHA256.test(entry.entrySha256) || !isRecord(entry.payload)) fail();
     const logicalId = `${entry.role}:${entry.bindingId}`; const domainId = `${entry.payload.kind}:${primaryId(entry.payload)}`;
     if (logical.has(logicalId) || domain.has(domainId)) fail();
     logical.set(logicalId, entry); domain.set(domainId, entry.payload);
   }
-  for (const { payload: binding } of entries) {
+  for (const { payload: binding } of normalizedEntries) {
     switch (binding.kind) {
       case 'organization-membership': case 'github-repository': break;
       case 'tenant-revision': {
@@ -134,7 +147,7 @@ export function resolveBindingGraph(entries, references) {
     if (seen.has(id) || !entry || entry.entrySha256 !== reference.entrySha256) fail('invalid_binding_reference');
     seen.add(id); return entry.payload;
   });
-  return immutable({ bindingEntryCount: entries.length, bindingsDigest: digest(entries), referenced });
+  return immutable({ bindingEntryCount: normalizedEntries.length, bindingsDigest: digest(normalizedEntries), referenced });
 }
 
 export function deriveRunResourceName(identity, intentId) {

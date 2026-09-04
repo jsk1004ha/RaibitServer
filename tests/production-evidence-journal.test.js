@@ -132,7 +132,15 @@ test('Given canonical binding kinds, When journaled, Then exact provenance round
       createdAt: '2026-09-04T00:00:59.000Z' }), { reason: 'invalid_journal' });
   }
   const entries = await loadBindingsFixtureUnsafe(ctx);
+  const malformedProject = { ...entries[4], payload: { ...entries[4].payload, unexpected: 'rejected' } };
+  malformedProject.payloadSha256 = digest(malformedProject.payload);
+  const { entrySha256: oldProjectSha, ...projectUnsigned } = malformedProject;
+  malformedProject.entrySha256 = digest(projectUnsigned);
+  assert.throws(() => resolveBindingGraph([...entries.slice(0, 4), malformedProject],
+    [...entries.slice(0, 4), malformedProject].map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))),
+  { reason: 'invalid_journal' });
   const badDeployment = { ...entries[6], payload: { ...entries[6].payload, tenantCommitSha: '3'.repeat(40) } };
+  badDeployment.payloadSha256 = digest(badDeployment.payload);
   const { entrySha256: ignored, ...unsigned } = badDeployment;
   badDeployment.entrySha256 = digest(unsigned);
   assert.throws(() => resolveBindingGraph([...entries.slice(0, 6), badDeployment],
