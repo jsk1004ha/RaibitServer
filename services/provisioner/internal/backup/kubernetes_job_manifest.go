@@ -11,6 +11,42 @@ import (
 
 type recoveryNames struct{ snapshot, policy, job string }
 
+const recoveryDatabaseHelperPath = "/usr/local/bin/raibit-recovery-db"
+const recoveryCacheHelperPath = "/usr/local/bin/raibit-recovery-cache"
+
+type runtimeRecoveryStep struct {
+	executable string
+	args       []string
+	binding    StreamBinding
+}
+
+func materializedRecoverySteps(job IsolatedJob) ([]runtimeRecoveryStep, bool, error) {
+	present, valid := recoveryHelperCommand(job.spec.Steps, job.spec.Connection.Engine())
+	if present && !valid {
+		return nil, false, ErrRecoveryJob
+	}
+	runtimeExecutable := ""
+	if valid {
+		switch job.spec.Connection.Engine() {
+		case EnginePostgreSQL, EngineMySQL, EngineMariaDB, EngineMongoDB:
+			runtimeExecutable = recoveryDatabaseHelperPath
+		case EngineRedis, EngineValkey:
+			runtimeExecutable = recoveryCacheHelperPath
+		default:
+			return nil, false, ErrRecoveryJob
+		}
+	}
+	steps := make([]runtimeRecoveryStep, len(job.spec.Steps))
+	for index, step := range job.spec.Steps {
+		executable := step.command.executable
+		if valid {
+			executable = runtimeExecutable
+		}
+		steps[index] = runtimeRecoveryStep{executable: executable, args: step.command.args, binding: step.binding}
+	}
+	return steps, valid, nil
+}
+
 func recoveryCredentialSnapshot(job IsolatedJob, source kubernetesSecret, name string) (map[string]any, error) {
 	ref := job.spec.Connection.spec.Secret
 	value, ok := source.Data[ref.key]
@@ -36,9 +72,13 @@ func recoveryJobManifest(job IsolatedJob, name, snapshotName, snapshotUID string
 	if endpoint, ok := job.spec.Connection.Endpoint().(NetworkEndpoint); ok && endpoint.spec.Port != recoveryProviderPort(job.spec.Connection.Engine()) {
 		return nil, 0, ErrRecoveryJob
 	}
-	containers := make([]any, len(job.spec.Steps))
+	steps, _, err := materializedRecoverySteps(job)
+	if err != nil {
+		return nil, 0, err
+	}
+	containers := make([]any, len(steps))
 	streamStep := -1
-	for i, step := range job.spec.Steps {
+	for i, step := range steps {
 		container, err := recoveryStepContainer(job, step, i, snapshotName)
 		if err != nil {
 			return nil, 0, err
@@ -79,10 +119,9 @@ func recoveryJobManifest(job IsolatedJob, name, snapshotName, snapshotUID string
 	}, streamStep, nil
 }
 
-func recoveryStepContainer(job IsolatedJob, step CommandStep, index int, snapshotName string) (map[string]any, error) {
-	command := step.command
+func recoveryStepContainer(job IsolatedJob, step runtimeRecoveryStep, index int, snapshotName string) (map[string]any, error) {
 	container := map[string]any{
-		"name": fmt.Sprintf("step-%d", index), "image": job.spec.Image, "imagePullPolicy": "IfNotPresent", "command": []any{command.executable}, "args": stringAny(command.args),
+		"name": fmt.Sprintf("step-%d", index), "image": job.spec.Image, "imagePullPolicy": "IfNotPresent", "command": []any{step.executable}, "args": stringAny(step.args),
 		"stdin": step.binding == StreamStdin, "stdinOnce": step.binding == StreamStdin,
 		"terminationMessagePath": recoveryreceipt.TerminationLogPath, "terminationMessagePolicy": "File",
 		"resources":       map[string]any{"requests": map[string]any{"cpu": strconv.FormatInt(job.spec.CPUMilli, 10) + "m", "memory": strconv.FormatInt(job.spec.MemoryMiB, 10) + "Mi", "ephemeral-storage": strconv.FormatInt(job.spec.EphemeralMiB, 10) + "Mi"}, "limits": map[string]any{"cpu": strconv.FormatInt(job.spec.CPUMilli, 10) + "m", "memory": strconv.FormatInt(job.spec.MemoryMiB, 10) + "Mi", "ephemeral-storage": strconv.FormatInt(job.spec.EphemeralMiB, 10) + "Mi"}},

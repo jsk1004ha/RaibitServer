@@ -108,12 +108,16 @@ func (c *CommandKubernetesJobClient) CreateAuthorizedJob(ctx context.Context, jo
 	if err != nil {
 		return created, err
 	}
-	_, created.helperReceipt = recoveryHelperCommand(job.spec.Steps, job.spec.Connection.Engine())
+	steps, helperReceipt, err := materializedRecoverySteps(job)
+	if err != nil {
+		return created, err
+	}
+	created.helperReceipt = helperReceipt
 	created.streamStep, created.engine, created.image = streamStep, job.spec.Connection.Engine(), job.spec.Image
-	created.steps = make([]createdJobStep, len(job.spec.Steps))
-	for index, step := range job.spec.Steps {
-		if len(step.command.args) == 1 {
-			created.steps[index] = createdJobStep{executable: step.command.executable, action: step.command.args[0], binding: step.binding}
+	created.steps = make([]createdJobStep, len(steps))
+	for index, step := range steps {
+		if len(step.args) == 1 {
+			created.steps[index] = createdJobStep{executable: step.executable, action: step.args[0], binding: step.binding}
 		}
 	}
 	current, err := c.readWorkload(ctx, provider.Namespace, provider.Name)
