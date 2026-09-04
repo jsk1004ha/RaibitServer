@@ -30,7 +30,7 @@ export class PostgresRecoveryTransaction implements RecoveryTransaction {
       const attempts = await recoveryRows<RecoveryState['attempts'][number]>(tx, 'SELECT to_jsonb(a) || jsonb_build_object(\'candidateStoredBytes\',a."candidateStoredBytes"::text,\'candidatePlaintextBytes\',a."candidatePlaintextBytes"::text) AS row FROM "ResourceRecoveryAttempt" a WHERE "backupId" IN (SELECT id FROM "ResourceBackup" WHERE "organizationId"=$1) ORDER BY "backupId",attempt FOR UPDATE', organizationId);
       const jobs = await recoveryRows<RecoveryState['jobs'][number]>(tx, 'SELECT to_jsonb(j) AS row FROM "WorkflowJob" j WHERE (type=\'resource.backup\' AND "targetId" IN (SELECT id FROM "ResourceBackup" WHERE "organizationId"=$1)) OR (type=\'resource.restore\' AND "targetId" IN (SELECT id FROM "ResourceRestore" WHERE "organizationId"=$1)) ORDER BY id FOR UPDATE', organizationId);
       const legacyBackups = await recoveryRows<RecoveryState['legacyBackups'][number]>(tx, 'SELECT jsonb_build_object(\'id\',b.id,\'resourceId\',b."resourceId") AS row FROM "ResourceBackup" b JOIN "Resource" r ON r.id=b."resourceId" JOIN "Project" p ON p.id=r."projectId" WHERE p."organizationId"=$1 AND b."formatVersion" IS NULL', organizationId);
-      const state: RecoveryState = { organizations, projects, resources, members, backups, restores, pins, attempts, jobs, legacyBackups };
+      const state: RecoveryState = { organizations, projects, resources, members, backups, restores, pins, attempts, jobs, auditEvents: [], legacyBackups };
       const before = structuredClone(state);
       const result = await work(state);
       await persistRecoveryState(tx, before, state);
@@ -53,6 +53,10 @@ async function persistRecoveryState(tx: RecoverySql, before: RecoveryState, next
   }
   const remaining = new Set(next.pins.map(row => row.id));
   for (const pin of before.pins) if (!remaining.has(pin.id)) await tx.$executeRawUnsafe('DELETE FROM "ResourceRecoveryPin" WHERE id=$1', pin.id);
+  for (const audit of next.auditEvents) await tx.$executeRawUnsafe(
+    'INSERT INTO "AuditLog" ("actorUserId",action,"targetType","targetId",metadata,"createdAt") VALUES ($1,$2,$3,$4,$5::jsonb,$6)',
+    audit.actorUserId, audit.action, audit.targetType, audit.targetId, JSON.stringify(audit.metadata), audit.createdAt,
+  );
 }
 async function writeRecoveryRow(tx: RecoverySql, table: Table, row: object) {
   const data = { ...row, ...(table === 'Resource' ? { updatedAt: new Date().toISOString() } : {}) };

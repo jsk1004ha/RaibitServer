@@ -1,0 +1,176 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { can } from '../packages/core/src/rbac.ts';
+import { ResourceRecoveryRepository } from '../packages/core/src/resource-recovery.ts';
+import { MemoryRecoveryTransaction } from '../packages/core/src/resource-recovery-memory.ts';
+import { PostgresRecoveryTransaction } from '../packages/core/src/resource-recovery-postgres.ts';
+import { fixture, request, scope, readyBackup, body } from './resource-recovery-fixture.test.js';
+
+test('recovery API core enforces the locked backup permission matrix', async () => {
+  // Given every organization role, when checking recovery actions, then only the locked roles are authorized.
+  assert.equal(can('OWNER', 'backup:manage'), true);
+  assert.equal(can('ADMIN', 'backup:manage'), true);
+  assert.equal(can('DB_ADMIN', 'backup:manage'), true);
+  assert.equal(can('OWNER', 'backup:restore'), true);
+  assert.equal(can('DB_ADMIN', 'backup:restore'), true);
+  for (const role of ['MAINTAINER', 'DEVELOPER', 'VIEWER']) {
+    assert.equal(can(role, 'backup:manage'), false);
+    assert.equal(can(role, 'backup:restore'), false);
+  }
+  assert.equal(can('ADMIN', 'backup:restore'), false);
+});
+
+test('recovery API core lists safe v1 backup views with stable keyset pagination', async () => {
+  // Given three v1 backups and a legacy row, when listing two pages, then ordering, expiry, and projection are stable and safe.
+  const state = fixture();
+  const repository = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => {});
+  const created = [];
+  for (const [key, at] of [['one', '2026-09-03T00:00:00Z'], ['two', '2026-09-03T00:00:01Z'], ['three', '2026-09-03T00:00:01Z']]) {
+    const result = await repository.createBackup({ ...request(key), now: at });
+    created.push(result.operation);
+  }
+  state.legacyBackups.push({ id: 'legacy', resourceId: 'resource_a' });
+  state.backups = state.backups.map((row, index) => index === 0
+    ? { ...row, status: 'READY', readyAt: row.createdAt, expiresAt: '2026-09-03T00:00:02Z', artifactSize: '7', errorCode: 'INTERNAL_SECRET_ERROR' }
+    : row);
+  state.backups = state.backups.map(row => ({ ...row, createdAt: row.createdAt.replace('.000Z', '') }));
+
+  const first = await repository.listBackups(scope, 'resource_a', { limit: 2, now: '2026-09-03T00:00:03Z' });
+  const second = await repository.listBackups(scope, 'resource_a', { limit: 2, cursor: first.nextCursor, now: '2026-09-03T00:00:03Z' });
+  assert.deepEqual([...first.backups, ...second.backups].map(row => row.id), [...created].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)).map(row => row.id));
+  assert.equal(first.backups.length, 2);
+  assert.equal(second.backups.length, 1);
+  assert.equal(second.nextCursor, null);
+  await assert.rejects(repository.listBackups(scope, 'resource_a', { cursor: 'not-json' }), { code: 'RECOVERY_CURSOR_INVALID', statusCode: 400 });
+  await assert.rejects(repository.listBackups(scope, 'resource_a', { limit: 1001 }), { code: 'RECOVERY_LIMIT_INVALID', statusCode: 400 });
+  const expired = [...first.backups, ...second.backups].find(row => row.id === created[0].id);
+  assert.equal(expired.recoverable, false);
+  assert.equal(expired.errorCode, null);
+  for (const privateField of ['artifactKey', 'artifactChecksum', 'sourceSpec', 'sourceProvenance', 'encryptionKeyVersion', 'cleanupToken', 'job']) {
+    assert.equal(Object.hasOwn(expired, privateField), false);
+  }
+});
+
+test('recovery API core applies the default backup page bound', async () => {
+  // Given more than the default page size, when listing without options, then exactly 200 rows and a continuation cursor are returned.
+  const state = fixture();
+  const repository = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => {});
+  const seed = (await repository.createBackup(request('page-bound'))).operation;
+  state.backups = Array.from({ length: 201 }, (_, index) => ({ ...seed, id: `backup_${String(index).padStart(3, '0')}`, requestIdempotencyKey: `page-${index}` }));
+  const page = await repository.listBackups(scope, 'resource_a');
+  assert.equal(page.backups.length, 200);
+  assert.notEqual(page.nextCursor, null);
+});
+
+test('recovery API core returns safe restore views and indistinguishable scoped failures', async () => {
+  // Given a ready backup and active restore, when reading the restore, then only public fields are returned and foreign/missing stay 404.
+  const state = fixture();
+  const repository = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => {});
+  const backup = await repository.createBackup(request('restore-source'));
+  await readyBackup(repository, backup.operation.id);
+  const restore = await repository.createRestore({ ...scope, sourceId: backup.operation.id, body: { ...body, requestIdempotencyKey: 'restore', name: 'restored' }, now: '2026-09-03T00:01:00Z' });
+  const view = await repository.getRestore(scope, restore.operation.id);
+  assert.deepEqual(Object.keys(view).sort(), ['backupId', 'createdAt', 'engine', 'errorCode', 'id', 'organizationId', 'projectId', 'readyAt', 'sourceResourceId', 'status', 'targetResourceId'].sort());
+  for (const id of [restore.operation.id, 'missing']) {
+    await assert.rejects(repository.getRestore({ organizationId: 'org_b', actorUserId: 'user_b' }, id), { code: 'RECOVERY_NOT_FOUND', statusCode: 404 });
+  }
+  state.members.push({ organizationId: 'org_a', userId: 'admin_a', role: 'ADMIN' });
+  await assert.rejects(repository.getRestore({ organizationId: 'org_a', actorUserId: 'admin_a' }, restore.operation.id), { code: 'RECOVERY_FORBIDDEN', statusCode: 403 });
+  await assert.rejects(repository.createRestore({ ...scope, sourceId: backup.operation.id, body: { ...body, requestIdempotencyKey: 'restore', name: 'changed' } }), { code: 'IDEMPOTENCY_CONFLICT' });
+});
+
+test('recovery API core authorizes owned create targets before inspecting lifecycle or provenance', async () => {
+  // Given unauthorized same-org users and owned but unhealthy sources, when creating recovery work, then lifecycle details remain hidden behind 403.
+  const state = fixture();
+  state.members.push({ organizationId: 'org_a', userId: 'viewer_a', role: 'VIEWER' }, { organizationId: 'org_a', userId: 'admin_a', role: 'ADMIN' });
+  const repository = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => {});
+  const backup = await repository.createBackup(request('authorization-source'));
+  await readyBackup(repository, backup.operation.id);
+  state.resources[0].status = 'DELETING';
+  await assert.rejects(repository.createBackup({ ...request('hidden-backup'), actorUserId: 'viewer_a' }), { code: 'RECOVERY_FORBIDDEN', statusCode: 403 });
+  await assert.rejects(repository.createRestore({ ...scope, actorUserId: 'admin_a', sourceId: backup.operation.id, body: { ...body, requestIdempotencyKey: 'hidden-restore', name: 'hidden-restore' } }), { code: 'RECOVERY_FORBIDDEN', statusCode: 403 });
+  state.backups.push({ ...backup.operation, id: 'malformed_backup', formatVersion: 0 });
+  await assert.rejects(repository.createRestore({ ...scope, actorUserId: 'admin_a', sourceId: 'malformed_backup', body: { ...body, requestIdempotencyKey: 'hidden-malformed', name: 'hidden-malformed' } }), { code: 'RECOVERY_FORBIDDEN', statusCode: 403 });
+});
+
+test('recovery API core makes mutation audits replay-safe and deletion asynchronous', async () => {
+  // Given first requests, replays, conflicts, and active restore pins, when mutating, then audits and deletion states are exact.
+  const state = fixture();
+  let quotaCalls = 0;
+  const repository = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => { quotaCalls += 1; });
+  const first = await repository.createBackup(request('audit'));
+  const replay = await repository.createBackup(request('audit'));
+  assert.equal(replay.operation.id, first.operation.id);
+  assert.equal(quotaCalls, 1);
+  assert.equal(state.auditEvents.length, 1);
+  assert.equal(state.auditEvents[0].action, 'resource.backup:requested');
+  state.resources[0].status = 'PROVISIONING';
+  const replayAfterSourceChange = await repository.createBackup(request('audit'));
+  assert.equal(replayAfterSourceChange.operation.id, first.operation.id);
+  assert.equal(quotaCalls, 1);
+  assert.equal(state.auditEvents.length, 1);
+  state.resources[0].status = 'READY';
+  await assert.rejects(repository.createBackup({ ...request('audit'), body: { ...body, requestIdempotencyKey: 'audit', unexpected: true } }), { code: 'RECOVERY_INPUT_INVALID' });
+  await readyBackup(repository, first.operation.id);
+  const pending = await repository.createBackup(request('pending-delete'));
+  await assert.rejects(repository.requestBackupDeletion(scope, pending.operation.id, { confirmed: true }), { code: 'RECOVERY_CLEANUP_INELIGIBLE' });
+  const restore = await repository.createRestore({ ...scope, sourceId: first.operation.id, body: { ...body, requestIdempotencyKey: 'restore-pin', name: 'restore-pin' }, now: '2026-09-03T00:02:00Z' });
+  assert.equal(state.auditEvents.filter(row => row.action === 'resource.restore:requested').length, 1);
+  await assert.rejects(repository.requestBackupDeletion(scope, first.operation.id, { confirmed: true }, '2026-09-03T00:03:00Z'), { code: 'RECOVERY_RESTORE_PINNED' });
+  state.pins = state.pins.filter(row => row.restoreId !== restore.operation.id);
+  const deleting = await repository.requestBackupDeletion(scope, first.operation.id, { confirmed: true }, '2026-09-03T00:03:00Z');
+  const repeated = await repository.requestBackupDeletion(scope, first.operation.id, { confirmed: true }, '2026-09-03T00:04:00Z');
+  assert.equal(deleting.status, 'DELETING');
+  assert.equal(repeated.status, 'DELETING');
+  assert.equal(state.auditEvents.filter(row => row.action === 'resource.backup:delete-requested').length, 1);
+  assert.deepEqual(Object.keys(state.auditEvents[0].metadata).sort(), ['engine', 'status']);
+});
+
+test('recovery API core accepts every terminal cleanup state and replays deleted backups', async () => {
+  // Given failed, expired, and deleted backups, when deletion is requested, then eligible rows move to DELETING and deleted rows remain idempotent.
+  const state = fixture();
+  const repository = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => {});
+  const seed = (await repository.createBackup(request('delete-states'))).operation;
+  state.backups = [
+    { ...seed, id: 'backup_failed', status: 'FAILED' },
+    { ...seed, id: 'backup_expired', status: 'EXPIRED' },
+    { ...seed, id: 'backup_deleted', status: 'DELETED' },
+  ];
+  for (const id of ['backup_failed', 'backup_expired']) {
+    assert.equal((await repository.requestBackupDeletion(scope, id, { confirmed: true })).status, 'DELETING');
+  }
+  assert.equal((await repository.requestBackupDeletion(scope, 'backup_deleted', { confirmed: true })).status, 'DELETED');
+  assert.equal(state.auditEvents.filter(row => row.action === 'resource.backup:delete-requested').length, 2);
+});
+
+test('recovery API core persists the first mutation audit inside the PostgreSQL transaction', async () => {
+  // Given a PostgreSQL transaction fake backed by the real fixture, when creating a backup, then its domain rows and audit use the same transaction callback.
+  const seed = fixture();
+  const writes = [];
+  let transactionActive = false;
+  const sql = {
+    async $transaction(work) {
+      transactionActive = true;
+      try { return await work(this); }
+      finally { transactionActive = false; }
+    },
+    async $queryRawUnsafe(query) {
+      if (query.includes('FROM "Organization"')) return seed.organizations.filter(row => row.id === 'org_a').map(row => ({ row }));
+      if (query.includes('FROM "Resource" r WHERE')) return seed.resources.filter(row => row.projectId === 'project_a').map(row => ({ row }));
+      if (query.includes('FROM "Project" p WHERE')) return seed.projects.filter(row => row.organizationId === 'org_a').map(row => ({ row }));
+      if (query.includes('FROM "Membership"')) return seed.members.filter(row => row.organizationId === 'org_a').map(row => ({ row }));
+      return [];
+    },
+    async $executeRawUnsafe(query, ...values) {
+      assert.equal(transactionActive, true);
+      writes.push({ query, values });
+      return 1;
+    },
+  };
+  const repository = new ResourceRecoveryRepository(new PostgresRecoveryTransaction(sql), () => {});
+  const result = await repository.createBackup(request('postgres-audit'));
+  const audit = writes.find(row => row.query.includes('INSERT INTO "AuditLog"'));
+  assert.ok(audit);
+  assert.deepEqual(audit.values.slice(0, 4), ['user_a', 'resource.backup:requested', 'resource-backup', result.operation.id]);
+  assert.deepEqual(JSON.parse(audit.values[4]), { engine: 'postgresql', status: 'QUEUED' });
+});

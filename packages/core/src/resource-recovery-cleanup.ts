@@ -5,9 +5,9 @@ import { recoveryOperation } from './resource-recovery-worker.ts';
 import type { RecoveryState, RecoveryScope, RecoveryClaim, RecoveryCleanupFence } from './resource-recovery-types.ts';
 
 export function cancelRecoveryRestore(state: RecoveryState, request: RecoveryScope & { readonly operationId: string; readonly now?: string }) {
-  recoveryAuthorized(state, request);
   const operation = state.restores.find(row => row.id === request.operationId && row.organizationId === request.organizationId);
   if (!operation) throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
+  recoveryAuthorized(state, request, 'backup:restore');
   recoveryTransition('restore', operation.status, 'CANCELLED');
   const now = recoveryNow(request.now);
   const job = recoveryJob(state, operation.id);

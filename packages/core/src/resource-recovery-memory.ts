@@ -3,7 +3,7 @@ import type { RecoveryState, RecoveryTransaction } from './resource-recovery-typ
 import { RecoveryError } from './resource-recovery-provenance.ts';
 
 export function emptyRecoveryState(): RecoveryState {
-  return { organizations: [], projects: [], resources: [], members: [], backups: [], restores: [], pins: [], attempts: [], jobs: [], legacyBackups: [] };
+  return { organizations: [], projects: [], resources: [], members: [], backups: [], restores: [], pins: [], attempts: [], jobs: [], auditEvents: [], legacyBackups: [] };
 }
 const memoryRecoveryTails = new WeakMap<RecoveryState, Promise<void>>();
 export class MemoryRecoveryTransaction implements RecoveryTransaction {
@@ -25,6 +25,7 @@ export class MemoryRecoveryTransaction implements RecoveryTransaction {
         candidate.members = [...this.store.members];
       }
       const beforeIds = new Set(candidate.resources.map(row => row.id));
+      const beforeAuditCount = candidate.auditEvents.length;
       const result = await work(candidate);
       if (this.store && recoveryStoreRevision(this.store) !== storeRevision) throw new RecoveryError('RECOVERY_TRANSACTION_CONFLICT');
       Object.assign(this.state, candidate);
@@ -34,6 +35,7 @@ export class MemoryRecoveryTransaction implements RecoveryTransaction {
         }
         const recoveryIds = new Set(candidate.jobs.map(job => job.id));
         this.store.workflowJobs = [...this.store.workflowJobs.filter(job => !recoveryIds.has(job.id)), ...structuredClone(candidate.jobs)];
+        for (const audit of candidate.auditEvents.slice(beforeAuditCount)) this.store.audit(audit.actorUserId, audit.action, audit.targetType, audit.targetId, audit.metadata);
       }
       return result;
     } finally { unlock(); }

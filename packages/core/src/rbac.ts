@@ -28,10 +28,10 @@ export function parseOrganizationRouteSlug(value: unknown): OrganizationRouteSlu
 
 const ROLE_PERMISSIONS: Readonly<Record<OrganizationMembershipRole, readonly string[]>> = Object.freeze({
   OWNER: ['*'],
-  ADMIN: ['project:read', 'project:create', 'project:update', 'project:delete', 'service:create', 'service:update', 'deploy:run', 'env:write', 'env:read', 'db:create', 'db:delete', 'db:schema:read', 'team:invite', 'audit:read', 'billing:read', 'logs:read', 'metrics:read'],
+  ADMIN: ['project:read', 'project:create', 'project:update', 'project:delete', 'service:create', 'service:update', 'deploy:run', 'env:write', 'env:read', 'db:create', 'db:delete', 'db:schema:read', 'backup:manage', 'team:invite', 'audit:read', 'billing:read', 'logs:read', 'metrics:read'],
   MAINTAINER: ['project:read', 'project:update', 'service:create', 'service:update', 'deploy:run', 'env:write', 'env:read', 'db:connect', 'db:schema:read', 'db:data:read', 'logs:read', 'metrics:read'],
   DEVELOPER: ['project:read', 'deploy:run', 'logs:read', 'metrics:read', 'env:write-limited', 'db:schema:read'],
-  DB_ADMIN: ['project:read', 'db:create', 'db:delete', 'db:connect', 'db:schema:read', 'db:data:read', 'db:query', 'db:query:write', 'backup:restore'],
+  DB_ADMIN: ['project:read', 'db:create', 'db:delete', 'db:connect', 'db:schema:read', 'db:data:read', 'db:query', 'db:query:write', 'backup:manage', 'backup:restore'],
   VIEWER: ['project:read', 'logs:read', 'metrics:read'],
 });
 

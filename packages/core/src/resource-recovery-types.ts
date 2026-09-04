@@ -62,11 +62,17 @@ export type RecoveryJob = {
   readonly attempts: number; readonly maxAttempts: number; readonly lockedBy: string | null; readonly lockedAt: string | null;
   readonly createdAt: string; readonly updatedAt: string; readonly runAfter: string;
 };
+export type RecoveryAuditEvent = {
+  readonly actorUserId: string; readonly action: 'resource.backup:requested' | 'resource.restore:requested' | 'resource.backup:delete-requested';
+  readonly targetType: 'resource-backup' | 'resource-restore'; readonly targetId: string;
+  readonly metadata: { readonly engine: string; readonly status: string }; readonly createdAt: string;
+};
 // A transaction owns these mutable collections; returned records remain readonly.
 export type RecoveryState = {
   organizations: { readonly id: string }[]; projects: RecoveryProject[]; resources: RecoveryResource[];
   members: RecoveryMember[]; backups: RecoveryBackup[]; restores: RecoveryRestore[];
   pins: RecoveryPin[]; attempts: RecoveryAttempt[]; jobs: RecoveryJob[];
+  auditEvents: RecoveryAuditEvent[];
   legacyBackups: { readonly id: string; readonly resourceId: string }[];
 };
 export type RecoveryFence = {
@@ -87,6 +93,16 @@ export type RecoveryMutation =
   | { readonly action: 'upload'; readonly uploadId: string }
   | { readonly action: 'complete' };
 export type RecoveryResult = { readonly operation: RecoveryBackup | RecoveryRestore; readonly job: RecoveryJob };
+export type ResourceBackupView = {
+  readonly id: string; readonly organizationId: string; readonly projectId: string; readonly engine: string;
+  readonly status: BackupStatus; readonly createdAt: string; readonly readyAt: string | null; readonly errorCode: string | null;
+  readonly resourceId: string; readonly size: string | null; readonly expiresAt: string | null; readonly recoverable: boolean;
+};
+export type ResourceRestoreView = {
+  readonly id: string; readonly organizationId: string; readonly projectId: string; readonly engine: string;
+  readonly status: RestoreStatus; readonly createdAt: string; readonly readyAt: string | null; readonly errorCode: string | null;
+  readonly backupId: string; readonly sourceResourceId: string; readonly targetResourceId: string;
+};
 export interface RecoveryTransaction {
   run<T>(organizationId: string, work: (state: RecoveryState) => T | Promise<T>): Promise<T>;
 }

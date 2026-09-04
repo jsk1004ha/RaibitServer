@@ -13,10 +13,10 @@ export function recoveryMillis(value: string): number {
   // PostgreSQL TIMESTAMP(3) is timezone-less; this contract stores it as UTC.
   return Date.parse(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?$/.test(value) ? `${value}Z` : value);
 }
-export function recoveryAuthorized(state: RecoveryState, scope: RecoveryScope, write = true): void {
+export function recoveryAuthorized(state: RecoveryState, scope: RecoveryScope, permission: 'backup:manage' | 'backup:restore'): void {
   const member = state.members.find(row => row.organizationId === scope.organizationId && row.userId === scope.actorUserId);
   if (!member || !state.organizations.some(row => row.id === scope.organizationId)) throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
-  if (!can(member.role, write ? 'backup:restore' : 'project:read')) throw new RecoveryError('RECOVERY_FORBIDDEN', 403);
+  if (!can(member.role, permission)) throw new RecoveryError('RECOVERY_FORBIDDEN', 403);
 }
 export function activeRecoveryResource(state: RecoveryState, id: string, organizationId: string): RecoveryResource {
   const resource = state.resources.find(row => row.id === id);
@@ -46,9 +46,15 @@ export function recoverySet(state: RecoveryState, operation: RecoveryBackup | Re
   if (job) state.jobs = state.jobs.map(row => row.id === job.id ? job : row);
 }
 export function createRecovery(state: RecoveryState, request: RecoveryRequest, kind: RecoveryKind) {
-  recoveryAuthorized(state, request);
   const body = recoveryBody(request.body, kind === 'restore');
   const now = recoveryNow(request.now);
+  if (kind === 'backup') {
+    const resource = state.resources.find(row => row.id === request.sourceId);
+    if (!resource || !state.projects.some(project => project.id === resource.projectId && project.organizationId === request.organizationId)) throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
+  } else if (!state.backups.some(row => row.id === request.sourceId && row.organizationId === request.organizationId)) {
+    throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
+  }
+  recoveryAuthorized(state, request, kind === 'restore' ? 'backup:restore' : 'backup:manage');
   const sourceBackup = kind === 'restore' ? recoveryBackup(state, request.sourceId, request.organizationId) : null;
   const source = activeRecoveryResource(state, sourceBackup?.resourceId ?? request.sourceId, request.organizationId);
   const fingerprint = recoveryHash(canonicalRecoveryJson({ formatVersion: body.formatVersion, sourceId: request.sourceId, name: body.name ?? null, kind }));
@@ -94,5 +100,8 @@ export function createRecovery(state: RecoveryState, request: RecoveryRequest, k
   const job: RecoveryJob = { id: `job_${recoveryHash(`${type}\0${base.id}`)}`, type, targetType: kind === 'backup' ? 'resource-backup' : 'resource-restore', targetId: base.id,
     payload: { version: 1, operationId: base.id }, status: 'queued', attempts: 0, maxAttempts: 3, lockedBy: null, lockedAt: null, createdAt: now, updatedAt: now, runAfter: now };
   state.jobs.push(job);
+  state.auditEvents.push({ actorUserId: request.actorUserId, action: kind === 'backup' ? 'resource.backup:requested' : 'resource.restore:requested',
+    targetType: kind === 'backup' ? 'resource-backup' : 'resource-restore', targetId: base.id,
+    metadata: { engine: base.engine, status: operation.status }, createdAt: now });
   return { operation, job, replay: false };
 }
