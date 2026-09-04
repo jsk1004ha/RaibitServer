@@ -32,6 +32,27 @@ function immutable(value) {
   if (isRecord(value)) return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => [key, immutable(item)])));
   return value;
 }
+export function snapshotJournalData(value, seen = new WeakSet()) {
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) fail('invalid_journal');
+  seen.add(value);
+  const array = Array.isArray(value);
+  if (Object.getPrototypeOf(value) !== (array ? Array.prototype : Object.prototype)) fail('invalid_journal');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.some((key) => typeof key !== 'string')) fail('invalid_journal');
+  const dataKeys = array ? keys.filter((key) => key !== 'length') : keys;
+  if (array && (!Object.hasOwn(descriptors.length ?? {}, 'value') || dataKeys.length !== descriptors.length.value
+    || dataKeys.some((key, index) => key !== String(index)))) fail('invalid_journal');
+  const result = array ? [] : {};
+  for (const key of dataKeys) {
+    const descriptor = descriptors[key];
+    if (!descriptor || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable) fail('invalid_journal');
+    result[key] = snapshotJournalData(descriptor.value, seen);
+  }
+  seen.delete(value);
+  return Object.freeze(result);
+}
 const isIso = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const validSelector = (value) => isRecord(value) && Object.keys(value).length > 0 && Object.entries(value).every(([key, item]) => SAFE_ID.test(key)
   && (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') && String(item).length > 0 && String(item).length <= 256);
@@ -39,6 +60,7 @@ const validRoute = (value) => typeof value === 'string' && ROUTE.test(value) && 
   && !value.includes('?') && !value.includes('#') && value.split('/').every((segment) => segment !== '.' && segment !== '..');
 
 export function parseCleanupIntentRecord(record, expectedIdentityDigest) {
+  record = snapshotJournalData(record);
   const keys = ['schema', 'entryType', 'sequence', 'runIdentitySha256', 'intentId', 'mutationKind', 'bindingEntryCount', 'bindingsDigest',
     'bindingRefs', 'approvedRuntimeSelectorSha256', 'resourceName', 'method', 'routeTemplate', 'relativeRoute', 'recoverySelector',
     'createdAt', 'deadlineAt', 'selectorSha256', 'entrySha256'];
@@ -61,6 +83,7 @@ export function parseCleanupIntentRecord(record, expectedIdentityDigest) {
 }
 
 export function parseCleanupOutcomeRecord(record, expectedIdentityDigest) {
+  record = snapshotJournalData(record);
   const keys = ['schema', 'entryType', 'sequence', 'runIdentitySha256', 'intentId', 'intentEntrySha256', 'actualId', 'actualUid',
     'responseSha256', 'resolvedAt', 'entrySha256'];
   if (!exactKeys(record, keys) || record.schema !== 'raibitserver.production-evidence-cleanup-journal/v1' || record.entryType !== 'outcome'
@@ -89,15 +112,17 @@ function primaryId(binding) {
 }
 
 export function parseEvidenceBindingPayload(value) {
-  const parsed = EvidenceBindingSchema.safeParse(value);
+  const parsed = EvidenceBindingSchema.safeParse(snapshotJournalData(value));
   if (!parsed.success) fail('invalid_journal');
   return immutable(parsed.data);
 }
 
 export function resolveBindingGraph(entries, references) {
-  if (!Array.isArray(entries) || !Array.isArray(references) || references.length === 0) fail();
+  const input = snapshotJournalData({ entries, references });
+  const entryInputs = input.entries; const referenceInputs = input.references;
+  if (!Array.isArray(entryInputs) || !Array.isArray(referenceInputs) || referenceInputs.length === 0) fail();
   const bindingKeys = ['schema', 'sequence', 'runIdentitySha256', 'role', 'bindingId', 'payload', 'payloadSha256', 'createdAt', 'entrySha256'];
-  const normalizedEntries = entries.map((entry, index) => {
+  const normalizedEntries = entryInputs.map((entry, index) => {
     if (!exactKeys(entry, bindingKeys) || entry.schema !== 'raibitserver.production-evidence-binding/v1'
       || entry.sequence !== index + 1 || !SHA256.test(entry.runIdentitySha256) || !SAFE_PART.test(entry.role)
       || !SAFE_PART.test(entry.bindingId) || !SHA256.test(entry.payloadSha256) || entry.payloadSha256 !== digest(entry.payload)
@@ -121,7 +146,8 @@ export function resolveBindingGraph(entries, references) {
       case 'organization-membership': case 'github-repository': break;
       case 'tenant-revision': {
         const repository = domain.get(`github-repository:${binding.repositoryId}`);
-        if (!repository || repository.repository !== binding.repository || repository.branch !== binding.branch) fail();
+        if (!repository || repository.repository !== binding.repository
+          || (binding.purpose === 'candidate' && repository.branch !== binding.branch)) fail();
         break;
       }
       case 'project': if (normalizedEntries.filter(({ payload }) => payload.kind === 'organization-membership' && payload.organizationId === binding.organizationId).length !== 1) fail(); break;
@@ -140,7 +166,7 @@ export function resolveBindingGraph(entries, references) {
     }
   }
   const seen = new Set();
-  const referenced = references.map((reference) => {
+  const referenced = referenceInputs.map((reference) => {
     if (!exactKeys(reference, ['role', 'bindingId', 'entrySha256']) || !SAFE_PART.test(reference.role)
       || !SAFE_PART.test(reference.bindingId) || !SHA256.test(reference.entrySha256)) fail('invalid_binding_reference');
     const id = `${reference.role}:${reference.bindingId}`; const entry = logical.get(id);

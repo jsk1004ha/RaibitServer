@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
 import { exclusiveJournalWrite, journalFiles, journalScope, withJournalTransaction } from './journal-io.mjs';
-import { parseEvidenceBindingPayload } from './binding-graph.mjs';
+import { parseEvidenceBindingPayload, snapshotJournalData } from './binding-graph.mjs';
 export { resolveBindingGraph } from './binding-graph.mjs';
 export { isPrivateJournalMetadata } from './journal-io.mjs';
 export { isPrivateArtifactWriterMetadata } from './safe-artifact-writer.mjs';
@@ -24,6 +24,7 @@ function immutable(value) {
 }
 
 export function parseEvidenceBindingEntry(record, expected) {
+  record = snapshotJournalData(record);
   const keys = ['schema', 'sequence', 'runIdentitySha256', 'role', 'bindingId', 'payload', 'payloadSha256', 'createdAt', 'entrySha256'];
   if (!exactKeys(record, keys) || record.schema !== 'raibitserver.production-evidence-binding/v1'
     || !Number.isSafeInteger(record.sequence) || record.sequence < 1 || record.runIdentitySha256 !== expected

@@ -95,8 +95,11 @@ test('Given a forged writer-shaped object, When a journal API is called, Then th
 
 test('Given a genuine writer and physical run, When one authority is created, Then consumers receive frozen serialized views', async (t) => {
   const ctx = await sandbox(t);
+  await assert.rejects(loadBindingsFixtureUnsafe(ctx), { reason: 'invalid_journal' });
   const authority = await createJournalAuthorityFixtureUnsafe({ runDirectory: ctx.runDirectory, identity: ctx.identity, genuineSafeWriter: ctx.writer });
   assert.equal(assertJournalAuthority(authority), authority);
+  assert.deepEqual(await authority.loadBindings(), []);
+  assert.equal((await authority.bindingSnapshot()).entryCount, 0);
   await authority.appendBinding({ role: 'identity', bindingId: 'membership',
     payload: { kind: 'organization-membership', organizationId: 'org-a', membershipId: 'membership-a', userId: 'user-a', role: 'OWNER' },
     createdAt: '2026-09-04T00:00:01.000Z' });
@@ -111,6 +114,13 @@ test('Given a genuine writer and physical run, When one authority is created, Th
     genuineSafeWriter: foreign.writer }), { reason: 'invalid_artifact_writer' });
 });
 
+test('Given initialized journals with one directory missing, When authority reads, Then corruption is not treated as fresh', async (t) => {
+  const ctx = await sandbox(t);
+  const authority = await createJournalAuthorityFixtureUnsafe({ runDirectory: ctx.runDirectory, identity: ctx.identity, genuineSafeWriter: ctx.writer });
+  await rm(path.join(ctx.runDirectory, 'cleanup-intents'), { recursive: true });
+  await assert.rejects(authority.loadCleanup({ approvedRuntimeSelector: null }), { reason: 'invalid_journal' });
+});
+
 test('Given an unknown binding shape, When appended, Then the internal strict schema rejects it', async (t) => {
   const ctx = await sandbox(t);
   await assert.rejects(appendBindingFixtureUnsafe({ ...ctx, role: 'identity', bindingId: 'membership', payload: {}, createdAt: '2026-09-04T00:00:01.000Z' }), { reason: 'invalid_journal' });
@@ -123,6 +133,13 @@ test('Given canonical binding kinds, When journaled, Then exact provenance round
       createdAt: `2026-09-04T00:00:${String(index + 1).padStart(2, '0')}.000Z` }));
   }
   assert.deepEqual((await loadBindingsFixtureUnsafe(ctx)).map(({ payload }) => payload), releaseBindings);
+  const deleteIntentId = 'full-ledger-project-delete';
+  const deleteName = deriveRunResourceName(ctx.identity, deleteIntentId);
+  await appendCleanupIntentFixtureUnsafe({ ...ctx, intentId: deleteIntentId, mutationKind: 'control-plane-delete-project',
+    bindingRefs: [ref(appended[0]), ref(appended[4])], resourceName: deleteName, method: 'DELETE',
+    routeTemplate: '/api/projects/:projectId', relativeRoute: '/api/projects/project-1', approvedRuntimeSelector: null,
+    recoverySelector: { kind: 'Project', organizationId: 'org-1', projectId: 'project-1', name: deleteName,
+      runIdentitySha256: digest(ctx.identity) }, createdAt: '2026-09-04T00:00:40.000Z', deadlineAt: '2026-09-04T00:01:00.000Z' });
   for (const payload of [
     { ...releaseBindings[1], repository: 'missing-slash' },
     { ...releaseBindings[2], tenantCommitSha: 'x' },
@@ -149,7 +166,7 @@ test('Given canonical binding kinds, When journaled, Then exact provenance round
   crossTenantProject.entrySha256 = digest(crossTenantUnsigned);
   const hostileEntries = [mutableMembership, ...entries.slice(1, 4), crossTenantProject];
   assert.throws(() => resolveBindingGraph(hostileEntries,
-    hostileEntries.map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))), { reason: 'invalid_binding_graph' });
+    hostileEntries.map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))), { reason: 'invalid_journal' });
   const badDeployment = { ...entries[6], payload: { ...entries[6].payload, tenantCommitSha: '3'.repeat(40) } };
   badDeployment.payloadSha256 = digest(badDeployment.payload);
   const { entrySha256: ignored, ...unsigned } = badDeployment;

@@ -66,6 +66,13 @@ async function optionalPhysicalFile(file) {
   return physicalFile(file);
 }
 
+async function optionalPhysicalDirectory(directory) {
+  try { await lstat(directory); }
+  catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false; throw error; }
+  await physicalDirectory(directory, false);
+  return true;
+}
+
 export async function journalScope(runDirectory, identity, directoryName, create = false, unsafeFixture = false) {
   if (!unsafeFixture && (process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number')) fail('journal_platform_not_release_safe');
   if (!isRecord(identity) || typeof identity.runId !== 'string' || !SAFE_PART.test(identity.runId) || !SAFE_PART.test(directoryName)) fail();
@@ -90,6 +97,20 @@ export async function validateJournalRoot(runDirectory, identity, writer, unsafe
   catch (error) { if (error instanceof SyntaxError) fail(); throw error; }
   if (!isRecord(run) || run.schema !== 'raibitserver.evidence-run/v1' || !isRecord(run.identity)
     || digest(run.identity) !== digest(identity) || path.basename(runDirectory) !== identity.runId) fail('identity_mismatch');
+}
+
+export async function initializeJournalDirectories(runDirectory, identity, writer, unsafeFixture = false) {
+  await validateJournalRoot(runDirectory, identity, writer, unsafeFixture);
+  const directories = ['bindings', 'cleanup-intents'].map((name) => path.join(runDirectory, name));
+  const present = await Promise.all(directories.map(optionalPhysicalDirectory));
+  if (present[0] !== present[1]) fail('journal_write_poisoned');
+  if (!present[0]) {
+    for (const directory of directories) await physicalDirectory(directory, true);
+    if (!unsafeFixture) {
+      await syncDirectory(runDirectory);
+      for (const directory of directories) await syncDirectory(directory);
+    }
+  }
 }
 
 async function syncDirectory(directory) {
