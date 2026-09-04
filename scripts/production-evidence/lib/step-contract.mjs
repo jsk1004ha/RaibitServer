@@ -52,7 +52,7 @@ function validInventory(value) {
         && hasExactKeys(value.labels, ['raibitserver.io/run-id']) && typeof value.labels['raibitserver.io/run-id'] === 'string';
     case 'control-plane':
       return hasExactKeys(value, ['type', 'resourceType', 'id', 'organizationId', 'projectId'])
-        && ['preview', 'resource', 'restore-target', 'attachment'].includes(value.resourceType)
+        && ['project', 'preview', 'resource', 'restore-target', 'attachment'].includes(value.resourceType)
         && [value.id, value.organizationId, value.projectId].every((item) => typeof item === 'string' && item.length > 0);
     case 'process':
       return hasExactKeys(value, ['type', 'pid', 'startedAt', 'commandSha256'])
@@ -67,8 +67,17 @@ function validInventory(value) {
 function validateInventoryScope(inventory, request) {
   const workRoot = path.resolve(request.runDirectory, 'work');
   for (const item of inventory) {
-    if (item.type === 'kubernetes' && item.labels['raibitserver.io/run-id'] !== request.identity.runId) invalidSchema();
-    if (item.type === 'control-plane' && (item.organizationId !== request.identity.organizationId || item.projectId !== request.identity.projectId)) invalidSchema();
+    if (item.type === 'kubernetes') {
+      if (item.labels['raibitserver.io/run-id'] !== request.identity.runId) invalidSchema();
+      if (request.state.cleanupNamespace && item.namespace !== request.state.cleanupNamespace) {
+        const client = request.state.authenticatedClient;
+        const isClientPod = item.kind === 'Pod' && item.namespace === client?.namespace && item.name === client?.podName && item.uid === client?.podUid;
+        const isClientPolicy = item.kind === 'NetworkPolicy' && item.namespace === client?.namespace && item.name === `${client?.podName}-egress`;
+        if (!isClientPod && !isClientPolicy) invalidSchema();
+      }
+    }
+    if (item.type === 'control-plane' && (item.organizationId !== request.identity.organizationId || item.projectId !== request.identity.projectId
+      || (item.resourceType === 'project' && item.id !== item.projectId))) invalidSchema();
     if (item.type === 'file') {
       const relative = path.relative(workRoot, path.resolve(item.path));
       if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) invalidSchema();
@@ -121,6 +130,10 @@ export function parseStepResult(value, step, request) {
     || !Array.isArray(value.assertions) || value.assertions.length === 0 || !value.assertions.every(validAssertion)
     || !Array.isArray(value.artifacts) || value.artifacts.length === 0 || !value.artifacts.every((item) => EvidenceArtifactSchema.safeParse(item).success)
     || !Array.isArray(value.cleanupInventory) || !value.cleanupInventory.every(validInventory)) invalidSchema();
+  const artifactPaths = value.artifacts.map(({ path: artifactPath }) => artifactPath);
+  const referencedPaths = value.assertions.flatMap(({ artifactPaths: paths }) => paths);
+  if (new Set(artifactPaths).size !== artifactPaths.length || artifactPaths.some((artifactPath) => !referencedPaths.includes(artifactPath))
+    || referencedPaths.some((artifactPath) => !artifactPaths.includes(artifactPath))) invalidSchema();
   if (request !== undefined) validateInventoryScope(value.cleanupInventory, request);
   assertAssertions(step, value.assertions);
   if ((value.status === 'PASS') !== value.assertions.every(({ status }) => status === 'PASS')) invalidSchema();

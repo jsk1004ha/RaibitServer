@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
+import path from 'node:path';
 import { APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST, DnsLabelSchema, OperatorInputValuesSchema, ClusterFingerprintSchema } from '../../../packages/schemas/src/production-evidence.ts';
 
 export { APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST };
@@ -94,4 +95,17 @@ export function environmentFingerprint(value) {
   if (!result.success) throw new EvidenceError('invalid_environment');
   assertRedacted(result.data);
   return digest(result.data);
+}
+
+export async function loadProductionInputs(attemptDir, environment = process.env) {
+  if (!path.isAbsolute(attemptDir)) throw new EvidenceError('invalid_arguments');
+  const approvedInputPath = path.join(path.dirname(attemptDir), 'inputs', 'approved-draft-input-v1.md');
+  const contract = await verifyApprovedSnapshot(approvedInputPath);
+  const refsPath = environment.RAIBITSERVER_PRODUCTION_EVIDENCE_SECRET_REFS_FILE;
+  if (typeof refsPath !== 'string' || !path.isAbsolute(refsPath)) throw new EvidenceError('missing_credentials');
+  const resolved = await realpath(refsPath);
+  if (resolved !== path.resolve(refsPath) || !(await lstat(resolved)).isFile()) throw new EvidenceError('missing_credentials');
+  const secretRefs = await readJson(resolved, 'missing_credentials');
+  if (!Array.isArray(secretRefs)) throw new EvidenceError('missing_credentials');
+  return inputsFromEnvironment(environment, secretRefs, contract);
 }

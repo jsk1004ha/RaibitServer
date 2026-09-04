@@ -1,11 +1,28 @@
 #!/usr/bin/env node
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { verifyManifest } from './production-evidence/lib/manifest.mjs';
 import { EvidenceError, loadOperatorContract, readJson } from './production-evidence/lib/operator-inputs.mjs';
-import { checkRun, verifyArtifacts } from './production-evidence/lib/run.mjs';
+import { checkRun, verifyArtifacts, verifyFragmentFiles, verifyRunReceipts } from './production-evidence/lib/run.mjs';
 import { verifyResourceLifecycle } from './production-evidence/lib/resource-lifecycle.mjs';
 
-try {
+export async function verifyEvidenceFile(file, options = {}) {
+  await loadOperatorContract();
+  const resolved = path.resolve(file);
+  const manifest = await readJson(resolved);
+  const result = verifyManifest(manifest, options);
+  if (!result.valid) throw new EvidenceError(result.reason);
+  if (!manifest.fixture) await checkRun(path.dirname(resolved), manifest);
+  await verifyArtifacts(path.dirname(resolved), manifest);
+  await verifyResourceLifecycle(path.dirname(resolved), manifest);
+  if (manifest.profile === 'train-a' || manifest.profile === 'final') {
+    await verifyFragmentFiles(path.dirname(resolved), manifest);
+    await verifyRunReceipts(path.dirname(resolved), manifest);
+  }
+  return result;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {
   const args = process.argv.slice(2);
   const options = {};
   for (const flag of ['--fragment', '--profile']) {
@@ -16,15 +33,8 @@ try {
     }
   }
   if (args.length !== 1 || !args[0] || args[0].startsWith('--')) throw new EvidenceError('invalid_arguments');
-  await loadOperatorContract();
   const file = path.resolve(args[0]);
-  const manifest = await readJson(file);
-  const result = verifyManifest(manifest, options);
-  if (!result.valid) throw new EvidenceError(result.reason);
-  // A committed component sample has no run receipt and never authorizes release.
-  if (!manifest.fixture) await checkRun(path.dirname(file), manifest);
-  await verifyArtifacts(path.dirname(file), manifest);
-  await verifyResourceLifecycle(path.dirname(file), manifest);
+  const result = await verifyEvidenceFile(file, options);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } catch (error) {
   process.stderr.write(`${error instanceof EvidenceError ? error.reason : 'evidence_io_failed'}\n`);

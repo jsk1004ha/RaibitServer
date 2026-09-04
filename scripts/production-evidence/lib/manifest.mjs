@@ -10,6 +10,10 @@ export const REQUIRED_ASSERTIONS = Object.freeze({
   operations: ['usage_quota_audit', 'trusted_proxy', 'metrics', 'rollback'],
   domains: ['ownership', 'tls_exact_san', 'route', 'revalidation', 'domain_delete'],
 });
+export const STEP_COMPONENT = Object.freeze({
+  'auth-source': 'lifecycle', 'supply-chain': 'lifecycle', runtime: 'lifecycle', observability: 'lifecycle',
+  resources: 'resources', 'backup-sql': 'resources', 'backup-nosql': 'resources', preview: 'lifecycle', rollback: 'operations', cleanup: 'operations',
+});
 const levels = Object.freeze({ local: 'L1', cluster: 'L2', lifecycle: 'L3', resources: 'L3', operations: 'L3', domains: 'L3' });
 const provenance = Object.freeze({ L1: 'local', L2: 'kind', L3: 'credentialed' });
 const fail = (reason) => ({ valid: false, releaseEligible: false, reason });
@@ -92,4 +96,56 @@ export function verifyManifest(value, options = {}) {
     if (error instanceof EvidenceError) return fail(error.reason);
     throw error;
   }
+}
+
+function aggregateStatus(statuses) {
+  if (statuses.includes('FAIL')) return 'FAIL';
+  if (statuses.includes('NOT_RUN')) return 'NOT_RUN';
+  return 'PASS';
+}
+
+function uniqueArtifacts(artifacts) {
+  const byPath = new Map();
+  for (const artifact of artifacts) {
+    const previous = byPath.get(artifact.path);
+    if (previous && previous.sha256 !== artifact.sha256) throw new EvidenceError('reused_artifact');
+    byPath.set(artifact.path, artifact);
+  }
+  return [...byPath.values()];
+}
+
+export function assembleManifest(input) {
+  const components = ['local', 'cluster', 'lifecycle', 'resources', 'operations'];
+  const fragments = components.map((component) => {
+    const foundation = input.foundations[component];
+    const assertions = REQUIRED_ASSERTIONS[component].map((id) => {
+      if (foundation && foundation.assertion === id) return { id, status: foundation.status, artifactPaths: [foundation.artifact.path] };
+      const matches = input.steps.flatMap(({ receipt }) => receipt.assertions.filter((assertion) => assertion.id === id));
+      const requiredMatches = ['backup_checksum', 'isolated_restore'].includes(id) ? 2 : 1;
+      return { id, status: matches.length < requiredMatches ? 'NOT_RUN' : aggregateStatus(matches.map(({ status }) => status)),
+        artifactPaths: [...new Set(matches.flatMap(({ artifactPaths }) => artifactPaths))] };
+    });
+    const referenced = new Set(assertions.flatMap(({ artifactPaths }) => artifactPaths));
+    const artifacts = uniqueArtifacts([
+      ...(foundation ? [foundation.artifact] : []),
+      ...input.steps.flatMap(({ receipt, descriptor }) => [
+        ...(STEP_COMPONENT[receipt.step] === component ? [descriptor] : []),
+        ...receipt.artifacts.filter(({ path }) => referenced.has(path) || (receipt.step === 'cleanup' && component === 'operations')),
+      ]),
+      input.cleanup.componentArtifacts[component],
+      ...(component === 'operations' ? [input.cleanup.stepDescriptor, input.cleanup.runArtifact] : []),
+    ].filter(Boolean));
+    const cleanupStatus = aggregateStatus([input.cleanup.status, input.cleanup.componentArtifacts[component] ? 'PASS' : 'NOT_RUN']);
+    return { component, level: component === 'local' ? 'L1' : component === 'cluster' ? 'L2' : 'L3',
+      provenance: input.fixture ? 'fixture' : component === 'local' ? 'local' : component === 'cluster' ? 'kind' : 'credentialed',
+      identity: input.identity, startedAt: input.startedAt, observedAt: input.observedAt,
+      status: aggregateStatus(assertions.map(({ status }) => status)), assertions, artifacts,
+      cleanup: { status: cleanupStatus, assertions: [{ id: 'component_cleanup', status: cleanupStatus, artifactPaths: [input.cleanup.componentArtifacts[component].path] }] } };
+  });
+  const cleanupStatus = aggregateStatus([input.cleanup.status, input.cleanup.runArtifact ? 'PASS' : 'NOT_RUN']);
+  return { schema: 'raibitserver.production-evidence/v1', profile: 'train-a', identity: input.identity,
+    startedAt: input.startedAt, observedAt: input.observedAt,
+    status: aggregateStatus([...fragments.map(({ status }) => status), cleanupStatus]), preflight: input.preflight,
+    fragments, cleanup: { status: cleanupStatus, assertions: [{ id: 'run_cleanup', status: cleanupStatus, artifactPaths: [input.cleanup.runArtifact.path] }] },
+    fixture: input.fixture };
 }
