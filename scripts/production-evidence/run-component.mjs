@@ -41,6 +41,11 @@ export function parseFixedStepArguments(args) {
   return Object.freeze({ requestPath: args[1], outputPath: args[3] });
 }
 
+export function stepReceiptExitCode(receipt) {
+  if (!receipt || !['PASS', 'FAIL', 'NOT_RUN'].includes(receipt.status)) throw new EvidenceError('invalid_step_contract');
+  return receipt.status === 'PASS' ? 0 : 1;
+}
+
 // Individual wrappers import this function with their compile-time step name. The
 // operator-facing argv never contains a selectable step.
 export async function runFixedStepCli(expectedStep, args) {
@@ -50,6 +55,15 @@ export async function runFixedStepCli(expectedStep, args) {
   const receipt = await executeStepRequest(request, { expectedStep });
   await writeFile(outputPath, `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
   await chmod(outputPath, 0o600);
+  return Object.freeze({ receipt, exitCode: stepReceiptExitCode(receipt) });
+}
+
+export async function runFixedStepMain(expectedStep, args, io = { stderr: process.stderr }) {
+  try { return await runFixedStepCli(expectedStep, args); }
+  catch (error) {
+    io.stderr.write(`${error instanceof EvidenceError ? error.reason : 'evidence_io_failed'}\n`);
+    return Object.freeze({ receipt: null, exitCode: 2 });
+  }
 }
 
 export function componentSample(component, now = new Date().toISOString()) {

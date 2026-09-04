@@ -15,7 +15,7 @@ import { APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST } from '../scripts/prod
 import { loadOperatorContract } from '../scripts/production-evidence/lib/operator-inputs.mjs';
 import { orderCleanupInventory, runProductionEvidence } from '../scripts/production-evidence/lib/orchestrator.mjs';
 import { createRunnerContext } from '../scripts/production-evidence/lib/run.mjs';
-import { parseFixedStepArguments } from '../scripts/production-evidence/run-component.mjs';
+import { parseFixedStepArguments, runFixedStepMain, stepReceiptExitCode } from '../scripts/production-evidence/run-component.mjs';
 import { STEP_ASSERTIONS } from '../scripts/production-evidence/lib/step-contract.mjs';
 import { parseArguments, parseMatrix } from '../scripts/production-evidence/lib/public-cli.mjs';
 
@@ -126,6 +126,17 @@ test('Given a fixed step wrapper, When arguments are parsed, Then no operator-se
   const requestPath = path.resolve('request.json'), outputPath = path.resolve('output.json');
   assert.deepEqual(parseFixedStepArguments(['--request', requestPath, '--output', outputPath]), { requestPath, outputPath });
   assert.throws(() => parseFixedStepArguments(['--step', 'runtime', '--request', requestPath, '--output', outputPath]), { reason: 'invalid_arguments' });
+});
+
+test('Given a fixed runner result, When its process outcome is selected, Then PASS is 0, evidence failures are 1, and harness failures are 2', async () => {
+  assert.equal(stepReceiptExitCode({ status: 'PASS' }), 0);
+  assert.equal(stepReceiptExitCode({ status: 'FAIL' }), 1);
+  assert.equal(stepReceiptExitCode({ status: 'NOT_RUN' }), 1);
+  assert.throws(() => stepReceiptExitCode({ status: 'UNKNOWN' }), { reason: 'invalid_step_contract' });
+  let stderr = '';
+  const harness = await runFixedStepMain('runtime', ['--step', 'runtime'], { stderr: { write: (value) => { stderr += value; } } });
+  assert.deepEqual(harness, { receipt: null, exitCode: 2 });
+  assert.equal(stderr, 'invalid_arguments\n');
 });
 
 test('Given a fault matrix, When its strict boundary or mode contract drifts, Then parsing fails closed', () => {
