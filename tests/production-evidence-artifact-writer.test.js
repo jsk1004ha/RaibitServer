@@ -78,28 +78,29 @@ test('Given a link at the final artifact path, When writing, Then it is rejected
   if (process.platform !== 'win32') assert.equal(await readFile(outside, 'utf8'), '{"outside":true}\n');
 });
 
-test('Given write, sync, or close failure, When retrying the same path, Then no partial artifact poisons the retry', async (t) => {
+test('Given stat, write, sync, or close failure, When retrying the failed path, Then the run stays poisoned and O_EXCL blocks reuse', async (t) => {
   // Given
   const { runDirectory } = await sandbox(t);
-  for (const stage of ['write', 'sync', 'close']) {
+  for (const stage of ['stat', 'write', 'sync', 'close']) {
     const artifactPath = `artifacts/lifecycle/${stage}.json`;
-    const testHooks = stage === 'write' ? { write: async () => { throw new Error('injected_write_failure'); } }
+    const testHooks = stage === 'stat' ? { stat: async () => { throw new Error('injected_stat_failure'); } }
+      : stage === 'write' ? { write: async () => { throw new Error('injected_write_failure'); } }
       : stage === 'sync' ? { sync: async () => { throw new Error('injected_sync_failure'); } }
         : { close: async (handle) => { await handle.close(); throw new Error('injected_close_failure'); } };
     const failing = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: [artifactPath], testHooks });
 
     // When
-    await assert.rejects(failing.writeJson(artifactPath, { stage, redacted: true }), new RegExp(`injected_${stage}_failure`));
+    await assert.rejects(failing.writeJson(artifactPath, { stage, redacted: true }), { reason: 'artifact_write_failed' });
+    await assert.rejects(failing.writeJson(artifactPath, { stage, redacted: true }), { reason: 'artifact_write_failed' });
     const retry = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: [artifactPath] });
-    const descriptor = await retry.writeJson(artifactPath, { stage, redacted: true });
 
     // Then
-    const bytes = await readFile(path.join(runDirectory, ...artifactPath.split('/')));
-    assert.equal(descriptor.sha256, createHash('sha256').update(bytes).digest('hex'));
+    await assert.rejects(retry.writeJson(artifactPath, { stage, redacted: true }), { reason: 'reused_artifact' });
+    assert.equal((await lstat(path.join(runDirectory, ...artifactPath.split('/')))).isFile(), true);
   }
 });
 
-test('Given a parent swap between validation and open, When writing, Then the raced file is rejected and removed', async (t) => {
+test('Given a parent swap between validation and open, When writing, Then it is rejected without unlinking the raced file', async (t) => {
   // Given
   const { parent: sandboxRoot, runDirectory } = await sandbox(t);
   const outside = path.join(sandboxRoot, 'outside');
@@ -115,7 +116,8 @@ test('Given a parent swap between validation and open, When writing, Then the ra
 
   // When / Then
   await assert.rejects(writer.writeJson('artifacts/lifecycle/runtime.json', { redacted: true }), { reason: 'invalid_artifact' });
-  await assert.rejects(readFile(path.join(outside, 'runtime.json')), { code: 'ENOENT' });
+  assert.equal((await readFile(path.join(outside, 'runtime.json'))).length, 0);
+  await assert.rejects(writer.writeJson('artifacts/lifecycle/runtime.json', { redacted: true }), { reason: 'artifact_write_failed' });
 });
 
 test('Given a hardlink added after exclusive open, When writing, Then link-count validation rejects before bytes are written', async (t) => {
@@ -131,18 +133,17 @@ test('Given a hardlink added after exclusive open, When writing, Then link-count
   // When / Then
   await assert.rejects(writer.writeJson('artifacts/runtime.json', { redacted: true }), { reason: 'invalid_artifact' });
   assert.equal((await readFile(outside)).length, 0);
-  await assert.rejects(readFile(path.join(runDirectory, 'artifacts', 'runtime.json')), { code: 'ENOENT' });
+  assert.equal((await readFile(path.join(runDirectory, 'artifacts', 'runtime.json'))).length, 0);
 });
 
-test('Given cleanup path substitution, When partial cleanup cannot prove inode identity, Then cleanup failure is distinct', async (t) => {
+test('Given final-path substitution after open, When validation fails, Then neither replacement nor opened inode is pathname-unlinked', async (t) => {
   // Given
   const { runDirectory } = await sandbox(t);
   const writer = await createUnsafeFixtureArtifactWriter({
     runDirectory,
     allowedPaths: ['artifacts/runtime.json'],
     testHooks: {
-      write: async () => { throw new Error('injected_write_failure'); },
-      beforeCleanup: async ({ target }) => {
+      afterOpen: async ({ target }) => {
         await rename(target, `${target}.partial`);
         await writeFile(target, '{"adversary":true}\n');
       },
@@ -150,8 +151,11 @@ test('Given cleanup path substitution, When partial cleanup cannot prove inode i
   });
 
   // When / Then
-  await assert.rejects(writer.writeJson('artifacts/runtime.json', { redacted: true }), { reason: 'artifact_cleanup_failed' });
+  await assert.rejects(writer.writeJson('artifacts/runtime.json', { redacted: true }), { reason: 'invalid_artifact' });
   assert.equal(await readFile(path.join(runDirectory, 'artifacts', 'runtime.json'), 'utf8'), '{"adversary":true}\n');
+  assert.equal((await readFile(path.join(runDirectory, 'artifacts', 'runtime.json.partial'))).length, 0);
+  const retry = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: ['artifacts/runtime.json'] });
+  await assert.rejects(retry.writeJson('artifacts/runtime.json', { redacted: true }), { reason: 'reused_artifact' });
 });
 
 test('Given Windows without a portable no-reparse ACL guarantee, When creating a release writer, Then it fails closed', { skip: process.platform !== 'win32' }, async (t) => {
