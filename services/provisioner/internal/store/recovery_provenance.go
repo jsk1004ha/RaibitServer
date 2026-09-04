@@ -191,7 +191,28 @@ func recoveryJSONString(s string) ([]byte, error) {
 	if err := encoder.Encode(s); err != nil {
 		return nil, ErrRecoveryInput
 	}
-	encoded := strings.TrimSuffix(out.String(), "\n")
-	encoded = strings.ReplaceAll(strings.ReplaceAll(encoded, `\u2028`, "\u2028"), `\u2029`, "\u2029")
-	return []byte(encoded), nil
+	encoded := bytes.TrimSuffix(out.Bytes(), []byte("\n"))
+	normalized := make([]byte, 0, len(encoded))
+	for i := 0; i < len(encoded); {
+		if encoded[i] == '\\' && i+6 <= len(encoded) {
+			switch {
+			case bytes.Equal(encoded[i:i+6], []byte(`\u2028`)):
+				normalized = append(normalized, "\u2028"...)
+				i += 6
+				continue
+			case bytes.Equal(encoded[i:i+6], []byte(`\u2029`)):
+				normalized = append(normalized, "\u2029"...)
+				i += 6
+				continue
+			}
+		}
+		if encoded[i] == '\\' && i+1 < len(encoded) {
+			normalized = append(normalized, encoded[i], encoded[i+1])
+			i += 2
+			continue
+		}
+		normalized = append(normalized, encoded[i])
+		i++
+	}
+	return normalized, nil
 }
