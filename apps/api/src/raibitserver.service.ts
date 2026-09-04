@@ -812,6 +812,11 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     return repository.handleGitHubWebhook(input);
   }
+
+  async applyNextPreviewObservation(input: { readonly workerId: string }) {
+    const repository: any = await this.repositoryPromise;
+    return repository.applyNextPreviewObservation(input);
+  }
 }
 
 async function assertProjectAccess(repository: any, projectId: string, subject: Record<string, any>) {

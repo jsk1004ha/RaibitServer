@@ -18,6 +18,8 @@ import { normalizeResourceEngine } from './catalog.ts';
 import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
+import { parsePreviewWebhook } from './preview-contract.ts';
+import { createPreviewRuntime, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import {
@@ -66,6 +68,7 @@ export class ControlPlaneStore {
   emailDeliveries: any[];
   authRateLimits: Map<string, any>;
   oauthTransactions = new Map<string, OAuthTransactionRecord>();
+  previewLineages = new Map<string, any>();
 
   constructor() {
     this.organizations = new Map();
@@ -1263,6 +1266,7 @@ export class ControlPlaneStore {
       throw error;
     }
     if (!verifyGitHubWebhookSignature(rawBody, signature, secret)) throw unauthorized('invalid GitHub webhook signature');
+    if (String(event || '').toLowerCase() === 'pull_request') return this.handlePreviewWebhook({ body: rawBody, signature, secret, deliveryId });
     const id = String(deliveryId || stableId('ghdel', event, rawBody));
     if (this.webhookEvents.get(id)?.handled) return { accepted: true, duplicate: true, deliveryId: id, actions: [] };
     const before = this.githubWebhookTransactionSnapshot();
@@ -1310,11 +1314,57 @@ export class ControlPlaneStore {
     }
   }
 
+  handlePreviewWebhook(input: Record<string, any>) {
+    const event = parsePreviewWebhook({ body: input.body, signature: input.signature, secret: input.secret, deliveryId: input.deliveryId });
+    if (this.webhookEvents.get(event.deliveryId)?.handled) return { accepted: true, duplicate: true, deliveryId: event.deliveryId, actions: [] };
+    const before = this.githubWebhookTransactionSnapshot();
+    try {
+      const actionPlan = { kind: event.action === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: event.repositoryId, installationId: event.installationId, repository: event.repository, baseBranch: event.baseRef };
+      const services = this.servicesForGitHubWebhook(actionPlan);
+      const actions: any[] = [];
+      const blocked = event.action === 'closed' ? new Set<string>() : this.githubWebhookQuotaBlocks(services, actionPlan, actions);
+      for (const service of services.filter((candidate) => !blocked.has(String(candidate.id)))) {
+        const project = this.projects.get(service.projectId);
+        const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+        const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
+        const integrationId = String(service.githubIntegrationId || desired.githubIntegrationId || github.integrationId || '');
+        const lineageId = stableId('preview-lineage', project.organizationId, project.id, service.id, event.installationId, event.repositoryId, event.pullRequestNumber);
+        const transition = transitionPreviewLineage(this.previewLineages.get(lineageId) || null, event, { organizationId: project.organizationId, projectId: project.id, serviceId: service.id, integrationId }, lineageId);
+        if (transition.decision === 'stale' || transition.decision === 'duplicate') { actions.push({ type: `preview-${transition.decision}`, serviceId: service.id, lineageId }); continue; }
+        this.previewLineages.set(lineageId, transition.lineage);
+        if (transition.decision === 'ambiguous') {
+          const job = this.enqueueWorkflowJob({ id: resolverJobId(transition.lineage), type: PREVIEW_RESOLVER_JOB, targetType: 'preview-lineage', targetId: lineageId, payload: resolverPayload(transition.lineage), maxAttempts: 3 });
+          actions.push({ type: 'preview-resolution-enqueued', serviceId: service.id, lineageId, workflowJobId: job.id });
+          continue;
+        }
+        const attempts = [...this.deployments.values()].filter((deployment) => deployment.previewLineageId === lineageId);
+        if (transition.decision === 'close') {
+          this.previewLineages.set(lineageId, { ...transition.lineage, routeIntent: previewCloseIntent(transition.lineage) });
+          const deploymentIds: string[] = [];
+          for (const attempt of attempts) if (String(attempt.status).toUpperCase() !== 'CLEANED_UP') { this.deployments.set(attempt.id, { ...attempt, status: 'PREVIEW_CLEANUP_REQUESTED', updatedAt: nowIso() }); deploymentIds.push(attempt.id); }
+          for (let index = 0; index < this.workflowJobs.length; index += 1) if ((this.workflowJobs[index].targetId === lineageId || deploymentIds.includes(this.workflowJobs[index].targetId)) && ['queued', 'running'].includes(this.workflowJobs[index].status)) this.workflowJobs[index] = { ...this.workflowJobs[index], status: 'cancelled', lockedBy: null, lockedAt: null };
+          actions.push({ type: 'preview-cleanup-requested', serviceId: service.id, lineageId, deploymentIds });
+          continue;
+        }
+        const deploymentId = stableId('dep', 'github-preview', event.deliveryId, service.id, transition.lineage.generation);
+        const runtime = createPreviewRuntime(transition.lineage, deploymentId);
+        const deployment = this.createDeployment({ id: deploymentId, serviceId: service.id, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime });
+        const job = this.enqueueWorkflowJob({ id: stableId('job', 'github-preview', event.deliveryId, service.id), type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, runtime } });
+        this.previewLineages.set(lineageId, { ...transition.lineage, candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation });
+        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, lineageId, deploymentId: deployment.id, workflowJobId: job.id });
+      }
+      this.webhookEvents.set(event.deliveryId, { id: stableId('whe', 'github', event.deliveryId), provider: 'github', eventType: 'pull_request', deliveryId: event.deliveryId, payload: maskSecrets({ action: event.action, repositoryId: event.repositoryId, pullRequestNumber: event.pullRequestNumber }), handled: true, errorMessage: null, createdAt: nowIso() });
+      this.audit('github-webhook', 'github:preview-webhook', 'github-delivery', event.deliveryId, { action: event.action, actions: actions.map(action => action.type) });
+      return { accepted: true, duplicate: false, deliveryId: event.deliveryId, matchedServiceCount: services.length, actions };
+    } catch (error) { this.restoreGitHubWebhookTransaction(before); throw error; }
+  }
+
   githubWebhookTransactionSnapshot() {
     const cloneMap = (source: Map<string, any>) => new Map([...source.entries()].map(([key, value]) => [key, deepClone(value)]));
     return {
       githubIntegrations: cloneMap(this.githubIntegrations),
       githubRepositories: cloneMap(this.githubRepositories),
+      previewLineages: cloneMap(this.previewLineages),
       deployments: cloneMap(this.deployments),
       webhookEvents: cloneMap(this.webhookEvents),
       quotas: cloneMap(this.quotas),
@@ -1327,6 +1377,7 @@ export class ControlPlaneStore {
   restoreGitHubWebhookTransaction(snapshot: Record<string, any>) {
     this.githubIntegrations = snapshot.githubIntegrations;
     this.githubRepositories = snapshot.githubRepositories;
+    this.previewLineages = snapshot.previewLineages;
     this.deployments = snapshot.deployments;
     this.webhookEvents = snapshot.webhookEvents;
     this.quotas = snapshot.quotas;

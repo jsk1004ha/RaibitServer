@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import crypto from 'node:crypto';
 
 export class PreviewError extends Error {
   readonly name = 'PreviewError';
@@ -12,7 +12,7 @@ export class PreviewError extends Error {
 }
 
 export type PreviewAction = 'opened' | 'synchronize' | 'reopened' | 'closed';
-export type PreviewWebhookInput = Readonly<{ body: string | Buffer; signature: string; secret: string; deliveryId: string }>;
+export type PreviewWebhookInput = Readonly<{ body: string | Uint8Array; signature: string; secret: string; deliveryId: string }>;
 export type PreviewWebhook = Readonly<{
   deliveryId: string; installationId: string; repositoryId: string; repository: string;
   pullRequestNumber: number; action: PreviewAction; headSha: string; headRef: string;
@@ -81,11 +81,11 @@ function host(value: unknown): string {
 }
 
 export function parsePreviewWebhook(input: PreviewWebhookInput): PreviewWebhook {
-  if ((typeof input.body !== 'string' && !Buffer.isBuffer(input.body)) || typeof input.secret !== 'string' || !input.secret) throw new PreviewError('preview_invalid_signature', 401);
+  if ((typeof input.body !== 'string' && !(input.body instanceof Uint8Array)) || typeof input.secret !== 'string' || !input.secret) throw new PreviewError('preview_invalid_signature', 401);
   if (Buffer.byteLength(input.body) > 1_048_576) throw new PreviewError('preview_payload_too_large', 413);
   if (typeof input.signature !== 'string' || !/^sha256=[a-f0-9]{64}$/.test(input.signature)) throw new PreviewError('preview_invalid_signature', 401);
-  const expected = createHmac('sha256', input.secret).update(input.body).digest();
-  if (!timingSafeEqual(expected, Buffer.from(input.signature.slice(7), 'hex'))) throw new PreviewError('preview_invalid_signature', 401);
+  const expected = crypto.createHmac('sha256', input.secret).update(input.body).digest();
+  if (!crypto.timingSafeEqual(expected, Buffer.from(input.signature.slice(7), 'hex'))) throw new PreviewError('preview_invalid_signature', 401);
   const deliveryId = text(input.deliveryId, uuidPattern).toLowerCase();
   let decoded: unknown;
   try { decoded = JSON.parse(typeof input.body === 'string' ? input.body : new TextDecoder('utf-8', { fatal: true }).decode(input.body)); }
@@ -114,7 +114,7 @@ export function parsePreviewWebhook(input: PreviewWebhookInput): PreviewWebhook 
 }
 
 export function previewProbeHost(lineageId: string, deploymentId: string, baseDomain: string): string {
-  const digest = createHash('sha256').update(`raibitserver.preview-probe/v1\0${text(lineageId, idPattern)}\0${text(deploymentId, idPattern)}`).digest('hex').slice(0, 32);
+  const digest = crypto.createHash('sha256').update(`raibitserver.preview-probe/v1\0${text(lineageId, idPattern)}\0${text(deploymentId, idPattern)}`).digest('hex').slice(0, 32);
   return host(`preview--probe-${digest}.${host(baseDomain)}`);
 }
 

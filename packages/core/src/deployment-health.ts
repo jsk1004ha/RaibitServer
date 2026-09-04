@@ -7,6 +7,11 @@ export function publicDeploymentHealth<T extends Readonly<Record<string, unknown
   return { ...INITIAL_DEPLOYMENT_HEALTH, ...row, publicHealthStatus: row.publicHealthStatus ?? INITIAL_DEPLOYMENT_HEALTH.publicHealthStatus };
 }
 
+export function servingDeploymentForHealth<T extends Readonly<Record<string, unknown>>>(deployments: readonly T[], lineage?: Readonly<Record<string, unknown>> | null): T | null {
+  if (lineage?.currentDeploymentId) return deployments.find(deployment => deployment.id === lineage.currentDeploymentId && deployment.previewLineageId === lineage.id && deployment.previewGeneration === lineage.currentGeneration) ?? null;
+  return deployments.find(deployment => String(deployment.deploymentType || '').toLowerCase() !== 'preview' && String(deployment.status || '').toUpperCase() === 'READY') ?? null;
+}
+
 export class HealthPathError extends Error {
   readonly name = 'HealthPathError';
   readonly statusCode = 400;

@@ -19,6 +19,8 @@ import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecor
 import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
+import { parsePreviewObservation, parsePreviewWebhook, PreviewError } from './preview-contract.ts';
+import { applyPreviewObservation, assertPreviewRetry, createPreviewRuntime, PREVIEW_APPLY_JOB, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage, type PreviewLineageRecord } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import { parseGitHubRepository } from './github-integration.ts';
@@ -1125,13 +1127,26 @@ export class PrismaControlPlaneRepository {
       const source = input.operation === 'retry'
         ? await tx.deployment.findUnique({ where: { id: input.sourceDeploymentId || '' } })
         : await tx.deployment.findFirst({ where: { serviceId: input.serviceId, status: { in: ['BUILD_FAILED', 'FAILED', 'READY'] } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
-      const candidate = deploymentSuccessor(source, input);
+      let previewLineage: PreviewLineageRecord | null = null;
+      if (String(source?.deploymentType || '').toLowerCase() === 'preview') {
+        const lineageRow = await tx.previewLineage.findUnique({ where: { id: source.previewLineageId || '' } });
+        previewLineage = assertPreviewRetry(lineageRow ? previewLineageRecord(lineageRow) : null, source);
+      }
+      let candidate = deploymentSuccessor(source, input);
+      if (previewLineage) {
+        const lineage = previewLineage;
+        const advanced = { ...lineage, version: lineage.version + 1, generation: lineage.generation + 1, candidateDeploymentId: null, candidateGeneration: null };
+        const runtime = createPreviewRuntime(advanced, candidate.id);
+        candidate = { ...candidate, commitSha: lineage.headSha, commitHash: lineage.headSha, previewLineageId: lineage.id, previewGeneration: advanced.generation, previewRuntime: runtime, previewUrl: `https://${lineage.stableHost}` };
+        await tx.previewLineage.update({ where: { id: lineage.id }, data: previewLineageData(advanced) });
+      }
       if (await tx.deployment.findFirst({ where: { serviceId: input.serviceId, status: { notIn: [...terminalDeploymentStatuses] } } })) throw new DeploymentOperationError('ACTIVE_DEPLOYMENT');
       assertMutable(service, 'service');
       await requireMutableProject(tx, service.projectId);
       await enforcePrismaQuotaRequirements(tx, input.requestedByUserId === 'system' ? null : input.requestedByUserId, 'deployment:create', deploymentQuotaRequirements(candidate.deploymentType));
       const deployment = await tx.deployment.create({ data: candidate });
       const workflowJob = await tx.workflowJob.create({ data: workflowJobData(successorWorkflow(candidate, input)) });
+      if (candidate.previewLineageId) await tx.previewLineage.update({ where: { id: candidate.previewLineageId }, data: { candidateDeploymentId: deployment.id, candidateGeneration: candidate.previewGeneration } });
       await tx.deploymentEvent.create({ data: { deploymentId: deployment.id, type: 'deployment.queued', message: 'Immutable deployment operation queued', metadata: { sourceDeploymentId: candidate.sourceDeploymentId } } });
       return { deployment, workflowJob };
     }, { isolationLevel: 'ReadCommitted', maxWait: 30000, timeout: 30000 });
@@ -1491,6 +1506,7 @@ export class PrismaControlPlaneRepository {
       (error as any).statusCode = 401;
       throw error;
     }
+    if (String(input.event || '').toLowerCase() === 'pull_request') return this.handlePreviewWebhook({ ...input, body: rawBody, secret });
     const deliveryId = String(input.deliveryId || stableId('ghdel', input.event, rawBody));
     const actionPlan = githubWebhookActionPlan(input.event, input.payload || {});
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
@@ -1558,6 +1574,124 @@ export class PrismaControlPlaneRepository {
     });
   }
 
+  async handlePreviewWebhook(input: Record<string, any>) {
+    const event = parsePreviewWebhook({ body: input.body, signature: input.signature, secret: input.secret, deliveryId: input.deliveryId });
+    const actionPlan = { kind: event.action === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: event.repositoryId, installationId: event.installationId, repository: event.repository, baseBranch: event.baseRef };
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const existingDelivery = await tx.webhookEvent.findUnique({ where: { deliveryId: event.deliveryId } });
+      if (existingDelivery?.handled) return { accepted: true, duplicate: true, deliveryId: event.deliveryId, actions: [] };
+      const services = await servicesForPrismaGitHubWebhook(tx, actionPlan);
+      const actions: Record<string, unknown>[] = [];
+      const blocked = event.action === 'closed' ? new Set<string>() : await prismaGitHubWebhookQuotaBlocks(tx, services, actionPlan, actions);
+      for (const service of services.filter((candidate: Record<string, any>) => !blocked.has(String(candidate.id)))) {
+        const organizationId = String(service.project.organizationId);
+        await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,18))', `preview:organization:${organizationId}`);
+        await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,15))', String(service.id));
+        const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+        const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
+        const integrationId = String(desired.githubIntegrationId || github.integrationId || '');
+        const lineageId = stableId('preview-lineage', organizationId, service.projectId, service.id, event.installationId, event.repositoryId, event.pullRequestNumber);
+        const currentRow = await tx.previewLineage.findFirst({ where: { id: lineageId } });
+        const current = currentRow ? previewLineageRecord(currentRow) : null;
+        const transition = transitionPreviewLineage(current, event, { organizationId, projectId: service.projectId, serviceId: service.id, integrationId }, lineageId);
+        if (transition.decision === 'stale' || transition.decision === 'duplicate') {
+          actions.push({ type: `preview-${transition.decision}`, serviceId: service.id, lineageId });
+          continue;
+        }
+        const data = previewLineageData(transition.lineage);
+        await tx.previewLineage.upsert({ where: { id: lineageId }, update: data, create: data });
+        if (transition.decision === 'ambiguous') {
+          const jobId = resolverJobId(transition.lineage);
+          await tx.workflowJob.upsert({ where: { id: jobId }, update: {}, create: { id: jobId, ...workflowJobData({ type: PREVIEW_RESOLVER_JOB, targetType: 'preview-lineage', targetId: lineageId, payload: resolverPayload(transition.lineage), maxAttempts: 3 }) } });
+          actions.push({ type: 'preview-resolution-enqueued', serviceId: service.id, lineageId, workflowJobId: jobId });
+          continue;
+        }
+        const attempts = await tx.deployment.findMany({ where: { previewLineageId: lineageId } });
+        if (transition.decision === 'close') {
+          await tx.previewLineage.update({ where: { id: lineageId }, data: { routeIntent: previewCloseIntent(transition.lineage), reconcileToken: null, reconcileWorker: null, reconcileLeaseUntil: null } });
+          const mutableIds = attempts.filter((attempt: Record<string, any>) => String(attempt.status).toUpperCase() !== 'CLEANED_UP').map((attempt: Record<string, any>) => attempt.id);
+          if (mutableIds.length) await tx.deployment.updateMany({ where: { id: { in: mutableIds } }, data: { status: 'PREVIEW_CLEANUP_REQUESTED' } });
+          await tx.workflowJob.updateMany({ where: { status: { in: ['queued', 'running'] }, OR: [{ targetType: 'preview-lineage', targetId: lineageId }, { targetType: 'deployment', targetId: { in: attempts.map((attempt: Record<string, any>) => attempt.id) } }] }, data: { status: 'cancelled', lockedBy: null, lockedAt: null } });
+          actions.push({ type: 'preview-cleanup-requested', serviceId: service.id, lineageId, deploymentIds: mutableIds });
+          continue;
+        }
+        const deploymentId = stableId('dep', 'github-preview', event.deliveryId, service.id, transition.lineage.generation);
+        const runtime = createPreviewRuntime(transition.lineage, deploymentId);
+        const deployment = await tx.deployment.create({ data: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
+        const jobId = stableId('job', 'github-preview', event.deliveryId, service.id);
+        await tx.workflowJob.create({ data: { id: jobId, ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: 1, runtime } }) } });
+        await tx.previewLineage.update({ where: { id: lineageId }, data: { candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation } });
+        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, lineageId, deploymentId: deployment.id, workflowJobId: jobId, generation: transition.lineage.generation });
+      }
+      const delivery = existingDelivery
+        ? await tx.webhookEvent.update({ where: { id: existingDelivery.id }, data: { handled: true, errorMessage: null } })
+        : await tx.webhookEvent.create({ data: { provider: 'github', eventType: 'pull_request', deliveryId: event.deliveryId, payload: sanitizeJson(maskSecrets({ action: event.action, repositoryId: event.repositoryId, pullRequestNumber: event.pullRequestNumber })), handled: true } });
+      await tx.auditLog.upsert({ where: { id: stableId('aud', 'github:preview-webhook', event.deliveryId) }, update: {}, create: { id: stableId('aud', 'github:preview-webhook', event.deliveryId), actorUserId: null, action: 'github:preview-webhook', targetType: 'github-delivery', targetId: event.deliveryId, metadata: sanitizeJson({ action: event.action, actions: actions.map(action => action.type) }) } });
+      return { accepted: true, duplicate: false, deliveryId: event.deliveryId, matchedServiceCount: services.length, actions, webhookEvent: delivery };
+    });
+  }
+
+  async applyNextPreviewObservation(options: Record<string, any> = {}) {
+    const workerId = String(options.workerId || 'preview-apply');
+    const now = new Date(options.now || Date.now());
+    const expiredBefore = new Date(now.getTime() - 60_000);
+    return this.prisma.$transaction(async (tx: any) => {
+      const job = await tx.workflowJob.findFirst({ where: { type: PREVIEW_APPLY_JOB, attempts: { lt: 3 }, runAfter: { lte: now }, OR: [{ status: 'queued' }, { status: 'running', lockedAt: { lte: expiredBefore } }] }, orderBy: [{ runAfter: 'asc' }, { createdAt: 'asc' }] });
+      if (!job) return { processed: false, reason: 'no_ready_preview_observation' };
+      const claimed = await tx.workflowJob.updateMany({ where: { id: job.id, type: PREVIEW_APPLY_JOB, attempts: job.attempts, status: job.status, lockedAt: job.lockedAt }, data: { status: 'running', attempts: { increment: 1 }, lockedBy: workerId, lockedAt: now } });
+      if (claimed.count !== 1) return { processed: false, reason: 'claim_lost' };
+      const lineage = await tx.previewLineage.findUnique({ where: { id: job.targetId } });
+      if (!lineage || job.targetType !== 'preview-lineage') {
+        await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'cancelled', lockedBy: null, lockedAt: null } });
+        return { processed: true, reason: 'stale_preview_observation' };
+      }
+      let observation;
+      try { observation = parsePreviewObservation(lineage.resolutionObservation); }
+      catch (error) {
+        if (!(error instanceof PreviewError)) throw error;
+        await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'failed', lockedBy: null, lockedAt: null, payload: { ...job.payload, terminalReason: 'preview_observation_invalid' } } });
+        return { processed: true, reason: 'preview_observation_invalid' };
+      }
+      if (observation.lineageId !== lineage.id || observation.lineageVersion !== lineage.version) {
+        await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'cancelled', lockedBy: null, lockedAt: null } });
+        return { processed: true, reason: 'stale_preview_observation' };
+      }
+      await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,18))', `preview:organization:${lineage.organizationId}`);
+      await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,15))', String(lineage.serviceId));
+      const service = await tx.service.findUnique({ where: { id: lineage.serviceId }, include: { project: { include: { organization: true } } } });
+      const actionPlan = { kind: observation.state === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: observation.repositoryId, installationId: observation.installationId, repository: lineage.repository, baseBranch: observation.baseRef };
+      const bindingValid = service && !['DELETE_REQUESTED', 'DELETING', 'DELETED'].includes(String(service.status).toUpperCase()) && !['DELETE_REQUESTED', 'DELETING', 'DELETED'].includes(String(service.project?.status).toUpperCase()) && serviceMatchesGitHubWebhook(service, actionPlan);
+      const matched = bindingValid ? await servicesForPrismaGitHubWebhook(tx, actionPlan) : [];
+      if (!matched.some((candidate: Record<string, any>) => candidate.id === lineage.serviceId)) {
+        await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'failed', lockedBy: null, lockedAt: null, payload: { ...job.payload, terminalReason: 'preview_binding_inactive' } } });
+        return { processed: true, reason: 'preview_binding_inactive' };
+      }
+      if (observation.state === 'open') {
+        const blocked = await prismaGitHubWebhookQuotaBlocks(tx, [service], actionPlan, []);
+        if (blocked.has(String(service.id))) {
+          await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'failed', lockedBy: null, lockedAt: null, payload: { ...job.payload, terminalReason: 'preview_quota_blocked' } } });
+          return { processed: true, reason: 'preview_quota_blocked' };
+        }
+      }
+      const transition = applyPreviewObservation(previewLineageRecord(lineage), observation);
+      await tx.previewLineage.update({ where: { id: lineage.id }, data: previewLineageData(transition.lineage) });
+      if (transition.decision === 'open') {
+        const deploymentId = stableId('dep', 'github-preview-apply', lineage.id, transition.lineage.version, transition.lineage.generation);
+        const runtime = createPreviewRuntime(transition.lineage, deploymentId);
+        const deployment = await tx.deployment.create({ data: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: observation.headSha, commitHash: observation.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_preview_resolver', branch: observation.headRef, pullRequestNumber: observation.pullRequestNumber, previewUrl: `https://${lineage.stableHost}`, previewLineageId: lineage.id, previewGeneration: transition.lineage.generation, previewRuntime: runtime, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
+        await tx.workflowJob.create({ data: { id: stableId('job', 'github-preview-apply', lineage.id, transition.lineage.version), ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId: lineage.id, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: 1, runtime } }) } });
+        await tx.previewLineage.update({ where: { id: lineage.id }, data: { candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation, resolutionObservation: null, resolutionErrorCode: null } });
+      } else if (transition.decision === 'close') {
+        const attempts = await tx.deployment.findMany({ where: { previewLineageId: lineage.id } });
+        const mutableIds = attempts.filter((attempt: Record<string, any>) => String(attempt.status).toUpperCase() !== 'CLEANED_UP').map((attempt: Record<string, any>) => attempt.id);
+        if (mutableIds.length) await tx.deployment.updateMany({ where: { id: { in: mutableIds } }, data: { status: 'PREVIEW_CLEANUP_REQUESTED' } });
+        await tx.previewLineage.update({ where: { id: lineage.id }, data: { routeIntent: previewCloseIntent(transition.lineage), resolutionObservation: null, resolutionErrorCode: null } });
+      }
+      await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'succeeded', lockedBy: null, lockedAt: null, payload: { ...job.payload, appliedVersion: transition.lineage.version } } });
+      return { processed: true, lineageId: lineage.id, decision: transition.decision };
+    }, { isolationLevel: 'Serializable' });
+  }
+
   async enqueueWorkflowJob(input: Record<string, any>) {
     return this.prisma.workflowJob.create({ data: workflowJobData(input) });
   }
@@ -1569,7 +1703,7 @@ export class PrismaControlPlaneRepository {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const job = await this.prisma.workflowJob.findFirst({
         where: {
-          type: { not: WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE },
+          type: { notIn: [WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE, WORKFLOW_TYPES.GITHUB_PREVIEW_RESOLVE, WORKFLOW_TYPES.GITHUB_PREVIEW_APPLY] },
           status: 'queued',
           runAfter: { lte: now },
           OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
@@ -1580,7 +1714,7 @@ export class PrismaControlPlaneRepository {
       const updated = await this.prisma.workflowJob.updateMany({
         where: {
           id: job.id,
-          type: { not: WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE },
+          type: { notIn: [WORKFLOW_TYPES.PUBLIC_HEALTH_OBSERVE, WORKFLOW_TYPES.GITHUB_PREVIEW_RESOLVE, WORKFLOW_TYPES.GITHUB_PREVIEW_APPLY] },
           status: 'queued',
           runAfter: { lte: now },
           OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
@@ -1927,6 +2061,22 @@ export class PrismaControlPlaneRepository {
     ]);
     return deepClone({ organizations, users: users.map(redactUser), members, projects, services, resources, deployments, auditLogs, usageRecords, workflowJobs, quotas, domains, resourceAttachments, resourceBackups, buildLogs, runtimeLogs, deploymentEvents, environmentVariables: environmentVariables.map(maskEnvRow), githubIntegrations });
   }
+}
+
+function previewLineageRecord(row: Record<string, any>): PreviewLineageRecord {
+  return {
+    id: row.id, organizationId: row.organizationId, projectId: row.projectId, serviceId: row.serviceId, integrationId: row.integrationId,
+    installationId: row.installationId, repositoryId: row.repositoryId, repository: row.repository, pullRequestNumber: row.pullRequestNumber,
+    stableHost: row.stableHost, namespace: row.namespace, routeName: row.routeName, state: row.state,
+    version: row.version, generation: row.generation, eventUpdatedAt: new Date(row.eventUpdatedAt).toISOString(), eventAction: row.eventAction,
+    headSha: row.headSha, headRef: row.headRef, baseRef: row.baseRef, beforeSha: row.beforeSha,
+    candidateDeploymentId: row.candidateDeploymentId, candidateGeneration: row.candidateGeneration,
+    currentDeploymentId: row.currentDeploymentId, currentGeneration: row.currentGeneration,
+  };
+}
+
+function previewLineageData(lineage: PreviewLineageRecord) {
+  return { ...lineage, eventUpdatedAt: new Date(lineage.eventUpdatedAt) };
 }
 
 async function findActivityRows(model: any, scope: Record<string, any>, options: Record<string, any> = {}) {
@@ -2374,6 +2524,10 @@ function deploymentData(input: Record<string, any>) {
     branch: input.branch || 'main',
     pullRequestNumber: input.pullRequestNumber ? Number(input.pullRequestNumber) : null,
     previewUrl: input.previewUrl || null,
+    previewLineageId: input.previewLineageId ?? null,
+    previewGeneration: input.previewGeneration ?? null,
+    previewRuntime: input.previewRuntime,
+    previewOwnedObjects: input.previewOwnedObjects,
     errorCode: input.errorCode || null,
     errorMessage: input.errorMessage ? maskLogLine(input.errorMessage) : null,
     buildStartedAt: input.buildStartedAt ? new Date(input.buildStartedAt) : undefined,
