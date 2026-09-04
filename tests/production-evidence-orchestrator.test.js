@@ -177,3 +177,18 @@ test('Given a failing injected step, When orchestration unwinds, Then cleanup st
   assert.equal(manifest.fragments.find(({ component }) => component === 'lifecycle').status, 'FAIL');
   assert.equal(JSON.parse(await readFile(path.join(result.runDirectory, 'artifacts', 'lifecycle', 'preview.json'), 'utf8')).status, 'NOT_RUN');
 });
+
+test('Given cleanup is the failing boundary, When the run is finalized, Then its typed cleanup reason is preserved', async (t) => {
+  const attemptDir = await sandbox(t);
+  const executor = async (request, context) => {
+    if (request.step !== 'cleanup') return passingStep(request, context);
+    const artifact = await context.writeArtifact('cleanup', 'cleanup-failure.json', { fixture: true, status: 'FAIL', redacted: true });
+    return { status: 'FAIL', reason: 'cleanup_failed', assertions: STEP_ASSERTIONS.cleanup.map((id) => ({ id, status: 'FAIL', artifactPaths: [artifact.path] })),
+      artifacts: [artifact], cleanupInventory: [] };
+  };
+  const result = await runProductionEvidence({ profile: 'train-a', scenario: null,
+    faultMatrix: { id: 'cleanup-leak', boundary: 'cleanup', mode: 'cleanup-leak', expectedReason: 'cleanup_failed' },
+    attemptDir, inputs: inputs(), executeStep: executor, clock: { now: () => new Date() }, uuid: randomUUID, fixture: true });
+  assert.equal(result.reason, 'cleanup_failed');
+  assert.equal(result.verification.releaseEligible, false);
+});

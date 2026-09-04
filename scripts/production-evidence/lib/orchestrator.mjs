@@ -161,5 +161,9 @@ export async function runProductionEvidence(options) {
     const reason = error instanceof EvidenceError ? error.reason : 'evidence_io_failed';
     verification = { valid: false, releaseEligible: false, reason };
   }
-  return { status: manifest.status, reason: verification.valid ? null : (fault?.boundary === 'verifier' ? verification.reason : blockingReason ?? verification.reason), runId, runDirectory, manifestPath, verification };
+  const cleanupReason = cleanupStep.receipt.status === 'PASS' && runCleanupStatus === 'PASS'
+    ? null : (cleanupStep.receipt.reason ?? runCleanupReason ?? 'cleanup_failed');
+  return { status: manifest.status, reason: verification.valid ? null
+    : (fault?.boundary === 'verifier' ? verification.reason : blockingReason ?? cleanupReason ?? verification.reason),
+  runId, runDirectory, manifestPath, verification };
 }
