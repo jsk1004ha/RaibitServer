@@ -7,7 +7,7 @@ import (
 )
 
 func (l *RecoveryLifecycle) Cleanup(ctx context.Context, identity store.RecoveryIdentity) error {
-	if identity.Kind != store.RecoveryBackup {
+	if identity.Kind != store.RecoveryBackup && identity.Kind != store.RecoveryRestore {
 		return ErrRecoveryRequest
 	}
 	claim, err := l.state.ClaimRecoveryCleanup(ctx, identity, "provisioner-recovery-cleanup")
@@ -16,6 +16,9 @@ func (l *RecoveryLifecycle) Cleanup(ctx context.Context, identity store.Recovery
 	}
 	if err = l.state.FenceRecoveryCleanup(ctx, claim); err != nil {
 		return err
+	}
+	if identity.Kind == store.RecoveryRestore {
+		return l.state.FinishRecoveryCleanup(ctx, claim)
 	}
 	attempts, err := l.state.ReadRecoveryCleanup(ctx, claim)
 	if err != nil {

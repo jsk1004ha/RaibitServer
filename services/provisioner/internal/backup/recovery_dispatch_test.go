@@ -17,11 +17,19 @@ type fakeRecoveryDispatchStore struct {
 	failures  int
 	cancels   int
 	execution store.RecoveryExecution
+	cleanup   *store.RecoveryIdentity
+	noClaim   bool
 }
 
 func (s *fakeRecoveryDispatchStore) ClaimNextRecovery(context.Context, string) (*store.RecoveryClaim, error) {
 	s.claims++
+	if s.noClaim {
+		return nil, nil
+	}
 	return &store.RecoveryClaim{}, nil
+}
+func (s *fakeRecoveryDispatchStore) NextRecoveryCleanup(context.Context) (*store.RecoveryIdentity, error) {
+	return s.cleanup, nil
 }
 func (s *fakeRecoveryDispatchStore) ReadRecoveryExecution(context.Context, store.RecoveryClaim) (store.RecoveryExecution, error) {
 	s.reads++
@@ -50,7 +58,11 @@ func (s *fakeRecoveryDispatchStore) CancelRestore(ctx context.Context, _ store.R
 	return nil
 }
 
-type fakeRecoveryHandler struct{ called int }
+type fakeRecoveryHandler struct {
+	called       int
+	cleanupKinds []store.RecoveryKind
+	cleanupErr   error
+}
 
 func (*fakeRecoveryHandler) Engine() Engine { return EnginePostgreSQL }
 func (h *fakeRecoveryHandler) Handle(_ context.Context, work RecoveryWork) error {
@@ -59,6 +71,14 @@ func (h *fakeRecoveryHandler) Handle(_ context.Context, work RecoveryWork) error
 		return ErrRecoveryRequest
 	}
 	return nil
+}
+
+func (h *fakeRecoveryHandler) Cleanup(_ context.Context, identity store.RecoveryIdentity) error {
+	if identity.Kind != store.RecoveryBackup && identity.Kind != store.RecoveryRestore {
+		return ErrRecoveryRequest
+	}
+	h.cleanupKinds = append(h.cleanupKinds, identity.Kind)
+	return h.cleanupErr
 }
 
 func postgresqlOnlyPolicy(t *testing.T) RecoveryToolPolicy {
@@ -90,6 +110,41 @@ func Test_RecoveryDispatcher_registered_handler_claims_and_dispatches_once(t *te
 	processed, err := dispatcher.RunOnce(context.Background())
 	if err != nil || !processed || state.claims != 1 || state.reads != 1 || handler.called != 1 {
 		t.Fatalf("processed=%v claims=%d reads=%d calls=%d err=%v", processed, state.claims, state.reads, handler.called, err)
+	}
+}
+
+func Test_RecoveryDispatcher_runs_durable_backup_and_restore_cleanup_when_recovery_queue_is_idle(t *testing.T) {
+	for _, kind := range []store.RecoveryKind{store.RecoveryBackup, store.RecoveryRestore} {
+		t.Run(string(kind), func(t *testing.T) {
+			identity := &store.RecoveryIdentity{Kind: kind, OperationID: "operation-1"}
+			state := &fakeRecoveryDispatchStore{noClaim: true, cleanup: identity}
+			handler := &fakeRecoveryHandler{}
+			dispatcher, err := NewRecoveryDispatcher(state, postgresqlOnlyPolicy(t), writeRunner{payload: "dump"}, []RecoveryHandler{handler}, "worker-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			processed, err := dispatcher.RunOnce(context.Background())
+			if err != nil || !processed || len(handler.cleanupKinds) != 1 || handler.cleanupKinds[0] != kind {
+				t.Fatalf("processed=%v cleanup kinds=%v err=%v", processed, handler.cleanupKinds, err)
+			}
+		})
+	}
+}
+
+func Test_RecoveryDispatcher_cleanup_failure_remains_retryable(t *testing.T) {
+	identity := &store.RecoveryIdentity{Kind: store.RecoveryRestore, OperationID: "restore-1"}
+	state := &fakeRecoveryDispatchStore{noClaim: true, cleanup: identity}
+	handler := &fakeRecoveryHandler{cleanupErr: ErrBackend}
+	dispatcher, err := NewRecoveryDispatcher(state, postgresqlOnlyPolicy(t), writeRunner{payload: "dump"}, []RecoveryHandler{handler}, "worker-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed, runErr := dispatcher.RunOnce(context.Background()); !processed || !errors.Is(runErr, ErrBackend) {
+		t.Fatalf("first processed=%v err=%v", processed, runErr)
+	}
+	handler.cleanupErr = nil
+	if processed, runErr := dispatcher.RunOnce(context.Background()); !processed || runErr != nil || len(handler.cleanupKinds) != 2 {
+		t.Fatalf("retry processed=%v calls=%d err=%v", processed, len(handler.cleanupKinds), runErr)
 	}
 }
 

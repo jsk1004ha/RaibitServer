@@ -11,13 +11,18 @@ import (
 )
 
 type lifecycleStore struct {
-	mu          sync.Mutex
-	events      []string
-	wire        *testJournal
-	attempts    []store.RecoveryAttempt
-	renewErr    error
-	cleanupErr  error
-	finishCount int
+	mu               sync.Mutex
+	events           []string
+	wire             *testJournal
+	attempts         []store.RecoveryAttempt
+	renewErr         error
+	cleanupErr       error
+	cleanupFenceErr  error
+	cleanupFinishErr error
+	cleanupKind      store.RecoveryKind
+	targetPinned     bool
+	targetDeleted    bool
+	finishCount      int
 }
 
 func (s *lifecycleStore) event(name string) {
@@ -118,13 +123,14 @@ func (s *lifecycleStore) ReadRecoveryAttempts(context.Context, store.RecoveryCla
 	s.event("read-attempts")
 	return append([]store.RecoveryAttempt(nil), s.attempts...), nil
 }
-func (s *lifecycleStore) ClaimRecoveryCleanup(context.Context, store.RecoveryIdentity, string) (store.RecoveryCleanupClaim, error) {
+func (s *lifecycleStore) ClaimRecoveryCleanup(_ context.Context, identity store.RecoveryIdentity, _ string) (store.RecoveryCleanupClaim, error) {
 	s.event("cleanup-claim")
+	s.cleanupKind = identity.Kind
 	return store.RecoveryCleanupClaim{}, s.cleanupErr
 }
 func (s *lifecycleStore) FenceRecoveryCleanup(context.Context, store.RecoveryCleanupClaim) error {
 	s.event("cleanup-fence")
-	return nil
+	return s.cleanupFenceErr
 }
 func (s *lifecycleStore) ReadRecoveryCleanup(context.Context, store.RecoveryCleanupClaim) ([]store.RecoveryAttempt, error) {
 	s.event("cleanup-read")
@@ -145,6 +151,13 @@ func (s *lifecycleStore) MarkRecoveryAttemptCleaned(_ context.Context, _ store.R
 }
 func (s *lifecycleStore) FinishRecoveryCleanup(context.Context, store.RecoveryCleanupClaim) error {
 	s.event("cleanup-finish")
+	if s.cleanupFinishErr != nil {
+		return s.cleanupFinishErr
+	}
+	if s.cleanupKind == store.RecoveryRestore {
+		s.targetPinned = false
+		s.targetDeleted = true
+	}
 	return nil
 }
 

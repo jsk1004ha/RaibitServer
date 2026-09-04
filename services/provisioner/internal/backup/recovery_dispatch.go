@@ -25,8 +25,13 @@ type RecoveryHandler interface {
 	Handle(context.Context, RecoveryWork) error
 }
 
+type recoveryCleanupHandler interface {
+	Cleanup(context.Context, store.RecoveryIdentity) error
+}
+
 type recoveryDispatchStore interface {
 	ClaimNextRecovery(context.Context, string) (*store.RecoveryClaim, error)
+	NextRecoveryCleanup(context.Context) (*store.RecoveryIdentity, error)
 	ReadRecoveryExecution(context.Context, store.RecoveryClaim) (store.RecoveryExecution, error)
 	CancelRestore(context.Context, store.RecoveryClaim) error
 	RetryRecovery(context.Context, store.RecoveryClaim) error
@@ -40,6 +45,7 @@ type RecoveryDispatcher struct {
 	handlers map[Engine]RecoveryHandler
 	worker   string
 	services []*Service
+	cleanup  recoveryCleanupHandler
 }
 
 func NewRecoveryDispatcher(state recoveryDispatchStore, policy RecoveryToolPolicy, runner JobRunner, handlers []RecoveryHandler, worker string) (*RecoveryDispatcher, error) {
@@ -52,7 +58,11 @@ func NewRecoveryDispatcher(state recoveryDispatchStore, policy RecoveryToolPolic
 	}
 	services := make([]*Service, 0, 1)
 	seenServices := make(map[*Service]bool)
-	for _, handler := range registered {
+	var cleanup recoveryCleanupHandler
+	for _, handler := range handlers {
+		if cleanup == nil {
+			cleanup, _ = handler.(recoveryCleanupHandler)
+		}
 		provider, ok := handler.(interface{ recoveryService() *Service })
 		if !ok || provider.recoveryService() == nil || seenServices[provider.recoveryService()] {
 			continue
@@ -60,7 +70,7 @@ func NewRecoveryDispatcher(state recoveryDispatchStore, policy RecoveryToolPolic
 		seenServices[provider.recoveryService()] = true
 		services = append(services, provider.recoveryService())
 	}
-	return &RecoveryDispatcher{store: state, policy: policy, runner: runner, handlers: registered, worker: worker, services: services}, nil
+	return &RecoveryDispatcher{store: state, policy: policy, runner: runner, handlers: registered, worker: worker, services: services, cleanup: cleanup}, nil
 }
 
 func (d *RecoveryDispatcher) Close() {
@@ -95,8 +105,11 @@ func registerRecoveryHandlers(policy RecoveryToolPolicy, handlers []RecoveryHand
 
 func (d *RecoveryDispatcher) RunOnce(ctx context.Context) (bool, error) {
 	claim, err := d.store.ClaimNextRecovery(ctx, d.worker)
-	if err != nil || claim == nil {
+	if err != nil {
 		return false, err
+	}
+	if claim == nil {
+		return d.runCleanup(ctx)
 	}
 	execution, err := d.store.ReadRecoveryExecution(ctx, *claim)
 	if err != nil {
@@ -144,6 +157,17 @@ func (d *RecoveryDispatcher) RunOnce(ctx context.Context) (bool, error) {
 		return true, errors.Join(err, transitionErr)
 	}
 	return true, nil
+}
+
+func (d *RecoveryDispatcher) runCleanup(ctx context.Context) (bool, error) {
+	identity, err := d.store.NextRecoveryCleanup(ctx)
+	if err != nil || identity == nil {
+		return false, err
+	}
+	if d.cleanup == nil {
+		return true, ErrRecoveryHandlerUnavailable
+	}
+	return true, d.cleanup.Cleanup(ctx, *identity)
 }
 
 func (*RecoveryDispatcher) durableTransition(ctx context.Context, transition func(context.Context) error) error {

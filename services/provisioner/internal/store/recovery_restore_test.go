@@ -95,10 +95,14 @@ func TestRecoveryPostgresCancelledRestoreCleanupReleasesOnlyTarget(t *testing.T)
 	if err := f.s.CancelRestore(f.ctx, c); err != nil {
 		t.Fatal(err)
 	}
+	eligible, err := f.s.NextRecoveryCleanup(f.ctx)
+	if err != nil || eligible == nil || eligible.Kind != RecoveryRestore || eligible.OperationID != id {
+		t.Fatalf("cancelled restore cleanup was not scheduled: %+v %v", eligible, err)
+	}
 	if err := f.s.StartRestoreVerification(f.ctx, c); err == nil {
 		t.Fatal("cancelled worker remained live")
 	}
-	cleanup, err := f.s.ClaimRecoveryCleanup(f.ctx, c.Identity(), "cleanup")
+	cleanup, err := f.s.ClaimRecoveryCleanup(f.ctx, *eligible, "cleanup")
 	if err != nil {
 		t.Fatal(err)
 	}

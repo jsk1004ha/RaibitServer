@@ -52,7 +52,11 @@ func TestRecoveryPostgresCleanupRetainsUncertainAttemptsAndFencesLease(t *testin
 	if err := f.s.FailRecovery(f.ctx, c); err != nil {
 		t.Fatal(err)
 	}
-	cleanup, err := f.s.ClaimRecoveryCleanup(f.ctx, c.Identity(), "cleanup")
+	eligible, err := f.s.NextRecoveryCleanup(f.ctx)
+	if err != nil || eligible == nil || eligible.Kind != RecoveryBackup || eligible.OperationID != f.id {
+		t.Fatalf("failed backup cleanup was not scheduled: %+v %v", eligible, err)
+	}
+	cleanup, err := f.s.ClaimRecoveryCleanup(f.ctx, *eligible, "cleanup")
 	if err != nil {
 		t.Fatal(err)
 	}

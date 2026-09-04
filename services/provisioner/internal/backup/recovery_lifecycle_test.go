@@ -141,6 +141,61 @@ func Test_RecoveryLifecycle_cleanup_records_remote_completion_before_finish(t *t
 	}
 }
 
+func Test_RecoveryLifecycle_backup_cleanup_fence_loss_blocks_remote_deletion_and_finish(t *testing.T) {
+	factory, state, wire, attempt := newLifecycleForTest(t, "")
+	binding, _ := NewSQLRecoveryAdapterBinding(NewPostgreSQLAdapter())
+	handler, _ := factory.Handler(binding)
+	execution := backupExecution(attempt)
+	if err := handler.Handle(context.Background(), RecoveryWork{Claim: store.RecoveryClaim{}, Execution: execution, Source: mustBindSource(t, execution), Runner: &sqlRunner{}}); err != nil {
+		t.Fatal(err)
+	}
+	state.attempts[0].State = "PREPARED"
+	state.events = nil
+	state.cleanupFenceErr = store.ErrRecoveryFence
+
+	err := handler.(*RecoveryLifecycle).Cleanup(context.Background(), execution.Identity)
+	if !errors.Is(err, store.ErrRecoveryFence) || wire.object == nil || slices.Contains(state.snapshot(), "cleanup-finish") {
+		t.Fatalf("events=%v remote object=%d err=%v", state.snapshot(), len(wire.object), err)
+	}
+}
+
+func Test_RecoveryLifecycle_restore_cleanup_releases_only_target_after_fenced_finish(t *testing.T) {
+	factory, state, _, attempt := newLifecycleForTest(t, "")
+	state.targetPinned = true
+	binding, _ := NewSQLRecoveryAdapterBinding(NewPostgreSQLAdapter())
+	handler, _ := factory.Handler(binding)
+	identity := restoreExecution(attempt).Identity
+	beforeAttempts := append([]store.RecoveryAttempt(nil), state.attempts...)
+
+	if err := handler.(*RecoveryLifecycle).Cleanup(context.Background(), identity); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(state.snapshot(), []string{"cleanup-claim", "cleanup-fence", "cleanup-finish"}) || state.targetPinned || !state.targetDeleted || !slices.Equal(state.attempts, beforeAttempts) {
+		t.Fatalf("events=%v pinned=%v deleted=%v attempts changed=%v", state.snapshot(), state.targetPinned, state.targetDeleted, !slices.Equal(state.attempts, beforeAttempts))
+	}
+}
+
+func Test_RecoveryLifecycle_restore_cleanup_fence_loss_blocks_target_deletion_and_retries(t *testing.T) {
+	factory, state, _, attempt := newLifecycleForTest(t, "")
+	state.targetPinned = true
+	state.cleanupFenceErr = store.ErrRecoveryFence
+	binding, _ := NewSQLRecoveryAdapterBinding(NewPostgreSQLAdapter())
+	handler, _ := factory.Handler(binding)
+	identity := restoreExecution(attempt).Identity
+
+	if err := handler.(*RecoveryLifecycle).Cleanup(context.Background(), identity); !errors.Is(err, store.ErrRecoveryFence) {
+		t.Fatalf("fence error=%v", err)
+	}
+	if state.targetDeleted || !state.targetPinned || slices.Contains(state.snapshot(), "cleanup-finish") {
+		t.Fatalf("events=%v pinned=%v deleted=%v", state.snapshot(), state.targetPinned, state.targetDeleted)
+	}
+	state.cleanupFenceErr = nil
+	state.events = nil
+	if err := handler.(*RecoveryLifecycle).Cleanup(context.Background(), identity); err != nil || !state.targetDeleted || state.targetPinned {
+		t.Fatalf("retry events=%v pinned=%v deleted=%v err=%v", state.snapshot(), state.targetPinned, state.targetDeleted, err)
+	}
+}
+
 func mustBindSource(t *testing.T, execution store.RecoveryExecution) Connection {
 	t.Helper()
 	value, err := BindRecoverySource(execution, testToolPolicy(t))
