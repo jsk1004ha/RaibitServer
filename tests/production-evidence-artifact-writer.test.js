@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 import { createSafeArtifactWriter, createUnsafeFixtureArtifactWriter, isPrivateArtifactWriterMetadata, PRIVATE_WRITER_SESSION_PATH } from '../scripts/production-evidence/lib/safe-artifact-writer.mjs';
+
+const execFileAsync = promisify(execFile);
 
 async function sandbox(t) {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'raibit-artifact-writer-'));
@@ -175,4 +179,34 @@ test('Given Windows without a portable no-reparse ACL guarantee, When creating a
 
   // When / Then
   await assert.rejects(createSafeArtifactWriter({ runDirectory, allowedPaths: ['artifacts/runtime.json'] }), { reason: 'artifact_platform_not_release_safe' });
+});
+
+test('Given a successful write and closed session, When same-process and child-process writers target different paths, Then the durable marker blocks both', async (t) => {
+  // Given
+  const { runDirectory } = await sandbox(t);
+  const writer = await fixtureWriter(t, { runDirectory, allowedPaths: ['artifacts/complete.json'] });
+  await writer.writeJson('artifacts/complete.json', { status: 'PASS', redacted: true });
+  await writer.close();
+
+  // When
+  const sameProcess = assert.rejects(
+    createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: ['artifacts/restarted.json'] }),
+    { reason: 'run_already_opened' },
+  );
+  const moduleUrl = new URL('../scripts/production-evidence/lib/safe-artifact-writer.mjs', import.meta.url).href;
+  const childScript = `import { createUnsafeFixtureArtifactWriter } from ${JSON.stringify(moduleUrl)};
+try {
+  await createUnsafeFixtureArtifactWriter({ runDirectory: ${JSON.stringify(runDirectory)}, allowedPaths: ['artifacts/restarted-child.json'] });
+  process.stdout.write('unexpected_success'); process.exitCode = 2;
+} catch (error) {
+  process.stdout.write(error?.reason ?? 'unknown');
+  if (error?.reason !== 'run_already_opened') process.exitCode = 3;
+}`;
+  const child = await execFileAsync(process.execPath, ['--input-type=module', '--eval', childScript], { timeout: 5_000, windowsHide: true });
+
+  // Then
+  await sameProcess;
+  assert.equal(child.stdout, 'run_already_opened');
+  await assert.rejects(readFile(path.join(runDirectory, 'artifacts', 'restarted.json')), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(runDirectory, 'artifacts', 'restarted-child.json')), { code: 'ENOENT' });
 });
