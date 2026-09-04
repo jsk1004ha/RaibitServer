@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/raibitserver/provisioner/internal/store"
 )
@@ -12,6 +13,7 @@ import (
 var ErrRecoveryHandlerUnavailable = errors.New("backup: recovery handler unavailable")
 
 type RecoveryWork struct {
+	Claim     store.RecoveryClaim
 	Execution store.RecoveryExecution
 	Source    Connection
 	Target    *Connection
@@ -26,6 +28,7 @@ type RecoveryHandler interface {
 type recoveryDispatchStore interface {
 	ClaimNextRecovery(context.Context, string) (*store.RecoveryClaim, error)
 	ReadRecoveryExecution(context.Context, store.RecoveryClaim) (store.RecoveryExecution, error)
+	CancelRestore(context.Context, store.RecoveryClaim) error
 	RetryRecovery(context.Context, store.RecoveryClaim) error
 	FailRecovery(context.Context, store.RecoveryClaim) error
 }
@@ -36,6 +39,7 @@ type RecoveryDispatcher struct {
 	runner   JobRunner
 	handlers map[Engine]RecoveryHandler
 	worker   string
+	services []*Service
 }
 
 func NewRecoveryDispatcher(state recoveryDispatchStore, policy RecoveryToolPolicy, runner JobRunner, handlers []RecoveryHandler, worker string) (*RecoveryDispatcher, error) {
@@ -46,7 +50,23 @@ func NewRecoveryDispatcher(state recoveryDispatchStore, policy RecoveryToolPolic
 	if state == nil || runner == nil || !recoveryPart.MatchString(worker) {
 		return nil, ErrConfig
 	}
-	return &RecoveryDispatcher{store: state, policy: policy, runner: runner, handlers: registered, worker: worker}, nil
+	services := make([]*Service, 0, 1)
+	seenServices := make(map[*Service]bool)
+	for _, handler := range registered {
+		provider, ok := handler.(interface{ recoveryService() *Service })
+		if !ok || provider.recoveryService() == nil || seenServices[provider.recoveryService()] {
+			continue
+		}
+		seenServices[provider.recoveryService()] = true
+		services = append(services, provider.recoveryService())
+	}
+	return &RecoveryDispatcher{store: state, policy: policy, runner: runner, handlers: registered, worker: worker, services: services}, nil
+}
+
+func (d *RecoveryDispatcher) Close() {
+	for _, service := range d.services {
+		service.Close()
+	}
 }
 
 func registerRecoveryHandlers(policy RecoveryToolPolicy, handlers []RecoveryHandler) (map[Engine]RecoveryHandler, error) {
@@ -80,27 +100,54 @@ func (d *RecoveryDispatcher) RunOnce(ctx context.Context) (bool, error) {
 	}
 	execution, err := d.store.ReadRecoveryExecution(ctx, *claim)
 	if err != nil {
-		return true, errors.Join(err, d.store.RetryRecovery(ctx, *claim))
+		return true, errors.Join(err, d.durableTransition(ctx, func(transitionCtx context.Context) error {
+			return d.store.RetryRecovery(transitionCtx, *claim)
+		}))
 	}
 	source, err := BindRecoverySource(execution, d.policy)
 	if err != nil {
-		return true, errors.Join(err, d.store.FailRecovery(ctx, *claim))
+		return true, errors.Join(err, d.durableTransition(ctx, func(transitionCtx context.Context) error {
+			return d.store.FailRecovery(transitionCtx, *claim)
+		}))
 	}
 	var target *Connection
 	if execution.Identity.Kind == store.RecoveryRestore {
 		bound, bindErr := BindRecoveryTarget(execution, d.policy)
 		if bindErr != nil {
-			return true, errors.Join(bindErr, d.store.FailRecovery(ctx, *claim))
+			return true, errors.Join(bindErr, d.durableTransition(ctx, func(transitionCtx context.Context) error {
+				return d.store.FailRecovery(transitionCtx, *claim)
+			}))
 		}
 		target = &bound
 	}
 	handler := d.handlers[source.Engine()]
 	if handler == nil {
-		return true, errors.Join(ErrRecoveryHandlerUnavailable, d.store.RetryRecovery(ctx, *claim))
+		return true, errors.Join(ErrRecoveryHandlerUnavailable, d.durableTransition(ctx, func(transitionCtx context.Context) error {
+			return d.store.RetryRecovery(transitionCtx, *claim)
+		}))
 	}
-	err = handler.Handle(ctx, RecoveryWork{Execution: execution, Source: source, Target: target, Runner: d.runner})
+	err = handler.Handle(ctx, RecoveryWork{Claim: *claim, Execution: execution, Source: source, Target: target, Runner: d.runner})
 	if err != nil {
-		return true, errors.Join(err, d.store.RetryRecovery(ctx, *claim))
+		if errors.Is(err, store.ErrRecoveryFence) || errors.Is(err, ErrFence) {
+			return true, err
+		}
+		transitionErr := d.durableTransition(ctx, func(transitionCtx context.Context) error {
+			switch {
+			case execution.Identity.Kind == store.RecoveryRestore && errors.Is(err, context.Canceled):
+				return d.store.CancelRestore(transitionCtx, *claim)
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				return d.store.FailRecovery(transitionCtx, *claim)
+			default:
+				return d.store.RetryRecovery(transitionCtx, *claim)
+			}
+		})
+		return true, errors.Join(err, transitionErr)
 	}
 	return true, nil
+}
+
+func (*RecoveryDispatcher) durableTransition(ctx context.Context, transition func(context.Context) error) error {
+	transitionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return transition(transitionCtx)
 }

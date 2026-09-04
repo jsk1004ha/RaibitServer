@@ -69,6 +69,8 @@ func NewService(config OperatorConfig, bundle Bundle, options Options) (*Service
 
 func (s *Service) Close() { s.transport.CloseIdleConnections() }
 
+func (s *Service) CurrentKeyVersion() string { return s.bundle.current }
+
 func (s *Service) operation(ctx context.Context, a Attempt) (context.Context, context.CancelFunc, error) {
 	if _, err := NewAttempt(a.spec); err != nil {
 		return nil, nil, err

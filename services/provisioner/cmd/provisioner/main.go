@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -39,6 +40,9 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "provisioner recovery configuration failed: %v\n", err)
 		os.Exit(1)
+	}
+	if recovery != nil {
+		defer recovery.Close()
 	}
 	dryRun := os.Getenv("RAIBITSERVER_DRY_RUN") != "0" && os.Getenv("RAIBITSERVER_EXECUTE") != "1"
 	interval := secondsEnv("RAIBITSERVER_RECONCILE_INTERVAL_SECONDS", 5*time.Second)
@@ -88,24 +92,76 @@ func configureRecovery(state *store.PostgresStore, runner *command.OSRunner, env
 	if err != nil || !operator.Enabled() {
 		return nil, err
 	}
-	policy, err := backup.ParseRequiredRecoveryToolPolicy(env)
+	policy, err := backup.ParseRecoveryToolPolicy(env)
 	if err != nil {
+		return nil, err
+	}
+	bundleFile, err := os.Open(operator.BundleFile())
+	if err != nil {
+		return nil, errors.Join(backup.ErrConfig, err)
+	}
+	bundle, parseErr := backup.ParseBundle(bundleFile)
+	closeErr := bundleFile.Close()
+	if err := errors.Join(parseErr, closeErr); err != nil {
+		return nil, errors.Join(backup.ErrConfig, err)
+	}
+	service, err := backup.NewService(operator, bundle, backup.Options{})
+	if err != nil {
+		return nil, err
+	}
+	factory, err := backup.NewRecoveryHandlerFactory(state, service)
+	if err != nil {
+		service.Close()
+		return nil, err
+	}
+	handlers, err := recoveryHandlers(factory, policy)
+	if err != nil {
+		service.Close()
 		return nil, err
 	}
 	client, err := backup.NewCommandKubernetesJobClient(runner, secondsEnv("RAIBITSERVER_RECOVERY_JOB_TIMEOUT_SECONDS", 30*time.Minute))
 	if err != nil {
+		service.Close()
 		return nil, err
 	}
 	jobRunner, err := backup.NewKubernetesJobRunner(client)
 	if err != nil {
+		service.Close()
 		return nil, err
 	}
-	return backup.NewRecoveryDispatcher(state, policy, jobRunner, recoveryHandlers(), "provisioner-recovery")
+	dispatcher, err := backup.NewRecoveryDispatcher(state, policy, jobRunner, handlers, "provisioner-recovery")
+	if err != nil {
+		service.Close()
+		return nil, err
+	}
+	return dispatcher, nil
 }
 
-// Tasks 24/25 register fixed-command engine handlers here. An enabled recovery
-// configuration fails startup while any configured engine has no handler.
-func recoveryHandlers() []backup.RecoveryHandler { return nil }
+func recoveryHandlers(factory *backup.RecoveryHandlerFactory, policy backup.RecoveryToolPolicy) ([]backup.RecoveryHandler, error) {
+	adapters := []backup.RecoveryAdapter{
+		backup.NewPostgreSQLAdapter(),
+		backup.NewMySQLRecoveryAdapter(),
+		backup.NewMariaDBRecoveryAdapter(),
+	}
+	handlers := make([]backup.RecoveryHandler, 0, len(adapters))
+	for _, adapter := range adapters {
+		if !policy.Enabled(adapter.Engine()) {
+			continue
+		}
+		binding, err := backup.NewSQLRecoveryAdapterBinding(adapter)
+		if err != nil {
+			return nil, err
+		}
+		handler, err := factory.Handler(binding)
+		if err != nil {
+			return nil, err
+		}
+		handlers = append(handlers, handler)
+	}
+	// Task 25 engines join this registry through an adapter binding; the durable
+	// lifecycle and Task 23 journal bridge remain engine-neutral.
+	return handlers, nil
+}
 
 func processEnvironment() map[string]string {
 	result := make(map[string]string)

@@ -9,6 +9,8 @@ import (
 
 type RecoveryToolPolicy struct{ images map[Engine]string }
 
+func (p RecoveryToolPolicy) Enabled(engine Engine) bool { return p.images[engine] != "" }
+
 func ParseRecoveryToolPolicy(env map[string]string) (RecoveryToolPolicy, error) {
 	const prefix = "RAIBITSERVER_RECOVERY_TOOL_"
 	images := make(map[Engine]string, 6)
