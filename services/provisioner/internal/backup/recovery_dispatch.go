@@ -39,7 +39,18 @@ type RecoveryDispatcher struct {
 }
 
 func NewRecoveryDispatcher(state recoveryDispatchStore, policy RecoveryToolPolicy, runner JobRunner, handlers []RecoveryHandler, worker string) (*RecoveryDispatcher, error) {
-	if state == nil || runner == nil || !recoveryPart.MatchString(worker) || len(policy.images) == 0 {
+	registered, err := registerRecoveryHandlers(policy, handlers)
+	if err != nil {
+		return nil, err
+	}
+	if state == nil || runner == nil || !recoveryPart.MatchString(worker) {
+		return nil, ErrConfig
+	}
+	return &RecoveryDispatcher{store: state, policy: policy, runner: runner, handlers: registered, worker: worker}, nil
+}
+
+func registerRecoveryHandlers(policy RecoveryToolPolicy, handlers []RecoveryHandler) (map[Engine]RecoveryHandler, error) {
+	if len(policy.images) == 0 {
 		return nil, ErrConfig
 	}
 	registered := make(map[Engine]RecoveryHandler, len(handlers))
@@ -59,7 +70,7 @@ func NewRecoveryDispatcher(state recoveryDispatchStore, policy RecoveryToolPolic
 		sort.Strings(missing)
 		return nil, fmt.Errorf("%w: %v", ErrRecoveryHandlerUnavailable, missing)
 	}
-	return &RecoveryDispatcher{store: state, policy: policy, runner: runner, handlers: registered, worker: worker}, nil
+	return registered, nil
 }
 
 func (d *RecoveryDispatcher) RunOnce(ctx context.Context) (bool, error) {

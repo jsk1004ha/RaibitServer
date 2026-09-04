@@ -29,6 +29,10 @@ type CreatedJobObservation struct {
 	Namespace                 string
 	snapshotName, snapshotUID string
 	policyName, policyUID     string
+	providerPodName           string
+	providerPodUID            string
+	authority                 string
+	labels                    map[string]string
 }
 
 type KubernetesJobClient interface {

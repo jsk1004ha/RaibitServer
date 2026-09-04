@@ -22,6 +22,7 @@ import (
 
 var (
 	ErrAlreadyExists     = errors.New("resource already exists")
+	ErrObjectNotFound    = errors.New("Kubernetes object not found")
 	ErrSecretNotFound    = errors.New("credential Secret not found")
 	ErrSecretUIDMismatch = errors.New("credential Secret UID precondition failed")
 )
@@ -475,6 +476,9 @@ func execute(ctx context.Context, name string, args []string, input []byte, dryR
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if bytes.Contains(output, []byte("Error from server (NotFound):")) {
+			return printable, nil, fmt.Errorf("%s: %w", printable, ErrObjectNotFound)
+		}
 		if redactOutput {
 			return printable, nil, fmt.Errorf("%s failed: %w (sensitive command output withheld)", printable, err)
 		}

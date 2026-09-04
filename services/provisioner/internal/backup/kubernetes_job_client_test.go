@@ -23,19 +23,43 @@ type fakeRecoveryCommands struct {
 	workloadImage         string
 	workloadGeneration    int64
 	snapshotAlreadyExists bool
+	workloadReads         int
+	driftBeforeJob        bool
+	streamErr             error
+	cleanupSawCanceled    bool
+	cleanupSawDeadline    bool
+	jobCreates            int
+	authorityBound         bool
+	authorityReleased      bool
+	authorityValue         string
+	bindErrAfterSideEffect bool
+	createFailureKind     string
 }
 
-func (f *fakeRecoveryCommands) Run(_ context.Context, _ string, args []string, _ bool, _ time.Duration) (string, error) {
+func (f *fakeRecoveryCommands) Run(ctx context.Context, _ string, args []string, _ bool, _ time.Duration) (string, error) {
 	if len(args) > 0 && args[0] == "wait" {
 		return "kubectl wait", nil
+	}
+	if len(args) > 1 && args[0] == "patch" && strings.HasPrefix(args[1], "pod/") {
+		f.cleanupSawCanceled = f.cleanupSawCanceled || ctx.Err() != nil
+		_, f.cleanupSawDeadline = ctx.Deadline()
+		if !patchContains(args, "test", "/metadata/uid", "provider-pod-uid") || !patchContains(args, "test", "/metadata/resourceVersion", "32") || !patchContains(args, "remove", "/metadata/labels/raibitserver.io~1recovery-authority", "") {
+			return "kubectl patch", ErrRecoveryJob
+		}
+		f.authorityReleased = true
+		return "kubectl patch", nil
 	}
 	return "", fmt.Errorf("unexpected command: %v", args)
 }
 
-func (f *fakeRecoveryCommands) RunSensitiveOutput(_ context.Context, _ string, args []string, _ time.Duration) (string, []byte, error) {
+func (f *fakeRecoveryCommands) RunSensitiveOutput(ctx context.Context, _ string, args []string, _ time.Duration) (string, []byte, error) {
+	if err := ctx.Err(); err != nil {
+		return "kubectl", nil, err
+	}
 	provider := f.job.spec.Connection.spec.Provenance.spec
 	switch args[1] {
 	case "statefulset/" + provider.Name:
+		f.workloadReads++
 		uid, image, generation := provider.UID, provider.Image, provider.Generation
 		if f.workloadUID != "" {
 			uid = f.workloadUID
@@ -46,12 +70,32 @@ func (f *fakeRecoveryCommands) RunSensitiveOutput(_ context.Context, _ string, a
 		if f.workloadGeneration != 0 {
 			generation = f.workloadGeneration
 		}
+		if f.driftBeforeJob && f.workloadReads > 1 {
+			uid = "replacement-workload-uid"
+		}
 		return "kubectl get statefulset", mustJSON(map[string]any{"metadata": map[string]any{"name": provider.Name, "namespace": provider.Namespace, "uid": uid, "generation": generation}, "spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app.kubernetes.io/name": provider.Name, "app.kubernetes.io/managed-by": "raibitserver", "raibitserver.io/managed": "true", "raibitserver.io/provider": string(f.job.spec.Connection.Engine()), "raibitserver.io/resource-id": f.job.spec.Connection.ResourceID(), "raibitserver.io/project-id": f.job.spec.Connection.spec.ProjectID}}, "spec": map[string]any{"containers": []any{map[string]any{"image": image}}}}}}), nil
 	case "secret/" + f.job.spec.Connection.spec.Secret.name:
 		ref := f.job.spec.Connection.spec.Secret
 		f.sourceReplaced = true
 		return "kubectl get secret", mustJSON(map[string]any{"metadata": map[string]any{"name": ref.name, "namespace": ref.namespace, "uid": provider.CredentialUID, "resourceVersion": "19", "annotations": map[string]any{"raibitserver.io/credential-generation": provider.CredentialGeneration, "raibitserver.io/credential-owner": "raibitserver-provisioner", "raibitserver.io/resource-id": f.job.spec.Connection.ResourceID(), "raibitserver.io/project-id": f.job.spec.Connection.spec.ProjectID}}, "data": map[string]any{ref.key: base64.StdEncoding.EncodeToString([]byte("old-exact-secret")), "UNRELATED": base64.StdEncoding.EncodeToString([]byte("must-not-copy"))}}), nil
+	case "pods":
+		return "kubectl get pods", mustJSON(map[string]any{"items": []any{f.providerPod("31", "")}}), nil
 	default:
+		if strings.HasPrefix(args[1], "pod/") {
+			if args[0] == "patch" {
+				authority := patchValue(args)
+				if authority == "" || !patchContains(args, "test", "/metadata/uid", "provider-pod-uid") || !patchContains(args, "test", "/metadata/resourceVersion", "31") {
+					return "kubectl patch pod", nil, ErrRecoveryJob
+				}
+				f.authorityBound = true
+				f.authorityValue = authority
+				if f.bindErrAfterSideEffect {
+					return "kubectl patch pod", nil, context.Canceled
+				}
+				return "kubectl patch pod", mustJSON(f.providerPod("32", authority)), nil
+			}
+			return "kubectl get pod", mustJSON(f.providerPod("32", f.authorityValue)), nil
+		}
 		if strings.HasPrefix(args[1], "secret/recovery-credential-") {
 			ref := f.job.spec.Connection.spec.Secret
 			provider := f.job.spec.Connection.spec.Provenance.spec
@@ -62,6 +106,17 @@ func (f *fakeRecoveryCommands) RunSensitiveOutput(_ context.Context, _ string, a
 			metadata := manifest["metadata"].(map[string]any)
 			spec := manifest["spec"].(map[string]any)
 			return "kubectl get job", mustJSON(map[string]any{"metadata": map[string]any{"name": metadata["name"], "namespace": metadata["namespace"], "uid": "job-uid", "labels": metadata["labels"], "annotations": metadata["annotations"]}, "spec": map[string]any{"template": spec["template"]}, "status": map[string]any{"succeeded": 1, "completionTime": "2026-09-04T00:00:00Z"}}), nil
+		}
+		if strings.HasPrefix(args[1], "networkpolicy/") {
+			for index := len(f.created) - 1; index >= 0; index-- {
+				manifest := f.created[index]
+				if manifest["kind"] != "NetworkPolicy" {
+					continue
+				}
+				metadata := manifest["metadata"].(map[string]any)
+				return "kubectl get networkpolicy", mustJSON(map[string]any{"metadata": map[string]any{"name": metadata["name"], "namespace": metadata["namespace"], "uid": "policy-uid", "labels": metadata["labels"]}}), nil
+			}
+			return "kubectl get networkpolicy", nil, command.ErrObjectNotFound
 		}
 	}
 	return "", nil, fmt.Errorf("unexpected get: %v", args)
@@ -96,12 +151,18 @@ func Test_CommandKubernetesJobClient_rejects_changed_provider_before_any_create(
 	}
 }
 
-func (f *fakeRecoveryCommands) RunCreateInputUID(_ context.Context, _ string, _ []string, input []byte, _ time.Duration) (string, string, error) {
+func (f *fakeRecoveryCommands) RunCreateInputUID(ctx context.Context, _ string, _ []string, input []byte, _ time.Duration) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "kubectl create", "", err
+	}
 	var object map[string]any
 	if json.Unmarshal(input, &object) != nil {
 		return "", "", ErrRecoveryJob
 	}
 	f.created = append(f.created, object)
+	if fmt.Sprint(object["kind"]) == f.createFailureKind {
+		return "kubectl create", "", context.Canceled
+	}
 	switch object["kind"] {
 	case "Secret":
 		if object["immutable"] != true || !f.sourceReplaced {
@@ -118,6 +179,7 @@ func (f *fakeRecoveryCommands) RunCreateInputUID(_ context.Context, _ string, _ 
 	case "NetworkPolicy":
 		return "kubectl create", "policy-uid", nil
 	case "Job":
+		f.jobCreates++
 		if containsString(object, f.job.spec.Connection.spec.Secret.name) || !containsString(object, "recovery-credential-") {
 			return "", "", ErrRecoveryJob
 		}
@@ -144,7 +206,13 @@ func Test_CommandKubernetesJobClient_adopts_only_exact_immutable_snapshot_after_
 	}
 }
 
-func (f *fakeRecoveryCommands) RunStream(_ context.Context, _ string, args []string, _ io.Reader, output io.Writer, _ time.Duration) (string, error) {
+func (f *fakeRecoveryCommands) RunStream(ctx context.Context, _ string, args []string, _ io.Reader, output io.Writer, _ time.Duration) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "kubectl stream", err
+	}
+	if f.streamErr != nil {
+		return "kubectl logs", f.streamErr
+	}
 	if args[0] != "logs" {
 		return "", ErrRecoveryJob
 	}
@@ -152,7 +220,9 @@ func (f *fakeRecoveryCommands) RunStream(_ context.Context, _ string, args []str
 	return "kubectl logs", err
 }
 
-func (f *fakeRecoveryCommands) DeleteObjectUID(_ context.Context, resource, _, name, uid string, _ time.Duration) (string, error) {
+func (f *fakeRecoveryCommands) DeleteObjectUID(ctx context.Context, resource, _, name, uid string, _ time.Duration) (string, error) {
+	f.cleanupSawCanceled = f.cleanupSawCanceled || ctx.Err() != nil
+	_, f.cleanupSawDeadline = ctx.Deadline()
 	f.deleted = append(f.deleted, resource+"/"+name+"@"+uid)
 	return "kubectl delete", nil
 }
@@ -171,7 +241,7 @@ func Test_CommandKubernetesJobClient_snapshots_exact_secret_before_replacement_a
 	runner, _ := NewKubernetesJobRunner(client)
 	handoff, _ := NewDumpHandoff(context.Background(), &countingWriteCloser{}, 16)
 	receipt, err := handoff.Execute(context.Background(), job, runner)
-	if err != nil || receipt.UID() != "job-uid" || receipt.Bytes() != 4 || len(commands.created) != 3 || len(commands.deleted) != 3 {
+	if err != nil || receipt.UID() != "job-uid" || receipt.Bytes() != 4 || len(commands.created) != 3 || len(commands.deleted) != 3 || !commands.authorityReleased {
 		t.Fatalf("receipt=%+v creates=%d deletes=%v err=%v", receipt, len(commands.created), commands.deleted, err)
 	}
 	policySpec := commands.created[1]["spec"].(map[string]any)
@@ -190,17 +260,4 @@ func Test_CommandKubernetesJobClient_snapshots_exact_secret_before_replacement_a
 			t.Fatalf("UID cleanup missing %s: %v", suffix, commands.deleted)
 		}
 	}
-}
-
-func mustJSON(value any) []byte {
-	result, err := json.Marshal(value)
-	if err != nil {
-		panic(err)
-	}
-	return result
-}
-
-func containsString(value any, wanted string) bool {
-	payload, _ := json.Marshal(value)
-	return strings.Contains(string(payload), wanted)
 }

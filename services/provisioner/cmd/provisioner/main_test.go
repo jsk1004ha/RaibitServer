@@ -33,6 +33,6 @@ func TestRecoveryStartupFailsClosedBeforeClaimsWhenHandlersAreNotRegistered(t *t
 		env["RAIBITSERVER_RECOVERY_TOOL_"+engine+"_IMAGE"] = "registry.example/recovery/" + strings.ToLower(engine) + "@sha256:" + strings.Repeat(string(rune('1'+index)), 64)
 	}
 	if _, err := configureRecovery(nil, &command.OSRunner{}, env); !errors.Is(err, backup.ErrRecoveryHandlerUnavailable) {
-		t.Fatalf("missing handlers did not fail startup: %v", err)
+		t.Fatalf("missing handlers did not fail startup before store access: %v", err)
 	}
 }

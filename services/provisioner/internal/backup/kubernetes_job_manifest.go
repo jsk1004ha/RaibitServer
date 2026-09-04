@@ -102,13 +102,10 @@ func recoveryStepContainer(job IsolatedJob, step CommandStep, index int, snapsho
 	return container, nil
 }
 
-func recoveryNetworkPolicyManifest(job IsolatedJob, name string, workload kubernetesWorkload) map[string]any {
+func recoveryNetworkPolicyManifest(job IsolatedJob, name, authority string) map[string]any {
 	endpoint := job.spec.Connection.Endpoint().(NetworkEndpoint)
 	labels := expectedJobLabels(job)
-	providerLabels := make(map[string]any, len(workload.Spec.Template.Metadata.Labels))
-	for key, value := range workload.Spec.Template.Metadata.Labels {
-		providerLabels[key] = value
-	}
+	providerLabels := map[string]any{recoveryAuthorityLabel: authority}
 	return map[string]any{
 		"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": map[string]any{"name": name, "namespace": job.spec.Namespace, "labels": labels},
 		"spec": map[string]any{"podSelector": map[string]any{"matchLabels": labels}, "policyTypes": []any{"Ingress", "Egress"}, "ingress": []any{}, "egress": []any{

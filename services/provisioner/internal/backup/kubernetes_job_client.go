@@ -77,34 +77,60 @@ func (c *CommandKubernetesJobClient) CreateAuthorizedJob(ctx context.Context, jo
 		return created, err
 	}
 	created.Namespace, created.snapshotName = job.spec.Namespace, names.snapshot
-	created.snapshotUID, err = c.createSnapshot(ctx, job, snapshot, secret, names.snapshot, secretRef.key)
-	if err != nil {
-		return CreatedJobObservation{}, err
-	}
+	created.labels = expectedJobLabels(job)
 	defer func() {
 		if resultErr != nil {
-			resultErr = errors.Join(resultErr, c.cleanup(ctx, created))
+			resultErr = errors.Join(resultErr, c.CleanupJob(ctx, created))
 		}
 	}()
-	policy := recoveryNetworkPolicyManifest(job, names.policy, workload)
+	created.snapshotUID, err = c.createSnapshot(ctx, job, snapshot, secret, names.snapshot, secretRef.key)
+	if err != nil {
+		return created, err
+	}
+	pod, err := c.readProviderPod(ctx, workload, job)
+	if err != nil {
+		return created, err
+	}
+	created.authority = recoveryAuthorityValue(job, workload, pod, created.snapshotUID)
+	created.providerPodName, created.providerPodUID = pod.Metadata.Name, pod.Metadata.UID
+	boundPod, err := c.bindProviderPod(ctx, pod, workload, job, created.authority)
+	if err != nil {
+		return created, err
+	}
+	created.providerPodName, created.providerPodUID = boundPod.Metadata.Name, boundPod.Metadata.UID
+	policy := recoveryNetworkPolicyManifest(job, names.policy, created.authority)
 	created.policyName = names.policy
 	created.policyUID, err = c.createObject(ctx, policy)
 	if err != nil {
-		return CreatedJobObservation{}, err
+		return created, err
 	}
 	manifest, streamStep, err := recoveryJobManifest(job, names.job, names.snapshot, created.snapshotUID)
 	if err != nil {
-		return CreatedJobObservation{}, err
+		return created, err
+	}
+	current, err := c.readWorkload(ctx, provider.Namespace, provider.Name)
+	if err != nil || !sameObservedWorkload(workload, current) || !validObservedWorkload(current, job) {
+		return created, errors.Join(ErrRecoveryJob, err)
+	}
+	currentPod, err := c.readPod(ctx, boundPod.Metadata.Namespace, boundPod.Metadata.Name)
+	if err != nil || !sameBoundProviderPod(boundPod, currentPod, current, job, created.authority) {
+		return created, errors.Join(ErrRecoveryJob, err)
 	}
 	created.Name = names.job
 	created.UID, err = c.createObject(ctx, manifest)
 	if err != nil {
-		return CreatedJobObservation{}, err
+		return created, err
 	}
 	if err = c.transfer(ctx, job, created.Name, streamStep, stream); err != nil {
-		return CreatedJobObservation{}, err
+		return created, err
 	}
 	return created, nil
+}
+
+func sameObservedWorkload(left, right kubernetesWorkload) bool {
+	leftPayload, leftErr := json.Marshal(left)
+	rightPayload, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftPayload) == string(rightPayload)
 }
 
 func (c *CommandKubernetesJobClient) createSnapshot(ctx context.Context, job IsolatedJob, manifest map[string]any, source kubernetesSecret, name, key string) (string, error) {
@@ -193,21 +219,6 @@ func recoveryObjectNames(job IsolatedJob) struct{ snapshot, policy, job string }
 	digest := sha256.Sum256([]byte(job.Identity()))
 	suffix := hex.EncodeToString(digest[:12])
 	return struct{ snapshot, policy, job string }{"recovery-credential-" + suffix, "recovery-egress-" + suffix, "recovery-job-" + suffix}
-}
-
-func (c *CommandKubernetesJobClient) CleanupJob(ctx context.Context, created CreatedJobObservation) error {
-	return c.cleanup(ctx, created)
-}
-
-func (c *CommandKubernetesJobClient) cleanup(ctx context.Context, created CreatedJobObservation) error {
-	var result error
-	for _, object := range []struct{ resource, name, uid string }{{"job", created.Name, created.UID}, {"networkpolicy", created.policyName, created.policyUID}, {"secret", created.snapshotName, created.snapshotUID}} {
-		if object.name != "" && object.uid != "" {
-			_, err := c.runner.DeleteObjectUID(ctx, object.resource, created.Namespace, object.name, object.uid, c.timeout)
-			result = errors.Join(result, err)
-		}
-	}
-	return result
 }
 
 func (c *CommandKubernetesJobClient) WaitJob(ctx context.Context, created CreatedJobObservation) (CompletedJobObservation, error) {
