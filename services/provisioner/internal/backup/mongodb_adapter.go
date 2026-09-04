@@ -14,6 +14,8 @@ const (
 	mongoDBCredentialPath = "/var/run/raibit-recovery/credential"
 	mongoDBArchiveFormat  = "mongodb-archive-gzip"
 	mongoDBRecoverySchema = "mongodb-recovery"
+	mongoDBMemoryMiB      = 512
+	mongoDBScratchMiB     = 12288
 )
 
 type MongoDBAdapter struct{}
@@ -97,7 +99,7 @@ func newMongoDBJob(connection Connection, plan []mongoDBJobStep) (IsolatedJob, e
 		Namespace: connection.spec.Provenance.spec.Namespace, Image: connection.toolImage,
 		OperationID: connection.operationID, Attempt: connection.attempt, Connection: connection,
 		Steps: steps, SecretFiles: []SecretFile{credential},
-		RunAsUser: 65532, CPUMilli: 250, MemoryMiB: 256, EphemeralMiB: 512, Deadline: 15 * time.Minute,
+		RunAsUser: 65532, CPUMilli: 250, MemoryMiB: mongoDBMemoryMiB, EphemeralMiB: mongoDBScratchMiB, Deadline: 15 * time.Minute,
 	})
 }
 

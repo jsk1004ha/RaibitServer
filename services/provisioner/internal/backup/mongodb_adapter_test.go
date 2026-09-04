@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/raibitserver/provisioner/internal/recoverywire"
 )
 
 func Test_MongoDBAdapter_dump_and_restore_archive_after_helper_verification(t *testing.T) {
@@ -68,6 +70,42 @@ func Test_MongoDBAdapter_uses_static_helper_actions_without_endpoint_argv(t *tes
 				}
 			}
 		}
+	}
+}
+
+func Test_MongoDBAdapter_dump_and_restore_capacity_covers_wire_stage_with_reserve(t *testing.T) {
+	// Given: fixed dump and restore helper plans for the same isolated resource.
+	connection := mongoConnection(t, "source", "source.mongodb.internal", "app", "provider", "7.0.12")
+	dump, dumpErr := newMongoDBJob(connection, []mongoDBJobStep{
+		{action: mongoDBVerifyAction, binding: StreamNone},
+		{action: mongoDBDumpAction, binding: StreamStdout},
+	})
+	restore, restoreErr := newMongoDBJob(connection, []mongoDBJobStep{
+		{action: mongoDBRestoreAction, binding: StreamStdin},
+		{action: mongoDBVerifyAction, binding: StreamNone},
+	})
+	if dumpErr != nil || restoreErr != nil {
+		t.Fatalf("dump=%v restore=%v", dumpErr, restoreErr)
+	}
+	requiredBytes := recoverywire.DefaultLimits().MaxBytes() + 64<<20
+
+	// When / Then: both directions retain the static helper ABI and enough scratch for a full staged artifact plus reserve.
+	for _, test := range []struct {
+		name     string
+		job      IsolatedJob
+		actions  []string
+		bindings []StreamBinding
+	}{
+		{name: "dump", job: dump, actions: []string{mongoDBVerifyAction, mongoDBDumpAction}, bindings: []StreamBinding{StreamNone, StreamStdout}},
+		{name: "restore", job: restore, actions: []string{mongoDBRestoreAction, mongoDBVerifyAction}, bindings: []StreamBinding{StreamStdin, StreamNone}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertMongoJob(t, test.job, connection.spec.Secret, test.actions, test.bindings)
+			spec := test.job.Spec()
+			if uint64(spec.EphemeralMiB)<<20 < requiredBytes {
+				t.Fatalf("scratch=%dMi required-bytes=%d", spec.EphemeralMiB, requiredBytes)
+			}
+		})
 	}
 }
 
@@ -166,7 +204,7 @@ type mongoClosedInput interface {
 func assertMongoJob(t *testing.T, job IsolatedJob, credential SecretRef, actions []string, bindings []StreamBinding) {
 	t.Helper()
 	spec := job.Spec()
-	if spec.RunAsUser != 65532 || spec.CPUMilli != 250 || spec.MemoryMiB != 256 || spec.EphemeralMiB != 512 || spec.Deadline != 15*time.Minute {
+	if spec.RunAsUser != 65532 || spec.CPUMilli != 250 || spec.MemoryMiB != mongoDBMemoryMiB || spec.EphemeralMiB != mongoDBScratchMiB || spec.Deadline != 15*time.Minute {
 		t.Fatalf("runtime=%+v", spec)
 	}
 	if len(spec.Secrets) != 0 || len(spec.SecretFiles) != 1 || !spec.SecretFiles[0].ReadOnly() || spec.SecretFiles[0].Ref() != credential || spec.SecretFiles[0].MountPath() != mongoDBCredentialPath {
