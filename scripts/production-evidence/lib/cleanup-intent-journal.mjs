@@ -1,16 +1,16 @@
 import path from 'node:path';
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
-import { bindingJournalSnapshot, exclusiveJournalWrite, journalFiles, journalScope } from './binding-journal.mjs';
+import {
+  bindingJournalSnapshot, bindingJournalSnapshotFixtureUnsafe, loadBindings, loadBindingsFixtureUnsafe,
+} from './binding-journal.mjs';
+import { exclusiveJournalWrite, journalFiles, journalScope } from './journal-io.mjs';
+import { MUTATION_CONTRACT, validateIntentScope } from './binding-graph.mjs';
+export { deriveRunResourceName } from './binding-graph.mjs';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SAFE_NAME = /^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const ROUTE = /^\/apis?\/[A-Za-z0-9._~:/-]+$/;
-const MUTATION_KINDS = Object.freeze(new Set([
-  'control-plane-create-project', 'control-plane-import-repository', 'control-plane-create-deployment', 'control-plane-create-resource',
-  'control-plane-rollback', 'control-plane-preview-cleanup', 'control-plane-delete-project', 'control-plane-delete-resource',
-  'kubernetes-apply-pod', 'kubernetes-apply-network-policy',
-]));
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -30,15 +30,22 @@ function validRoute(value) {
   return value.split('/').every((segment) => segment !== '.' && segment !== '..');
 }
 function parseIntent(record, expectedIdentityDigest, parsePayload) {
-  const keys = ['schema', 'entryType', 'sequence', 'runIdentitySha256', 'intentId', 'mutationKind', 'organizationId', 'projectId',
-    'resourceName', 'relativeRoute', 'recoverySelector', 'createdAt', 'deadlineAt', 'selectorSha256', 'entrySha256'];
+  const keys = ['schema', 'entryType', 'sequence', 'runIdentitySha256', 'intentId', 'mutationKind', 'bindingEntryCount', 'bindingsDigest',
+    'bindingRefs', 'approvedRuntimeSelectorSha256', 'resourceName', 'method', 'routeTemplate', 'relativeRoute', 'recoverySelector',
+    'createdAt', 'deadlineAt', 'selectorSha256', 'entrySha256'];
   if (!exactKeys(record, keys) || record.schema !== 'raibitserver.production-evidence-cleanup-journal/v1' || record.entryType !== 'intent'
     || !Number.isSafeInteger(record.sequence) || record.sequence < 1 || record.runIdentitySha256 !== expectedIdentityDigest
-    || !SAFE_NAME.test(record.intentId) || !MUTATION_KINDS.has(record.mutationKind) || !SAFE_ID.test(record.organizationId)
-    || !SAFE_ID.test(record.projectId) || !SAFE_NAME.test(record.resourceName) || !validRoute(record.relativeRoute)
+    || !SAFE_NAME.test(record.intentId) || !Object.hasOwn(MUTATION_CONTRACT, record.mutationKind)
+    || !Number.isSafeInteger(record.bindingEntryCount) || record.bindingEntryCount < 1 || !SHA256.test(record.bindingsDigest)
+    || !Array.isArray(record.bindingRefs) || record.bindingRefs.length === 0
+    || !(record.approvedRuntimeSelectorSha256 === null || SHA256.test(record.approvedRuntimeSelectorSha256))
+    || !SAFE_NAME.test(record.resourceName) || !['POST', 'DELETE', 'APPLY'].includes(record.method)
+    || typeof record.routeTemplate !== 'string' || !validRoute(record.routeTemplate) || !validRoute(record.relativeRoute)
     || !validSelector(record.recoverySelector) || !isIso(record.createdAt) || !isIso(record.deadlineAt)
     || Date.parse(record.deadlineAt) <= Date.parse(record.createdAt) || !SHA256.test(record.selectorSha256)
     || record.selectorSha256 !== digest(record.recoverySelector) || !SHA256.test(record.entrySha256)) fail();
+  const [method, routeTemplate] = MUTATION_CONTRACT[record.mutationKind];
+  if (record.method !== method || record.routeTemplate !== routeTemplate) fail('invalid_mutation_contract');
   const { entrySha256, ...unsigned } = record;
   if (entrySha256 !== digest(unsigned)) fail('journal_digest_mismatch');
   assertRedacted(record);
@@ -63,11 +70,15 @@ function parseOutcome(record, expectedIdentityDigest, parsePayload) {
 }
 
 async function readCleanup(options, create = false) {
-  const parseIntentPayload = options.parseIntent ?? ((value) => value);
-  const parseOutcomePayload = options.parseOutcome ?? ((value) => value);
-  if (typeof parseIntentPayload !== 'function' || typeof parseOutcomePayload !== 'function') fail();
-  const scope = await journalScope(options.runDirectory, options.identity, 'cleanup-intents', create);
-  const files = await journalFiles(scope.directory, /^\d{6}--(?:intent|outcome)--[a-z0-9][a-z0-9.-]{0,127}\.json$/);
+  const parseIntentPayload = options.parseIntent;
+  const parseOutcomePayload = options.parseOutcome;
+  if (typeof parseIntentPayload !== 'function' || typeof parseOutcomePayload !== 'function' || typeof options.parseBinding !== 'function') fail();
+  const unsafeFixture = options.unsafeFixture === true;
+  const scope = await journalScope(options.runDirectory, options.identity, 'cleanup-intents', create, unsafeFixture);
+  const bindingEntries = await (unsafeFixture ? loadBindingsFixtureUnsafe : loadBindings)({
+    runDirectory: options.runDirectory, identity: options.identity, parsePayload: options.parseBinding,
+  });
+  const files = await journalFiles(scope.directory, /^\d{6}--(?:intent|outcome)--[a-f0-9]{12}\.json$/);
   const entries = [];
   const intents = new Map();
   const outcomes = new Map();
@@ -79,7 +90,7 @@ async function readCleanup(options, create = false) {
     const entry = raw?.entryType === 'intent' ? parseIntent(raw, scope.runIdentitySha256, parseIntentPayload)
       : raw?.entryType === 'outcome' ? parseOutcome(raw, scope.runIdentitySha256, parseOutcomePayload) : fail();
     const at = Date.parse(entry.entryType === 'intent' ? entry.createdAt : entry.resolvedAt);
-    const expectedName = `${String(entry.sequence).padStart(6, '0')}--${entry.entryType}--${entry.intentId}.json`;
+    const expectedName = `${String(entry.sequence).padStart(6, '0')}--${entry.entryType}--${entry.entrySha256.slice(0, 12)}.json`;
     if (entry.sequence !== index + 1 || expectedName !== file.name || at <= previousAt || !file.bytes.equals(Buffer.from(`${JSON.stringify(raw)}\n`))) fail();
     if (entry.entryType === 'intent') {
       if (intents.has(entry.intentId)) fail('intent_conflict');
@@ -92,47 +103,70 @@ async function readCleanup(options, create = false) {
     }
     previousAt = at; entries.push(entry);
   }
+  for (const intent of intents.values()) {
+    if (intent.bindingEntryCount > bindingEntries.length) fail('invalid_binding_reference');
+    const prefix = bindingEntries.slice(0, intent.bindingEntryCount);
+    if (digest(prefix) !== intent.bindingsDigest) fail('invalid_binding_reference');
+    const expected = validateIntentScope({ ...intent, identity: options.identity, approvedRuntimeSelector: options.approvedRuntimeSelector }, prefix);
+    if (intent.approvedRuntimeSelectorSha256 !== expected.runtimeDigest) fail('invalid_recovery_selector');
+  }
   return { scope, entries: Object.freeze(entries), files, intents, outcomes };
 }
 
-export async function loadCleanupJournal(options) {
+async function loadJournal(options) {
   const loaded = await readCleanup(options);
   const pending = [...loaded.intents.values()].filter((intent) => !loaded.outcomes.has(intent.intentId));
   const resolved = [...loaded.intents.values()].filter((intent) => loaded.outcomes.has(intent.intentId))
     .map((intent) => immutable({ intent, outcome: loaded.outcomes.get(intent.intentId) }));
   return immutable({ entries: loaded.entries, pending, resolved });
 }
+export async function loadCleanupJournal(options) { return loadJournal({ ...options, unsafeFixture: false }); }
+export async function loadCleanupJournalFixtureUnsafe(options) { return loadJournal({ ...options, unsafeFixture: true }); }
 
-export async function cleanupJournalSnapshot(options) {
-  const journal = await loadCleanupJournal(options);
+async function cleanupSnapshot(options) {
+  const journal = await loadJournal(options);
   return immutable({ schema: 'raibitserver.production-evidence-cleanup-journal-snapshot/v1',
     runIdentitySha256: digest(options.identity), entryCount: journal.entries.length, entriesSha256: digest(journal.entries) });
 }
+export async function cleanupJournalSnapshot(options) { return cleanupSnapshot({ ...options, unsafeFixture: false }); }
+export async function cleanupJournalSnapshotFixtureUnsafe(options) { return cleanupSnapshot({ ...options, unsafeFixture: true }); }
 
-export async function productionEvidenceJournalSnapshot(options) {
-  const [bindings, cleanup] = await Promise.all([bindingJournalSnapshot(options), cleanupJournalSnapshot(options)]);
+async function journalSetSnapshot(options) {
+  const unsafeFixture = options.unsafeFixture === true;
+  const [bindings, cleanup] = await Promise.all([
+    (unsafeFixture ? bindingJournalSnapshotFixtureUnsafe : bindingJournalSnapshot)({ ...options, parsePayload: options.parseBinding }),
+    cleanupSnapshot(options),
+  ]);
   const unsigned = { schema: 'raibitserver.production-evidence-journal-set-snapshot/v1', runIdentitySha256: digest(options.identity),
     bindingEntriesSha256: bindings.entriesSha256, cleanupEntriesSha256: cleanup.entriesSha256 };
   return immutable({ ...unsigned, journalSha256: digest(unsigned) });
 }
+export async function productionEvidenceJournalSnapshot(options) { return journalSetSnapshot({ ...options, unsafeFixture: false }); }
+export async function productionEvidenceJournalSnapshotFixtureUnsafe(options) { return journalSetSnapshot({ ...options, unsafeFixture: true }); }
 
-export async function appendCleanupIntent(options) {
-  const keys = ['runDirectory', 'identity', 'intentId', 'mutationKind', 'organizationId', 'projectId', 'resourceName',
-    'relativeRoute', 'recoverySelector', 'createdAt', 'deadlineAt'];
+async function appendIntent(options) {
+  const keys = ['runDirectory', 'identity', 'intentId', 'mutationKind', 'bindingRefs', 'resourceName', 'method', 'routeTemplate', 'relativeRoute',
+    'recoverySelector', 'approvedRuntimeSelector', 'createdAt', 'deadlineAt', 'parseBinding', 'parseIntent', 'parseOutcome'];
   if (!isRecord(options) || keys.some((key) => !Object.hasOwn(options, key))
-    || Object.keys(options).some((key) => ![...keys, 'parseIntent', 'parseOutcome'].includes(key))
-    || !SAFE_NAME.test(options.intentId) || !MUTATION_KINDS.has(options.mutationKind)
-    || !SAFE_ID.test(options.organizationId) || !SAFE_ID.test(options.projectId) || !SAFE_NAME.test(options.resourceName)
+    || Object.keys(options).some((key) => ![...keys, 'unsafeFixture', 'writer'].includes(key))
+    || !SAFE_NAME.test(options.intentId) || !Object.hasOwn(MUTATION_CONTRACT, options.mutationKind)
+    || !Array.isArray(options.bindingRefs) || options.bindingRefs.length === 0 || !SAFE_NAME.test(options.resourceName)
     || !validRoute(options.relativeRoute) || !validSelector(options.recoverySelector) || !isIso(options.createdAt) || !isIso(options.deadlineAt)
-    || Date.parse(options.deadlineAt) <= Date.parse(options.createdAt)) fail();
+    || Date.parse(options.deadlineAt) <= Date.parse(options.createdAt) || typeof options.parseBinding !== 'function'
+    || typeof options.parseIntent !== 'function' || typeof options.parseOutcome !== 'function') fail();
   assertRedacted(options);
-  const runMark = options.identity.runId;
-  if (!options.resourceName.includes(runMark) && !options.resourceName.includes(digest(options.identity).slice(0, 12))) fail();
+  const unsafeFixture = options.unsafeFixture === true;
+  const bindingEntries = await (unsafeFixture ? loadBindingsFixtureUnsafe : loadBindings)({
+    runDirectory: options.runDirectory, identity: options.identity, parsePayload: options.parseBinding,
+  });
+  const expected = validateIntentScope(options, bindingEntries);
   const loaded = await readCleanup(options, true);
   const existing = loaded.intents.get(options.intentId);
   if (existing) {
-    const requested = { mutationKind: options.mutationKind, organizationId: options.organizationId, projectId: options.projectId,
-      resourceName: options.resourceName, relativeRoute: options.relativeRoute, recoverySelector: options.recoverySelector,
+    const requested = { mutationKind: options.mutationKind, bindingEntryCount: bindingEntries.length, bindingsDigest: digest(bindingEntries),
+      bindingRefs: options.bindingRefs, approvedRuntimeSelectorSha256: expected.runtimeDigest,
+      resourceName: options.resourceName, method: options.method, routeTemplate: options.routeTemplate,
+      relativeRoute: options.relativeRoute, recoverySelector: options.recoverySelector,
       createdAt: options.createdAt, deadlineAt: options.deadlineAt };
     const recorded = Object.fromEntries(Object.keys(requested).map((key) => [key, existing[key]]));
     if (digest(requested) !== digest(recorded)) fail('intent_conflict');
@@ -143,20 +177,25 @@ export async function appendCleanupIntent(options) {
   if (last && Date.parse(options.createdAt) <= Date.parse(last.entryType === 'intent' ? last.createdAt : last.resolvedAt)) fail();
   const unsigned = { schema: 'raibitserver.production-evidence-cleanup-journal/v1', entryType: 'intent', sequence: loaded.entries.length + 1,
     runIdentitySha256: loaded.scope.runIdentitySha256, intentId: options.intentId, mutationKind: options.mutationKind,
-    organizationId: options.organizationId, projectId: options.projectId, resourceName: options.resourceName,
+    bindingEntryCount: bindingEntries.length, bindingsDigest: digest(bindingEntries), bindingRefs: options.bindingRefs,
+    approvedRuntimeSelectorSha256: expected.runtimeDigest, resourceName: options.resourceName,
+    method: options.method, routeTemplate: options.routeTemplate,
     relativeRoute: options.relativeRoute, recoverySelector: options.recoverySelector, createdAt: options.createdAt,
     deadlineAt: options.deadlineAt, selectorSha256: digest(options.recoverySelector) };
   const entry = immutable({ ...unsigned, entrySha256: digest(unsigned) });
-  const parsed = parseIntent(entry, loaded.scope.runIdentitySha256, options.parseIntent ?? ((value) => value));
+  const parsed = parseIntent(entry, loaded.scope.runIdentitySha256, options.parseIntent);
   if (digest(parsed) !== digest(entry)) fail();
-  await exclusiveJournalWrite(loaded.scope.directory, `${String(entry.sequence).padStart(6, '0')}--intent--${entry.intentId}.json`, entry);
+  await exclusiveJournalWrite(options.runDirectory, `cleanup-intents/${String(entry.sequence).padStart(6, '0')}--intent--${entry.entrySha256.slice(0, 12)}.json`, entry, options.writer, unsafeFixture);
   return entry;
 }
+export async function appendCleanupIntent(options) { return appendIntent({ ...options, unsafeFixture: false }); }
+export async function appendCleanupIntentFixtureUnsafe(options) { return appendIntent({ ...options, unsafeFixture: true }); }
 
-export async function appendCleanupOutcome(options) {
-  const keys = ['runDirectory', 'identity', 'intentId', 'actualId', 'actualUid', 'responseSha256', 'resolvedAt'];
+async function appendOutcome(options) {
+  const keys = ['runDirectory', 'identity', 'intentId', 'actualId', 'actualUid', 'responseSha256', 'resolvedAt',
+    'parseBinding', 'parseIntent', 'parseOutcome', 'approvedRuntimeSelector'];
   if (!isRecord(options) || keys.some((key) => !Object.hasOwn(options, key))
-    || Object.keys(options).some((key) => ![...keys, 'parseIntent', 'parseOutcome'].includes(key))
+    || Object.keys(options).some((key) => ![...keys, 'unsafeFixture', 'writer'].includes(key))
     || !SAFE_NAME.test(options.intentId) || !SAFE_ID.test(options.actualId)
     || !(options.actualUid === null || SAFE_ID.test(options.actualUid)) || !SHA256.test(options.responseSha256) || !isIso(options.resolvedAt)) fail();
   const loaded = await readCleanup(options);
@@ -175,18 +214,32 @@ export async function appendCleanupOutcome(options) {
     runIdentitySha256: loaded.scope.runIdentitySha256, intentId: options.intentId, intentEntrySha256: intent.entrySha256,
     actualId: options.actualId, actualUid: options.actualUid, responseSha256: options.responseSha256, resolvedAt: options.resolvedAt };
   const entry = immutable({ ...unsigned, entrySha256: digest(unsigned) });
-  const parsed = parseOutcome(entry, loaded.scope.runIdentitySha256, options.parseOutcome ?? ((value) => value));
+  const parsed = parseOutcome(entry, loaded.scope.runIdentitySha256, options.parseOutcome);
   if (digest(parsed) !== digest(entry)) fail();
-  await exclusiveJournalWrite(loaded.scope.directory, `${String(entry.sequence).padStart(6, '0')}--outcome--${entry.intentId}.json`, entry);
+  await exclusiveJournalWrite(options.runDirectory, `cleanup-intents/${String(entry.sequence).padStart(6, '0')}--outcome--${entry.entrySha256.slice(0, 12)}.json`, entry, options.writer, options.unsafeFixture === true);
   return entry;
 }
+export async function appendCleanupOutcome(options) { return appendOutcome({ ...options, unsafeFixture: false }); }
+export async function appendCleanupOutcomeFixtureUnsafe(options) { return appendOutcome({ ...options, unsafeFixture: true }); }
 
-export function resolveCleanupRecovery(intent, candidates) {
+export function resolveCleanupRecovery(options) {
+  if (!exactKeys(options, ['intent', 'candidates', 'bindingEntries', 'identity', 'approvedRuntimeSelector', 'parseBinding'])
+    || typeof options.parseBinding !== 'function') fail();
+  const { intent, candidates } = options;
   if (!isRecord(intent) || intent.entryType !== 'intent' || !validSelector(intent.recoverySelector)
     || !SHA256.test(intent.selectorSha256) || digest(intent.recoverySelector) !== intent.selectorSha256 || !SHA256.test(intent.entrySha256)
-    || !Array.isArray(candidates)) fail();
+    || !Array.isArray(candidates) || intent.runIdentitySha256 !== digest(options.identity)
+    || !Array.isArray(options.bindingEntries) || intent.bindingEntryCount > options.bindingEntries.length) fail();
   const { entrySha256, ...unsigned } = intent;
   if (digest(unsigned) !== entrySha256) fail('journal_digest_mismatch');
+  const prefix = options.bindingEntries.slice(0, intent.bindingEntryCount).map((entry) => {
+    const payload = options.parseBinding(entry.payload);
+    if (payload === undefined || digest(payload) !== digest(entry.payload)) fail('invalid_binding_graph');
+    return { ...entry, payload };
+  });
+  if (digest(prefix) !== intent.bindingsDigest) fail('invalid_binding_reference');
+  const expected = validateIntentScope({ ...intent, identity: options.identity, approvedRuntimeSelector: options.approvedRuntimeSelector }, prefix);
+  if (intent.approvedRuntimeSelectorSha256 !== expected.runtimeDigest) fail('invalid_recovery_selector');
   if (candidates.length === 0) return immutable({ status: 'absent' });
   if (candidates.length > 1) fail('ambiguous_recovery');
   const candidate = candidates[0];
