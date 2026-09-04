@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { registerHooks, createRequire } from 'node:module';
-import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
+import { PrismaControlPlaneRepository, runtimePemContextQuery } from '../packages/core/src/persistence.ts';
 import { createSessionToken } from '../packages/core/src/identity.ts';
 import { decodeKeysetCursor } from '../packages/core/src/store-helpers.ts';
 
@@ -202,6 +203,60 @@ test('Given legacy split PEM rows, When Nest reads JSON pages and SSE polls, The
   }
 });
 
+test('Given adversarial predecessor history, When PostgreSQL establishes PEM context, Then indexed LATERAL reads stop before response allocation',
+  {skip:!process.env.RAIBITSERVER_TEST_DATABASE_URL}, async (t) => {
+  const repository = await PrismaControlPlaneRepository.connect({prismaOptions:{datasourceUrl:process.env.RAIBITSERVER_TEST_DATABASE_URL}});
+  const ids = {org:randomUUID(),project:randomUUID(),service:randomUUID(),deployment:randomUUID()};
+  let primaryFailure;
+  try {
+    const org = await repository.prisma.organization.create({data:{id:ids.org,name:'PEM query plan',slug:'plan-'+ids.org.slice(0,8)}});
+    const project = await repository.prisma.project.create({data:{id:ids.project,organizationId:org.id,name:'Plan',slug:'plan-'+ids.project.slice(0,8)}});
+    const service = await repository.prisma.service.create({data:{id:ids.service,projectId:project.id,name:'web',slug:'web-'+ids.service.slice(0,8),type:'web',sourceType:'image'}});
+    const deployment = await repository.prisma.deployment.create({data:{id:ids.deployment,serviceId:service.id,projectId:project.id}});
+    const podUid = randomUUID();
+    const at = new Date('2026-09-04T00:00:00.000Z');
+    const source = {requestId:1,source:`runtime:${service.id}:${deployment.id}:${podUid}:app`,kind:'runtime',serviceId:service.id,deploymentId:deployment.id,podUid,containerName:'app',timestamp:new Date(at.getTime()+2_000),id:'ffffffff-ffff-ffff-ffff-ffffffffffff'};
+    await repository.prisma.runtimeLog.createMany({data:Array.from({length:1_024},(_,index)=>({
+      id:`${String(index).padStart(8,'0')}-0000-0000-0000-000000000000`,serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:new Date(at.getTime()+index),line:'x'.repeat(16_000),
+    }))});
+    await repository.prisma.runtimeLog.createMany({data:[
+      {id:'00000000-ffff-ffff-ffff-ffffffffffff',serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:source.timestamp,line:'same-tie-0'},
+      {id:'11111111-ffff-ffff-ffff-ffffffffffff',serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:source.timestamp,line:'same-tie-1'},
+      {id:'eeeeeeee-ffff-ffff-ffff-ffffffffffff',serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:source.timestamp,line:'same-tie-e'},
+    ]});
+    await repository.prisma.runtimeLog.create({data:{id:source.id,serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:source.timestamp,line:'after-history'}});
+    await repository.prisma.$executeRawUnsafe('ANALYZE "RuntimeLog"');
+
+    const rows = await repository.prisma.$queryRaw(runtimePemContextQuery([source]));
+    const explain = await repository.prisma.$queryRaw(Prisma.sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${runtimePemContextQuery([source])}`);
+    const plan = explain[0]['QUERY PLAN'][0].Plan;
+    const runtimeIndex = planNodes(plan).find((node) => node['Relation Name'] === 'RuntimeLog' && (node['Node Type'] === 'Index Scan' || node['Node Type'] === 'Index Only Scan'));
+    const limit = planNodes(plan).find((node) => node['Node Type'] === 'Limit');
+
+    assert.equal(rows.length,5);
+    assert.equal(rows.reduce((sum,row)=>sum+Buffer.byteLength(row.line),0)<=5*1_024,true);
+    assert.equal(rows.slice(-3).map((row)=>row.line).join(','),'same-tie-0,same-tie-1,same-tie-e');
+    assert.equal(rows.slice(0,2).every((row)=>row.truncated===true),true);
+    assert.equal(runtimeIndex !== undefined,true,JSON.stringify(plan));
+    assert.equal(runtimeIndex['Actual Rows']<=5,true,JSON.stringify(runtimeIndex));
+    assert.equal(limit !== undefined && limit['Actual Rows']<=5,true,JSON.stringify(plan));
+    assert.equal(Number.isInteger(runtimeIndex['Shared Hit Blocks']),true,JSON.stringify(runtimeIndex));
+    t.diagnostic(JSON.stringify({historyRows:1024,returnedRows:rows.length,returnedLineBytes:rows.reduce((sum,row)=>sum+Buffer.byteLength(row.line),0),indexActualRows:runtimeIndex['Actual Rows'],indexSharedHitBlocks:runtimeIndex['Shared Hit Blocks'],limitActualRows:limit['Actual Rows']}));
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
+  } finally {
+    const cleanupFailures = [];
+    try { await repository.prisma.organization.delete({where:{id:ids.org}}); } catch (error) { cleanupFailures.push(new Error('delete predecessor plan organization',{cause:error})); }
+    try { await repository.disconnect(); } catch (error) { cleanupFailures.push(new Error('disconnect predecessor plan repository',{cause:error})); }
+    if (cleanupFailures.length) {
+      const aggregate = new AggregateError(cleanupFailures,'predecessor plan cleanup failed');
+      if (primaryFailure) console.error(aggregate);
+      else throw aggregate;
+    }
+  }
+});
+
 async function readSseEvent(reader, eventName) {
   let buffered = '';
   while (true) {
@@ -216,4 +271,12 @@ async function readSseEvent(reader, eventName) {
     const match = frames.find((frame) => frame.includes('event: '+eventName+'\n'));
     if (match) return match;
   }
+}
+
+function planNodes(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const record = value;
+  const nodes = [record];
+  for (const child of record.Plans || []) nodes.push(...planNodes(child));
+  return nodes;
 }

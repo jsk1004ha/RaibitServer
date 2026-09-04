@@ -21,7 +21,7 @@ import { previewRuntimePlan } from './preview-deployments.ts';
 import { parsePreviewWebhook } from './preview-contract.ts';
 import { createPreviewRuntime, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
-import { observationLogSource, type ObservationLogContext } from './observability-projection.ts';
+import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import {
   boundedActivityRows,
@@ -780,8 +780,9 @@ export class ControlPlaneStore {
     return deepClone(row);
   }
 
-  appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', containerName = 'app', line, level = 'info' }: Record<string, any>) {
-    const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, containerName, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
+  appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', podUid, containerName = 'app', line, level = 'info' }: Record<string, any>) {
+    const resolvedPodUid = persistedRuntimePodUid({ serviceId, deploymentId, podName, podUid, containerName });
+    const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, podUid: resolvedPodUid, containerName, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
     this.runtimeLogs.push(row);
     return deepClone(row);
   }

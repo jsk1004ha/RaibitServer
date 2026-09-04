@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { encodeKeysetCursor } from './store-helpers.ts';
 import { OBSERVABILITY_RESPONSE_BYTES, sanitizeObservationLine, sanitizeObservationRecord, type RedactionState } from './observability-redaction.ts';
 
@@ -131,6 +132,20 @@ export function observationLogSource(row: PublicRow): string | null {
   const deploymentId = boundedIdentity(row.deploymentId);
   const step = boundedIdentity(row.step);
   return deploymentId && step ? `build:${deploymentId}:${step}` : null;
+}
+
+// Writers that cannot receive the kubelet UID persist this deterministic, scoped identity instead.
+// It remains stable for one service/deployment/pod/container observation source and is never inferred on read.
+export function persistedRuntimePodUid(row: PublicRow): string | null {
+  const supplied = boundedIdentity(row.podUid);
+  if (supplied) return supplied;
+  const serviceId = boundedIdentity(row.serviceId);
+  const deploymentId = boundedIdentity(row.deploymentId);
+  const podName = boundedIdentity(row.podName);
+  const containerName = boundedIdentity(row.containerName);
+  if (!serviceId || !deploymentId || !podName || !containerName) return null;
+  const material = JSON.stringify([serviceId, deploymentId, podName, containerName]);
+  return `writer-${crypto.createHash('sha256').update(material).digest('hex')}`;
 }
 
 function logContextStates(contexts: readonly ObservationLogContext[] | undefined): Map<string, RedactionState> {
