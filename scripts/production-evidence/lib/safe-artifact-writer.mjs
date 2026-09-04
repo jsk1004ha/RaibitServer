@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, realpath, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
 
@@ -79,23 +79,9 @@ async function assertOpenedFile({ handle, root, target, ancestors, identity }) {
     || !pathIsWithin(root, target) || await realpath(target) !== target) throw new EvidenceError('invalid_artifact');
 }
 
-async function removeCreatedFile(target, identity) {
-  let current;
-  try { current = await lstat(target); }
-  catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
-    throw new EvidenceError('artifact_cleanup_failed');
-  }
-  if (current.isSymbolicLink() || !current.isFile() || current.dev !== identity.dev || current.ino !== identity.ino) {
-    throw new EvidenceError('artifact_cleanup_failed');
-  }
-  try { await unlink(target); }
-  catch { throw new EvidenceError('artifact_cleanup_failed'); }
-}
-
 function parseTestHooks(value, unsafeFixture) {
   if (value === undefined) return Object.freeze({});
-  const names = ['beforeOpen', 'afterOpen', 'write', 'sync', 'close', 'beforeCleanup'];
+  const names = ['beforeOpen', 'afterOpen', 'stat', 'write', 'sync', 'close'];
   if (!unsafeFixture || value === null || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).some((key) => !names.includes(key) || typeof value[key] !== 'function')) {
     throw new EvidenceError('invalid_artifact_policy');
@@ -109,12 +95,14 @@ async function createArtifactWriter({ runDirectory, allowedPaths, unsafeFixture,
   await checkedDirectory(root, root);
   const isAllowed = allowedPathPredicate(allowedPaths);
   const hooks = parseTestHooks(testHooks, unsafeFixture);
+  let poisoned = false;
   if (!unsafeFixture && (process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number')) {
     throw new EvidenceError('artifact_platform_not_release_safe');
   }
 
   return Object.freeze({
     async writeJson(relativePath, value) {
+      if (poisoned) throw new EvidenceError('artifact_write_failed');
       const segments = parseRelativePath(relativePath);
       if (isAllowed(relativePath) !== true) throw new EvidenceError('invalid_artifact');
       const encoded = JSON.stringify(value);
@@ -153,7 +141,7 @@ async function createArtifactWriter({ runDirectory, allowedPaths, unsafeFixture,
         throw error;
       }
       try {
-        const opened = await handle.stat();
+        const opened = hooks.stat ? await hooks.stat(handle) : await handle.stat();
         identity = Object.freeze({ dev: opened.dev, ino: opened.ino });
         if (hooks.afterOpen) await hooks.afterOpen(Object.freeze({ parent, target }));
         await assertOpenedFile({ handle, root, target, ancestors, identity });
@@ -166,19 +154,13 @@ async function createArtifactWriter({ runDirectory, allowedPaths, unsafeFixture,
         else await handle.close();
         handle = undefined;
       } catch (error) {
+        poisoned = true;
         if (handle) {
           try { await handle.close(); }
-          catch { /* Cleanup below is the authoritative partial-file check. */ }
+          catch { /* The failed run remains poisoned; path deletion is intentionally forbidden. */ }
         }
-        if (!identity) throw new EvidenceError('artifact_cleanup_failed');
-        try {
-          if (hooks.beforeCleanup) await hooks.beforeCleanup(Object.freeze({ parent, target }));
-          await removeCreatedFile(target, identity);
-        } catch (cleanupError) {
-          if (cleanupError instanceof EvidenceError && cleanupError.reason === 'artifact_cleanup_failed') throw cleanupError;
-          throw new EvidenceError('artifact_cleanup_failed');
-        }
-        throw error;
+        if (error instanceof EvidenceError) throw error;
+        throw new EvidenceError('artifact_write_failed');
       }
       return Object.freeze({ path: relativePath, sha256: digest(bytes), redacted: true });
     },
