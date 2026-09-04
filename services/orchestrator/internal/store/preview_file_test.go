@@ -20,7 +20,7 @@ func TestPreviewRoutePromotion_swaps_pointer_and_only_retires_prior_ready(t *tes
 		},
 	})
 	state := NewFileStore(path)
-	at := time.Date(2026, 9, 4, 1, 2, 3, 0, time.UTC)
+	at := time.Now().UTC().Truncate(time.Second)
 	work, err := state.ClaimNextPreviewRoute(context.Background(), ClaimOptions{WorkerID: "worker-1", Lease: time.Minute, Now: at})
 	if err != nil || work == nil {
 		t.Fatalf("claim=%#v err=%v", work, err)
