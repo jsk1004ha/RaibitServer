@@ -206,6 +206,26 @@ test('recovery API core accepts every terminal cleanup state and replays deleted
   assert.equal(state.auditEvents.filter(row => row.action === 'resource.backup:delete-requested').length, 2);
 });
 
+test('recovery API core parses delete confirmation as an exact prototype-safe body', async () => {
+  // Given malformed, missing, inherited, and exact confirmation bodies, when deletion is requested, then only one own confirmed=true field is accepted.
+  const state = fixture();
+  const repository = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => {});
+  const backup = await repository.createBackup(request('delete-body'));
+  await readyBackup(repository, backup.operation.id);
+  const symbolExtra = { confirmed: true };
+  Object.defineProperty(symbolExtra, Symbol('extra'), { enumerable: true, value: true });
+  for (const input of [null, 'true', [], { confirmed: 'true' }, { confirmed: true, extra: true }, symbolExtra]) {
+    await assert.rejects(repository.requestBackupDeletion(scope, backup.operation.id, input), { code: 'RECOVERY_INPUT_INVALID', statusCode: 400 });
+  }
+  for (const input of [{}, { confirmed: false }, Object.create({ confirmed: true })]) {
+    await assert.rejects(repository.requestBackupDeletion(scope, backup.operation.id, input), { code: 'RECOVERY_CONFIRMATION_REQUIRED', statusCode: 400 });
+  }
+  const exact = Object.assign(Object.create(null), { confirmed: true });
+  assert.equal((await repository.requestBackupDeletion(scope, backup.operation.id, exact)).status, 'DELETING');
+  assert.equal((await repository.requestBackupDeletion(scope, backup.operation.id, { confirmed: true })).status, 'DELETING');
+  assert.equal(state.auditEvents.filter(row => row.action === 'resource.backup:delete-requested').length, 1);
+});
+
 test('recovery API core persists the first mutation audit inside the PostgreSQL transaction', async () => {
   // Given a PostgreSQL transaction fake backed by the real fixture, when creating a backup, then its domain rows and audit use the same transaction callback.
   const seed = fixture();

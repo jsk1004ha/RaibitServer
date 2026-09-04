@@ -65,12 +65,12 @@ export class ResourceRecoveryRepository {
       return publicRestore(restore);
     });
   }
-  requestBackupDeletion(scope: RecoveryScope, id: string, input: { readonly confirmed: true }, now?: string): Promise<ResourceBackupView> {
+  requestBackupDeletion(scope: RecoveryScope, id: string, input: unknown, now?: string): Promise<ResourceBackupView> {
     return this.transaction.run(scope.organizationId, state => {
       const backup = state.backups.find(row => row.id === id && row.organizationId === scope.organizationId);
       if (!backup) throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
       recoveryAuthorized(state, scope, 'backup:manage');
-      if (input.confirmed !== true) throw new RecoveryError('RECOVERY_INPUT_INVALID', 400);
+      requireDeleteConfirmation(input);
       if (backup.status === 'DELETING' || backup.status === 'DELETED') return publicBackup(backup, now);
       if (!['READY', 'FAILED', 'EXPIRED'].includes(backup.status)) throw new RecoveryError('RECOVERY_CLEANUP_INELIGIBLE');
       if (state.pins.some(pin => pin.backupId === backup.id && pin.kind === 'RESTORE_TARGET')) throw new RecoveryError('RECOVERY_RESTORE_PINNED');
@@ -112,6 +112,15 @@ function publicRecoveryError(code: string | null): string | null {
 function requireResourceOwner(state: RecoveryState, resourceId: string, organizationId: string): void {
   const resource = state.resources.find(row => row.id === resourceId);
   if (!resource || !state.projects.some(project => project.id === resource.projectId && project.organizationId === organizationId)) throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
+}
+function requireDeleteConfirmation(input: unknown): void {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new RecoveryError('RECOVERY_INPUT_INVALID', 400);
+  const keys = Reflect.ownKeys(input).filter(key => Object.prototype.propertyIsEnumerable.call(input, key));
+  if (keys.length === 0) throw new RecoveryError('RECOVERY_CONFIRMATION_REQUIRED', 400);
+  if (keys.length !== 1 || keys[0] !== 'confirmed') throw new RecoveryError('RECOVERY_INPUT_INVALID', 400);
+  const confirmed = Reflect.get(input, 'confirmed');
+  if (confirmed === false) throw new RecoveryError('RECOVERY_CONFIRMATION_REQUIRED', 400);
+  if (confirmed !== true) throw new RecoveryError('RECOVERY_INPUT_INVALID', 400);
 }
 function encodeBackupCursor(row: Pick<RecoveryBackup, 'createdAt' | 'id'>): string {
   return Buffer.from(JSON.stringify({ v: 1, at: row.createdAt, id: row.id } satisfies BackupCursor)).toString('base64url');
