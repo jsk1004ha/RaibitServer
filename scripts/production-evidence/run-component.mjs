@@ -1,12 +1,39 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { chmod, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST, EvidenceError, digest, readJson } from './lib/operator-inputs.mjs';
 import { REQUIRED_ASSERTIONS } from './lib/manifest.mjs';
-import { createRun, writeFragment } from './lib/run.mjs';
+import { createRun, createRunnerContext, writeFragment } from './lib/run.mjs';
 import { preflight } from './preflight.mjs';
+import { parseStepRequest, parseStepResult } from './lib/step-contract.mjs';
+
+const STEP_MODULES = Object.freeze({
+  'auth-source': './steps/auth-source.mjs',
+  'supply-chain': './steps/supply-chain.mjs',
+  runtime: './steps/runtime.mjs',
+  observability: './steps/observability.mjs',
+  resources: './steps/resources.mjs',
+  'backup-sql': './steps/backup-sql.mjs',
+  'backup-nosql': './steps/backup-nosql.mjs',
+  preview: './steps/preview.mjs',
+  rollback: './steps/rollback.mjs',
+  cleanup: './steps/cleanup.mjs',
+});
+
+export async function executeStepRequest(value, options = {}) {
+  const request = parseStepRequest(value, options.expectedStep);
+  const modulePath = STEP_MODULES[request.step];
+  if (!modulePath) throw new EvidenceError('invalid_step_contract');
+  const implementation = await import(new URL(modulePath, import.meta.url));
+  if (typeof implementation.execute !== 'function') throw new EvidenceError('invalid_step_contract');
+  const context = options.context ?? createRunnerContext(request.runDirectory, request.deadlineAt);
+  const result = parseStepResult(await implementation.execute(request, context), request.step, request);
+  const receipt = { schema: 'raibitserver.production-evidence-step-receipt/v1', step: request.step, identity: request.identity,
+    startedAt: request.startedAt, observedAt: context.now(), ...result, redacted: true, fixture: options.fixture === true };
+  return receipt;
+}
 
 export function componentSample(component, now = new Date().toISOString()) {
   if (!['resources', 'domains'].includes(component)) throw new EvidenceError('invalid_component');
@@ -36,18 +63,12 @@ export async function runComponent(request) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const args = process.argv.slice(2);
-    if (args[0] === '--sample' && args.length === 3) {
-      const sample = componentSample(args[1]);
-      const directory = await createRun(args[2], sample.manifest.identity, sample.manifest.startedAt);
-      await writeFile(path.join(directory, 'assertions.json'), sample.artifact, { flag: 'wx', mode: 0o600 });
-      await writeFile(path.join(directory, 'manifest.json'), `${JSON.stringify(sample.manifest, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-      process.stdout.write(`${JSON.stringify({ manifestPath: path.join(directory, 'manifest.json'), releaseEligible: false, fixture: true })}\n`);
-    } else {
-      if (args.length !== 1) throw new EvidenceError('invalid_arguments');
-      const result = await runComponent(await readJson(args[0], 'missing_approved_input'));
-      process.stderr.write(`${result.reason}\n`);
-      process.exitCode = 1;
-    }
+    if (args.length !== 6 || args[0] !== '--step' || args[2] !== '--request' || args[4] !== '--output'
+      || !path.isAbsolute(args[3]) || !path.isAbsolute(args[5])) throw new EvidenceError('invalid_arguments');
+    const request = await readJson(args[3], 'missing_step_request');
+    const receipt = await executeStepRequest(request, { expectedStep: args[1] });
+    await writeFile(args[5], `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
+    await chmod(args[5], 0o600);
   } catch (error) {
     process.stderr.write(`${error instanceof EvidenceError ? error.reason : 'evidence_io_failed'}\n`);
     process.exitCode = 1;

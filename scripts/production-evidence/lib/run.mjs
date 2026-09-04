@@ -1,3 +1,6 @@
+import { spawn } from 'node:child_process';
+import http from 'node:http';
+import https from 'node:https';
 import { mkdir, writeFile, readFile, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { EvidenceIdentitySchema, EvidenceFragmentSchema } from '../../../packages/schemas/src/production-evidence.ts';
@@ -53,4 +56,76 @@ export async function verifyArtifacts(directory, manifest) {
     assertRedacted(bytes.toString('utf8'));
     if (!manifest.fixture && /"fixture"\s*:\s*true/.test(bytes.toString('utf8'))) throw new EvidenceError('fixture_not_release_evidence');
   }
+}
+
+function boundedTimeout(deadlineAt, requested) {
+  const remaining = Date.parse(deadlineAt) - Date.now();
+  if (!Number.isFinite(remaining) || remaining <= 0) throw new EvidenceError('step_deadline_exceeded');
+  return Math.min(remaining, requested ?? remaining);
+}
+
+function safeRelativeArtifact(component, name) {
+  if (!['local', 'cluster', 'lifecycle', 'resources', 'operations'].includes(component)
+    || !/^[a-z0-9][a-z0-9-]{0,63}\.json$/.test(name)) throw new EvidenceError('invalid_artifact');
+  return `artifacts/${component}/${name}`;
+}
+
+export function createRunnerContext(runDirectory, deadlineAt, clock = { now: () => new Date() }) {
+  const now = () => {
+    const value = clock.now();
+    return (value instanceof Date ? value : new Date(value)).toISOString();
+  };
+  return Object.freeze({
+    now,
+    async executeFile(file, args, options = {}) {
+      if (typeof file !== 'string' || !file || !Array.isArray(args) || args.some((arg) => typeof arg !== 'string')) throw new EvidenceError('invalid_command');
+      assertRedacted(args);
+      if (options.env !== undefined) assertRedacted(options.env);
+      const timeoutMs = boundedTimeout(deadlineAt, options.timeoutMs);
+      const startedAt = now();
+      const child = spawn(file, args, { cwd: options.cwd, env: options.env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '', stderr = '';
+      child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+      const exitCode = await new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('close', (code) => resolve(code ?? 1));
+      }).finally(() => clearTimeout(timer));
+      assertRedacted(stdout); assertRedacted(stderr);
+      return Object.freeze({ exitCode, stdout, stderr, startedAt, observedAt: now() });
+    },
+    async requestJson(request) {
+      const url = new URL(request.url);
+      if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) throw new EvidenceError('invalid_request');
+      if (request.headers && Object.keys(request.headers).some((name) => /authorization|cookie|token|secret|api-key/i.test(name))) throw new EvidenceError('redaction');
+      const body = request.body === undefined ? undefined : Buffer.from(JSON.stringify(request.body));
+      if (body) assertRedacted(body.toString('utf8'));
+      const timeoutMs = boundedTimeout(deadlineAt, request.timeoutMs);
+      return await new Promise((resolve, reject) => {
+        const client = url.protocol === 'https:' ? https : http;
+        const outgoing = client.request(url, { method: request.method, headers: request.headers, signal: AbortSignal.timeout(timeoutMs) }, (response) => {
+          let bytes = '';
+          response.setEncoding('utf8'); response.on('data', (chunk) => { bytes += chunk; });
+          response.on('end', () => {
+            try { assertRedacted(bytes); resolve(Object.freeze({ statusCode: response.statusCode ?? 0, body: bytes ? JSON.parse(bytes) : null, observedAt: now() })); }
+            catch (error) { reject(error); }
+          });
+        });
+        outgoing.once('error', reject);
+        if (body) outgoing.write(body);
+        outgoing.end();
+      });
+    },
+    async writeArtifact(component, name, value) {
+      assertRedacted(value);
+      const relative = safeRelativeArtifact(component, name);
+      const target = path.join(runDirectory, ...relative.split('/'));
+      await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+      const bytes = `${JSON.stringify(value)}\n`;
+      await writeFile(target, bytes, { flag: 'wx', mode: 0o600 });
+      return Object.freeze({ path: relative, sha256: digest(bytes), redacted: true });
+    },
+  });
 }
