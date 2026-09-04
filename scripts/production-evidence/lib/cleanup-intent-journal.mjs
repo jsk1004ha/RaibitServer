@@ -3,7 +3,7 @@ import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
 import {
   bindingJournalSnapshot, bindingJournalSnapshotFixtureUnsafe, loadBindings, loadBindingsFixtureUnsafe,
 } from './binding-journal.mjs';
-import { exclusiveJournalWrite, journalFiles, journalScope } from './journal-io.mjs';
+import { exclusiveJournalWrite, journalFiles, journalScope, withJournalTransaction } from './journal-io.mjs';
 import { MUTATION_CONTRACT, validateIntentScope } from './binding-graph.mjs';
 export { deriveRunResourceName } from './binding-graph.mjs';
 
@@ -188,8 +188,12 @@ async function appendIntent(options) {
   await exclusiveJournalWrite(options.runDirectory, `cleanup-intents/${String(entry.sequence).padStart(6, '0')}--intent--${entry.entrySha256.slice(0, 12)}.json`, entry, options.writer, unsafeFixture);
   return entry;
 }
-export async function appendCleanupIntent(options) { return appendIntent({ ...options, unsafeFixture: false }); }
-export async function appendCleanupIntentFixtureUnsafe(options) { return appendIntent({ ...options, unsafeFixture: true }); }
+export async function appendCleanupIntent(options) {
+  return withJournalTransaction(options?.writer, () => appendIntent({ ...options, unsafeFixture: false }));
+}
+export async function appendCleanupIntentFixtureUnsafe(options) {
+  return withJournalTransaction(options?.writer, () => appendIntent({ ...options, unsafeFixture: true }));
+}
 
 async function appendOutcome(options) {
   const keys = ['runDirectory', 'identity', 'intentId', 'actualId', 'actualUid', 'responseSha256', 'resolvedAt',
@@ -219,8 +223,12 @@ async function appendOutcome(options) {
   await exclusiveJournalWrite(options.runDirectory, `cleanup-intents/${String(entry.sequence).padStart(6, '0')}--outcome--${entry.entrySha256.slice(0, 12)}.json`, entry, options.writer, options.unsafeFixture === true);
   return entry;
 }
-export async function appendCleanupOutcome(options) { return appendOutcome({ ...options, unsafeFixture: false }); }
-export async function appendCleanupOutcomeFixtureUnsafe(options) { return appendOutcome({ ...options, unsafeFixture: true }); }
+export async function appendCleanupOutcome(options) {
+  return withJournalTransaction(options?.writer, () => appendOutcome({ ...options, unsafeFixture: false }));
+}
+export async function appendCleanupOutcomeFixtureUnsafe(options) {
+  return withJournalTransaction(options?.writer, () => appendOutcome({ ...options, unsafeFixture: true }));
+}
 
 export function resolveCleanupRecovery(options) {
   if (!exactKeys(options, ['intent', 'candidates', 'bindingEntries', 'identity', 'approvedRuntimeSelector', 'parseBinding'])

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
-import { exclusiveJournalWrite, journalFiles, journalScope } from './journal-io.mjs';
+import { exclusiveJournalWrite, journalFiles, journalScope, withJournalTransaction } from './journal-io.mjs';
 export { resolveBindingGraph } from './binding-graph.mjs';
 export { isPrivateJournalMetadata } from './journal-io.mjs';
 export { isPrivateArtifactWriterMetadata } from './safe-artifact-writer.mjs';
@@ -84,8 +84,12 @@ async function append(options) {
   const name = `${String(entry.sequence).padStart(6, '0')}--${entry.entrySha256.slice(0, 16)}.json`;
   return Object.freeze({ ...(await exclusiveJournalWrite(options.runDirectory, `bindings/${name}`, entry, options.writer, options.unsafeFixture === true)), entry });
 }
-export async function appendBinding(options) { return append({ ...options, unsafeFixture: false }); }
-export async function appendBindingFixtureUnsafe(options) { return append({ ...options, unsafeFixture: true }); }
+export async function appendBinding(options) {
+  return withJournalTransaction(options?.writer, () => append({ ...options, unsafeFixture: false }));
+}
+export async function appendBindingFixtureUnsafe(options) {
+  return withJournalTransaction(options?.writer, () => append({ ...options, unsafeFixture: true }));
+}
 
 async function snapshot(options) {
   const entries = await load(options);

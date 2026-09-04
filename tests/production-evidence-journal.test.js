@@ -56,6 +56,18 @@ test('Given a parsed binding, When appended twice exactly, Then committed bytes 
   assert.equal((await readdir(path.dirname(first.path))).length, 3);
 });
 
+test('Given concurrent appends through one writer, When serialized, Then chronology remains immutable', async (t) => {
+  const ctx = await sandbox(t);
+  await Promise.all([
+    appendBindingFixtureUnsafe({ ...ctx, role: 'identity', bindingId: 'membership', parsePayload: parseBinding,
+      payload: { kind: 'organization-membership', organizationId: 'org-a', membershipId: 'membership-a', userId: 'user-a', role: 'OWNER' },
+      createdAt: '2026-09-04T00:00:01.000Z' }),
+    appendBindingFixtureUnsafe({ ...ctx, role: 'project', bindingId: 'primary', parsePayload: parseBinding,
+      payload: { kind: 'project', projectId: 'project-a', organizationId: 'org-a' }, createdAt: '2026-09-04T00:00:02.000Z' }),
+  ]);
+  assert.deepEqual((await loadBindingsFixtureUnsafe({ ...ctx, parsePayload: parseBinding })).map(({ sequence }) => sequence), [1, 2]);
+});
+
 test('Given no schema parser, When journal APIs are called, Then permissive payload acceptance is forbidden', async (t) => {
   const ctx = await sandbox(t);
   await assert.rejects(appendBindingFixtureUnsafe({ ...ctx, role: 'identity', bindingId: 'membership', payload: {}, createdAt: '2026-09-04T00:00:01.000Z' }), { reason: 'invalid_journal' });

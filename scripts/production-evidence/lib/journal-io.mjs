@@ -5,6 +5,7 @@ import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
 import { isPrivateArtifactWriterMetadata } from './safe-artifact-writer.mjs';
 
 const SAFE_PART = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/;
+const transactions = new WeakMap();
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const samePath = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
@@ -12,6 +13,22 @@ function fail(reason = 'invalid_journal') { throw new EvidenceError(reason); }
 
 export const isPrivateJournalMetadata = (relativePath) => isPrivateArtifactWriterMetadata(relativePath)
   || /^(?:bindings\/\d{6}--[a-f0-9]{16}|cleanup-intents\/\d{6}--(?:intent|outcome)--[a-f0-9]{12})\.json\.(?:pending|commit)$/.test(relativePath);
+
+export async function withJournalTransaction(writer, operation) {
+  if ((typeof writer !== 'object' && typeof writer !== 'function') || writer === null || typeof operation !== 'function') {
+    fail('missing_journal_writer');
+  }
+  const previous = transactions.get(writer) ?? Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  transactions.set(writer, gate);
+  await previous;
+  try { return await operation(); }
+  finally {
+    release();
+    if (transactions.get(writer) === gate) transactions.delete(writer);
+  }
+}
 
 async function physicalDirectory(directory, create) {
   if (!path.isAbsolute(directory) || path.resolve(directory) !== directory) fail();
