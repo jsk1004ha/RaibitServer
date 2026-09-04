@@ -1,11 +1,13 @@
 import { constants } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, mkdir, open, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
-import { isPrivateArtifactWriterMetadata } from './safe-artifact-writer.mjs';
+import { assertSafeArtifactWriter, isPrivateArtifactWriterMetadata } from './safe-artifact-writer.mjs';
 
 const SAFE_PART = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/;
 const transactions = new WeakMap();
+const activeTransaction = new AsyncLocalStorage();
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const samePath = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
@@ -15,15 +17,15 @@ export const isPrivateJournalMetadata = (relativePath) => isPrivateArtifactWrite
   || /^(?:bindings\/\d{6}--[a-f0-9]{16}|cleanup-intents\/\d{6}--(?:intent|outcome)--[a-f0-9]{12})\.json\.(?:pending|commit)$/.test(relativePath);
 
 export async function withJournalTransaction(writer, operation) {
-  if ((typeof writer !== 'object' && typeof writer !== 'function') || writer === null || typeof operation !== 'function') {
-    fail('missing_journal_writer');
-  }
+  assertSafeArtifactWriter(writer);
+  if (typeof operation !== 'function') fail();
+  if (activeTransaction.getStore() === writer) return operation();
   const previous = transactions.get(writer) ?? Promise.resolve();
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   transactions.set(writer, gate);
   await previous;
-  try { return await operation(); }
+  try { return await activeTransaction.run(writer, operation); }
   finally {
     release();
     if (transactions.get(writer) === gate) transactions.delete(writer);
@@ -92,7 +94,7 @@ function parseMarker(bytes, schema, relative, sha256) {
 }
 
 export async function exclusiveJournalWrite(runDirectory, relative, value, writer, unsafeFixture = false) {
-  if (!writer || typeof writer.writeJson !== 'function') fail('missing_journal_writer');
+  assertSafeArtifactWriter(writer);
   const parts = relative.split('/');
   const [directoryName, fileName] = parts;
   if (parts.length !== 2 || !SAFE_PART.test(fileName.replace(/\.json$/, '').replaceAll('--', '-')) || !fileName.endsWith('.json')) fail();

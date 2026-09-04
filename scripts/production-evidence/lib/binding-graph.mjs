@@ -1,10 +1,11 @@
-import { digest, EvidenceError } from './operator-inputs.mjs';
+import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
 
 const SAFE_PART = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SAFE_NAME = /^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$/;
 const SAFE_CONTEXT = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const ROUTE = /^\/apis?\/[A-Za-z0-9._~:/-]+$/;
 export const MUTATION_CONTRACT = Object.freeze({
   'control-plane-create-project': Object.freeze(['POST', '/api/projects']),
   'control-plane-import-repository': Object.freeze(['POST', '/api/github/repositories/import']),
@@ -15,7 +16,7 @@ export const MUTATION_CONTRACT = Object.freeze({
   'control-plane-delete-project': Object.freeze(['DELETE', '/api/projects/:projectId']),
   'control-plane-delete-resource': Object.freeze(['DELETE', '/api/resources/:resourceId']),
   'control-plane-create-backup': Object.freeze(['POST', '/api/resources/:resourceId/backups']),
-  'control-plane-create-restore': Object.freeze(['POST', '/api/backups/:backupId/restore']),
+  'control-plane-create-restore': Object.freeze(['POST', '/api/backups/:backupId/restores']),
   'control-plane-delete-backup': Object.freeze(['DELETE', '/api/backups/:backupId']),
   'control-plane-delete-restore-target': Object.freeze(['DELETE', '/api/resources/:resourceId']),
   'kubernetes-apply-pod': Object.freeze(['APPLY', '/api/v1/namespaces/:namespace/pods']),
@@ -30,6 +31,47 @@ function immutable(value) {
   if (isRecord(value)) return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => [key, immutable(item)])));
   return value;
 }
+const isIso = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+const validSelector = (value) => isRecord(value) && Object.keys(value).length > 0 && Object.entries(value).every(([key, item]) => SAFE_ID.test(key)
+  && (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') && String(item).length > 0 && String(item).length <= 256);
+const validRoute = (value) => typeof value === 'string' && ROUTE.test(value) && !value.includes('//') && !value.includes('%')
+  && !value.includes('?') && !value.includes('#') && value.split('/').every((segment) => segment !== '.' && segment !== '..');
+
+export function parseCleanupIntentRecord(record, expectedIdentityDigest) {
+  const keys = ['schema', 'entryType', 'sequence', 'runIdentitySha256', 'intentId', 'mutationKind', 'bindingEntryCount', 'bindingsDigest',
+    'bindingRefs', 'approvedRuntimeSelectorSha256', 'resourceName', 'method', 'routeTemplate', 'relativeRoute', 'recoverySelector',
+    'createdAt', 'deadlineAt', 'selectorSha256', 'entrySha256'];
+  if (!exactKeys(record, keys) || record.schema !== 'raibitserver.production-evidence-cleanup-journal/v1' || record.entryType !== 'intent'
+    || !Number.isSafeInteger(record.sequence) || record.sequence < 1 || record.runIdentitySha256 !== expectedIdentityDigest
+    || !SAFE_NAME.test(record.intentId) || !Object.hasOwn(MUTATION_CONTRACT, record.mutationKind)
+    || !Number.isSafeInteger(record.bindingEntryCount) || record.bindingEntryCount < 1 || !SHA256.test(record.bindingsDigest)
+    || !Array.isArray(record.bindingRefs) || record.bindingRefs.length === 0
+    || !(record.approvedRuntimeSelectorSha256 === null || SHA256.test(record.approvedRuntimeSelectorSha256))
+    || !SAFE_NAME.test(record.resourceName) || !['POST', 'DELETE', 'APPLY'].includes(record.method)
+    || !validRoute(record.routeTemplate) || !validRoute(record.relativeRoute) || !validSelector(record.recoverySelector)
+    || !isIso(record.createdAt) || !isIso(record.deadlineAt) || Date.parse(record.deadlineAt) <= Date.parse(record.createdAt)
+    || !SHA256.test(record.selectorSha256) || record.selectorSha256 !== digest(record.recoverySelector) || !SHA256.test(record.entrySha256)) fail('invalid_journal');
+  const [method, routeTemplate] = MUTATION_CONTRACT[record.mutationKind];
+  const { entrySha256, ...unsigned } = record;
+  if (record.method !== method || record.routeTemplate !== routeTemplate) fail('invalid_mutation_contract');
+  if (entrySha256 !== digest(unsigned)) fail('journal_digest_mismatch');
+  assertRedacted(record);
+  return immutable(record);
+}
+
+export function parseCleanupOutcomeRecord(record, expectedIdentityDigest) {
+  const keys = ['schema', 'entryType', 'sequence', 'runIdentitySha256', 'intentId', 'intentEntrySha256', 'actualId', 'actualUid',
+    'responseSha256', 'resolvedAt', 'entrySha256'];
+  if (!exactKeys(record, keys) || record.schema !== 'raibitserver.production-evidence-cleanup-journal/v1' || record.entryType !== 'outcome'
+    || !Number.isSafeInteger(record.sequence) || record.sequence < 1 || record.runIdentitySha256 !== expectedIdentityDigest
+    || !SAFE_NAME.test(record.intentId) || !SHA256.test(record.intentEntrySha256) || !SAFE_ID.test(record.actualId)
+    || !(record.actualUid === null || SAFE_ID.test(record.actualUid)) || !SHA256.test(record.responseSha256)
+    || !isIso(record.resolvedAt) || !SHA256.test(record.entrySha256)) fail('invalid_journal');
+  const { entrySha256, ...unsigned } = record;
+  if (entrySha256 !== digest(unsigned)) fail('journal_digest_mismatch');
+  assertRedacted(record);
+  return immutable(record);
+}
 function primaryId(binding) {
   switch (binding.kind) {
     case 'organization-membership': return binding.membershipId;
@@ -43,6 +85,24 @@ function primaryId(binding) {
     case 'restore': return binding.restoreId;
     default: fail();
   }
+}
+
+export function parseEvidenceBindingPayload(value) {
+  if (!isRecord(value) || typeof value.kind !== 'string') fail('invalid_journal');
+  const contracts = {
+    'organization-membership': ['kind', 'organizationId', 'membershipId', 'userId', 'role'],
+    'github-repository': ['kind', 'repositoryId', 'owner', 'name'],
+    'tenant-revision': ['kind', 'repositoryId', 'tenantCommitSha'],
+    project: ['kind', 'projectId', 'organizationId'],
+    service: ['kind', 'serviceId', 'projectId'],
+    deployment: ['kind', 'deploymentId', 'serviceId'],
+    resource: ['kind', 'role', 'engine', 'resourceId', 'projectId'],
+    backup: ['kind', 'engine', 'backupId', 'sourceResourceId'],
+    restore: ['kind', 'restoreId', 'backupId', 'targetResourceId'],
+  };
+  const keys = contracts[value.kind];
+  if (!keys || !exactKeys(value, keys) || keys.slice(1).some((key) => !SAFE_ID.test(value[key]))) fail('invalid_journal');
+  return immutable(value);
 }
 
 export function resolveBindingGraph(entries, references) {
@@ -129,9 +189,10 @@ function expectedSelector(options, graph) {
     }
     case 'control-plane-create-restore': {
       const { project } = tenant(graph); const source = one(graph.referenced, 'resource', (item) => item.projectId === project.projectId && item.role === 'source');
+      if (graph.referenced.filter((item) => item.kind === 'resource').length !== 1) fail('invalid_recovery_selector');
       const backup = one(graph.referenced, 'backup', (item) => item.sourceResourceId === source.resourceId);
-      const target = one(graph.referenced, 'resource', (item) => item.projectId === project.projectId && item.role === 'restore-target');
-      return { kind: 'Restore', projectId: project.projectId, backupId: backup.backupId, targetResourceId: target.resourceId, engine: source.engine, name: options.resourceName, runIdentitySha256 };
+      return { kind: 'Restore', projectId: project.projectId, backupId: backup.backupId,
+        engine: source.engine, name: options.resourceName, runIdentitySha256 };
     }
     case 'control-plane-delete-project': {
       const { project } = tenant(graph); return { kind: 'Project', organizationId: membership.organizationId, projectId: project.projectId, name: options.resourceName, runIdentitySha256 };
