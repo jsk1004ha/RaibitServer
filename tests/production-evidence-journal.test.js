@@ -139,6 +139,17 @@ test('Given canonical binding kinds, When journaled, Then exact provenance round
   assert.throws(() => resolveBindingGraph([...entries.slice(0, 4), malformedProject],
     [...entries.slice(0, 4), malformedProject].map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))),
   { reason: 'invalid_journal' });
+  let payloadReads = 0;
+  const mutableMembership = { ...entries[0] };
+  Object.defineProperty(mutableMembership, 'payload', { enumerable: true,
+    get: () => (++payloadReads <= 4 ? entries[0].payload : { ...entries[0].payload, organizationId: 'org-b' }) });
+  const crossTenantProject = { ...entries[4], payload: { ...entries[4].payload, organizationId: 'org-b' } };
+  crossTenantProject.payloadSha256 = digest(crossTenantProject.payload);
+  const { entrySha256: oldCrossTenantSha, ...crossTenantUnsigned } = crossTenantProject;
+  crossTenantProject.entrySha256 = digest(crossTenantUnsigned);
+  const hostileEntries = [mutableMembership, ...entries.slice(1, 4), crossTenantProject];
+  assert.throws(() => resolveBindingGraph(hostileEntries,
+    hostileEntries.map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))), { reason: 'invalid_binding_graph' });
   const badDeployment = { ...entries[6], payload: { ...entries[6].payload, tenantCommitSha: '3'.repeat(40) } };
   badDeployment.payloadSha256 = digest(badDeployment.payload);
   const { entrySha256: ignored, ...unsigned } = badDeployment;

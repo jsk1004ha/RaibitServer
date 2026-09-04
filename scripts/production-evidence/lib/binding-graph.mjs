@@ -124,7 +124,7 @@ export function resolveBindingGraph(entries, references) {
         if (!repository || repository.repository !== binding.repository || repository.branch !== binding.branch) fail();
         break;
       }
-      case 'project': if (entries.filter(({ payload }) => payload.kind === 'organization-membership' && payload.organizationId === binding.organizationId).length !== 1) fail(); break;
+      case 'project': if (normalizedEntries.filter(({ payload }) => payload.kind === 'organization-membership' && payload.organizationId === binding.organizationId).length !== 1) fail(); break;
       case 'service': if (!domain.has(`project:${binding.projectId}`)) fail(); break;
       case 'deployment': {
         const revision = domain.get(`tenant-revision:${binding.tenantRevisionId}`);
