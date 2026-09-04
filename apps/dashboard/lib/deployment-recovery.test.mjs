@@ -48,6 +48,26 @@ test('operation surfaces compose the enhanced native form for every recovery pat
   assert.match(deployment, /previewCleanupAllowed/);
 });
 
+test('retry and redeploy native forms render independent replay keys for one deployment view', async () => {
+  // Given: the server-owned deployment detail page with both recovery forms.
+  const deployment = await read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx');
+  const retryForm = deployment.match(/<OperationSubmit action=\{apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/retry`[\s\S]*?<\/OperationSubmit>/)?.[0];
+  const redeployForm = deployment.match(/<OperationSubmit action=\{apiAction\(`\/services\/\$\{String\(detail\.serviceId \|\| ''\)\}\/redeploy`[\s\S]*?<\/OperationSubmit>/)?.[0];
+
+  // When: the hidden native POST payload fields are inspected.
+  const retryKey = retryForm?.match(/name="requestIdempotencyKey" type="hidden" value=\{([^}]+)\}/)?.[1];
+  const redeployKey = redeployForm?.match(/name="requestIdempotencyKey" type="hidden" value=\{([^}]+)\}/)?.[1];
+
+  // Then: each action references its own server-rendered key, while both carry snapshotVersion.
+  assert.ok(retryKey, 'retry form must submit a requestIdempotencyKey');
+  assert.ok(redeployKey, 'redeploy form must submit a requestIdempotencyKey');
+  assert.notEqual(retryKey, redeployKey, 'retry and redeploy must not reuse one replay key');
+  assert.match(deployment, /const retryRequestIdempotencyKey = snapshotVersion === null \? null : randomUUID\(\);/);
+  assert.match(deployment, /const redeployRequestIdempotencyKey = snapshotVersion === null \? null : randomUUID\(\);/);
+  assert.match(retryForm ?? '', /name="snapshotVersion" type="hidden"/);
+  assert.match(redeployForm ?? '', /name="snapshotVersion" type="hidden"/);
+});
+
 test('deployment stream preserves hostile text as text and exposes only same-origin operation links', async () => {
   const source = await read('../components/project-hub/deployment-stream.tsx');
 
