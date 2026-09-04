@@ -255,6 +255,8 @@ test('Given no restore target yet, When restore is requested, Then intent preced
   await appendBindingFixtureUnsafe({ ...ctx, role: 'restore', bindingId: 'restore-a',
     payload: { kind: 'restore', restoreId: 'restore-a', backupId: 'backup-a', targetResourceId: 'resource-target' },
     createdAt: '2026-09-04T00:00:07.000Z' });
+  await assert.rejects(appendCleanupOutcomeFixtureUnsafe({ ...ctx, intentId: intent.intentId, actualId: 'foreign-restore', actualUid: null,
+    responseSha256: 'b'.repeat(64), resolvedAt: '2026-09-04T00:00:08.000Z', approvedRuntimeSelector: null }), { reason: 'outcome_conflict' });
   await appendCleanupOutcomeFixtureUnsafe({ ...ctx, intentId: intent.intentId, actualId: 'restore-a', actualUid: null,
     responseSha256: 'b'.repeat(64), resolvedAt: '2026-09-04T00:00:08.000Z', approvedRuntimeSelector: null });
   assert.equal((await loadCleanupJournalFixtureUnsafe({ ...ctx, approvedRuntimeSelector: null })).resolved.length, 1);

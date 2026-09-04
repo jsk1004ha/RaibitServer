@@ -70,7 +70,7 @@ async function readCleanup(options, create = false) {
     const expected = validateIntentScope({ ...intent, identity: options.identity, approvedRuntimeSelector: options.approvedRuntimeSelector }, prefix);
     if (intent.approvedRuntimeSelectorSha256 !== expected.runtimeDigest) fail('invalid_recovery_selector');
   }
-  return { scope, entries: Object.freeze(entries), files, intents, outcomes };
+  return { scope, entries: Object.freeze(entries), files, intents, outcomes, bindingEntries };
 }
 
 async function loadJournal(options) {
@@ -181,6 +181,18 @@ async function appendOutcome(options) {
   const loaded = await readCleanup(options);
   const intent = loaded.intents.get(options.intentId);
   if (!intent || Date.parse(options.resolvedAt) <= Date.parse(intent.createdAt) || Date.parse(options.resolvedAt) > Date.parse(intent.deadlineAt)) fail('outcome_conflict');
+  if (intent.mutationKind === 'control-plane-create-restore') {
+    const postResponse = loaded.bindingEntries.slice(intent.bindingEntryCount);
+    const restores = postResponse.filter(({ payload }) => payload.kind === 'restore' && payload.restoreId === options.actualId
+      && payload.backupId === intent.recoverySelector.backupId);
+    if (restores.length !== 1) fail('outcome_conflict');
+    const restore = restores[0];
+    const targets = postResponse.filter(({ payload }) => payload.kind === 'resource' && payload.role === 'restore-target'
+      && payload.resourceId === restore.payload.targetResourceId && payload.projectId === intent.recoverySelector.projectId
+      && payload.engine === intent.recoverySelector.engine);
+    if (targets.length !== 1 || [restore, targets[0]].some((entry) => Date.parse(entry.createdAt) <= Date.parse(intent.createdAt)
+      || Date.parse(entry.createdAt) > Date.parse(options.resolvedAt))) fail('outcome_conflict');
+  }
   const existing = loaded.outcomes.get(options.intentId);
   if (existing) {
     const requested = { actualId: options.actualId, actualUid: options.actualUid, responseSha256: options.responseSha256, resolvedAt: options.resolvedAt };
