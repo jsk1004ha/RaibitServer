@@ -172,7 +172,7 @@ func assertSQLHelperJob(t *testing.T, job IsolatedJob, actions []string, binding
 			}
 		}
 	}
-	if spec.RunAsUser != 65532 || spec.CPUMilli != 250 || spec.MemoryMiB != 256 || spec.EphemeralMiB != 512 || spec.Deadline != 15*time.Minute {
+	if spec.RunAsUser != 65532 || spec.CPUMilli != 250 || spec.MemoryMiB != 512 || spec.EphemeralMiB != 12288 || spec.Deadline != 15*time.Minute {
 		t.Fatalf("unbounded runtime=%+v", spec)
 	}
 	if len(spec.Secrets) != 0 || len(spec.SecretFiles) != 1 || !spec.SecretFiles[0].ReadOnly() || spec.SecretFiles[0].Ref() != secret {
