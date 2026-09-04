@@ -68,6 +68,7 @@ func Test_SharedScratch_when_job_has_init_and_main_steps(t *testing.T) {
 	volumes := podSpec["volumes"].([]any)
 	initContainer := podSpec["initContainers"].([]any)[0].(map[string]any)
 	mainContainer := podSpec["containers"].([]any)[0].(map[string]any)
+	podSecurity := podSpec["securityContext"].(map[string]any)
 
 	// Then: exactly one bounded emptyDir is mounted read-write at the same deterministic path in both steps.
 	if len(volumes) != 1 {
@@ -80,6 +81,9 @@ func Test_SharedScratch_when_job_has_init_and_main_steps(t *testing.T) {
 	wantMount := []any{map[string]any{"name": "recovery-scratch", "mountPath": "/var/run/raibit-recovery/scratch", "readOnly": false}}
 	if !reflect.DeepEqual(initContainer["volumeMounts"], wantMount) || !reflect.DeepEqual(mainContainer["volumeMounts"], wantMount) {
 		t.Fatalf("init=%#v main=%#v", initContainer["volumeMounts"], mainContainer["volumeMounts"])
+	}
+	if podSecurity["runAsUser"] != podSecurity["runAsGroup"] || podSecurity["runAsUser"] != podSecurity["fsGroup"] {
+		t.Fatalf("scratch identity=%#v", podSecurity)
 	}
 	if _, suspended := jobSpec["suspend"]; suspended {
 		t.Fatalf("job unexpectedly suspended: %#v", jobSpec)

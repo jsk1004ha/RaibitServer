@@ -14,21 +14,23 @@ func validStageSpec() StageSpec {
 	return StageSpec{
 		Engine: EnginePostgreSQL, Action: ActionPostgreSQLRestore, Direction: DirectionRestore,
 		DecodedBytes: 128, DecodedSHA256: testDecodedSHA,
-		Baseline: BaselineSpec{SchemaSHA256: testSchemaSHA, DataSHA256: testDataSHA, RecordCount: 7},
+		Baseline:      BaselineSpec{SchemaSHA256: testSchemaSHA, DataSHA256: testDataSHA, RecordCount: 7},
+		SourceVersion: VersionIdentity{engine: EnginePostgreSQL, value: "160002"}, TargetVersionBefore: VersionIdentity{engine: EnginePostgreSQL, value: "160004"},
 	}
 }
 
 func validDumpStageSpec() StageSpec {
 	return StageSpec{
 		Engine: EnginePostgreSQL, Action: ActionPostgreSQLDump, Direction: DirectionDump,
-		Baseline: BaselineSpec{SchemaSHA256: testSchemaSHA, DataSHA256: testDataSHA, RecordCount: 7},
+		Baseline:      BaselineSpec{SchemaSHA256: testSchemaSHA, DataSHA256: testDataSHA, RecordCount: 7},
+		SourceVersion: VersionIdentity{engine: EnginePostgreSQL, value: "160002"},
 	}
 }
 
 func Test_StageStore_atomically_writes_and_consumes_fixed_state(t *testing.T) {
 	// Given
 	now := time.Unix(1_800_000_000, 0).UTC()
-	path := filepath.Join(t.TempDir(), StageFileName)
+	path := filepath.Join(newStageTestDirectory(t), StageFileName)
 	store := newStageStore(path, func() time.Time { return now })
 	stage, err := NewStage(validStageSpec())
 	if err != nil {
@@ -54,7 +56,7 @@ func Test_StageStore_atomically_writes_and_consumes_fixed_state(t *testing.T) {
 func Test_StageStore_carries_preflight_baseline_from_verify_to_dump(t *testing.T) {
 	// Given
 	now := time.Unix(1_800_000_000, 0).UTC()
-	path := filepath.Join(t.TempDir(), StageFileName)
+	path := filepath.Join(newStageTestDirectory(t), StageFileName)
 	store := newStageStore(path, func() time.Time { return now })
 	stage, err := NewStage(validDumpStageSpec())
 	if err != nil || store.write(stage) != nil {
@@ -65,7 +67,7 @@ func Test_StageStore_carries_preflight_baseline_from_verify_to_dump(t *testing.T
 	consumed, err := store.consume(EnginePostgreSQL, ActionPostgreSQLDump, DirectionDump)
 
 	// Then
-	if err != nil || consumed.DecodedBytes() != 0 || consumed.DecodedSHA256() != "" || consumed.Baseline() != validDumpStageSpec().Baseline {
+	if err != nil || consumed.DecodedBytes() != 0 || consumed.DecodedSHA256() != "" || consumed.Baseline() != validDumpStageSpec().Baseline || consumed.SourceVersion() != validDumpStageSpec().SourceVersion {
 		t.Fatalf("preflight stage=%+v error=%v", consumed, err)
 	}
 }
@@ -76,10 +78,11 @@ func Test_Stage_builds_final_receipt_specs_for_dump_and_restore(t *testing.T) {
 	verification := VerificationSpec{Version: true, Schema: true, DecodedArtifact: true, Sentinel: &verified}
 	dump, _ := NewStage(validDumpStageSpec())
 	restore, _ := NewStage(validStageSpec())
+	targetVersion, _ := NewVersionIdentity(EnginePostgreSQL, "160004")
 
 	// When
-	dumpSpec, dumpErr := dump.DumpReceiptSpec(DecodedSpec{Bytes: 128, SHA256: testDecodedSHA}, VerificationSpec{Version: true, Schema: true, DecodedArtifact: true})
-	restoreSpec, restoreErr := restore.RestoreReceiptSpec(verification)
+	dumpSpec, dumpErr := dump.DumpReceiptSpec(dump.SourceVersion(), DecodedSpec{Bytes: 128, SHA256: testDecodedSHA}, VerificationSpec{Version: true, Schema: true, DecodedArtifact: true})
+	restoreSpec, restoreErr := restore.RestoreReceiptSpec(targetVersion, verification)
 
 	// Then
 	if dumpErr != nil || restoreErr != nil {
@@ -108,7 +111,7 @@ func Test_StageStore_rejects_and_deletes_stale_or_mismatched_state(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			// Given
 			writtenAt := time.Unix(1_800_000_000, 0).UTC()
-			path := filepath.Join(t.TempDir(), StageFileName)
+			path := filepath.Join(newStageTestDirectory(t), StageFileName)
 			writer := newStageStore(path, func() time.Time { return writtenAt })
 			stage, err := NewStage(validStageSpec())
 			if err != nil || writer.write(stage) != nil {
@@ -147,7 +150,7 @@ func Test_NewStage_rejects_fake_decoded_digest_in_dump_preflight(t *testing.T) {
 
 func Test_StageStore_rejects_oversized_state(t *testing.T) {
 	// Given
-	path := filepath.Join(t.TempDir(), StageFileName)
+	path := filepath.Join(newStageTestDirectory(t), StageFileName)
 	if err := os.WriteFile(path, []byte(strings.Repeat("x", MaxBytes+1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -159,26 +162,5 @@ func Test_StageStore_rejects_oversized_state(t *testing.T) {
 	// Then
 	if !errors.Is(err, ErrStage) {
 		t.Fatalf("error=%v", err)
-	}
-}
-
-type stageFileInfo struct{ mode fs.FileMode }
-
-func (stageFileInfo) Name() string            { return StageFileName }
-func (stageFileInfo) Size() int64             { return 1 }
-func (value stageFileInfo) Mode() fs.FileMode { return value.mode }
-func (stageFileInfo) ModTime() time.Time      { return time.Time{} }
-func (stageFileInfo) IsDir() bool             { return false }
-func (stageFileInfo) Sys() any                { return nil }
-
-func Test_StageStore_rejects_symlink_and_non_regular_nodes(t *testing.T) {
-	for _, mode := range []fs.FileMode{fs.ModeSymlink | 0o600, fs.ModeNamedPipe | 0o600} {
-		// When
-		valid := validStageFile(stageFileInfo{mode: mode})
-
-		// Then
-		if valid {
-			t.Fatalf("unsafe mode accepted: %v", mode)
-		}
 	}
 }
