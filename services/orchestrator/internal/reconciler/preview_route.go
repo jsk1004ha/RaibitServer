@@ -59,7 +59,14 @@ func (r *ServiceReconciler) promotePreviewRoute(ctx context.Context, work store.
 	if err != nil {
 		return err
 	}
-	manifest := kube.PreviewRouteManifest(work, runtime, intent.UID, intent.ResourceVersion, r.config.IngressClassName, service.Port)
+	manifest, err := kube.PreviewRouteManifest(work, runtime, intent.UID, intent.ResourceVersion, service.Port, kube.DeploymentOptions{
+		IngressClassName:        r.config.IngressClassName,
+		IngressCustomHTTPErrors: r.config.IngressCustomHTTPErrors,
+		IngressErrorMiddleware:  r.config.IngressErrorMiddleware,
+	})
+	if err != nil {
+		return err
+	}
 	file, err := r.writeManifest(work.Candidate.ID, []map[string]any{manifest}, "preview-route")
 	if err != nil {
 		return err

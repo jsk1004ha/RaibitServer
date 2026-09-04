@@ -77,7 +77,15 @@ func ObservePreviewObject(raw []byte, runtime store.PreviewRuntime, projectID, s
 	return store.PreviewOwnedObject{Group: group, Version: "v1", Kind: kind, Namespace: runtime.Namespace, Name: expectedName, UID: object.Metadata.UID, ResourceVersion: object.Metadata.ResourceVersion}, nil
 }
 
-func PreviewRouteManifest(work store.PreviewRouteWork, runtime store.PreviewRuntime, uid, resourceVersion, ingressClass string, port int) map[string]any {
+func PreviewRouteManifest(work store.PreviewRouteWork, runtime store.PreviewRuntime, uid, resourceVersion string, port int, options ...DeploymentOptions) (map[string]any, error) {
+	ingressClass, err := trustedIngressClassName(options)
+	if err != nil {
+		return nil, err
+	}
+	ingressErrors, err := trustedIngressErrorOptions(options)
+	if err != nil {
+		return nil, err
+	}
 	metadata := map[string]any{
 		"name": work.RouteName, "namespace": work.Namespace,
 		"labels": map[string]any{
@@ -92,12 +100,12 @@ func PreviewRouteManifest(work store.PreviewRouteWork, runtime store.PreviewRunt
 			"raibitserver.io/preview-generation":      strconv.Itoa(runtime.Generation),
 			"raibitserver.io/preview-backend-service": runtime.ServiceName,
 		},
-		"annotations": map[string]any{"raibitserver.io/hostname": work.StableHost},
+		"annotations": ingressAnnotations(work.StableHost, ingressErrors),
 	}
 	if uid != "" {
 		metadata["uid"], metadata["resourceVersion"] = uid, resourceVersion
 	}
-	return map[string]any{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": metadata, "spec": map[string]any{"ingressClassName": ingressClass, "rules": []any{map[string]any{"host": work.StableHost, "http": map[string]any{"paths": []any{map[string]any{"path": "/", "pathType": "Prefix", "backend": map[string]any{"service": map[string]any{"name": runtime.ServiceName, "port": map[string]any{"number": port}}}}}}}}}}
+	return map[string]any{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": metadata, "spec": map[string]any{"ingressClassName": ingressClass, "rules": []any{map[string]any{"host": work.StableHost, "http": map[string]any{"paths": []any{map[string]any{"path": "/", "pathType": "Prefix", "backend": map[string]any{"service": map[string]any{"name": runtime.ServiceName, "port": map[string]any{"number": port}}}}}}}}}}, nil
 }
 
 func ObservePreviewRoute(raw []byte, work store.PreviewRouteWork, runtime store.PreviewRuntime) (store.PreviewRouteObserved, error) {

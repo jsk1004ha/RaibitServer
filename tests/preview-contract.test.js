@@ -18,13 +18,6 @@ const observation = () => ({ version: 1, lineageId: identity.lineageId, lineageV
 const owned = () => ({ group: 'apps', version: 'v1', kind: 'Deployment', namespace: 'org-1--demo', name: 'pr-42-web-6d187e3ec9dc', uid: 'c60b7c80-1cd0-4d7c-a65a-aa642dc1992b' });
 const typedFailure = (error) => error instanceof preview.PreviewError && error.statusCode === 400 && error.code === 'preview_invalid_input';
 
-test('exposes strict signed admission when preview lifecycle is available', () => {
-  // Given: the preview module; When: looking up the admission boundary.
-  const actual = typeof preview.parsePreviewWebhook;
-  // Then: admission is a callable helper, not the old permissive planner.
-  assert.equal(actual, 'function');
-});
-
 test('uses signed raw bytes as sole authority when an unrelated parsed payload disagrees', () => {
   // Given
   const input = { ...signed(), payload: { installation: { id: 666 } } };

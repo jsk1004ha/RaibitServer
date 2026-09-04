@@ -49,6 +49,37 @@ func TestPreviewRoutePromotion_creates_stable_route_after_exact_candidate_health
 	}
 }
 
+func TestPreviewRoutePromotion_rejects_invalid_trusted_ingress_settings_before_apply(t *testing.T) {
+	// Given
+	runtime := map[string]any{"version": 1, "lineageId": "lineage-1", "deploymentId": "candidate", "generation": 2, "lineageVersion": 3, "stableHost": "preview--pr-1--org--demo.example.test", "probeHost": "preview--probe-0123456789abcdef0123456789abcdef.example.test", "namespace": "org-demo", "workloadName": "candidate-web", "serviceName": "candidate-web", "probeIngressName": "candidate-web", "routeName": "preview-route"}
+	path := writeState(t, map[string]any{
+		"projects":        []any{map[string]any{"id": "project-1", "organizationId": "org-1", "slug": "demo", "status": "ACTIVE"}},
+		"services":        []any{map[string]any{"id": "service-1", "projectId": "project-1", "slug": "web", "type": "web", "port": 8080, "status": "ACTIVE"}},
+		"previewLineages": []any{map[string]any{"id": "lineage-1", "organizationId": "org-1", "projectId": "project-1", "serviceId": "service-1", "state": "OPEN", "version": 3, "namespace": "org-demo", "routeName": "preview-route", "stableHost": "preview--pr-1--org--demo.example.test", "candidateDeploymentId": "candidate", "candidateGeneration": 2}},
+		"deployments":     []any{map[string]any{"id": "candidate", "projectId": "project-1", "serviceId": "service-1", "status": "READY", "publicHealthStatus": "HEALTHY", "deploymentType": "preview", "previewLineageId": "lineage-1", "previewGeneration": 2, "previewRuntime": runtime}},
+	})
+	outputDir := t.TempDir()
+	runner := &fakeRunner{stdoutFor: func(cmd string) string {
+		if strings.Contains(cmd, "get ingress/preview-route") {
+			return ""
+		}
+		return "ok\n"
+	}}
+	r := NewServiceReconcilerWithStore(Config{OutputDir: outputDir, IngressCustomHTTPErrors: "404,700"}, store.NewFileStore(path), runner)
+
+	// When
+	result, err := r.RunOnceResult(context.Background())
+
+	// Then
+	if err == nil || result == nil || strings.Contains(strings.Join(runner.commands, "\n"), " create ") || strings.Contains(strings.Join(runner.commands, "\n"), " replace ") {
+		t.Fatalf("invalid trusted ingress settings must reject before apply: result=%#v commands=%#v err=%v", result, runner.commands, err)
+	}
+	entries, readErr := os.ReadDir(outputDir)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("invalid trusted ingress settings must not write an apply manifest: entries=%#v err=%v", entries, readErr)
+	}
+}
+
 func TestPreviewRoutePromotion_replaces_existing_lineage_route_after_resume(t *testing.T) {
 	// Given: the lineage still has a healthy candidate and Kubernetes has the
 	// lineage-owned route pointing at the previous service, as after a crash.

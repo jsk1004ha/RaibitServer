@@ -69,6 +69,15 @@ func TestPreviewRoutePromotion_uses_authenticated_native_kubernetes_command(t *t
 				object = items[0].(map[string]any)
 			}
 			metadata := object["metadata"].(map[string]any)
+			annotations, ok := metadata["annotations"].(map[string]any)
+			if !ok || len(annotations) != 3 || annotations["raibitserver.io/hostname"] != "preview--pr-1--org--demo.example.test" || annotations["nginx.ingress.kubernetes.io/custom-http-errors"] != "500,502,504" || annotations["traefik.ingress.kubernetes.io/router.middlewares"] != "platform-errors@kubernetescrd" {
+				http.Error(response, "preview route annotations do not satisfy configured admission", http.StatusBadRequest)
+				return
+			}
+			if object["spec"].(map[string]any)["ingressClassName"] != "traefik" {
+				http.Error(response, "preview route ingress class does not satisfy configured admission", http.StatusBadRequest)
+				return
+			}
 			metadata["uid"], metadata["resourceVersion"] = "wire-route-uid", "31"
 			route, _ = json.Marshal(object)
 			response.WriteHeader(http.StatusCreated)
@@ -101,7 +110,7 @@ func TestPreviewRoutePromotion_uses_authenticated_native_kubernetes_command(t *t
 		"previewLineages": []any{map[string]any{"id": "lineage-wire", "organizationId": "org-wire", "projectId": "project-wire", "serviceId": "service-wire", "state": "OPEN", "version": 1, "namespace": "org-demo", "routeName": "preview-route", "stableHost": "preview--pr-1--org--demo.example.test", "candidateDeploymentId": "candidate-wire", "candidateGeneration": 1}},
 		"deployments":     []any{map[string]any{"id": "candidate-wire", "projectId": "project-wire", "serviceId": "service-wire", "status": "READY", "publicHealthStatus": "HEALTHY", "deploymentType": "preview", "previewLineageId": "lineage-wire", "previewGeneration": 1, "previewRuntime": runtime}},
 	})
-	r := NewServiceReconcilerWithStore(Config{OutputDir: t.TempDir()}, store.NewFileStore(path), command.OSRunner{})
+	r := NewServiceReconcilerWithStore(Config{OutputDir: t.TempDir(), IngressClassName: "traefik", IngressCustomHTTPErrors: "504,500,502", IngressErrorMiddleware: "platform-errors@kubernetescrd"}, store.NewFileStore(path), command.OSRunner{})
 
 	// When
 	result, err := r.RunOnceResult(context.Background())

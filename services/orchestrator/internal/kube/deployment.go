@@ -510,16 +510,18 @@ func serviceManifest(spec AppServiceSpec, labels map[string]any) map[string]any 
 }
 
 func ingressManifest(spec AppServiceSpec, labels map[string]any, ingressClassName string, ingressErrors ingressErrorOptions) map[string]any {
-	annotations := map[string]any{
-		"raibitserver.io/hostname": spec.Host,
-	}
+	return map[string]any{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": map[string]any{"name": spec.Name, "namespace": spec.Namespace, "labels": labels, "annotations": ingressAnnotations(spec.Host, ingressErrors)}, "spec": map[string]any{"ingressClassName": ingressClassName, "rules": []any{map[string]any{"host": spec.Host, "http": map[string]any{"paths": []any{map[string]any{"path": "/", "pathType": "Prefix", "backend": map[string]any{"service": map[string]any{"name": spec.Name, "port": map[string]any{"number": spec.Port}}}}}}}}}}
+}
+
+func ingressAnnotations(host string, ingressErrors ingressErrorOptions) map[string]any {
+	annotations := map[string]any{"raibitserver.io/hostname": host}
 	if !ingressErrors.disabled {
 		annotations["nginx.ingress.kubernetes.io/custom-http-errors"] = ingressErrors.customHTTPErrors
 	}
 	if !ingressErrors.disabled && ingressErrors.middleware != "" {
 		annotations["traefik.ingress.kubernetes.io/router.middlewares"] = ingressErrors.middleware
 	}
-	return map[string]any{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": map[string]any{"name": spec.Name, "namespace": spec.Namespace, "labels": labels, "annotations": annotations}, "spec": map[string]any{"ingressClassName": ingressClassName, "rules": []any{map[string]any{"host": spec.Host, "http": map[string]any{"paths": []any{map[string]any{"path": "/", "pathType": "Prefix", "backend": map[string]any{"service": map[string]any{"name": spec.Name, "port": map[string]any{"number": spec.Port}}}}}}}}}}
+	return annotations
 }
 
 func networkPolicyManifest(spec AppServiceSpec, labels map[string]any, ingressGatewayNamespace string) map[string]any {
