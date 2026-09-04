@@ -142,8 +142,16 @@ func (s stageStore) consumeIfPresent(engine Engine, action Action, direction Dir
 			result, resultErr = Stage{}, ErrStage
 		}
 	}()
+	hidden, hiddenErr := hiddenClaimsPresent(root)
+	if hiddenErr != nil || hidden {
+		return Stage{}, true, ErrStage
+	}
 	if _, err := root.root.Lstat(StageFileName); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
+			hidden, hiddenErr := hiddenClaimsPresent(root)
+			if hiddenErr != nil || hidden {
+				return Stage{}, true, ErrStage
+			}
 			return Stage{}, false, nil
 		}
 		return Stage{}, true, ErrStage

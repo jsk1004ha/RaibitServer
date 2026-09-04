@@ -29,7 +29,7 @@ func claimScratch(root stageRoot, spec scratchClaimSpec) (claimedScratch, error)
 	if err != nil {
 		return claimedScratch{}, ErrStage
 	}
-	claimed := ".recovery-stage-claim-" + nonce
+	claimed := stageClaimPrefix + nonce
 	if err := root.root.Rename(spec.name, claimed); err != nil {
 		return claimedScratch{}, ErrStage
 	}

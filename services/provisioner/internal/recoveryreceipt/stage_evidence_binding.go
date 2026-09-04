@@ -99,7 +99,7 @@ func (s stageEvidenceStore) consume(stage Stage, verifier EvidenceVerifier) (res
 			resultErr = ErrStage
 		}
 	}()
-	binding, err := claimScratch(root, scratchClaimSpec{name: StageEvidenceBindingFileName, maxBytes: MaxBytes})
+	binding, err := claimScratch(root, scratchClaimSpec{name: StageEvidenceBindingFileName, maxBytes: MaxBytes, beforeOpen: s.beforeBindingOpen})
 	if err != nil {
 		return ErrStage
 	}

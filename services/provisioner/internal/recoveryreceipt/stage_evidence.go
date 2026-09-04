@@ -26,10 +26,11 @@ func (d EvidenceDescriptor) valid() bool {
 type EvidenceVerifier func(io.Reader) error
 
 type stageEvidenceStore struct {
-	path         string
-	now          func() time.Time
-	beforeOpen   func(*os.Root, string) error
-	beforeRemove func(*os.Root, string) error
+	path              string
+	now               func() time.Time
+	beforeOpen        func(*os.Root, string) error
+	beforeBindingOpen func(*os.Root, string) error
+	beforeRemove      func(*os.Root, string) error
 }
 
 func newStageEvidenceStore(path string) stageEvidenceStore {
@@ -126,12 +127,20 @@ func (s stageEvidenceStore) companionsPresent() (present bool, resultErr error) 
 			present, resultErr = false, ErrStage
 		}
 	}()
+	hidden, hiddenErr := hiddenClaimsPresent(root)
+	if hiddenErr != nil || hidden {
+		return true, ErrStage
+	}
 	for _, name := range []string{StageEvidenceFileName, StageEvidenceBindingFileName} {
 		if _, err := root.root.Lstat(name); err == nil {
 			return true, nil
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return false, ErrStage
 		}
+	}
+	hidden, hiddenErr = hiddenClaimsPresent(root)
+	if hiddenErr != nil || hidden {
+		return true, ErrStage
 	}
 	return false, nil
 }
