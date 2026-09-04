@@ -2,7 +2,6 @@ package backup
 
 import (
 	"context"
-	"io"
 )
 
 // RecoveryAdapter is engine-neutral. Implementations select only fixed commands
@@ -10,6 +9,6 @@ import (
 // receipt only after their engine-specific verification succeeds.
 type RecoveryAdapter interface {
 	Engine() Engine
-	Dump(context.Context, DumpRequest, io.WriteCloser, JobRunner) (JobReceipt, error)
-	Restore(context.Context, RestoreRequest, io.ReadCloser, JobRunner) (VerificationReceipt, error)
+	Dump(context.Context, DumpRequest, *StreamHandoff, JobRunner) (DumpResult, error)
+	Restore(context.Context, RestoreRequest, *StreamHandoff, JobRunner) (VerificationReceipt, error)
 }

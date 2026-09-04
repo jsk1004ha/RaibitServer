@@ -1,47 +1,64 @@
 package backup
 
 import (
-	"context"
-	"errors"
-	"io"
-	"regexp"
+	"path"
+	"slices"
 	"strings"
 	"time"
 )
 
-var imageReference = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$`)
-
-type FixedCommand struct {
+type DirectCommand struct {
 	executable string
 	args       []string
 }
 
-func NewFixedCommand(executable string, args ...string) (FixedCommand, error) {
-	command := FixedCommand{executable: executable, args: append([]string(nil), args...)}
-	if !validFixedCommand(command) {
-		return FixedCommand{}, ErrRecoveryJob
+// newDirectCommand is intentionally package-private: engine adapters own every argv byte.
+func newDirectCommand(executable string, args ...string) (DirectCommand, error) {
+	base := path.Base(executable)
+	if len(executable) == 0 || len(executable) > 256 || base != executable || strings.ContainsAny(executable, "\x00/\\ \t\r\n") || isShell(base) || len(args) > 64 {
+		return DirectCommand{}, ErrRecoveryJob
 	}
-	return command, nil
-}
-
-func fixedLiteral(value string) bool {
-	return len(value) > 0 && len(value) <= 512 && !strings.ContainsAny(value, " \t\r\n$`'\";|&<>(){}[]!*?\\")
-}
-
-func validFixedCommand(command FixedCommand) bool {
-	if !fixedLiteral(command.executable) || len(command.args) > 32 {
-		return false
-	}
-	for _, arg := range command.args {
-		if !fixedLiteral(arg) {
-			return false
+	for _, arg := range args {
+		if len(arg) == 0 || len(arg) > 4096 || strings.ContainsRune(arg, '\x00') || strings.Contains(arg, "$(") {
+			return DirectCommand{}, ErrRecoveryJob
 		}
 	}
-	return true
+	return DirectCommand{executable: executable, args: slices.Clone(args)}, nil
 }
 
-func (c FixedCommand) Executable() string { return c.executable }
-func (c FixedCommand) Args() []string     { return append([]string(nil), c.args...) }
+func isShell(executable string) bool {
+	switch strings.ToLower(executable) {
+	case "sh", "bash", "dash", "zsh", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "env":
+		return true
+	}
+	return false
+}
+
+func (c DirectCommand) Executable() string { return c.executable }
+func (c DirectCommand) Args() []string     { return slices.Clone(c.args) }
+
+type StreamBinding uint8
+
+const (
+	StreamNone StreamBinding = iota
+	StreamStdin
+	StreamStdout
+)
+
+type CommandStep struct {
+	command DirectCommand
+	binding StreamBinding
+}
+
+func newCommandStep(command DirectCommand, binding StreamBinding) (CommandStep, error) {
+	if command.executable == "" || binding > StreamStdout {
+		return CommandStep{}, ErrRecoveryJob
+	}
+	return CommandStep{command: command, binding: binding}, nil
+}
+
+func (s CommandStep) Command() DirectCommand { return s.command }
+func (s CommandStep) Binding() StreamBinding { return s.binding }
 
 type SecretEnv struct {
 	name string
@@ -58,94 +75,168 @@ func NewSecretEnv(name string, ref SecretRef) (SecretEnv, error) {
 func (e SecretEnv) Name() string   { return e.name }
 func (e SecretEnv) Ref() SecretRef { return e.ref }
 
-type IsolatedJobSpec struct {
-	Namespace           string
-	Image               string
-	Command             FixedCommand
-	Secrets             []SecretEnv
-	RunAsUser           int64
-	CPUMilli, MemoryMiB int64
-	Deadline            time.Duration
+type SecretFile struct {
+	mountPath string
+	ref       SecretRef
 }
 
-// IsolatedJob is a non-root, fixed-argv execution request. Its construction
-// encodes the required bounded resources; no shell or plaintext secret exists.
-type IsolatedJob struct{ spec IsolatedJobSpec }
+func NewSecretFile(mountPath string, ref SecretRef) (SecretFile, error) {
+	clean := path.Clean(mountPath)
+	if clean != mountPath || !strings.HasPrefix(clean, "/var/run/raibit-recovery/") || clean == "/var/run/raibit-recovery" || !validSecretRef(ref) {
+		return SecretFile{}, ErrRecoveryJob
+	}
+	return SecretFile{mountPath: mountPath, ref: ref}, nil
+}
+
+func (f SecretFile) MountPath() string { return f.mountPath }
+func (f SecretFile) Ref() SecretRef    { return f.ref }
+func (SecretFile) ReadOnly() bool      { return true }
+
+type RuntimeSecurity struct {
+	runAsUser                              int64
+	runAsNonRoot, readOnlyRootFilesystem   bool
+	allowPrivilegeEscalation, automountSAT bool
+	dropAllCapabilities                    bool
+}
+
+func (s RuntimeSecurity) RunAsUser() int64                   { return s.runAsUser }
+func (s RuntimeSecurity) RunAsNonRoot() bool                 { return s.runAsNonRoot }
+func (s RuntimeSecurity) ReadOnlyRootFilesystem() bool       { return s.readOnlyRootFilesystem }
+func (s RuntimeSecurity) AllowPrivilegeEscalation() bool     { return s.allowPrivilegeEscalation }
+func (s RuntimeSecurity) AutomountServiceAccountToken() bool { return s.automountSAT }
+func (s RuntimeSecurity) DropAllCapabilities() bool          { return s.dropAllCapabilities }
+
+type NetworkPolicy interface{ recoveryNetworkPolicy() }
+
+type EndpointEgressPolicy struct {
+	host        string
+	port        uint16
+	defaultDeny bool
+}
+
+func (EndpointEgressPolicy) recoveryNetworkPolicy() {}
+func (p EndpointEgressPolicy) Host() string         { return p.host }
+func (p EndpointEgressPolicy) Port() uint16         { return p.port }
+func (p EndpointEgressPolicy) DefaultDeny() bool    { return p.defaultDeny }
+
+type VolumeOnlyPolicy struct {
+	volume, root string
+	defaultDeny  bool
+}
+
+func (VolumeOnlyPolicy) recoveryNetworkPolicy() {}
+func (p VolumeOnlyPolicy) Volume() string       { return p.volume }
+func (p VolumeOnlyPolicy) Root() string         { return p.root }
+func (p VolumeOnlyPolicy) DefaultDeny() bool    { return p.defaultDeny }
+func (VolumeOnlyPolicy) AllowsEgress() bool     { return false }
+
+type FenceIdentity struct {
+	operationID string
+	attempt     int
+}
+
+func (f FenceIdentity) OperationID() string { return f.operationID }
+func (f FenceIdentity) Attempt() int        { return f.attempt }
+
+type IsolatedJobSpec struct {
+	Namespace, Image, OperationID                string
+	Attempt                                      int
+	Connection                                   Connection
+	Steps                                        []CommandStep
+	Secrets                                      []SecretEnv
+	SecretFiles                                  []SecretFile
+	RunAsUser, CPUMilli, MemoryMiB, EphemeralMiB int64
+	Deadline                                     time.Duration
+}
+
+type IsolatedJob struct {
+	spec     IsolatedJobSpec
+	security RuntimeSecurity
+	policy   NetworkPolicy
+	labels   map[string]string
+	fence    FenceIdentity
+}
 
 func NewIsolatedJob(spec IsolatedJobSpec) (IsolatedJob, error) {
-	if !recoveryPart.MatchString(spec.Namespace) || !imageReference.MatchString(spec.Image) || !validFixedCommand(spec.Command) || spec.RunAsUser < 1 || spec.CPUMilli < 1 || spec.CPUMilli > 4000 || spec.MemoryMiB < 16 || spec.MemoryMiB > 8192 || spec.Deadline < time.Second || spec.Deadline > MaxDuration || len(spec.Secrets) > 16 {
+	if !recoveryPart.MatchString(spec.Namespace) || !digestImagePattern.MatchString(spec.Image) || !recoveryPart.MatchString(spec.OperationID) || spec.Attempt < 1 || spec.Connection.spec.ResourceID == "" || spec.RunAsUser < 1 || spec.CPUMilli < 1 || spec.CPUMilli > 4000 || spec.MemoryMiB < 16 || spec.MemoryMiB > 8192 || spec.EphemeralMiB < 16 || spec.EphemeralMiB > 16384 || spec.Deadline < time.Second || spec.Deadline > MaxDuration || len(spec.Steps) == 0 || len(spec.Steps) > 8 || len(spec.Secrets) > 16 || len(spec.SecretFiles) > 8 {
 		return IsolatedJob{}, ErrRecoveryJob
 	}
-	seen := make(map[string]struct{}, len(spec.Secrets))
-	for _, env := range spec.Secrets {
-		if env.ref.namespace != spec.Namespace || !secretEnvName.MatchString(env.name) || !validSecretRef(env.ref) {
+	streamBindings := 0
+	for _, step := range spec.Steps {
+		if step.command.executable == "" || step.binding > StreamStdout {
 			return IsolatedJob{}, ErrRecoveryJob
 		}
-		if _, exists := seen[env.name]; exists {
-			return IsolatedJob{}, ErrRecoveryJob
+		if step.binding != StreamNone {
+			streamBindings++
 		}
-		seen[env.name] = struct{}{}
 	}
-	spec.Secrets = append([]SecretEnv(nil), spec.Secrets...)
-	return IsolatedJob{spec: spec}, nil
+	if streamBindings != 1 || !validJobSecrets(spec) || commandLeaksEndpoint(spec.Steps, spec.Connection.Endpoint()) {
+		return IsolatedJob{}, ErrRecoveryJob
+	}
+	policy := policyFor(spec.Connection.Endpoint())
+	if policy == nil {
+		return IsolatedJob{}, ErrRecoveryJob
+	}
+	spec.Steps, spec.Secrets, spec.SecretFiles = slices.Clone(spec.Steps), slices.Clone(spec.Secrets), slices.Clone(spec.SecretFiles)
+	fence := FenceIdentity{operationID: spec.OperationID, attempt: spec.Attempt}
+	labels := map[string]string{"raibitserver.io/owned-by": "recovery", "raibitserver.io/operation": spec.OperationID, "raibitserver.io/resource": spec.Connection.ResourceID()}
+	security := RuntimeSecurity{runAsUser: spec.RunAsUser, runAsNonRoot: true, readOnlyRootFilesystem: true, dropAllCapabilities: true}
+	return IsolatedJob{spec: spec, security: security, policy: policy, labels: labels, fence: fence}, nil
+}
+
+func validJobSecrets(spec IsolatedJobSpec) bool {
+	if spec.Connection.Engine() == EngineSQLite {
+		return len(spec.Secrets) == 0 && len(spec.SecretFiles) == 0
+	}
+	seen := make(map[string]struct{}, len(spec.Secrets)+len(spec.SecretFiles))
+	boundCredential := false
+	for _, secret := range spec.Secrets {
+		if secret.ref.namespace != spec.Namespace || !secretEnvName.MatchString(secret.name) || !validSecretRef(secret.ref) {
+			return false
+		}
+		if _, exists := seen["env:"+secret.name]; exists {
+			return false
+		}
+		boundCredential = boundCredential || secret.ref.sameObject(spec.Connection.spec.Secret)
+		seen["env:"+secret.name] = struct{}{}
+	}
+	for _, secret := range spec.SecretFiles {
+		if secret.ref.namespace != spec.Namespace || !strings.HasPrefix(secret.mountPath, "/var/run/raibit-recovery/") || !validSecretRef(secret.ref) {
+			return false
+		}
+		if _, exists := seen["file:"+secret.mountPath]; exists {
+			return false
+		}
+		boundCredential = boundCredential || secret.ref.sameObject(spec.Connection.spec.Secret)
+		seen["file:"+secret.mountPath] = struct{}{}
+	}
+	return boundCredential
+}
+
+func policyFor(endpoint Endpoint) NetworkPolicy {
+	switch value := endpoint.(type) {
+	case NetworkEndpoint:
+		return EndpointEgressPolicy{host: value.spec.Host, port: value.spec.Port, defaultDeny: true}
+	case SQLiteEndpoint:
+		return VolumeOnlyPolicy{volume: value.spec.Volume, root: value.spec.Root, defaultDeny: true}
+	default:
+		return nil
+	}
 }
 
 func (j IsolatedJob) Spec() IsolatedJobSpec {
-	j.spec.Secrets = append([]SecretEnv(nil), j.spec.Secrets...)
+	j.spec.Steps, j.spec.Secrets, j.spec.SecretFiles = slices.Clone(j.spec.Steps), slices.Clone(j.spec.Secrets), slices.Clone(j.spec.SecretFiles)
 	return j.spec
 }
-func (j IsolatedJob) Command() FixedCommand { return j.spec.Command }
+func (j IsolatedJob) Security() RuntimeSecurity    { return j.security }
+func (j IsolatedJob) NetworkPolicy() NetworkPolicy { return j.policy }
+func (j IsolatedJob) Fence() FenceIdentity         { return j.fence }
+func (j IsolatedJob) Labels() map[string]string    { return cloneMap(j.labels) }
 
-type JobStream struct {
-	input  io.ReadCloser
-	output io.WriteCloser
-}
-
-func NewDumpStream(output io.WriteCloser) (JobStream, error) {
-	if output == nil {
-		return JobStream{}, ErrRecoveryStream
+func cloneMap(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
 	}
-	return JobStream{output: output}, nil
-}
-
-func NewRestoreStream(input io.ReadCloser) (JobStream, error) {
-	if input == nil {
-		return JobStream{}, ErrRecoveryStream
-	}
-	return JobStream{input: input}, nil
-}
-
-func (s JobStream) Input() io.ReadCloser   { return s.input }
-func (s JobStream) Output() io.WriteCloser { return s.output }
-func (s JobStream) Close() error {
-	var errs []error
-	if s.input != nil {
-		errs = append(errs, s.input.Close())
-	}
-	if s.output != nil {
-		errs = append(errs, s.output.Close())
-	}
-	return errors.Join(errs...)
-}
-
-type JobReceipt struct {
-	name  string
-	bytes int64
-}
-
-func NewJobReceipt(name string, streamedBytes int64) (JobReceipt, error) {
-	if !recoveryPart.MatchString(name) || streamedBytes < 0 || streamedBytes > MaxStoredBytes {
-		return JobReceipt{}, ErrRecoveryJob
-	}
-	return JobReceipt{name: name, bytes: streamedBytes}, nil
-}
-
-func (r JobReceipt) Name() string { return r.name }
-func (r JobReceipt) Bytes() int64 { return r.bytes }
-
-// JobRunner owns JobStream and MUST close it on every outcome, including a
-// context cancellation. Implementations stream directly; they must not buffer
-// recovery artifacts in memory.
-type JobRunner interface {
-	Run(context.Context, IsolatedJob, JobStream) (JobReceipt, error)
+	return result
 }
