@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { EvidenceError, loadProductionInputs, readJson } from './operator-inputs.mjs';
-import { runProductionEvidence } from './orchestrator.mjs';
+import { parseFaultCase, runProductionEvidence } from './orchestrator.mjs';
 
 export function parseArguments(args) {
   const accepted = new Set(['--profile', '--scenario', '--fault-matrix', '--attempt-dir']);
@@ -24,15 +24,10 @@ export function parseArguments(args) {
 }
 
 export function parseMatrix(value) {
-  const caseKeys = ['id', 'boundary', 'mode', 'expectedReason'];
-  const boundaries = ['preflight', 'auth-source', 'supply-chain', 'runtime', 'observability', 'resources', 'backup-sql', 'backup-nosql', 'preview', 'rollback', 'cleanup', 'verifier'];
-  const modes = ['not-run', 'command-failure', 'identity-mismatch', 'artifact-tamper', 'secret-output', 'cleanup-leak'];
   if (!value || Object.keys(value).length !== 2 || value.schema !== 'raibitserver.production-evidence-fault-matrix/v1'
     || !Array.isArray(value.cases) || value.cases.length === 0
-    || value.cases.some((item) => !item || Object.keys(item).length !== caseKeys.length || caseKeys.some((key) => !Object.hasOwn(item, key))
-      || typeof item.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(item.id) || !boundaries.includes(item.boundary)
-      || !modes.includes(item.mode) || typeof item.expectedReason !== 'string' || !item.expectedReason)
     || new Set(value.cases.map(({ id }) => id)).size !== value.cases.length) throw new EvidenceError('invalid_fault_matrix');
+  for (const item of value.cases) parseFaultCase(item);
   return value;
 }
 

@@ -109,7 +109,7 @@ test('Given public production arguments, When duplicates, unknowns, or mixed mod
 test('Given the exported orchestrator, When scenario and fault mode are not the exact union, Then it rejects before setup', async () => {
   const base = { profile: 'train-a', attemptDir: path.resolve('attempt'), inputs: inputs(), executeStep: null,
     clock: { now: () => new Date() }, uuid: randomUUID, fixture: false };
-  const fault = { id: 'runtime-failure', boundary: 'runtime', mode: 'command-failure', expectedReason: 'runtime_failed' };
+  const fault = { id: 'runtime-failure', boundary: 'runtime', mode: 'command-failure', expectedReason: 'command_failure' };
   await assert.rejects(runProductionEvidence({ ...base, scenario: 'typo', faultMatrix: fault }), { reason: 'invalid_arguments' });
   await assert.rejects(runProductionEvidence({ ...base, scenario: null, faultMatrix: null }), { reason: 'invalid_arguments' });
   await assert.rejects(runProductionEvidence({ ...base, scenario: 'happy', faultMatrix: fault }), { reason: 'invalid_arguments' });
@@ -129,9 +129,12 @@ test('Given a fixed step wrapper, When arguments are parsed, Then no operator-se
 });
 
 test('Given a fault matrix, When its strict boundary or mode contract drifts, Then parsing fails closed', () => {
-  const value = { schema: 'raibitserver.production-evidence-fault-matrix/v1', cases: [{ id: 'runtime-failure', boundary: 'runtime', mode: 'command-failure', expectedReason: 'runtime_failed' }] };
+  const value = { schema: 'raibitserver.production-evidence-fault-matrix/v1', cases: [{ id: 'runtime-failure', boundary: 'runtime', mode: 'command-failure', expectedReason: 'command_failure' }] };
   assert.deepEqual(parseMatrix(value), value);
   assert.throws(() => parseMatrix({ ...value, cases: [{ ...value.cases[0], step: 'runtime' }] }), { reason: 'invalid_fault_matrix' });
+  assert.throws(() => parseMatrix({ ...value, cases: [{ ...value.cases[0], expectedReason: 'chosen_by_fixture' }] }), { reason: 'invalid_fault_matrix' });
+  assert.throws(() => parseMatrix({ ...value, cases: [{ ...value.cases[0], boundary: 'preflight' }] }), { reason: 'invalid_fault_matrix' });
+  assert.throws(() => parseMatrix({ ...value, cases: [{ ...value.cases[0], boundary: 'verifier', mode: 'cleanup-leak', expectedReason: 'cleanup_failed' }] }), { reason: 'invalid_fault_matrix' });
 });
 
 test('Given a complete immutable receipt, When parsed, Then identity and redaction are retained', () => {

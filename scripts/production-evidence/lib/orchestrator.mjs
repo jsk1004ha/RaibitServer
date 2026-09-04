@@ -13,12 +13,28 @@ import { verifyEvidenceFile } from '../../verify-production-evidence.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const RUN_BUDGET_MS = 4 * 60 * 60_000;
+const FAULT_REASON = Object.freeze({ 'not-run': 'not_run', 'command-failure': 'command_failure',
+  'identity-mismatch': 'identity_mismatch', 'artifact-tamper': 'artifact_digest_mismatch',
+  'secret-output': 'redaction', 'cleanup-leak': 'cleanup_failed' });
 
 function iso(clock) {
   const value = clock.now();
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) throw new EvidenceError('invalid_clock');
   return date.toISOString();
+}
+
+export function parseFaultCase(value) {
+  const faultKeys = ['id', 'boundary', 'mode', 'expectedReason'];
+  const boundaries = ['preflight', ...STEP_NAMES, 'verifier'];
+  const verifierModes = ['identity-mismatch', 'artifact-tamper', 'secret-output'];
+  if (!value || typeof value !== 'object' || Object.keys(value).length !== faultKeys.length
+    || faultKeys.some((key) => !Object.hasOwn(value, key)) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value.id)
+    || !boundaries.includes(value.boundary) || !Object.hasOwn(FAULT_REASON, value.mode)
+    || value.expectedReason !== FAULT_REASON[value.mode]
+    || (value.boundary === 'preflight' && value.mode !== 'not-run')
+    || (value.boundary === 'verifier' && !verifierModes.includes(value.mode))) throw new EvidenceError('invalid_fault_matrix');
+  return Object.freeze(value);
 }
 
 function validateOptions(options) {
@@ -29,13 +45,7 @@ function validateOptions(options) {
     || !path.isAbsolute(options.attemptDir) || typeof options.clock?.now !== 'function' || typeof options.uuid !== 'function'
     || !(options.executeStep === null || typeof options.executeStep === 'function') || typeof options.fixture !== 'boolean') throw new EvidenceError('invalid_arguments');
   if (options.faultMatrix !== null) {
-    const faultKeys = ['id', 'boundary', 'mode', 'expectedReason'];
-    const boundaries = ['preflight', ...STEP_NAMES, 'verifier'];
-    const modes = ['not-run', 'command-failure', 'identity-mismatch', 'artifact-tamper', 'secret-output', 'cleanup-leak'];
-    if (typeof options.faultMatrix !== 'object' || Object.keys(options.faultMatrix).length !== faultKeys.length
-      || faultKeys.some((key) => !Object.hasOwn(options.faultMatrix, key)) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(options.faultMatrix.id)
-      || !boundaries.includes(options.faultMatrix.boundary) || !modes.includes(options.faultMatrix.mode)
-      || typeof options.faultMatrix.expectedReason !== 'string' || !options.faultMatrix.expectedReason) throw new EvidenceError('invalid_fault_matrix');
+    parseFaultCase(options.faultMatrix);
   }
 }
 
