@@ -31,6 +31,9 @@ func recoveryJobManifest(job IsolatedJob, name, snapshotName, snapshotUID string
 	if !providerUIDPattern.MatchString(snapshotUID) {
 		return nil, 0, ErrRecoveryJob
 	}
+	if endpoint, ok := job.spec.Connection.Endpoint().(NetworkEndpoint); ok && endpoint.spec.Port != recoveryProviderPort(job.spec.Connection.Engine()) {
+		return nil, 0, ErrRecoveryJob
+	}
 	containers := make([]any, len(job.spec.Steps))
 	streamStep := -1
 	for i, step := range job.spec.Steps {
@@ -114,16 +117,36 @@ func recoveryStepContainer(job IsolatedJob, step CommandStep, index int, snapsho
 }
 
 func recoveryNetworkPolicyManifest(job IsolatedJob, name, authority string) map[string]any {
-	endpoint := job.spec.Connection.Endpoint().(NetworkEndpoint)
 	labels := expectedJobLabels(job)
-	providerLabels := map[string]any{recoveryAuthorityLabel: authority}
+	engine := job.spec.Connection.Engine()
+	provider := string(engine)
+	providerPort := recoveryProviderPort(engine)
+	metadataLabels := expectedJobLabels(job)
+	metadataLabels["raibitserver.io/provider"] = provider
+	providerLabels := map[string]any{recoveryAuthorityLabel: authority, "raibitserver.io/provider": provider}
 	return map[string]any{
-		"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": map[string]any{"name": name, "namespace": job.spec.Namespace, "labels": labels},
+		"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": map[string]any{"name": name, "namespace": job.spec.Namespace, "labels": metadataLabels},
 		"spec": map[string]any{"podSelector": map[string]any{"matchLabels": labels}, "policyTypes": []any{"Ingress", "Egress"}, "ingress": []any{}, "egress": []any{
-			map[string]any{"to": []any{map[string]any{"podSelector": map[string]any{"matchLabels": providerLabels}}}, "ports": []any{map[string]any{"protocol": "TCP", "port": endpoint.spec.Port}}},
+			map[string]any{"to": []any{map[string]any{"podSelector": map[string]any{"matchLabels": providerLabels}}}, "ports": []any{map[string]any{"protocol": "TCP", "port": providerPort}}},
 			map[string]any{"to": []any{map[string]any{"namespaceSelector": map[string]any{"matchLabels": map[string]any{"kubernetes.io/metadata.name": "kube-system"}}, "podSelector": map[string]any{"matchLabels": map[string]any{"k8s-app": "kube-dns"}}}}, "ports": []any{map[string]any{"protocol": "UDP", "port": 53}, map[string]any{"protocol": "TCP", "port": 53}}},
 		}},
 	}
+}
+
+func recoveryProviderPort(engine Engine) uint16 {
+	switch engine {
+	case EnginePostgreSQL:
+		return 5432
+	case EngineMySQL, EngineMariaDB:
+		return 3306
+	case EngineMongoDB:
+		return 27017
+	case EngineRedis, EngineValkey:
+		return 6379
+	case EngineSQLite:
+		return 0
+	}
+	return 0
 }
 
 type kubernetesJobObservation struct {
