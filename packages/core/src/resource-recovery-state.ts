@@ -48,6 +48,15 @@ export function recoverySet(state: RecoveryState, operation: RecoveryBackup | Re
 export function createRecovery(state: RecoveryState, request: RecoveryRequest, kind: RecoveryKind) {
   const body = recoveryBody(request.body, kind === 'restore');
   const now = recoveryNow(request.now);
+  const fingerprint = recoveryHash(canonicalRecoveryJson({ formatVersion: body.formatVersion, sourceId: request.sourceId, name: body.name ?? null, kind }));
+  const existing = kind === 'backup'
+    ? state.backups.find(row => row.resourceId === request.sourceId && row.organizationId === request.organizationId && row.requestIdempotencyKey === body.requestIdempotencyKey)
+    : state.restores.find(row => row.backupId === request.sourceId && row.organizationId === request.organizationId && row.requestIdempotencyKey === body.requestIdempotencyKey);
+  if (existing) {
+    recoveryAuthorized(state, request, kind === 'restore' ? 'backup:restore' : 'backup:manage');
+    if (existing.requestFingerprint !== fingerprint) throw new RecoveryError('IDEMPOTENCY_CONFLICT');
+    return { operation: existing, job: recoveryJob(state, existing.id), replay: true };
+  }
   if (kind === 'backup') {
     const resource = state.resources.find(row => row.id === request.sourceId);
     if (!resource || !state.projects.some(project => project.id === resource.projectId && project.organizationId === request.organizationId)) throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
@@ -57,14 +66,6 @@ export function createRecovery(state: RecoveryState, request: RecoveryRequest, k
   recoveryAuthorized(state, request, kind === 'restore' ? 'backup:restore' : 'backup:manage');
   const sourceBackup = kind === 'restore' ? recoveryBackup(state, request.sourceId, request.organizationId) : null;
   const source = activeRecoveryResource(state, sourceBackup?.resourceId ?? request.sourceId, request.organizationId);
-  const fingerprint = recoveryHash(canonicalRecoveryJson({ formatVersion: body.formatVersion, sourceId: request.sourceId, name: body.name ?? null, kind }));
-  const existing = kind === 'backup'
-    ? state.backups.find(row => row.resourceId === source.id && row.organizationId === request.organizationId && row.requestIdempotencyKey === body.requestIdempotencyKey)
-    : state.restores.find(row => row.backupId === request.sourceId && row.organizationId === request.organizationId && row.requestIdempotencyKey === body.requestIdempotencyKey);
-  if (existing) {
-    if (existing.requestFingerprint !== fingerprint) throw new RecoveryError('IDEMPOTENCY_CONFLICT');
-    return { operation: existing, job: recoveryJob(state, existing.id), replay: true };
-  }
   if (source.status !== 'READY') throw new RecoveryError('SOURCE_NOT_READY');
   if (!['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey'].includes(source.engine)) throw new RecoveryError('RECOVERY_ENGINE_UNSUPPORTED');
   const provenance = captureRecoveryProvenance(source);

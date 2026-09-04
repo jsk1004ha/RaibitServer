@@ -126,6 +126,69 @@ test('recovery API core makes mutation audits replay-safe and deletion asynchron
   assert.deepEqual(Object.keys(state.auditEvents[0].metadata).sort(), ['engine', 'status']);
 });
 
+test('recovery API core replays backup and restore before inspecting retired source lifecycle', async () => {
+  // Given committed backup and restore requests whose source is later retired, when exact keys replay, then the original rows return without side effects.
+  const state = fixture();
+  let quotaCalls = 0;
+  const repository = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => { quotaCalls += 1; });
+  const backupInput = request('retired-backup-replay');
+  const backup = await repository.createBackup(backupInput);
+  await readyBackup(repository, backup.operation.id);
+  const restoreInput = { ...scope, sourceId: backup.operation.id, body: { ...body, requestIdempotencyKey: 'retired-restore-replay', name: 'retired-restore' }, now: '2026-09-03T00:02:00Z' };
+  const restore = await repository.createRestore(restoreInput);
+  const before = { jobs: state.jobs.length, audits: state.auditEvents.length, quotaCalls };
+  state.projects[0].deletionRequestedAt = '2026-09-03T00:03:00Z';
+  state.resources[0].status = 'DELETED';
+  state.resources[0].deletionRequestedAt = '2026-09-03T00:03:00Z';
+  state.resources = state.resources.filter(row => row.id !== 'resource_a');
+
+  const backupReplay = await repository.createBackup(backupInput);
+  const restoreReplay = await repository.createRestore(restoreInput);
+  assert.equal(backupReplay.operation.id, backup.operation.id);
+  assert.equal(backupReplay.job.id, backup.job.id);
+  assert.equal(restoreReplay.operation.id, restore.operation.id);
+  assert.equal(restoreReplay.job.id, restore.job.id);
+  assert.deepEqual({ jobs: state.jobs.length, audits: state.auditEvents.length, quotaCalls }, before);
+  await assert.rejects(repository.createRestore({ ...restoreInput, body: { ...restoreInput.body, name: 'changed-after-retire' } }), { code: 'IDEMPOTENCY_CONFLICT', statusCode: 409 });
+});
+
+test('recovery API core PostgreSQL transaction replays retired sources without persistence writes', async () => {
+  // Given durable rows loaded by the PostgreSQL adapter, when exact requests replay after retirement, then no row, audit, job, or quota write occurs.
+  const state = fixture();
+  const memory = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => {});
+  const backupInput = request('postgres-retired-backup');
+  const backup = await memory.createBackup(backupInput);
+  await readyBackup(memory, backup.operation.id);
+  const restoreInput = { ...scope, sourceId: backup.operation.id, body: { ...body, requestIdempotencyKey: 'postgres-retired-restore', name: 'postgres-retired' }, now: '2026-09-03T00:02:00Z' };
+  const restore = await memory.createRestore(restoreInput);
+  state.projects[0].deletionRequestedAt = '2026-09-03T00:03:00Z';
+  state.resources[0].status = 'DELETED';
+  state.resources[0].deletionRequestedAt = '2026-09-03T00:03:00Z';
+  const writes = [];
+  const sql = {
+    async $transaction(work) { return work(this); },
+    async $queryRawUnsafe(query) {
+      if (query.includes('FROM "Organization" o WHERE')) return state.organizations.filter(row => row.id === 'org_a').map(row => ({ row }));
+      if (query.includes('FROM "ResourceBackup" b WHERE')) return state.backups.map(row => ({ row }));
+      if (query.includes('FROM "ResourceRestore" r WHERE')) return state.restores.map(row => ({ row }));
+      if (query.includes('FROM "ResourceRecoveryPin"')) return state.pins.map(row => ({ row }));
+      if (query.includes('FROM "ResourceRecoveryAttempt"')) return state.attempts.map(row => ({ row }));
+      if (query.includes('FROM "WorkflowJob"')) return state.jobs.map(row => ({ row }));
+      if (query.includes('FROM "Resource" r WHERE')) return state.resources.filter(row => row.projectId === 'project_a').map(row => ({ row }));
+      if (query.includes('FROM "Project" p WHERE')) return state.projects.filter(row => row.organizationId === 'org_a').map(row => ({ row }));
+      if (query.includes('FROM "Membership"')) return state.members.filter(row => row.organizationId === 'org_a').map(row => ({ row }));
+      return [];
+    },
+    async $executeRawUnsafe(query, ...values) { writes.push({ query, values }); return 1; },
+  };
+  let quotaCalls = 0;
+  const repository = new ResourceRecoveryRepository(new PostgresRecoveryTransaction(sql), () => { quotaCalls += 1; });
+  assert.equal((await repository.createBackup(backupInput)).operation.id, backup.operation.id);
+  assert.equal((await repository.createRestore(restoreInput)).operation.id, restore.operation.id);
+  assert.equal(quotaCalls, 0);
+  assert.equal(writes.length, 0);
+});
+
 test('recovery API core accepts every terminal cleanup state and replays deleted backups', async () => {
   // Given failed, expired, and deleted backups, when deletion is requested, then eligible rows move to DELETING and deleted rows remain idempotent.
   const state = fixture();
