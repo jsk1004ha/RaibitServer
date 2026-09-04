@@ -130,6 +130,61 @@ func TestRecoveryPostgresCleanupSelectorIncludesFailureBeforeIntent(t *testing.T
 	}
 }
 
+func TestRecoveryPostgresCleanupSelectorSkipsAllCleanedFailedBackup(t *testing.T) {
+	f := recoveryDB(t)
+	f.cleanedBackupAttempt(t)
+	f.exec(t, `UPDATE "ResourceBackup" SET status='FAILED',"cleanupLeaseUntil"=CURRENT_TIMESTAMP-interval '1 second' WHERE id=$1`, f.id)
+	identity, err := f.s.NextRecoveryCleanup(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity != nil {
+		t.Fatalf("all-cleaned FAILED backup was spuriously selected: %+v", identity)
+	}
+}
+
+func TestRecoveryPostgresCleanupSelectorResumesAllCleanedDeletingBackup(t *testing.T) {
+	f := recoveryDB(t)
+	f.cleanedBackupAttempt(t)
+	f.exec(t, `UPDATE "ResourceBackup" SET "cleanupLeaseUntil"=CURRENT_TIMESTAMP-interval '1 second' WHERE id=$1`, f.id)
+	identity, err := f.s.NextRecoveryCleanup(f.ctx)
+	if err != nil || identity == nil || identity.Kind != RecoveryBackup || identity.OperationID != f.id {
+		t.Fatalf("all-cleaned DELETING backup was not selected: %+v %v", identity, err)
+	}
+	cleanup, err := f.s.ClaimRecoveryCleanup(f.ctx, *identity, "finish-cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.s.FinishRecoveryCleanup(f.ctx, cleanup); err != nil {
+		t.Fatal(err)
+	}
+	var deleted, pinned bool
+	if err = f.s.db.QueryRowContext(f.ctx, `SELECT status='DELETED',EXISTS(SELECT 1 FROM "ResourceRecoveryPin" WHERE "backupId"=$1 AND kind='ARTIFACT_SOURCE') FROM "ResourceBackup" WHERE id=$1`, f.id).Scan(&deleted, &pinned); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted || pinned {
+		t.Fatalf("deleted=%v source pinned=%v", deleted, pinned)
+	}
+}
+
+func (f recoveryFixture) cleanedBackupAttempt(t *testing.T) {
+	t.Helper()
+	f.backup(t)
+	f.job(t)
+	claim := f.claim(t)
+	f.candidate(t, claim)
+	if err := f.s.FailRecovery(f.ctx, claim); err != nil {
+		t.Fatal(err)
+	}
+	cleanup, err := f.s.ClaimRecoveryCleanup(f.ctx, claim.Identity(), "cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.s.MarkRecoveryAttemptCleaned(f.ctx, cleanup, claim.Identity().Attempt); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRecoveryPostgresParentDeletionPinBarrier(t *testing.T) {
 	for _, table := range []string{"Resource", "Project", "Organization"} {
 		t.Run(table, func(t *testing.T) {
