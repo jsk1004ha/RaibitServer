@@ -195,7 +195,7 @@ test('log snapshot endpoints enforce the same tenant scope as streams', async ()
   const serviceB = controlPlane.store.createService({ projectId: projectB.id, name: 'web', type: 'web', sourceType: 'image', image: 'example/web:1' });
   const deploymentB = controlPlane.store.createDeployment({ projectId: projectB.id, serviceId: serviceB.id });
   controlPlane.store.appendBuildLog({ deploymentId: deploymentB.id, step: 'build', line: 'tenant-b-secret-log' });
-  controlPlane.store.appendRuntimeLog({ serviceId: serviceB.id, deploymentId: deploymentB.id, podName: 'web-0', containerName: 'web', line: 'tenant-b-runtime-log' });
+  controlPlane.store.appendRuntimeLog({ serviceId: serviceB.id, deploymentId: deploymentB.id, podName: 'web-0', sourceInstanceId: 'tenant-b-web-incarnation', containerName: 'web', line: 'tenant-b-runtime-log' });
   const userA = controlPlane.store.createUser({ email: 'tenant-a-user@example.com', approvalStatus: 'APPROVED' });
   controlPlane.store.addMember({ organizationId: orgA.id, userId: userA.id, role: 'viewer' });
 

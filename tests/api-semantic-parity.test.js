@@ -146,7 +146,7 @@ test('Given the running Nest graph, when contracts and HTTP are exercised, then 
       if (scenario.save) values[scenario.save] = body.id;
       if (scenario.save === 'deploymentId') {
         runtime.repository.store.appendBuildLog({ deploymentId: body.id, line: 'build ready' });
-        runtime.repository.store.appendRuntimeLog({ serviceId: values.serviceId, line: 'runtime ready' });
+        runtime.repository.store.appendRuntimeLog({ serviceId: values.serviceId, sourceInstanceId: 'semantic-parity-runtime', line: 'runtime ready' });
         runtime.repository.store.createDeployment({ id: 'parity-ready', serviceId: values.serviceId, imageUrl: 'nginx:alpine', status: 'READY' });
       }
       report.http.push({ operationId: scenario.operation, method: scenario.method, status: response.status, contentType: response.headers.get('content-type'), schemaValid: true });

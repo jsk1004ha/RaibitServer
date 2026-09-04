@@ -434,11 +434,14 @@ func (s *PostgresStore) AppendRuntimeLog(ctx context.Context, input RuntimeLogIn
 	if strings.TrimSpace(input.Line) == "" {
 		return nil
 	}
+	if !runtimeSourceInstancePattern.MatchString(input.SourceInstanceID) {
+		return ErrRuntimeLogSourceIdentity
+	}
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO "RuntimeLog" (id, "serviceId", "deploymentId", "podName", "containerName", line, level, timestamp)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now.Format(time.RFC3339Nano)),
-		input.ServiceID, nullable(input.DeploymentID), defaultString(input.PodName, "orchestrator"), defaultString(input.ContainerName, "app"), Redact(input.Line), defaultString(input.Level, "info"), now)
+INSERT INTO "RuntimeLog" (id, "serviceId", "deploymentId", "podName", "podUid", "containerName", line, level, timestamp)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now.Format(time.RFC3339Nano)),
+		input.ServiceID, nullable(input.DeploymentID), defaultString(input.PodName, "orchestrator"), input.SourceInstanceID, defaultString(input.ContainerName, "app"), Redact(input.Line), defaultString(input.Level, "info"), now)
 	return err
 }
 

@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
-import { checkAdditiveSql, checkCrd, checkMigrationContract, digest, projectRoot } from '../scripts/check-migration-contract.mjs';
+import { checkAdditiveSql, checkCrd, checkMigrationContract, checkReviewedTriggerSql, digest, projectRoot } from '../scripts/check-migration-contract.mjs';
 
 const manifest = JSON.parse(readFileSync(new URL('../prisma/migration-contract.json', import.meta.url), 'utf8'));
 const crds = JSON.parse(readFileSync(new URL('../test-fixtures/contracts/crd-schema-v1.json', import.meta.url), 'utf8'));
@@ -33,7 +33,7 @@ test('deployment lineage nullable uniqueness migration gate', async t => {
     else assert.throws(() => checkAdditiveSql(sql));
     const root = fixture(child);
     const next = structuredClone(manifest);
-    const id = '000013_lineage_gate_fixture';
+    const id = '000017_lineage_gate_fixture';
     mkdirSync(join(root, 'prisma/migrations', id));
     writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
     next.migrations.push({ id, sha256: digest(sql) });
@@ -67,6 +67,14 @@ test('migration compatibility gate is available before deployment', async () => 
 test('checkout has ordered digests and a forward-fix deployment contract', () => {
   // Given the checkout, when checking the migration contract, then all artifacts agree.
   assert.deepEqual(checkMigrationContract(), { migrations: manifest.migrations.length, applicationCompatibilityFloor: '000008_git_source_binding', rollbackMode: 'forward-fix', crds: 2 });
+});
+
+test('reviewed trigger migrations reject executable mutation inside guard functions', () => {
+  // Given the digest-pinned recovery guard migration, when its trigger bodies are inspected.
+  const sql = readFileSync(new URL('../prisma/migrations/000014_resource_recovery/migration.sql', import.meta.url), 'utf8');
+  // Then validation-only trigger bodies pass while an injected row mutation fails closed.
+  assert.doesNotThrow(() => checkReviewedTriggerSql(sql));
+  assert.throws(() => checkReviewedTriggerSql(sql.replace('RETURN NEW;\nEND $$;', 'DELETE FROM "ResourceBackup";\n  RETURN NEW;\nEND $$;')), /may not mutate rows/);
 });
 
 test('reject destructive migration matrix before apply', async (t) => {
@@ -118,7 +126,7 @@ test('reject destructive migration matrix before apply', async (t) => {
     await t.test(`appended migration rejected: ${sql}`, (child) => {
       const root = fixture(child);
       const next = structuredClone(manifest);
-      const id = '000011_rejected_fixture';
+      const id = '000017_rejected_fixture';
       mkdirSync(join(root, 'prisma/migrations', id));
       writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
       next.migrations.push({ id, sha256: digest(sql) });
@@ -152,7 +160,7 @@ test('index gate rejects N-1 uniqueness restrictions and unsupported index gramm
     await t.test(sql, (child) => {
       const root = fixture(child);
       const next = structuredClone(manifest);
-      const id = '000011_index_fixture';
+      const id = '000017_index_fixture';
       mkdirSync(join(root, 'prisma/migrations', id));
       writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
       next.migrations.push({ id, sha256: digest(sql) });

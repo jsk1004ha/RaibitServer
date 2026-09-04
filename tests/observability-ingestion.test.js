@@ -8,6 +8,7 @@ import * as observability from '../packages/core/src/observability.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { decodeKeysetCursor } from '../packages/core/src/store-helpers.ts';
+import { projectObservationPayload } from '../packages/core/src/observability-projection.ts';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/observability-redaction-v1.json', import.meta.url)));
 for (const item of fixture.cases) {
@@ -42,6 +43,27 @@ test('ingestion adversarial matrix persists nonsecret PEM continuation across re
     state = result.state;
   }
 });
+test('runtime log writer keeps PEM state separate for same-name pod incarnations', () => {
+  // Given two producer-supplied immutable source IDs behind the same mutable pod name.
+  const plane = new RAIBITSERVERControlPlane();
+  const org = plane.store.createOrganization({name:'Runtime identity fixture',plan:'club'});
+  const project = plane.store.createProject({organizationId:org.id,name:'identity'});
+  const service = plane.store.createService({projectId:project.id,name:'web',type:'web'});
+  const deployment = plane.store.createDeployment({serviceId:service.id,status:'READY'});
+  const first = plane.store.appendRuntimeLog({serviceId:service.id,deploymentId:deployment.id,podName:'web-0',sourceInstanceId:'pod-incarnation-a',containerName:'app',line:'-----BEGIN PRIVATE KEY-----'});
+  const second = plane.store.appendRuntimeLog({serviceId:service.id,deploymentId:deployment.id,podName:'web-0',sourceInstanceId:'pod-incarnation-b',containerName:'app',line:'healthy incarnation'});
+  // When both rows share one response projection, then one incarnation's PEM cursor cannot mask the other.
+  const projected = projectObservationPayload({logs:[first,second]});
+  assert.notEqual(first.podUid,second.podUid);
+  assert.equal(projected.logs[0].line,'****');
+  assert.equal(projected.logs[1].line,'healthy incarnation');
+});
+test('runtime log writer rejects a missing immutable source instance', () => {
+  // Given a runtime record containing only mutable naming fields.
+  const plane = new RAIBITSERVERControlPlane();
+  // When the public writer is called, then it rejects instead of synthesizing identity from names.
+  assert.throws(() => plane.store.appendRuntimeLog({serviceId:'service',deploymentId:'deployment',podName:'web-0',containerName:'app',line:'unsafe identity'}), /immutable source instance/i);
+});
 test('correlated ingestion happy path masks writes and legacy HTTP JSON/SSE with complete-row cursor', async () => {
   // Given actual repository and HTTP adapter with legacy unmasked rows.
   const plane = new RAIBITSERVERControlPlane();
@@ -49,7 +71,7 @@ test('correlated ingestion happy path masks writes and legacy HTTP JSON/SSE with
   const project = plane.store.createProject({organizationId:org.id,name:'demo'});
   const service = plane.store.createService({projectId:project.id,name:'web',type:'web'});
   for (const item of fixture.cases) {
-    const row = plane.store.appendRuntimeLog({serviceId:service.id,line:item.input});
+    const row = plane.store.appendRuntimeLog({serviceId:service.id,sourceInstanceId:'fixture-runtime-source',line:item.input});
     assert.equal(row.line === item.expected,true,item.name);
   }
   plane.store.runtimeLogs = Array.from({length:1001}, (_,i) => ({

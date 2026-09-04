@@ -1883,7 +1883,7 @@ export class PrismaControlPlaneRepository {
   async appendRuntimeLog(input: Record<string, any>) {
     const podName = input.podName || 'local-pod';
     const containerName = input.containerName || 'app';
-    const podUid = persistedRuntimePodUid({ serviceId: input.serviceId, deploymentId: input.deploymentId, podName, containerName, podUid: input.podUid });
+    const podUid = persistedRuntimePodUid({ podUid: input.podUid, sourceInstanceId: input.sourceInstanceId });
     return this.prisma.runtimeLog.create({ data: { serviceId: input.serviceId, deploymentId: input.deploymentId || null, podName, podUid, containerName, line: maskLogLine(input.line), level: input.level || 'info' } });
   }
 

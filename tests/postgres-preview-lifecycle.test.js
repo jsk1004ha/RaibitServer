@@ -4,13 +4,17 @@ import test from 'node:test';
 import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 
 const secret = 'task18-local-only-secret';
+const postgresConfigured = Boolean(process.env.RAIBITSERVER_TEST_DATABASE_URL && process.env.RAIBITSERVER_TEST_PRISMA_MODULE);
+const postgresOptions = { skip: !postgresConfigured && process.env.RAIBITSERVER_REQUIRE_POSTGRES_TESTS !== '1' ? 'NOT_RUN: disposable PostgreSQL URL/module not configured' : false };
 function signed(action, updatedAt, deliveryId = randomUUID(), headSha = 'a'.repeat(40), before, repository = { id: 101, full_name: 'club/repo' }) {
   const value = { action, number: 7, installation: { id: 900 }, repository, pull_request: { number: 7, state: action === 'closed' ? 'closed' : 'open', head: { sha: headSha, ref: 'topic' }, base: { ref: 'main' }, updated_at: updatedAt }, ...(before ? { before } : {}) };
   const body = JSON.stringify(value);
   return { event: 'pull_request', deliveryId, body, payload: { malicious: true }, secret, signature: `sha256=${createHmac('sha256', secret).update(body).digest('hex')}` };
 }
 
-test('signed preview admission dedupes twenty clients and fences close resolver reopen on PostgreSQL', async t => {
+test('signed preview admission dedupes twenty clients and fences close resolver reopen on PostgreSQL', postgresOptions, async t => {
+  assert.ok(process.env.RAIBITSERVER_TEST_DATABASE_URL, 'real disposable PostgreSQL URL required; this suite must not skip');
+  assert.ok(process.env.RAIBITSERVER_TEST_PRISMA_MODULE, 'generated PostgreSQL Prisma module required; this suite must not skip');
   const { PrismaClient } = await import(process.env.RAIBITSERVER_TEST_PRISMA_MODULE);
   const clients = Array.from({ length: 20 }, () => new PrismaClient({ datasourceUrl: process.env.RAIBITSERVER_TEST_DATABASE_URL, transactionOptions: { maxWait: 30000, timeout: 30000 } }));
   const repositories = clients.map(client => new PrismaControlPlaneRepository(client));

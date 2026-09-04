@@ -780,8 +780,8 @@ export class ControlPlaneStore {
     return deepClone(row);
   }
 
-  appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', podUid, containerName = 'app', line, level = 'info' }: Record<string, any>) {
-    const resolvedPodUid = persistedRuntimePodUid({ serviceId, deploymentId, podName, podUid, containerName });
+  appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', podUid, sourceInstanceId, containerName = 'app', line, level = 'info' }: Record<string, any>) {
+    const resolvedPodUid = persistedRuntimePodUid({ podUid, sourceInstanceId });
     const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, podUid: resolvedPodUid, containerName, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
     this.runtimeLogs.push(row);
     return deepClone(row);

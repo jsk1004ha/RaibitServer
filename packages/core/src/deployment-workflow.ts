@@ -129,7 +129,7 @@ export async function reconcileDeploymentRollout(repository: any, deploymentId: 
     }
     if (options.failRollout) throw errorFromOption(options.failRollout, 'simulated rollout failure');
     const host = options.host || options.urlHost || null;
-    await appendRuntimeLog(repository, { serviceId: service.id, deploymentId, podName: dryRun ? 'dry-run' : `${service.slug || service.name}-pod`, containerName: service.slug || service.name || 'app', line: host ? `HTTP 200 ${host}` : 'rollout status ready' });
+    await appendRuntimeLog(repository, { serviceId: service.id, deploymentId, podName: dryRun ? 'dry-run' : `${service.slug || service.name}-pod`, sourceInstanceId: `deployment-rollout:${deploymentId}`, containerName: service.slug || service.name || 'app', line: host ? `HTTP 200 ${host}` : 'rollout status ready' });
     await updateDeployment(repository, deploymentId, { status: DEPLOYMENT_STATUSES.READY, deployedAt: nowIso(), finishedAt: nowIso(), errorCode: null, errorMessage: null });
     await updateService(repository, service.id, { status: 'ready', imageUrl: deployment.imageUrl || service.imageUrl || service.image || null });
     await appendDeploymentEvent(repository, { deploymentId, type: 'rollout.ready', message: 'Kubernetes rollout is ready', metadata: { dryRun, host, image: deployment.imageUrl || service.imageUrl || service.image || null } });
@@ -137,7 +137,7 @@ export async function reconcileDeploymentRollout(repository: any, deploymentId: 
   } catch (error) {
     const errorSpec = errorSpecForCode('ROLLOUT_FAILED');
     const safeMessage = sanitizeLogRecord(error?.message || String(error));
-    await appendRuntimeLog(repository, { serviceId: service.id, deploymentId, podName: dryRun ? 'dry-run' : `${service.slug || service.name}-pod`, containerName: 'orchestrator', line: safeMessage, level: 'error' });
+    await appendRuntimeLog(repository, { serviceId: service.id, deploymentId, podName: dryRun ? 'dry-run' : `${service.slug || service.name}-pod`, sourceInstanceId: `deployment-rollout:${deploymentId}`, containerName: 'orchestrator', line: safeMessage, level: 'error' });
     await updateDeployment(repository, deploymentId, { status: DEPLOYMENT_STATUSES.FAILED, finishedAt: nowIso(), errorCode: errorSpec.code, errorMessage: safeMessage });
     await appendDeploymentEvent(repository, { deploymentId, type: 'rollout.failed', message: safeMessage, metadata: { dryRun, errorSpec } });
     throw error;

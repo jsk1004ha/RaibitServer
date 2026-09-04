@@ -1,8 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-test('schema15 permits exact preview ownership and rejects foreign pointers and mutation', async t => {
+const postgresConfigured = Boolean(process.env.RAIBITSERVER_TEST_DATABASE_URL && process.env.RAIBITSERVER_TEST_PRISMA_MODULE);
+const postgresOptions = { skip: !postgresConfigured && process.env.RAIBITSERVER_REQUIRE_POSTGRES_TESTS !== '1' ? 'NOT_RUN: disposable PostgreSQL URL/module not configured' : false };
+
+test('schema15 permits exact preview ownership and rejects foreign pointers and mutation', postgresOptions, async t => {
   // Given: an exclusively owned database migrated through schema15.
+  assert.ok(process.env.RAIBITSERVER_TEST_DATABASE_URL, 'real disposable PostgreSQL URL required; this suite must not skip');
+  assert.ok(process.env.RAIBITSERVER_TEST_PRISMA_MODULE, 'generated PostgreSQL Prisma module required; this suite must not skip');
   const { PrismaClient } = await import(process.env.RAIBITSERVER_TEST_PRISMA_MODULE);
   const db = new PrismaClient({ datasourceUrl: process.env.RAIBITSERVER_TEST_DATABASE_URL });
   t.after(() => db.$disconnect());

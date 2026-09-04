@@ -36,9 +36,10 @@ const (
 )
 
 var (
-	ErrDeploymentLeaseLost     = errors.New("deployment reconcile lease ownership lost")
-	ErrDeletionLeaseLost       = errors.New("deletion lease ownership lost")
-	ErrParentDeletionRequested = errors.New("deployment parent is being deleted")
+	ErrDeploymentLeaseLost      = errors.New("deployment reconcile lease ownership lost")
+	ErrDeletionLeaseLost        = errors.New("deletion lease ownership lost")
+	ErrParentDeletionRequested  = errors.New("deployment parent is being deleted")
+	ErrRuntimeLogSourceIdentity = errors.New("runtime log immutable source instance ID is required")
 )
 
 type DesiredStateStore interface {
@@ -185,12 +186,13 @@ type DeploymentEventInput struct {
 }
 
 type RuntimeLogInput struct {
-	ServiceID     string
-	DeploymentID  string
-	PodName       string
-	ContainerName string
-	Line          string
-	Level         string
+	ServiceID        string
+	DeploymentID     string
+	PodName          string
+	SourceInstanceID string
+	ContainerName    string
+	Line             string
+	Level            string
 }
 
 type FileStore struct {
@@ -633,7 +635,10 @@ func (s *FileStore) AppendRuntimeLog(ctx context.Context, input RuntimeLogInput)
 	if strings.TrimSpace(input.Line) == "" {
 		return nil
 	}
-	return s.appendRecord(ctx, "runtimeLogs", record{"id": stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now()), "serviceId": input.ServiceID, "deploymentId": nullable(input.DeploymentID), "podName": defaultString(input.PodName, "orchestrator"), "containerName": defaultString(input.ContainerName, "app"), "line": Redact(input.Line), "level": defaultString(input.Level, "info"), "timestamp": now()})
+	if !runtimeSourceInstancePattern.MatchString(input.SourceInstanceID) {
+		return ErrRuntimeLogSourceIdentity
+	}
+	return s.appendRecord(ctx, "runtimeLogs", record{"id": stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now()), "serviceId": input.ServiceID, "deploymentId": nullable(input.DeploymentID), "podName": defaultString(input.PodName, "orchestrator"), "podUid": input.SourceInstanceID, "containerName": defaultString(input.ContainerName, "app"), "line": Redact(input.Line), "level": defaultString(input.Level, "info"), "timestamp": now()})
 }
 
 func (s *FileStore) appendRecord(ctx context.Context, key string, row record) error {
@@ -1067,8 +1072,9 @@ func stableID(parts ...string) string {
 func notFound(kind, id string) error { return fmt.Errorf("%s not found: %s", kind, id) }
 
 var (
-	secretAssignmentPattern = regexp.MustCompile(`(?i)([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)`)
-	knownTokenPattern       = regexp.MustCompile(`(?i)(ghp_|github_pat_|glpat-|sk-[A-Za-z0-9_-]*|xox[baprs]-)[A-Za-z0-9_\-]+`)
+	secretAssignmentPattern      = regexp.MustCompile(`(?i)([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)`)
+	knownTokenPattern            = regexp.MustCompile(`(?i)(ghp_|github_pat_|glpat-|sk-[A-Za-z0-9_-]*|xox[baprs]-)[A-Za-z0-9_\-]+`)
+	runtimeSourceInstancePattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,256}$`)
 )
 
 func Redact(value string) string {

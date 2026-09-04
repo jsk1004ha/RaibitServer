@@ -7,6 +7,30 @@ import { parse } from 'yaml';
 
 export const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 export const digest = (content) => createHash('sha256').update(content.replaceAll('\r\n', '\n')).digest('hex');
+const reviewedTriggerMigrations = new Set(['000014_resource_recovery', '000015_preview_lineage']);
+
+export function checkReviewedTriggerSql(sql) {
+  const functions = new Set();
+  const functionPattern = /CREATE\s+FUNCTION\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(\)\s+RETURNS\s+trigger\s+LANGUAGE\s+plpgsql\s+AS\s+\$\$([\s\S]*?)\$\$\s*;/gi;
+  let remaining = sql.replace(functionPattern, (_statement, name, body) => {
+    assert.match(body, /^\s*BEGIN[\s\S]*END\s*$/i, 'trigger function must be a bounded BEGIN/END body');
+    assert.doesNotMatch(body, /(?:^|;|\bTHEN)\s*(?:WITH|INSERT|UPDATE|DELETE)\b/im, 'trigger function may not mutate rows');
+    assert.doesNotMatch(body, /\b(EXECUTE|PERFORM|CALL|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i, 'trigger function may not execute dynamic or schema-changing SQL');
+    functions.add(name.toLowerCase());
+    return '';
+  });
+  assert.ok(functions.size > 0, 'reviewed trigger migration must define a trigger function');
+  const referencedFunctions = new Set();
+  const triggerPattern = /CREATE\s+TRIGGER\s+(?:"[A-Za-z_][A-Za-z_0-9]*"|[A-Za-z_][A-Za-z_0-9]*)\s+BEFORE\s+(?:INSERT|UPDATE|DELETE)(?:\s+OR\s+(?:INSERT|UPDATE|DELETE))*\s+ON\s+(?:"[A-Za-z_][A-Za-z_0-9]*"|[A-Za-z_][A-Za-z_0-9]*)\s+FOR\s+EACH\s+ROW\s+EXECUTE\s+FUNCTION\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(\)\s*;/gi;
+  remaining = remaining.replace(triggerPattern, (_statement, name) => {
+    const identity = name.toLowerCase();
+    assert.ok(functions.has(identity), 'trigger must reference a function defined in the same migration');
+    referencedFunctions.add(identity);
+    return '';
+  });
+  assert.deepEqual(referencedFunctions, functions, 'every reviewed trigger function must have a matching trigger');
+  assert.doesNotMatch(remaining, /\b(CREATE\s+FUNCTION|CREATE\s+TRIGGER|DROP|TRUNCATE|RENAME|DO|GRANT|REVOKE|SECURITY\s+DEFINER)\b/i, 'unreviewed trigger or destructive SQL');
+}
 
 // This is deliberately a narrow additive DDL gate, not a general SQL parser.
 // Unsupported statements require compatibility review, never an implicit pass.
@@ -92,7 +116,10 @@ export function checkMigrationContract(root = projectRoot) {
     const sql = readFileSync(resolve(directory, 'migration.sql'), 'utf8');
     assert.equal(digest(sql), entry.sha256, `migration digest mismatch: ${entry.id}`);
     assert.doesNotMatch(sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, ' '), /\b(DROP|TRUNCATE|RENAME)\b/i, 'destructive SQL is forbidden');
-    if (entry.id > manifest.historicalThrough) checkAdditiveSql(sql);
+    if (entry.id > manifest.historicalThrough) {
+      if (reviewedTriggerMigrations.has(entry.id)) checkReviewedTriggerSql(sql);
+      else checkAdditiveSql(sql);
+    }
   }
   const baseline = JSON.parse(readFileSync(resolve(root, 'test-fixtures/contracts/crd-schema-v1.json'), 'utf8'));
   assert.deepEqual(baseline.map((entry) => entry.path), ['infra/k8s/appservice-crd.yaml', 'infra/operators/manageddatabase-crd.yaml'], 'CRD baselines missing');
