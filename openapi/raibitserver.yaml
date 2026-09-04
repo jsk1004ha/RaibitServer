@@ -5,7 +5,7 @@ info:
   version: 0.4.0
   description: Implemented Nest control-plane operations. Prototype-only and
     planned operations are not advertised. SSE returns snapshots/deltas;
-    Last-Event-ID resume is not implemented.
+    per-service runtime log streams resume from a bounded, scope-bound Last-Event-ID token.
 servers:
   - url: http://localhost:3000/api
 paths:
@@ -1243,6 +1243,12 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 2048
       responses:
         "200":
           description: Successful response
@@ -1261,8 +1267,11 @@ paths:
       x-permission: logs:read
       x-sse:
         event: service.logs.snapshot
-        resume: unsupported
-        reconnect: fresh-snapshot
+        resume: last-event-id-v1
+        reconnect: strictly-after-accepted-cursor
+        scope: project-and-service
+        maxResumeTokenLength: 2048
+        terminal: stream.end
         error:
           $ref: "#/components/schemas/StreamError"
   /projects/{projectId}/deployment-agent/plan:

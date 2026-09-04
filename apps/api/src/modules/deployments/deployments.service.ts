@@ -20,4 +20,5 @@ export class DeploymentsService {
   deploymentActivitySnapshot(deploymentId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.deploymentActivitySnapshot(deploymentId, subject, options); }
   listRuntimeLogs(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.listRuntimeLogs(serviceId, subject, options); }
   serviceLogSnapshot(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.serviceLogSnapshot(serviceId, subject, options); }
+  openServiceLogStream(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.openServiceLogStream(serviceId, subject, options); }
 }

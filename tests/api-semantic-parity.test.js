@@ -111,7 +111,7 @@ test('Given the running Nest graph, when contracts and HTTP are exercised, then 
     for (const scenario of fixtures.http) {
       const contract = apiOperations[scenario.operation];
       const url = scenario.path.replace(/\{([^}]+)\}/g, (_match, key) => values[key]);
-      const headers = { 'content-type': 'application/json', ...(scenario.public ? {} : { authorization: `Bearer ${token}` }), ...(scenario.stream ? { 'last-event-id': 'stale-event-id' } : {}) };
+      const headers = { 'content-type': 'application/json', ...(scenario.public ? {} : { authorization: `Bearer ${token}` }), ...(scenario.operation === 'deployments-stream' ? { 'last-event-id': 'stale-event-id' } : {}) };
       const response = await fetch(runtime.baseUrl + url, { method: scenario.method, headers, body: scenario.body ? JSON.stringify(scenario.body) : undefined, signal: AbortSignal.timeout(10_000) });
       assert.equal(response.status, scenario.status, `${scenario.operation}: real HTTP status mismatch ${await (!response.ok && response.status !== scenario.status ? response.text() : Promise.resolve(''))}`);
       let body;
@@ -128,7 +128,7 @@ test('Given the running Nest graph, when contracts and HTTP are exercised, then 
       const parsed = (response.ok ? contract.response : ErrorBody).safeParse(body);
       assert.equal(parsed.success, true, `${scenario.operation}: real HTTP schema mismatch ${JSON.stringify(parsed.error?.issues)}`);
       if (scenario.stream) {
-        assert.ok(body.service || body.deployment, `${scenario.operation}: unsupported resume must start a fresh snapshot`);
+        assert.ok(body.service || body.deployment, `${scenario.operation}: initial connection must start with an authorized snapshot`);
         const liveClient = new RAIBITSERVERClient({ baseUrl: runtime.baseUrl, token });
         const streamPath = Object.fromEntries(Object.keys(contract.input.shape.path.shape).map((key) => [key, values[key]]));
         const snapshot = await liveClient.operations[scenario.operation]({ path: streamPath, query: {}, body: {} });

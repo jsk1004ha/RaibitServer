@@ -19,6 +19,7 @@ import { consumeGitHubOAuthIdentity, startGitHubOAuth } from './github-oauth-flo
 import { createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, resolveGitHubAppInstallationSelection, verifyGitHubAppInstallationState } from './github-app.ts';
 import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
 import { publicSitesFromSnapshot } from './public-sites.ts';
+import { decodeServiceLogResumeToken, encodeServiceLogResumeToken } from './sse.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = {
@@ -527,7 +528,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
           logs,
           events: controlPlane.store.listDeploymentEvents(deploymentId),
           stream: { mode: 'sse-snapshot', retryMs: 3000 },
-        }, { logContexts: controlPlane.store.logPemContext(logs), unknownLogState: true });
+        }, { projectionOptions: { logContexts: controlPlane.store.logPemContext(logs), unknownLogState: true } });
       }
       const runtimeLogsMatch = url.pathname.match(/^\/services\/([^/]+)\/logs$/);
       if (runtimeLogsMatch && method === 'GET') {
@@ -547,12 +548,21 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const service = controlPlane.store.getService(serviceId);
         if (!service) return send(res, 404, { error: 'service_not_found' });
         await assertProjectAccess(controlPlane.store, service.projectId, subject);
-        const logs = controlPlane.store.listRuntimeLogs(serviceId);
-        return sendSseSnapshot(res, 'service.logs.snapshot', {
-          service,
+        const scope = { projectId: String(service.projectId), serviceId: String(service.id) };
+        const lastEventId = req.headers?.['last-event-id'];
+        const resume = lastEventId === undefined ? null : decodeServiceLogResumeToken(lastEventId, scope);
+        const serviceCursor = entityStreamCursor(service);
+        const logs = controlPlane.store.listRuntimeLogs(serviceId, { cursor: resume?.logCursorToken || undefined });
+        const body = {
+          service: resume?.serviceCursor === serviceCursor ? null : service,
           logs,
+          serviceCursor,
+          logCursor: resume?.logCursorToken || null,
           stream: { mode: 'sse-snapshot', retryMs: 3000 },
-        }, { logContexts: controlPlane.store.logPemContext(logs), unknownLogState: true });
+        };
+        const projected = projectObservationPayload(body, { logContexts: controlPlane.store.logPemContext(logs), unknownLogState: true });
+        const eventId = encodeServiceLogResumeToken(scope, projected);
+        return sendSseSnapshot(res, 'service.logs.snapshot', projected, { eventId, preprojected: true });
       }
       const resourceConsoleTableMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/tables\/([^/]+)$/);
       if (resourceConsoleTableMatch && method === 'GET') {
@@ -954,8 +964,14 @@ export function send(res, statusCode, body) {
   res.end(payload);
 }
 
-export function sendSseSnapshot(res, event, body, projectionOptions = {}) {
-  const payload = JSON.stringify(projectObservationPayload(body, projectionOptions));
+type SseSnapshotOptions = {
+  readonly projectionOptions?: Parameters<typeof projectObservationPayload>[1];
+  readonly eventId?: string;
+  readonly preprojected?: boolean;
+};
+
+export function sendSseSnapshot(res, event, body, options: SseSnapshotOptions = {}) {
+  const payload = JSON.stringify(options.preprojected ? body : projectObservationPayload(body, options.projectionOptions));
   res.writeHead(200, {
     ...securityHeaders(),
     'content-type': 'text/event-stream; charset=utf-8',
@@ -963,9 +979,14 @@ export function sendSseSnapshot(res, event, body, projectionOptions = {}) {
     connection: 'keep-alive',
   });
   res.write(`retry: ${body?.stream?.retryMs || 3000}\n`);
+  if (options.eventId) res.write(`id: ${options.eventId}\n`);
   res.write(`event: ${event}\n`);
   res.write(`data: ${payload}\n\n`);
   res.end();
+}
+
+function entityStreamCursor(row: Record<string, any>) {
+  return `${row.updatedAt || row.createdAt || ''}:${row.status || ''}:${row.id || ''}`;
 }
 
 function authRateSource(req: any) {

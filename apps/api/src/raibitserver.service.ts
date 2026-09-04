@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
-import { DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
+import { decodeServiceLogResumeToken, DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
 import { projectObservationPayload } from '@raibitserver/core';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
@@ -463,6 +463,31 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       logCursor: options.logCursor || null,
       stream: sseStreamConfig(),
     }, observationProjectionOptions(options, logContexts));
+  }
+
+  async openServiceLogStream(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, service.projectId, subject);
+    const resumeScope = { projectId: String(service.projectId), serviceId: String(service.id) };
+    const resume = options.lastEventId === undefined
+      ? null
+      : await paginationRead(async () => decodeServiceLogResumeToken(options.lastEventId, resumeScope));
+    const logs = await paginationRead<Array<Record<string, any>>>(() => repository.listRuntimeLogs(serviceId, {
+      cursor: resume?.logCursorToken || undefined,
+      limit: options.limit,
+    }));
+    const serviceCursor = entityVersion(service);
+    const logContexts = await logPemContext(repository, logs);
+    const snapshot = projectObservationPayload({
+      service: resume?.serviceCursor === serviceCursor ? null : service,
+      logs,
+      serviceCursor,
+      logCursor: resume?.logCursorToken || null,
+      stream: sseStreamConfig(),
+    }, observationProjectionOptions(options, logContexts));
+    return { snapshot, resumeScope };
   }
 
   async queryResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {

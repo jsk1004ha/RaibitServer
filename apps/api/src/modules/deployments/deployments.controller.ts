@@ -1,5 +1,5 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
-import { clearObservationProjectionContinuation, createObservationProjectionContinuation, startBoundedSseStream } from '@raibitserver/core';
+import { Body, Controller, Get, HttpCode, HttpException, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
+import { clearObservationProjectionContinuation, createObservationProjectionContinuation, encodeServiceLogResumeToken, startBoundedSseStream } from '@raibitserver/core';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { DeploymentsService } from './deployments.service';
 
@@ -132,13 +132,18 @@ export class DeploymentLogsController {
   @Get('services/:serviceId/logs/stream')
   async runtimeStream(@Param('serviceId') serviceId: string, @Req() req: any, @Res() res: any) {
     const continuation = createObservationProjectionContinuation();
-    const snapshot = await this.deploymentsService.serviceLogSnapshot(serviceId, req.raibitSubject, { observationContinuation: continuation });
+    const { snapshot, resumeScope } = await this.deploymentsService.openServiceLogStream(serviceId, req.raibitSubject, {
+      lastEventId: req.headers?.['last-event-id'],
+      observationContinuation: continuation,
+    });
     startBoundedSseStream({
       req,
       res,
       event: 'service.logs.snapshot',
       initialPayload: snapshot,
       preprojected: true,
+      eventId: (payload) => encodeServiceLogResumeToken(resumeScope, payload),
+      terminalError: (error) => error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500,
       onClose: () => clearObservationProjectionContinuation(continuation),
       load: (cursors) => this.deploymentsService.serviceLogSnapshot(serviceId, req.raibitSubject, {
         serviceCursor: cursors.serviceCursor,

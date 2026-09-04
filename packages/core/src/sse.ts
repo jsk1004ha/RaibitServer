@@ -1,8 +1,72 @@
 import { projectObservationPayload } from './observability-projection.ts';
+import { decodeKeysetCursor } from './store-helpers.ts';
 
 type AnyRecord = Record<string, any>;
 
-export function startBoundedSseStream({ req, res, event, initialPayload, load, onClose, preprojected = false }: {
+export type ServiceLogResumeScope = {
+  readonly projectId: string;
+  readonly serviceId: string;
+};
+
+export type ServiceLogResumeCursor = {
+  readonly serviceCursor: string | null;
+  readonly logCursor: ReturnType<typeof decodeKeysetCursor> | null;
+  readonly logCursorToken: string | null;
+};
+
+type ResumeTokenPayload = {
+  readonly v: 1;
+  readonly p: string;
+  readonly s: string;
+  readonly sc: string | null;
+  readonly lc: string | null;
+};
+
+const MAX_RESUME_TOKEN_LENGTH = 2_048;
+const MAX_SCOPE_LENGTH = 512;
+const MAX_SERVICE_CURSOR_LENGTH = 1_024;
+
+export class ServiceLogResumeTokenError extends Error {
+  readonly name = 'ServiceLogResumeTokenError';
+  readonly statusCode = 400;
+
+  constructor() {
+    super('invalid service log resume token');
+  }
+}
+
+export function encodeServiceLogResumeToken(scope: ServiceLogResumeScope, cursors: { readonly serviceCursor?: unknown; readonly logCursor?: unknown }): string {
+  const projectId = boundedRequiredString(scope.projectId, MAX_SCOPE_LENGTH);
+  const serviceId = boundedRequiredString(scope.serviceId, MAX_SCOPE_LENGTH);
+  const serviceCursor = boundedOptionalString(cursors.serviceCursor, MAX_SERVICE_CURSOR_LENGTH);
+  const logCursor = boundedOptionalString(cursors.logCursor, 1_024);
+  if (logCursor !== null) decodeKeysetCursor(logCursor);
+  const payload: ResumeTokenPayload = { v: 1, p: projectId, s: serviceId, sc: serviceCursor, lc: logCursor };
+  const token = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  if (token.length > MAX_RESUME_TOKEN_LENGTH) throw new ServiceLogResumeTokenError();
+  return token;
+}
+
+export function decodeServiceLogResumeToken(value: unknown, scope: ServiceLogResumeScope): ServiceLogResumeCursor {
+  if (typeof value !== 'string' || !value || value.length > MAX_RESUME_TOKEN_LENGTH || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new ServiceLogResumeTokenError();
+  }
+  try {
+    const decoded: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+    if (!isResumeTokenPayload(decoded)) throw new ServiceLogResumeTokenError();
+    if (decoded.p !== scope.projectId || decoded.s !== scope.serviceId) throw new ServiceLogResumeTokenError();
+    return {
+      serviceCursor: decoded.sc,
+      logCursor: decoded.lc === null ? null : decodeKeysetCursor(decoded.lc),
+      logCursorToken: decoded.lc,
+    };
+  } catch (error) {
+    if (error instanceof ServiceLogResumeTokenError) throw error;
+    throw new ServiceLogResumeTokenError();
+  }
+}
+
+export function startBoundedSseStream({ req, res, event, initialPayload, load, onClose, preprojected = false, eventId, terminalError }: {
   req: any;
   res: any;
   event: string;
@@ -10,6 +74,8 @@ export function startBoundedSseStream({ req, res, event, initialPayload, load, o
   load: (cursors: AnyRecord) => Promise<AnyRecord>;
   onClose?: () => void;
   preprojected?: boolean;
+  eventId?: (payload: AnyRecord) => string;
+  terminalError?: (error: unknown) => boolean;
 }) {
   const streamConfig = initialPayload?.stream || {};
   const retryMs = boundedInteger(streamConfig.retryMs, 3_000, 10, 60_000);
@@ -18,7 +84,7 @@ export function startBoundedSseStream({ req, res, event, initialPayload, load, o
   const slowClientTimeoutMs = boundedInteger(streamConfig.slowClientTimeoutMs, 5_000, 10, 60_000);
   const deltaEvent = event.endsWith('.snapshot') ? `${event.slice(0, -'.snapshot'.length)}.delta` : `${event}.delta`;
   const initial = preprojected ? initialPayload : projectObservationPayload(initialPayload);
-  const cursors = cursorValues(initial);
+  const cursors: AnyRecord = {};
   let sequence = 0;
   let polling = false;
   let closed = false;
@@ -34,14 +100,17 @@ export function startBoundedSseStream({ req, res, event, initialPayload, load, o
   try {
     prepareResponse(res);
     writeFrame(`retry: ${retryMs}\n\n`);
-    writeEvent(event, initial);
+    if (writeEvent(event, initial)) Object.assign(cursors, cursorValues(initial));
 
     if (!closed) {
       pollTimer = setInterval(() => void poll(), retryMs);
       heartbeatTimer = setInterval(() => {
         if (!closed && !backpressured) writeFrame(`: keepalive ${Date.now()}\n\n`);
       }, heartbeatMs);
-      lifetimeTimer = setTimeout(() => stop(true), maxLifetimeMs);
+      lifetimeTimer = setTimeout(() => {
+        writeControlEvent('stream.end', { reason: 'max_lifetime' });
+        stop(true);
+      }, maxLifetimeMs);
       pollTimer.unref?.();
       heartbeatTimer.unref?.();
       lifetimeTimer.unref?.();
@@ -58,10 +127,10 @@ export function startBoundedSseStream({ req, res, event, initialPayload, load, o
     try {
       const loaded = await load({ ...cursors });
       const payload = preprojected ? loaded : projectObservationPayload(loaded);
-      Object.assign(cursors, cursorValues(payload));
-      if (hasDelta(payload)) writeEvent(deltaEvent, payload);
-    } catch {
-      writeEvent('stream.error', { error: 'stream update unavailable' });
+      if (hasDelta(payload) && writeEvent(deltaEvent, payload)) Object.assign(cursors, cursorValues(payload));
+    } catch (error) {
+      writeControlEvent('stream.error', { error: 'stream update unavailable' });
+      if (terminalError?.(error)) stop(true);
     } finally {
       polling = false;
     }
@@ -69,20 +138,26 @@ export function startBoundedSseStream({ req, res, event, initialPayload, load, o
 
   function writeEvent(eventName: string, payload: AnyRecord) {
     sequence += 1;
-    return writeFrame(`id: ${Date.now()}-${sequence}\nevent: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
+    const id = eventId ? eventId(payload) : `${Date.now()}-${sequence}`;
+    return writeFrame(`id: ${id}\nevent: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
+  }
+
+  function writeControlEvent(eventName: string, payload: AnyRecord) {
+    if (!eventId) return writeEvent(eventName, payload);
+    return writeFrame(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
   }
 
   function writeFrame(frame: string) {
     if (closed || backpressured) return false;
-    let accepted = false;
+    let writable = false;
     try {
-      accepted = res.write(frame) !== false;
+      writable = res.write(frame) !== false;
     } catch {
       stop(true);
       return false;
     }
-    if (!accepted) waitForDrain();
-    return accepted;
+    if (!writable) waitForDrain();
+    return true;
   }
 
   function waitForDrain() {
@@ -131,6 +206,31 @@ export function startBoundedSseStream({ req, res, event, initialPayload, load, o
     get closed() { return closed; },
     get backpressured() { return backpressured; },
   };
+}
+
+function isResumeTokenPayload(value: unknown): value is ResumeTokenPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  if (Object.keys(value).sort().join(',') !== 'lc,p,s,sc,v') return false;
+  const version = Reflect.get(value, 'v');
+  const projectId = Reflect.get(value, 'p');
+  const serviceId = Reflect.get(value, 's');
+  const serviceCursor = Reflect.get(value, 'sc');
+  const logCursor = Reflect.get(value, 'lc');
+  return version === 1
+    && typeof projectId === 'string' && projectId.length > 0 && projectId.length <= MAX_SCOPE_LENGTH
+    && typeof serviceId === 'string' && serviceId.length > 0 && serviceId.length <= MAX_SCOPE_LENGTH
+    && (serviceCursor === null || (typeof serviceCursor === 'string' && serviceCursor.length > 0 && serviceCursor.length <= MAX_SERVICE_CURSOR_LENGTH))
+    && (logCursor === null || (typeof logCursor === 'string' && logCursor.length > 0 && logCursor.length <= 1_024));
+}
+
+function boundedRequiredString(value: unknown, maximum: number): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum) throw new ServiceLogResumeTokenError();
+  return value;
+}
+
+function boundedOptionalString(value: unknown, maximum: number): string | null {
+  if (value === undefined || value === null) return null;
+  return boundedRequiredString(value, maximum);
 }
 
 function prepareResponse(res: any) {

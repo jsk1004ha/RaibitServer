@@ -136,6 +136,8 @@ export function createOpenApiDocument() {
     const querySchema = z.toJSONSchema(operationId === 'auth-github-callback' ? GitHubOAuthCallbackParameters : shape.query);
     for (const [name, schema] of Object.entries(querySchema.properties ?? {})) parameters.push({ name, in: 'query', required: querySchema.required?.includes(name) ?? false, schema });
     const stream = 'stream' in contract ? contract.stream : undefined;
+    const resumableServiceLogs = operationId === 'services-logs-stream';
+    if (resumableServiceLogs) parameters.push({ name: 'Last-Event-ID', in: 'header', required: false, schema: { type: 'string', maxLength: 2048 } });
     const resourceCreate = operationId === 'resources-create';
     const response = { description: resourceCreate ? 'Resource desired state created; this does not confirm runtime readiness or release support.' : 'Successful response', content: { [stream ? 'text/event-stream' : 'application/json']: { schema: reference(contract.response) } } };
     const responses: Record<string, object> = { [contract.status]: response, default: { description: 'Typed error response', content: { 'application/json': { schema: reference(contract.error) } } } };
@@ -150,9 +152,11 @@ export function createOpenApiDocument() {
       ...(resourceCreate ? { description: 'Creates desired state for canonical local engines only. Dedicated-local databases/cache and local SQLite are implemented; unsupported catalog engines remain disabled. No release readiness or managed backup/restore workflow is claimed.' } : {}),
       security: webhook ? [{ githubSignature: [] }] : contract.permission ? [{ bearerAuth: [] }] : [],
       'x-permission': contract.permission,
-      ...(stream ? { 'x-sse': { event: stream, resume: 'unsupported', reconnect: 'fresh-snapshot', error: reference(M.StreamError) } } : {}),
+      ...(stream ? { 'x-sse': resumableServiceLogs
+        ? { event: stream, resume: 'last-event-id-v1', reconnect: 'strictly-after-accepted-cursor', scope: 'project-and-service', maxResumeTokenLength: 2048, terminal: 'stream.end', error: reference(M.StreamError) }
+        : { event: stream, resume: 'unsupported', reconnect: 'fresh-snapshot', error: reference(M.StreamError) } } : {}),
       ...(webhook ? { 'x-signature-headers': ['x-github-event', 'x-github-delivery', 'x-hub-signature-256'] } : {}),
     };
   }
-  return { openapi: '3.1.0', 'x-resource-capability-source': 'test-fixtures/contracts/resource-capabilities-v1.json', info: { title: 'RAIBITSERVER API', version: '0.4.0', description: 'Implemented Nest control-plane operations. Prototype-only and planned operations are not advertised. SSE returns snapshots/deltas; Last-Event-ID resume is not implemented.' }, servers: [{ url: 'http://localhost:3000/api' }], paths, components: { schemas, securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, githubSignature: { type: 'apiKey', in: 'header', name: 'x-hub-signature-256' } } } };
+  return { openapi: '3.1.0', 'x-resource-capability-source': 'test-fixtures/contracts/resource-capabilities-v1.json', info: { title: 'RAIBITSERVER API', version: '0.4.0', description: 'Implemented Nest control-plane operations. Prototype-only and planned operations are not advertised. SSE returns snapshots/deltas; per-service runtime log streams resume from a bounded, scope-bound Last-Event-ID token.' }, servers: [{ url: 'http://localhost:3000/api' }], paths, components: { schemas, securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, githubSignature: { type: 'apiKey', in: 'header', name: 'x-hub-signature-256' } } } };
 }
