@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/raibitserver/provisioner/internal/recoveryreceipt"
 )
 
 const RecoveryArtifactFormatV1 uint8 = 1
@@ -74,12 +76,37 @@ func newDumpResult(request DumpRequest, receipt JobReceipt, format EngineFormat,
 	if request.source.spec.ResourceID == "" || receipt.name == "" || receipt.direction != dumpDirection || receipt.resourceID != request.source.ResourceID() || receipt.fence.operationID != request.source.operationID || receipt.fence.attempt != request.source.attempt || request.source.Engine() != format.spec.Engine || baseline.spec.Schema == "" {
 		return DumpResult{}, ErrRecoveryRequest
 	}
+	if tool, ok := receipt.RecoveryReceipt(); ok {
+		if tool.ValidateFor(recoveryreceipt.Engine(request.source.Engine()), tool.Action(), recoveryreceipt.DirectionDump) != nil {
+			return DumpResult{}, ErrRecoveryRequest
+		}
+	}
 	return DumpResult{request: request, receipt: receipt, format: format, baseline: baseline}, nil
 }
-func (r DumpResult) Request() DumpRequest           { return r.request }
-func (r DumpResult) Receipt() JobReceipt            { return r.receipt }
-func (r DumpResult) Format() EngineFormat           { return r.format }
+func (r DumpResult) Request() DumpRequest { return r.request }
+func (r DumpResult) Receipt() JobReceipt  { return r.receipt }
+func (r DumpResult) Format() EngineFormat { return r.format }
+
+// Baseline returns the static engine/format check descriptor retained for artifact rehydration.
 func (r DumpResult) Baseline() VerificationMetadata { return r.baseline }
+
+// ObservedBaseline returns the helper-observed dynamic source evidence for the in-flight dump.
+func (r DumpResult) ObservedBaseline() (recoveryreceipt.BaselineSpec, bool) {
+	tool, ok := r.receipt.RecoveryReceipt()
+	if !ok {
+		return recoveryreceipt.BaselineSpec{}, false
+	}
+	return tool.Baseline(), true
+}
+
+// DecodedArtifact returns the helper-observed decoded payload size and SHA-256.
+func (r DumpResult) DecodedArtifact() (uint64, string, bool) {
+	tool, ok := r.receipt.RecoveryReceipt()
+	if !ok {
+		return 0, "", false
+	}
+	return tool.DecodedBytes(), tool.DecodedSHA256(), true
+}
 
 // RecoveryArtifact joins immutable adapter metadata with Task23's durable upload record.
 type RecoveryArtifact struct {
@@ -169,6 +196,8 @@ type VerificationReceipt struct {
 	target   Connection
 	artifact RecoveryArtifact
 	observed VerificationMetadata
+	evidence recoveryreceipt.Receipt
+	verified bool
 }
 
 func NewVerificationReceipt(request RestoreRequest, targetJob JobReceipt, observed VerificationMetadata) (VerificationReceipt, error) {
@@ -176,8 +205,20 @@ func NewVerificationReceipt(request RestoreRequest, targetJob JobReceipt, observ
 	if targetJob.direction != restoreDirection || targetJob.resourceID != request.target.ResourceID() || targetJob.fence.operationID != request.target.operationID || targetJob.fence.attempt != request.target.attempt || observed.spec.Schema == "" || observed.spec.Schema != want.spec.Schema || observed.spec.Version != want.spec.Version || !slices.Equal(observed.spec.Fields, want.spec.Fields) {
 		return VerificationReceipt{}, ErrRecoveryRequest
 	}
-	return VerificationReceipt{target: request.target, artifact: request.artifact, observed: observed}, nil
+	targetTool, targetOK := targetJob.RecoveryReceipt()
+	// Dynamic source evidence is re-read from the authenticated recovery wire after restart.
+	// The durable artifact record intentionally does not pretend to persist an in-memory dump receipt.
+	if request.target.Engine() != EngineSQLite && !targetOK {
+		return VerificationReceipt{}, ErrRecoveryRequest
+	}
+	if targetOK && targetTool.ValidateFor(recoveryreceipt.Engine(request.target.Engine()), targetTool.Action(), recoveryreceipt.DirectionRestore) != nil {
+		return VerificationReceipt{}, ErrRecoveryRequest
+	}
+	return VerificationReceipt{target: request.target, artifact: request.artifact, observed: observed, evidence: targetTool, verified: targetOK}, nil
 }
 func (r VerificationReceipt) Target() Connection             { return r.target }
 func (r VerificationReceipt) Artifact() RecoveryArtifact     { return r.artifact }
 func (r VerificationReceipt) Observed() VerificationMetadata { return r.observed }
+func (r VerificationReceipt) RecoveryReceipt() (recoveryreceipt.Receipt, bool) {
+	return r.evidence, r.verified
+}

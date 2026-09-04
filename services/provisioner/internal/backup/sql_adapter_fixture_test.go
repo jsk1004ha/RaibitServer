@@ -41,7 +41,7 @@ func (r *sqlRunner) Run(ctx context.Context, job IsolatedJob, stream JobStream) 
 	}
 	r.runs = append(r.runs, recorded)
 	r.completed++
-	return testCompletedJob(job, "sql-job"), nil
+	return completedHelperJob(job, "sql-job")
 }
 
 type sqlOutput struct{ strings.Builder }

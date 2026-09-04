@@ -108,11 +108,19 @@ func testArtifact(t *testing.T, source Connection) RecoveryArtifact {
 
 func testRestoreReceipt(t *testing.T, target Connection) JobReceipt {
 	t.Helper()
-	job, err := NewIsolatedJob(testJobSpec(t, target, StreamStdin))
+	plans, err := postgresqlRestorePlan(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := newJobReceipt(testCompletedJob(job, "restore-job"), 4, job, restoreDirection)
+	job, err := newSQLJob(target, plans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := completedHelperJob(job, "restore-job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := newJobReceipt(observed, 4, job, restoreDirection)
 	if err != nil {
 		t.Fatal(err)
 	}

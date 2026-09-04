@@ -6,6 +6,8 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+
+	"github.com/raibitserver/provisioner/internal/recoveryreceipt"
 )
 
 type streamDirection uint8
@@ -210,18 +212,30 @@ type JobReceipt struct {
 	resourceID string
 	fence      FenceIdentity
 	direction  streamDirection
+	tool       recoveryreceipt.Receipt
+	toolValid  bool
 }
 
 func newJobReceipt(observed completedJobObservation, streamedBytes int64, job IsolatedJob, direction streamDirection) (JobReceipt, error) {
 	if !recoveryPart.MatchString(observed.name) || !providerUIDPattern.MatchString(observed.uid) || observed.specIdentity != isolatedJobIdentity(job) || streamedBytes < 0 || streamedBytes > MaxStoredBytes || job.spec.Connection.spec.ResourceID == "" || job.fence.attempt < 1 || direction < dumpDirection || direction > restoreDirection {
 		return JobReceipt{}, ErrRecoveryJob
 	}
-	return JobReceipt{name: observed.name, uid: observed.uid, bytes: streamedBytes, resourceID: job.spec.Connection.ResourceID(), fence: job.fence, direction: direction}, nil
+	engine, action, toolDirection, helper := expectedHelperReceipt(job)
+	if helper {
+		directionMatches := direction == dumpDirection && toolDirection == recoveryreceipt.DirectionDump || direction == restoreDirection && toolDirection == recoveryreceipt.DirectionRestore
+		if !directionMatches || !observed.receiptPresent || observed.receipt.ValidateFor(engine, action, toolDirection) != nil {
+			return JobReceipt{}, ErrRecoveryJob
+		}
+	}
+	return JobReceipt{name: observed.name, uid: observed.uid, bytes: streamedBytes, resourceID: job.spec.Connection.ResourceID(), fence: job.fence, direction: direction, tool: observed.receipt, toolValid: observed.receiptPresent}, nil
 }
 
 func (r JobReceipt) Name() string { return r.name }
 func (r JobReceipt) UID() string  { return r.uid }
 func (r JobReceipt) Bytes() int64 { return r.bytes }
+func (r JobReceipt) RecoveryReceipt() (recoveryreceipt.Receipt, bool) {
+	return r.tool, r.toolValid
+}
 
 type JobRunner interface {
 	Run(context.Context, IsolatedJob, JobStream) (completedJobObservation, error)

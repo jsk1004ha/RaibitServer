@@ -41,7 +41,7 @@ func (r *mongoRunner) Run(ctx context.Context, job IsolatedJob, stream JobStream
 	}
 	r.runs = append(r.runs, run)
 	r.completed++
-	return testCompletedJob(job, "mongodb-job"), nil
+	return completedHelperJob(job, "mongodb-job")
 }
 
 type mongoOutput struct {

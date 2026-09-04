@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/raibitserver/provisioner/internal/recoveryreceipt"
 )
 
 type recoveryNames struct{ snapshot, policy, job string }
@@ -52,7 +54,7 @@ func recoveryJobManifest(job IsolatedJob, name, snapshotName, snapshotUID string
 	podSpec := map[string]any{
 		"automountServiceAccountToken": false, "restartPolicy": "Never", "terminationGracePeriodSeconds": 10,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": job.security.runAsUser, "runAsGroup": job.security.runAsUser, "fsGroup": job.security.runAsUser, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
-		"containers": []any{containers[len(containers)-1]},
+		"containers":      []any{containers[len(containers)-1]},
 		"volumes": []any{map[string]any{
 			"name": job.scratch.name, "emptyDir": map[string]any{"sizeLimit": job.scratch.SizeLimit()},
 		}},
@@ -82,9 +84,10 @@ func recoveryStepContainer(job IsolatedJob, step CommandStep, index int, snapsho
 	container := map[string]any{
 		"name": fmt.Sprintf("step-%d", index), "image": job.spec.Image, "imagePullPolicy": "IfNotPresent", "command": []any{command.executable}, "args": stringAny(command.args),
 		"stdin": step.binding == StreamStdin, "stdinOnce": step.binding == StreamStdin,
+		"terminationMessagePath": recoveryreceipt.TerminationLogPath, "terminationMessagePolicy": "File",
 		"resources":       map[string]any{"requests": map[string]any{"cpu": strconv.FormatInt(job.spec.CPUMilli, 10) + "m", "memory": strconv.FormatInt(job.spec.MemoryMiB, 10) + "Mi", "ephemeral-storage": strconv.FormatInt(job.spec.EphemeralMiB, 10) + "Mi"}, "limits": map[string]any{"cpu": strconv.FormatInt(job.spec.CPUMilli, 10) + "m", "memory": strconv.FormatInt(job.spec.MemoryMiB, 10) + "Mi", "ephemeral-storage": strconv.FormatInt(job.spec.EphemeralMiB, 10) + "Mi"}},
 		"securityContext": map[string]any{"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "runAsNonRoot": true, "runAsUser": job.security.runAsUser, "capabilities": map[string]any{"drop": []any{"ALL"}}},
-		"volumeMounts": []any{map[string]any{"name": job.scratch.name, "mountPath": job.scratch.mountPath, "readOnly": false}},
+		"volumeMounts":    []any{map[string]any{"name": job.scratch.name, "mountPath": job.scratch.mountPath, "readOnly": false}},
 	}
 	projection, projected := job.EndpointProjection()
 	projectedEnvironment := projection.environment()

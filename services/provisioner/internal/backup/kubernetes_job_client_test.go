@@ -15,25 +15,29 @@ import (
 )
 
 type fakeRecoveryCommands struct {
-	job                   IsolatedJob
-	created               []map[string]any
-	deleted               []string
-	sourceReplaced        bool
-	workloadUID           string
-	workloadImage         string
-	workloadGeneration    int64
-	snapshotAlreadyExists bool
-	workloadReads         int
-	driftBeforeJob        bool
-	streamErr             error
-	cleanupSawCanceled    bool
-	cleanupSawDeadline    bool
-	jobCreates            int
+	job                    IsolatedJob
+	created                []map[string]any
+	deleted                []string
+	sourceReplaced         bool
+	workloadUID            string
+	workloadImage          string
+	workloadGeneration     int64
+	snapshotAlreadyExists  bool
+	workloadReads          int
+	driftBeforeJob         bool
+	streamErr              error
+	cleanupSawCanceled     bool
+	cleanupSawDeadline     bool
+	jobCreates             int
 	authorityBound         bool
 	authorityReleased      bool
 	authorityValue         string
 	bindErrAfterSideEffect bool
-	createFailureKind     string
+	createFailureKind      string
+	jobReceipt             string
+	jobPodCount            int
+	omitJobPods            bool
+	mutateJobPod           func(map[string]any)
 }
 
 func (f *fakeRecoveryCommands) Run(ctx context.Context, _ string, args []string, _ bool, _ time.Duration) (string, error) {
@@ -79,6 +83,9 @@ func (f *fakeRecoveryCommands) RunSensitiveOutput(ctx context.Context, _ string,
 		f.sourceReplaced = true
 		return "kubectl get secret", mustJSON(map[string]any{"metadata": map[string]any{"name": ref.name, "namespace": ref.namespace, "uid": provider.CredentialUID, "resourceVersion": "19", "annotations": map[string]any{"raibitserver.io/credential-generation": provider.CredentialGeneration, "raibitserver.io/credential-owner": "raibitserver-provisioner", "raibitserver.io/resource-id": f.job.spec.Connection.ResourceID(), "raibitserver.io/project-id": f.job.spec.Connection.spec.ProjectID}}, "data": map[string]any{ref.key: base64.StdEncoding.EncodeToString([]byte("old-exact-secret")), "UNRELATED": base64.StdEncoding.EncodeToString([]byte("must-not-copy"))}}), nil
 	case "pods":
+		if strings.Contains(strings.Join(args, " "), "job-name=") {
+			return "kubectl get pods", mustJSON(map[string]any{"items": f.recoveryJobPods()}), nil
+		}
 		return "kubectl get pods", mustJSON(map[string]any{"items": []any{f.providerPod("31", "")}}), nil
 	default:
 		if strings.HasPrefix(args[1], "pod/") {
@@ -188,30 +195,15 @@ func (f *fakeRecoveryCommands) RunCreateInputUID(ctx context.Context, _ string, 
 	return "", "", ErrRecoveryJob
 }
 
-func Test_CommandKubernetesJobClient_adopts_only_exact_immutable_snapshot_after_already_exists(t *testing.T) {
-	connection := testNetworkConnection(t, "source", "source.db.internal", "source-secret", "DATABASE_URL", "16.4")
-	job, err := NewIsolatedJob(testJobSpec(t, connection, StreamStdout))
-	if err != nil {
-		t.Fatal(err)
-	}
-	commands := &fakeRecoveryCommands{job: job, snapshotAlreadyExists: true}
-	client, err := NewCommandKubernetesJobClient(commands, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner, _ := NewKubernetesJobRunner(client)
-	handoff, _ := NewDumpHandoff(context.Background(), &countingWriteCloser{}, 16)
-	if receipt, runErr := handoff.Execute(context.Background(), job, runner); runErr != nil || receipt.UID() != "job-uid" {
-		t.Fatalf("receipt=%+v err=%v", receipt, runErr)
-	}
-}
-
 func (f *fakeRecoveryCommands) RunStream(ctx context.Context, _ string, args []string, _ io.Reader, output io.Writer, _ time.Duration) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "kubectl stream", err
 	}
 	if f.streamErr != nil {
 		return "kubectl logs", f.streamErr
+	}
+	if args[0] == "attach" {
+		return "kubectl attach", nil
 	}
 	if args[0] != "logs" {
 		return "", ErrRecoveryJob

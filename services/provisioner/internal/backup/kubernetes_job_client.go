@@ -108,6 +108,14 @@ func (c *CommandKubernetesJobClient) CreateAuthorizedJob(ctx context.Context, jo
 	if err != nil {
 		return created, err
 	}
+	_, created.helperReceipt = recoveryHelperCommand(job.spec.Steps, job.spec.Connection.Engine())
+	created.streamStep, created.engine, created.image = streamStep, job.spec.Connection.Engine(), job.spec.Image
+	created.steps = make([]createdJobStep, len(job.spec.Steps))
+	for index, step := range job.spec.Steps {
+		if len(step.command.args) == 1 {
+			created.steps[index] = createdJobStep{executable: step.command.executable, action: step.command.args[0], binding: step.binding}
+		}
+	}
 	current, err := c.readWorkload(ctx, provider.Namespace, provider.Name)
 	if err != nil || !sameObservedWorkload(workload, current) || !validObservedWorkload(current, job) {
 		return created, errors.Join(ErrRecoveryJob, err)
@@ -229,5 +237,5 @@ func (c *CommandKubernetesJobClient) WaitJob(ctx context.Context, created Create
 	if err := c.readJSON(ctx, []string{"get", "job/" + created.Name, "--namespace", created.Namespace, "-o", "json"}, &observed); err != nil || observed.Metadata.UID != created.UID || observed.Metadata.Annotations["raibitserver.io/credential-snapshot-uid"] != created.snapshotUID || !observed.referencesSnapshot(created.snapshotName) {
 		return CompletedJobObservation{}, errors.Join(ErrRecoveryJob, err)
 	}
-	return observed.completed()
+	return c.completeObservedJob(ctx, created, observed)
 }
