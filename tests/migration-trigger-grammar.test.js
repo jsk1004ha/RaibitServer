@@ -43,12 +43,12 @@ test('reviewed trigger grammar is closed through checker and CLI', async t => {
     assert.doesNotThrow(() => checkReviewedTriggerSql(sql, id));
   }
   const safe = [
-    ['nested comments and doubled double-quoted identifier', declaration('BEGIN /* outer /* nested */ comment */ RETURN NEW; END', '$$', '"Odd""Table"'), withFirstGuardPrefix('/* outer /* nested */ comment */')],
-    ['untagged function body with tagged dollar string', declaration('BEGIN RAISE EXCEPTION $message$DELETE /* text */$message$; RETURN NEW; END'), withFirstGuardPrefix('RAISE EXCEPTION $message$DELETE /* text */$message$;')],
-    ['tagged function body with untagged dollar string', declaration('BEGIN RAISE EXCEPTION $$UPDATE -- text$$; RETURN NEW; END', '$function$'), withFirstGuardPrefix('RAISE EXCEPTION $$UPDATE -- text$$;', '$function$')],
-    ['escape string with backslash-escaped apostrophe', declaration("BEGIN RAISE EXCEPTION E'it\\'s DELETE'; RETURN NEW; END"), withFirstGuardPrefix("RAISE EXCEPTION E'it\\'s DELETE';")],
+    ['nested comments and doubled double-quoted identifier', declaration('BEGIN /* outer /* nested */ comment */ RETURN NEW; END', '$$', '"Odd""Table"')],
+    ['untagged function body with tagged dollar string', declaration('BEGIN RAISE EXCEPTION $message$DELETE /* text */$message$; RETURN NEW; END')],
+    ['tagged function body with untagged dollar string', declaration('BEGIN RAISE EXCEPTION $$UPDATE -- text$$; RETURN NEW; END', '$function$')],
+    ['escape string with backslash-escaped apostrophe', declaration("BEGIN RAISE EXCEPTION E'it\\'s DELETE'; RETURN NEW; END")],
   ];
-  for (const [name, sql, cliSql] of safe) await verify(`accepts ${name}`, `${sql}\n/* trailing /* nested */ trivia */`, cliSql, true);
+  for (const [name, sql] of safe) await verify(`accepts ${name}`, `${sql}\n/* trailing /* nested */ trivia */`, reviewedRecovery, true);
   const obscuredMutations = [
     ['block comment', 'IF true THEN /* comment */ DELETE FROM "User"; END IF;'],
     ['line comment', 'IF true THEN -- comment\nDELETE FROM "User"; END IF;'],
@@ -73,6 +73,13 @@ test('reviewed trigger grammar is closed through checker and CLI', async t => {
   for (const [name, suffix] of rejected) await verify(`rejects ${name}`, `${base}\n${suffix}`, `${reviewedRecovery}\n${suffix}`, false);
   const extraDeclaration = declaration('BEGIN RETURN NEW; END');
   await verify('rejects an extra function and trigger declaration', `${reviewedRecovery}\n${extraDeclaration}`, `${reviewedRecovery}\n${extraDeclaration}`, false, '000014_resource_recovery');
+  const duplicateFunction = `${reviewedRecovery}\nCREATE OR REPLACE FUNCTION recovery_backup_guard() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN RETURN NEW; END\n$$;`;
+  await verify('rejects a duplicate approved function', duplicateFunction, duplicateFunction, false, '000014_resource_recovery');
+  const approvedTrigger = 'CREATE TRIGGER "ResourceBackup_guard" BEFORE INSERT OR UPDATE OR DELETE ON "ResourceBackup" FOR EACH ROW EXECUTE FUNCTION recovery_backup_guard();';
+  const duplicateTrigger = `${reviewedRecovery}\n${approvedTrigger}`;
+  await verify('rejects a duplicate approved trigger', duplicateTrigger, duplicateTrigger, false, '000014_resource_recovery');
+  const weakenedGuard = reviewedRecovery.replace("IF TG_OP='DELETE' THEN", 'IF false THEN');
+  await verify('rejects a weakened approved guard body', weakenedGuard, weakenedGuard, false, '000014_resource_recovery');
   const unfinishedFunction = 'CREATE FUNCTION reviewed_guard() RETURNS trigger LANGUAGE plpgsql AS $function$ BEGIN RETURN NEW; END;';
   await verify('rejects unterminated function dollar body', unfinishedFunction, reviewedRecovery.replace('END $$;\nCREATE TRIGGER "ResourceBackup_guard"', 'END;\nCREATE TRIGGER "ResourceBackup_guard"'), false);
 });

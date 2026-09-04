@@ -11,11 +11,13 @@ const reviewedTriggerMigrations = new Set(['000014_resource_recovery', '000015_p
 // Anchor manually reviewed schema DDL that precedes the closed trigger declarations.
 const reviewedTriggerContracts = new Map([
   ['000014_resource_recovery', {
+    sqlDigest: 'b2e611fbbe6d6d66e9c04b6c4cbf3000a4af1c83ec7d4be1f986d3c2de0a38ac',
     prefixDigest: 'dc3efe6158e92f3ffe4e23b667f38824280a9832e85cc0f6ea9b1f117e8ad907',
     functions: ['recovery_attempt_guard', 'recovery_backup_guard', 'recovery_pin_guard', 'recovery_restore_guard'],
     triggers: ['"ResourceBackup_guard"|INSERTORUPDATEORDELETE|"ResourceBackup"|recovery_backup_guard', '"ResourceRecoveryAttempt_guard"|INSERTORUPDATEORDELETE|"ResourceRecoveryAttempt"|recovery_attempt_guard', '"ResourceRecoveryPin_guard"|INSERTORUPDATE|"ResourceRecoveryPin"|recovery_pin_guard', '"ResourceRestore_guard"|INSERTORUPDATEORDELETE|"ResourceRestore"|recovery_restore_guard'],
   }],
   ['000015_preview_lineage', {
+    sqlDigest: '1cc33de5d47030b3643e7bc26fb4870c32d28d468e6962a1f43fdd2745ec756d',
     prefixDigest: '3b85ca152eaf0f0d33c024e4767b32b4645219df0a1a4404f1a9a4df9dbd8a7b',
     functions: ['raibit_preview_attempt_guard', 'raibit_preview_lineage_guard'],
     triggers: ['"Deployment_preview_guard"|UPDATE|"Deployment"|raibit_preview_attempt_guard', '"PreviewLineage_guard"|INSERTORUPDATE|"PreviewLineage"|raibit_preview_lineage_guard'],
@@ -87,12 +89,16 @@ function assertSqlTrivia(sql) {
 
 export function checkReviewedTriggerSql(sql, migrationId) {
   const functions = new Set();
+  let functionDeclarationCount = 0;
   const firstFunction = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b/i.exec(sql);
   assert.ok(firstFunction, 'reviewed trigger migration must define a trigger function');
   const prefix = sql.slice(0, firstFunction.index);
   const contract = migrationId ? reviewedTriggerContracts.get(migrationId) : [...reviewedTriggerContracts.values()].find(entry => entry.prefixDigest === digest(prefix));
   if (migrationId) assert.ok(contract, 'reviewed trigger migration contract is missing');
-  if (contract) assert.equal(digest(prefix), contract.prefixDigest, 'reviewed pre-trigger DDL changed');
+  if (contract) {
+    assert.equal(digest(prefix), contract.prefixDigest, 'reviewed pre-trigger DDL changed');
+    assert.equal(digest(sql), contract.sqlDigest, 'reviewed trigger migration differs from canonical SQL');
+  }
   else assertSqlTrivia(prefix);
   const functionPattern = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(\)\s+RETURNS\s+trigger\s+LANGUAGE\s+plpgsql\s+AS\s+(\$\$|\$[A-Za-z_][A-Za-z_0-9]*\$)([\s\S]*?)\2\s*;/gi;
   let remaining = sql.slice(firstFunction.index).replace(functionPattern, (_statement, name, _delimiter, body) => {
@@ -101,12 +107,15 @@ export function checkReviewedTriggerSql(sql, migrationId) {
     assert.doesNotMatch(code, /\b(?:WITH|INSERT|UPDATE|DELETE)\b/i, 'trigger function may not mutate rows');
     assert.doesNotMatch(code, /\b(EXECUTE|PERFORM|CALL|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i, 'trigger function may not execute dynamic or schema-changing SQL');
     functions.add(name.toLowerCase());
+    functionDeclarationCount++;
     return '';
   });
   assert.ok(functions.size > 0, 'reviewed trigger migration must define a trigger function');
+  assert.equal(functionDeclarationCount, functions.size, 'reviewed trigger function declarations must be unique');
   if (contract) assert.deepEqual([...functions].sort(), contract.functions, 'reviewed trigger function set changed');
   const referencedFunctions = new Set();
   const triggerSignatures = new Set();
+  let triggerDeclarationCount = 0;
   const identifier = '(?:"(?:[^"]|"")*"|[A-Za-z_][A-Za-z_0-9]*)';
   const triggerPattern = new RegExp(`CREATE\\s+TRIGGER\\s+(${identifier})\\s+BEFORE\\s+((?:INSERT|UPDATE|DELETE)(?:\\s+OR\\s+(?:INSERT|UPDATE|DELETE))*)\\s+ON\\s+(${identifier})\\s+FOR\\s+EACH\\s+ROW\\s+EXECUTE\\s+FUNCTION\\s+([A-Za-z_][A-Za-z_0-9]*)\\s*\\(\\)\\s*;`, 'gi');
   remaining = remaining.replace(triggerPattern, (_statement, triggerName, events, tableName, name) => {
@@ -114,10 +123,12 @@ export function checkReviewedTriggerSql(sql, migrationId) {
     assert.ok(functions.has(identity), 'trigger must reference a function defined in the same migration');
     referencedFunctions.add(identity);
     triggerSignatures.add(`${triggerName}|${events.replaceAll(/\s+/g, '').toUpperCase()}|${tableName}|${identity}`);
+    triggerDeclarationCount++;
     return '';
   });
   assert.deepEqual(referencedFunctions, functions, 'every reviewed trigger function must have a matching trigger');
   assert.equal(triggerSignatures.size, functions.size, 'every reviewed trigger function must have exactly one trigger');
+  assert.equal(triggerDeclarationCount, triggerSignatures.size, 'reviewed trigger declarations must be unique');
   if (contract) assert.deepEqual([...triggerSignatures].sort(), contract.triggers, 'reviewed trigger declaration set changed');
   assertSqlTrivia(remaining);
 }
