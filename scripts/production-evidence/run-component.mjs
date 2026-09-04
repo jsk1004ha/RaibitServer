@@ -35,6 +35,23 @@ export async function executeStepRequest(value, options = {}) {
   return receipt;
 }
 
+export function parseFixedStepArguments(args) {
+  if (args.length !== 4 || args[0] !== '--request' || args[2] !== '--output'
+    || !path.isAbsolute(args[1]) || !path.isAbsolute(args[3])) throw new EvidenceError('invalid_arguments');
+  return Object.freeze({ requestPath: args[1], outputPath: args[3] });
+}
+
+// Individual wrappers import this function with their compile-time step name. The
+// operator-facing argv never contains a selectable step.
+export async function runFixedStepCli(expectedStep, args) {
+  if (!Object.hasOwn(STEP_MODULES, expectedStep)) throw new EvidenceError('invalid_step_contract');
+  const { requestPath, outputPath } = parseFixedStepArguments(args);
+  const request = await readJson(requestPath, 'missing_step_request');
+  const receipt = await executeStepRequest(request, { expectedStep });
+  await writeFile(outputPath, `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
+  await chmod(outputPath, 0o600);
+}
+
 export function componentSample(component, now = new Date().toISOString()) {
   if (!['resources', 'domains'].includes(component)) throw new EvidenceError('invalid_component');
   const identity = { runId: randomUUID(), environmentFingerprint: digest('synthetic-environment'), sourceCommitSha: '0'.repeat(40), migrationDigest: digest('synthetic-migration'), approvedInputSha256: APPROVED_INPUT_SHA256, operatorContractDigest: OPERATOR_CONTRACT_DIGEST, operatorInputFingerprint: digest('synthetic-input'), organizationId: 'fixture-org', projectId: 'fixture-project', serviceId: 'fixture-service', deploymentId: 'fixture-deployment', resourceId: 'fixture-resource' };
@@ -61,16 +78,6 @@ export async function runComponent(request) {
   return { status: 'NOT_RUN', reason, releaseEligible: false, runId: identity.runId };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
-    const args = process.argv.slice(2);
-    if (args.length !== 6 || args[0] !== '--step' || args[2] !== '--request' || args[4] !== '--output'
-      || !path.isAbsolute(args[3]) || !path.isAbsolute(args[5])) throw new EvidenceError('invalid_arguments');
-    const request = await readJson(args[3], 'missing_step_request');
-    const receipt = await executeStepRequest(request, { expectedStep: args[1] });
-    await writeFile(args[5], `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
-    await chmod(args[5], 0o600);
-  } catch (error) {
-    process.stderr.write(`${error instanceof EvidenceError ? error.reason : 'evidence_io_failed'}\n`);
-    process.exitCode = 1;
-  }
+  process.stderr.write('invalid_arguments\n');
+  process.exitCode = 2;
 }

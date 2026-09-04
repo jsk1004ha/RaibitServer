@@ -24,7 +24,8 @@ function iso(clock) {
 function validateOptions(options) {
   const keys = ['profile', 'scenario', 'faultMatrix', 'attemptDir', 'inputs', 'executeStep', 'clock', 'uuid', 'fixture'];
   if (!options || Object.keys(options).length !== keys.length || keys.some((key) => !Object.hasOwn(options, key))
-    || options.profile !== 'train-a' || (options.scenario === 'happy') === (options.faultMatrix !== null)
+    || options.profile !== 'train-a'
+    || !((options.scenario === 'happy' && options.faultMatrix === null) || (options.scenario === null && options.faultMatrix !== null))
     || !path.isAbsolute(options.attemptDir) || typeof options.clock?.now !== 'function' || typeof options.uuid !== 'function'
     || !(options.executeStep === null || typeof options.executeStep === 'function') || typeof options.fixture !== 'boolean') throw new EvidenceError('invalid_arguments');
   if (options.faultMatrix !== null) {

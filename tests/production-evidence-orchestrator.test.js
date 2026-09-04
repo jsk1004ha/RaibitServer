@@ -15,6 +15,7 @@ import { APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST } from '../scripts/prod
 import { loadOperatorContract } from '../scripts/production-evidence/lib/operator-inputs.mjs';
 import { orderCleanupInventory, runProductionEvidence } from '../scripts/production-evidence/lib/orchestrator.mjs';
 import { createRunnerContext } from '../scripts/production-evidence/lib/run.mjs';
+import { parseFixedStepArguments } from '../scripts/production-evidence/run-component.mjs';
 import { STEP_ASSERTIONS } from '../scripts/production-evidence/lib/step-contract.mjs';
 import { parseArguments, parseMatrix } from '../scripts/production-evidence/lib/public-cli.mjs';
 
@@ -105,11 +106,26 @@ test('Given public production arguments, When duplicates, unknowns, or mixed mod
   ]) assert.throws(() => parseArguments(args), { reason: 'invalid_arguments' });
 });
 
+test('Given the exported orchestrator, When scenario and fault mode are not the exact union, Then it rejects before setup', async () => {
+  const base = { profile: 'train-a', attemptDir: path.resolve('attempt'), inputs: inputs(), executeStep: null,
+    clock: { now: () => new Date() }, uuid: randomUUID, fixture: false };
+  const fault = { id: 'runtime-failure', boundary: 'runtime', mode: 'command-failure', expectedReason: 'runtime_failed' };
+  await assert.rejects(runProductionEvidence({ ...base, scenario: 'typo', faultMatrix: fault }), { reason: 'invalid_arguments' });
+  await assert.rejects(runProductionEvidence({ ...base, scenario: null, faultMatrix: null }), { reason: 'invalid_arguments' });
+  await assert.rejects(runProductionEvidence({ ...base, scenario: 'happy', faultMatrix: fault }), { reason: 'invalid_arguments' });
+});
+
 test('Given the public HTTP transport, When a caller supplies localhost, credentials, or an unsupported method, Then it fails before I/O', async () => {
   const context = createRunnerContext(path.resolve('run'), new Date(Date.now() + 60_000).toISOString());
   await assert.rejects(context.requestJson({ method: 'GET', url: 'http://127.0.0.1:18080/api/auth/me' }), { reason: 'invalid_request' });
   await assert.rejects(context.requestJson({ method: 'GET', url: 'https://user:pass@example.test/api/auth/me' }), { reason: 'invalid_request' });
   await assert.rejects(context.requestJson({ method: 'TRACE', url: 'https://example.test/' }), { reason: 'invalid_request' });
+});
+
+test('Given a fixed step wrapper, When arguments are parsed, Then no operator-selectable step is accepted', () => {
+  const requestPath = path.resolve('request.json'), outputPath = path.resolve('output.json');
+  assert.deepEqual(parseFixedStepArguments(['--request', requestPath, '--output', outputPath]), { requestPath, outputPath });
+  assert.throws(() => parseFixedStepArguments(['--step', 'runtime', '--request', requestPath, '--output', outputPath]), { reason: 'invalid_arguments' });
 });
 
 test('Given a fault matrix, When its strict boundary or mode contract drifts, Then parsing fails closed', () => {
