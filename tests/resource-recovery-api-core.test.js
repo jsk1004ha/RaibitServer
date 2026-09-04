@@ -226,6 +226,19 @@ test('recovery API core parses delete confirmation as an exact prototype-safe bo
   assert.equal(state.auditEvents.filter(row => row.action === 'resource.backup:delete-requested').length, 1);
 });
 
+test('recovery API core rejects malformed delete bodies before target lookup or authorization', async () => {
+  // Given missing and forbidden targets, when malformed bodies are supplied, then deterministic body errors precede target and permission errors.
+  const state = fixture();
+  state.members.push({ organizationId: 'org_a', userId: 'viewer_a', role: 'VIEWER' });
+  const repository = new ResourceRecoveryRepository(new MemoryRecoveryTransaction(state), () => {});
+  const backup = await repository.createBackup(request('delete-precedence'));
+  await assert.rejects(repository.requestBackupDeletion(scope, 'missing', { confirmed: true, extra: true }), { code: 'RECOVERY_INPUT_INVALID', statusCode: 400 });
+  await assert.rejects(repository.requestBackupDeletion(scope, 'missing', { confirmed: false }), { code: 'RECOVERY_CONFIRMATION_REQUIRED', statusCode: 400 });
+  await assert.rejects(repository.requestBackupDeletion({ organizationId: 'org_a', actorUserId: 'viewer_a' }, backup.operation.id, []), { code: 'RECOVERY_INPUT_INVALID', statusCode: 400 });
+  await assert.rejects(repository.requestBackupDeletion(scope, 'missing', { confirmed: true }), { code: 'RECOVERY_NOT_FOUND', statusCode: 404 });
+  await assert.rejects(repository.requestBackupDeletion({ organizationId: 'org_a', actorUserId: 'viewer_a' }, backup.operation.id, { confirmed: true }), { code: 'RECOVERY_FORBIDDEN', statusCode: 403 });
+});
+
 test('recovery API core persists the first mutation audit inside the PostgreSQL transaction', async () => {
   // Given a PostgreSQL transaction fake backed by the real fixture, when creating a backup, then its domain rows and audit use the same transaction callback.
   const seed = fixture();

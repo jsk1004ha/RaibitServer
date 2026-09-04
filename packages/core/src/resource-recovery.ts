@@ -65,12 +65,12 @@ export class ResourceRecoveryRepository {
       return publicRestore(restore);
     });
   }
-  requestBackupDeletion(scope: RecoveryScope, id: string, input: unknown, now?: string): Promise<ResourceBackupView> {
+  async requestBackupDeletion(scope: RecoveryScope, id: string, input: unknown, now?: string): Promise<ResourceBackupView> {
+    requireDeleteConfirmation(input);
     return this.transaction.run(scope.organizationId, state => {
       const backup = state.backups.find(row => row.id === id && row.organizationId === scope.organizationId);
       if (!backup) throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
       recoveryAuthorized(state, scope, 'backup:manage');
-      requireDeleteConfirmation(input);
       if (backup.status === 'DELETING' || backup.status === 'DELETED') return publicBackup(backup, now);
       if (!['READY', 'FAILED', 'EXPIRED'].includes(backup.status)) throw new RecoveryError('RECOVERY_CLEANUP_INELIGIBLE');
       if (state.pins.some(pin => pin.backupId === backup.id && pin.kind === 'RESTORE_TARGET')) throw new RecoveryError('RECOVERY_RESTORE_PINNED');
