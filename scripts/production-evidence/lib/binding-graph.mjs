@@ -1,5 +1,6 @@
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
 import { EvidenceBindingSchema } from '../../../packages/schemas/src/production-evidence.ts';
+import { snapshotJournalData } from './journal-data-snapshot.mjs';
 
 const SAFE_PART = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -31,27 +32,6 @@ function immutable(value) {
   if (Array.isArray(value)) return Object.freeze(value.map(immutable));
   if (isRecord(value)) return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => [key, immutable(item)])));
   return value;
-}
-export function snapshotJournalData(value, seen = new WeakSet()) {
-  if (value === null || typeof value !== 'object') return value;
-  if (seen.has(value)) fail('invalid_journal');
-  seen.add(value);
-  const array = Array.isArray(value);
-  if (Object.getPrototypeOf(value) !== (array ? Array.prototype : Object.prototype)) fail('invalid_journal');
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const keys = Reflect.ownKeys(descriptors);
-  if (keys.some((key) => typeof key !== 'string')) fail('invalid_journal');
-  const dataKeys = array ? keys.filter((key) => key !== 'length') : keys;
-  if (array && (!Object.hasOwn(descriptors.length ?? {}, 'value') || dataKeys.length !== descriptors.length.value
-    || dataKeys.some((key, index) => key !== String(index)))) fail('invalid_journal');
-  const result = array ? [] : {};
-  for (const key of dataKeys) {
-    const descriptor = descriptors[key];
-    if (!descriptor || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable) fail('invalid_journal');
-    result[key] = snapshotJournalData(descriptor.value, seen);
-  }
-  seen.delete(value);
-  return Object.freeze(result);
 }
 const isIso = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const validSelector = (value) => isRecord(value) && Object.keys(value).length > 0 && Object.entries(value).every(([key, item]) => SAFE_ID.test(key)

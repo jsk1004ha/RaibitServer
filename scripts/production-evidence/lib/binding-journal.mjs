@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
 import { exclusiveJournalWrite, journalFiles, journalScope, withJournalTransaction } from './journal-io.mjs';
-import { parseEvidenceBindingPayload, snapshotJournalData } from './binding-graph.mjs';
+import { parseEvidenceBindingPayload } from './binding-graph.mjs';
+import { snapshotJournalData } from './journal-data-snapshot.mjs';
 export { resolveBindingGraph } from './binding-graph.mjs';
 export { isPrivateJournalMetadata } from './journal-io.mjs';
 export { isPrivateArtifactWriterMetadata } from './safe-artifact-writer.mjs';
