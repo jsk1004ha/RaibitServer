@@ -53,8 +53,8 @@ test('correlated ingestion happy path masks writes and legacy HTTP JSON/SSE with
     assert.equal(row.line === item.expected,true,item.name);
   }
   plane.store.runtimeLogs = Array.from({length:1001}, (_,i) => ({
-    id:'log-'+String(i).padStart(5,'0'),serviceId:service.id,deploymentId:null,
-    podName:null,containerName:null,timestamp:'2026-09-03T00:00:00.000Z',
+    id:'log-'+String(i).padStart(5,'0'),serviceId:service.id,deploymentId:'legacy-deployment',
+    podName:'legacy-pod',podUid:'legacy-pod-uid',containerName:'app',timestamp:'2026-09-03T00:00:00.000Z',
     line:'Authorization: Basic Rk9SQklEREVOX0JBU0lD\n'+'한'.repeat(5000),
   }));
   const server = http.createServer(createApiHandler(plane,{auth:{mode:'disabled',allowDisabled:true}}));

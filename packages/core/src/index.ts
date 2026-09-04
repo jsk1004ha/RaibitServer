@@ -52,4 +52,4 @@ export { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnaps
 export type * from './types.ts';
 export { oauthAttempt, publicOAuthError, OAuthPublicError } from './oauth-security.ts';
 export * from './deployment-health.ts';
-export { projectObservationPayload } from './observability-projection.ts';
+export { clearObservationProjectionContinuation, createObservationProjectionContinuation, projectObservationPayload, type ObservationProjectionContinuation } from './observability-projection.ts';

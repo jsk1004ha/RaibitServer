@@ -2,12 +2,14 @@ import { projectObservationPayload } from './observability-projection.ts';
 
 type AnyRecord = Record<string, any>;
 
-export function startBoundedSseStream({ req, res, event, initialPayload, load }: {
+export function startBoundedSseStream({ req, res, event, initialPayload, load, onClose, preprojected = false }: {
   req: any;
   res: any;
   event: string;
   initialPayload: AnyRecord;
   load: (cursors: AnyRecord) => Promise<AnyRecord>;
+  onClose?: () => void;
+  preprojected?: boolean;
 }) {
   const streamConfig = initialPayload?.stream || {};
   const retryMs = boundedInteger(streamConfig.retryMs, 3_000, 10, 60_000);
@@ -15,7 +17,7 @@ export function startBoundedSseStream({ req, res, event, initialPayload, load }:
   const maxLifetimeMs = boundedInteger(streamConfig.maxLifetimeMs, 15 * 60_000, 25, 60 * 60_000);
   const slowClientTimeoutMs = boundedInteger(streamConfig.slowClientTimeoutMs, 5_000, 10, 60_000);
   const deltaEvent = event.endsWith('.snapshot') ? `${event.slice(0, -'.snapshot'.length)}.delta` : `${event}.delta`;
-  const initial = projectObservationPayload(initialPayload);
+  const initial = preprojected ? initialPayload : projectObservationPayload(initialPayload);
   const cursors = cursorValues(initial);
   let sequence = 0;
   let polling = false;
@@ -29,28 +31,33 @@ export function startBoundedSseStream({ req, res, event, initialPayload, load }:
   const onRequestClose = () => stop(false);
   const onResponseClose = () => stop(false);
 
-  prepareResponse(res);
-  writeFrame(`retry: ${retryMs}\n\n`);
-  writeEvent(event, initial);
+  try {
+    prepareResponse(res);
+    writeFrame(`retry: ${retryMs}\n\n`);
+    writeEvent(event, initial);
 
-  if (!closed) {
-    pollTimer = setInterval(() => void poll(), retryMs);
-    heartbeatTimer = setInterval(() => {
-      if (!closed && !backpressured) writeFrame(`: keepalive ${Date.now()}\n\n`);
-    }, heartbeatMs);
-    lifetimeTimer = setTimeout(() => stop(true), maxLifetimeMs);
-    pollTimer.unref?.();
-    heartbeatTimer.unref?.();
-    lifetimeTimer.unref?.();
-    req?.on?.('close', onRequestClose);
-    res?.on?.('close', onResponseClose);
+    if (!closed) {
+      pollTimer = setInterval(() => void poll(), retryMs);
+      heartbeatTimer = setInterval(() => {
+        if (!closed && !backpressured) writeFrame(`: keepalive ${Date.now()}\n\n`);
+      }, heartbeatMs);
+      lifetimeTimer = setTimeout(() => stop(true), maxLifetimeMs);
+      pollTimer.unref?.();
+      heartbeatTimer.unref?.();
+      lifetimeTimer.unref?.();
+      req?.on?.('close', onRequestClose);
+      res?.on?.('close', onResponseClose);
+    }
+  } catch {
+    stop(true);
   }
 
   async function poll() {
     if (closed || polling || backpressured) return;
     polling = true;
     try {
-      const payload = projectObservationPayload(await load({ ...cursors }));
+      const loaded = await load({ ...cursors });
+      const payload = preprojected ? loaded : projectObservationPayload(loaded);
       Object.assign(cursors, cursorValues(payload));
       if (hasDelta(payload)) writeEvent(deltaEvent, payload);
     } catch {
@@ -116,6 +123,7 @@ export function startBoundedSseStream({ req, res, event, initialPayload, load }:
     if (endResponse && !res.writableEnded && !res.destroyed) {
       try { res.end(); } catch { /* response is already gone */ }
     }
+    try { onClose?.(); } catch { /* cleanup cannot reopen a closed stream */ }
   }
 
   return {

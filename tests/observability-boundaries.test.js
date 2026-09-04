@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { boundedDnsLabel, identityDnsLabel, tenantProjectLabel } from '../packages/core/src/domain-router.ts';
 import { sanitizeObservationLine } from '../packages/core/src/observability-redaction.ts';
-import { maskedObservationRows, projectObservationPayload } from '../packages/core/src/observability-projection.ts';
+import { createObservationProjectionContinuation, maskedObservationRows, projectObservationPayload } from '../packages/core/src/observability-projection.ts';
 
 test('runtime identity fixture matches existing TypeScript naming primitives', () => {
   // Given the frozen Go/TypeScript shared corpus, when existing naming primitives derive identity.
@@ -55,4 +56,48 @@ test('a wide legacy metadata object cannot block complete-row cursor progress', 
   const rows = maskedObservationRows([row]);
   assert.equal(rows.length,1);
   assert.equal(Buffer.byteLength(JSON.stringify(rows))<262144,true);
+});
+
+test('Given a PEM end row beyond the byte prefix, When it is replayed, Then the source state rolls back with the cursor', () => {
+  // Given one immutable runtime source and a payload whose service metadata consumes most of the response budget.
+  const continuation = createObservationProjectionContinuation();
+  const source = {serviceId:'service-1',deploymentId:'deployment-1',podUid:'pod-1',containerName:'app'};
+  const otherSource = {...source,podUid:'pod-2'};
+  const filling = Array.from({length:40},(_,index)=>({id:'fill-'+index,timestamp:'2026-09-04T00:00:00.000Z',...otherSource,line:'x'.repeat(16_000)}));
+  // When the end row does not fit the first complete-row prefix.
+  const first = projectObservationPayload({service:{metadata:'x'.repeat(65_000)},logs:[
+    {id:'begin',timestamp:'2026-09-04T00:00:00.000Z',...source,line:'-----BEGIN RSA PRIVATE KEY-----'},
+    ...filling,
+    {id:'end',timestamp:'2026-09-04T00:00:01.000Z',...source,line:'-----END RSA PRIVATE KEY----- after'},
+  ]},{continuation});
+  // Then replaying that row still observes the prior PEM state and only later text becomes visible.
+  assert.equal(first.logs.some((row)=>row.id==='end'),false);
+  const replay = projectObservationPayload({logs:[
+    {id:'end',timestamp:'2026-09-04T00:00:01.000Z',...source,line:'-----END RSA PRIVATE KEY----- after'},
+    {id:'after',timestamp:'2026-09-04T00:00:02.000Z',...source,line:'VISIBLE_AFTER_END'},
+  ]},{continuation});
+  assert.equal(replay.logs[0].line,'**** after');
+  assert.equal(replay.logs[1].line,'VISIBLE_AFTER_END');
+});
+
+test('Given an SSE setup write failure, When close paths repeat, Then projection cleanup runs exactly once', async () => {
+  const { startBoundedSseStream } = await import('../packages/core/src/sse.ts');
+  const req = new EventEmitter();
+  const res = new EventEmitter();
+  res.setHeader = () => { throw new Error('header write failed'); };
+  res.end = () => {};
+  let cleanup = 0;
+  const stream = startBoundedSseStream({
+    req,
+    res,
+    event:'service.logs.snapshot',
+    initialPayload:{logs:[]},
+    load:async()=>({logs:[]}),
+    onClose:()=>{ cleanup += 1; },
+  });
+  req.emit('close');
+  res.emit('close');
+  stream.stop();
+  assert.equal(stream.closed,true);
+  assert.equal(cleanup,1);
 });

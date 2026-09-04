@@ -401,7 +401,10 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
     if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
     await assertProjectAccess(repository, deployment.projectId, subject);
-    return paginationRead(async () => activityPage('logs', await repository.listDeploymentLogs(deploymentId, options)));
+    return paginationRead(async () => {
+      const logs = await repository.listDeploymentLogs(deploymentId, options);
+      return activityPage('logs', logs, options, await logPemContext(repository, logs));
+    });
   }
 
   async listDeploymentEvents(deploymentId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -409,7 +412,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
     if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
     await assertProjectAccess(repository, deployment.projectId, subject);
-    return paginationRead(async () => activityPage('events', await repository.listDeploymentEvents(deploymentId, options)));
+    return paginationRead(async () => activityPage('events', await repository.listDeploymentEvents(deploymentId, options), options));
   }
 
   async deploymentActivitySnapshot(deploymentId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -422,6 +425,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       repository.listDeploymentEvents(deploymentId, { cursor: options.eventCursor, limit: options.limit }),
     ]));
     const deploymentCursor = entityVersion(deployment);
+    const logContexts = await logPemContext(repository, logs);
     return projectObservationPayload({
       deployment: !options.deploymentCursor || options.deploymentCursor !== deploymentCursor ? deployment : null,
       logs,
@@ -430,7 +434,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       logCursor: options.logCursor || null,
       eventCursor: options.eventCursor || null,
       stream: sseStreamConfig(),
-    });
+    }, observationProjectionOptions(options, logContexts));
   }
 
   async listRuntimeLogs(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -438,7 +442,10 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const service = await repository.getService(serviceId);
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     await assertProjectAccess(repository, service.projectId, subject);
-    return paginationRead(async () => activityPage('logs', await repository.listRuntimeLogs(serviceId, options)));
+    return paginationRead(async () => {
+      const logs = await repository.listRuntimeLogs(serviceId, options);
+      return activityPage('logs', logs, options, await logPemContext(repository, logs));
+    });
   }
 
   async serviceLogSnapshot(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -448,13 +455,14 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     await assertProjectAccess(repository, service.projectId, subject);
     const logs = await paginationRead<Array<Record<string, any>>>(() => repository.listRuntimeLogs(serviceId, { cursor: options.logCursor, limit: options.limit }));
     const serviceCursor = entityVersion(service);
+    const logContexts = await logPemContext(repository, logs);
     return projectObservationPayload({
       service: !options.serviceCursor || options.serviceCursor !== serviceCursor ? service : null,
       logs,
       serviceCursor,
       logCursor: options.logCursor || null,
       stream: sseStreamConfig(),
-    });
+    }, observationProjectionOptions(options, logContexts));
   }
 
   async queryResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
@@ -941,8 +949,20 @@ async function usersForRepository(repository: any) {
   return snapshot.users || [];
 }
 
-function activityPage(key: 'logs' | 'events', rows: Array<Record<string, any>>) {
-  return projectObservationPayload({ [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp') });
+function activityPage(key: 'logs' | 'events', rows: Array<Record<string, any>>, options: Record<string, any> = {}, logContexts: readonly any[] = []) {
+  return projectObservationPayload(
+    { [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp'), logContinuationUnknown: key === 'logs' },
+    key === 'logs' ? observationProjectionOptions(options, logContexts) : {},
+  );
+}
+
+function observationProjectionOptions(options: Record<string, any>, logContexts: readonly any[] = []) {
+  const continuation = options.observationContinuation;
+  return { ...(continuation?.v === 1 ? { continuation } : {}), logContexts, unknownLogState: true };
+}
+
+async function logPemContext(repository: any, rows: Array<Record<string, any>>) {
+  return repository.logPemContext ? repository.logPemContext(rows) : [];
 }
 
 function keysetPage(key: 'projects' | 'services' | 'resources' | 'deployments', rows: Array<Record<string, any>>, timestampField: string) {

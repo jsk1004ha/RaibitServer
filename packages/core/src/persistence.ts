@@ -16,7 +16,6 @@ import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJo
 import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, resourceNameFallback, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
 import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate } from './security.ts';
-import { maskedObservationRows } from './observability-projection.ts';
 import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
@@ -25,6 +24,7 @@ import { applyPreviewObservation, assertPreviewRetry, createPreviewRuntime, PREV
 import { normalizeAccountType } from './identity.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import { parseGitHubRepository } from './github-integration.ts';
+import { observationLogSource, type ObservationLogContext } from './observability-projection.ts';
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
@@ -332,6 +332,7 @@ export class InMemoryControlPlaneRepository {
   async appendDeploymentEvent(input: Record<string, any>) { return this.store.appendDeploymentEvent(input); }
   async listDeploymentLogs(deploymentId: string, options: Record<string, any> = {}) { return this.store.listDeploymentLogs(deploymentId, options); }
   async listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) { return this.store.listRuntimeLogs(serviceId, options); }
+  async logPemContext(rows: Record<string, any>[]) { return this.store.logPemContext(rows); }
   async listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) { return this.store.listDeploymentEvents(deploymentId, options); }
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleQuery(resourceId, query, options); }
   async runResourceConsoleCommand(resourceId: string, command: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleCommand(resourceId, command, options); }
@@ -1861,6 +1862,21 @@ export class PrismaControlPlaneRepository {
 
   async listDeploymentLogs(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.buildLog, { deploymentId }, options); }
   async listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.runtimeLog, { serviceId }, options); }
+  async logPemContext(rows: Record<string, any>[]): Promise<ObservationLogContext[]> {
+    const firstBySource = firstLogRowsBySource(rows);
+    return Promise.all([...firstBySource.entries()].map(async ([source, row]) => {
+      const model: any = row.serviceId ? this.prisma.runtimeLog : this.prisma.buildLog;
+      const scope = row.serviceId
+        ? { serviceId: row.serviceId, deploymentId: row.deploymentId, podUid: row.podUid, containerName: row.containerName }
+        : { deploymentId: row.deploymentId, step: row.step };
+      const history = await model.findMany({
+        where: { AND: [scope, beforeActivityRow(row)] },
+        orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
+        take: 1001,
+      });
+      return { rows: history.slice(0, 1000).reverse(), complete: history.length <= 1000, source };
+    }));
+  }
   async listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.deploymentEvent, { deploymentId }, options); }
 
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) {
@@ -2087,7 +2103,26 @@ async function findActivityRows(model: any, scope: Record<string, any>, options:
     orderBy: [{ timestamp: cursorFilter ? 'asc' : 'desc' }, { id: cursorFilter ? 'asc' : 'desc' }],
     take: activityLimit(options.limit),
   });
-  return maskedObservationRows(cursorFilter ? rows : rows.reverse());
+  return cursorFilter ? rows : rows.reverse();
+}
+
+function firstLogRowsBySource(rows: Record<string, any>[]) {
+  const first = new Map<string, Record<string, any>>();
+  for (const row of rows.slice(0, 128)) {
+    const source = observationLogSource(row);
+    if (source && !first.has(source)) first.set(source, row);
+  }
+  return first;
+}
+
+function beforeActivityRow(row: Record<string, any>) {
+  const timestamp = new Date(row.timestamp);
+  return {
+    OR: [
+      { timestamp: { lt: timestamp } },
+      { timestamp, id: { lt: String(row.id) } },
+    ],
+  };
 }
 
 async function findKeysetRows(model: any, scope: Record<string, any>, options: Record<string, any> = {}, query: Record<string, any> = {}) {

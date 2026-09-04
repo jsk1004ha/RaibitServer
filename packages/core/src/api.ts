@@ -512,7 +512,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
         const options = pageOptions(url);
         const rows = kind === 'logs' ? controlPlane.store.listDeploymentLogs(deploymentId, options) : controlPlane.store.listDeploymentEvents(deploymentId, options);
-        return send(res, 200, activityPage(kind, rows));
+        return send(res, 200, activityPage(kind, rows, options, kind === 'logs' ? controlPlane.store.logPemContext(rows) : []));
       }
       const deploymentStreamMatch = url.pathname.match(/^\/deployments\/([^/]+)\/stream$/);
       if (deploymentStreamMatch && method === 'GET') {
@@ -521,12 +521,13 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const deployment = controlPlane.store.getDeployment(deploymentId);
         if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
         await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
+        const logs = controlPlane.store.listDeploymentLogs(deploymentId);
         return sendSseSnapshot(res, 'deployment.snapshot', {
           deployment,
-          logs: controlPlane.store.listDeploymentLogs(deploymentId),
+          logs,
           events: controlPlane.store.listDeploymentEvents(deploymentId),
           stream: { mode: 'sse-snapshot', retryMs: 3000 },
-        });
+        }, { logContexts: controlPlane.store.logPemContext(logs), unknownLogState: true });
       }
       const runtimeLogsMatch = url.pathname.match(/^\/services\/([^/]+)\/logs$/);
       if (runtimeLogsMatch && method === 'GET') {
@@ -535,7 +536,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const service = controlPlane.store.services.get(serviceId);
         if (!service) return send(res, 404, { error: 'service_not_found' });
         await assertProjectAccess(controlPlane.store, service.projectId, subject);
-        return send(res, 200, activityPage('logs', controlPlane.store.listRuntimeLogs(serviceId, pageOptions(url))));
+        const options = pageOptions(url);
+        const logs = controlPlane.store.listRuntimeLogs(serviceId, options);
+        return send(res, 200, activityPage('logs', logs, options, controlPlane.store.logPemContext(logs)));
       }
       const runtimeStreamMatch = url.pathname.match(/^\/services\/([^/]+)\/logs\/stream$/);
       if (runtimeStreamMatch && method === 'GET') {
@@ -544,11 +547,12 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const service = controlPlane.store.getService(serviceId);
         if (!service) return send(res, 404, { error: 'service_not_found' });
         await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        const logs = controlPlane.store.listRuntimeLogs(serviceId);
         return sendSseSnapshot(res, 'service.logs.snapshot', {
           service,
-          logs: controlPlane.store.listRuntimeLogs(serviceId),
+          logs,
           stream: { mode: 'sse-snapshot', retryMs: 3000 },
-        });
+        }, { logContexts: controlPlane.store.logPemContext(logs), unknownLogState: true });
       }
       const resourceConsoleTableMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/tables\/([^/]+)$/);
       if (resourceConsoleTableMatch && method === 'GET') {
@@ -903,8 +907,11 @@ function keysetPage(key: string, rows: Array<Record<string, any>>, timestampFiel
   return { [key]: rows, nextCursor: keysetCursorForRows(rows, timestampField) };
 }
 
-function activityPage(key: string, rows: Array<Record<string, any>>) {
-  return projectObservationPayload({ [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp') });
+function activityPage(key: string, rows: Array<Record<string, any>>, options: Record<string, any> = {}, logContexts: readonly any[] = []) {
+  return projectObservationPayload(
+    { [key]: rows, nextCursor: keysetCursorForRows(rows, 'timestamp'), logContinuationUnknown: key === 'logs' },
+    key === 'logs' ? { logContexts, unknownLogState: true } : {},
+  );
 }
 
 function projectSpecFromBody(body) {
@@ -947,8 +954,8 @@ export function send(res, statusCode, body) {
   res.end(payload);
 }
 
-export function sendSseSnapshot(res, event, body) {
-  const payload = JSON.stringify(projectObservationPayload(body));
+export function sendSseSnapshot(res, event, body, projectionOptions = {}) {
+  const payload = JSON.stringify(projectObservationPayload(body, projectionOptions));
   res.writeHead(200, {
     ...securityHeaders(),
     'content-type': 'text/event-stream; charset=utf-8',

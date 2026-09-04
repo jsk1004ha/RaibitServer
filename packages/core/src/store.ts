@@ -21,6 +21,7 @@ import { previewRuntimePlan } from './preview-deployments.ts';
 import { parsePreviewWebhook } from './preview-contract.ts';
 import { createPreviewRuntime, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
+import { observationLogSource, type ObservationLogContext } from './observability-projection.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import {
   boundedActivityRows,
@@ -797,6 +798,21 @@ export class ControlPlaneStore {
 
   listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) {
     return deepClone(boundedActivityRows(this.runtimeLogs.filter((row) => row.serviceId === serviceId), options));
+  }
+
+  logPemContext(rows: Record<string, any>[]): ObservationLogContext[] {
+    const first = new Map<string, Record<string, any>>();
+    for (const row of rows.slice(0, 128)) {
+      const source = observationLogSource(row);
+      if (source && !first.has(source)) first.set(source, row);
+    }
+    return [...first.entries()].map(([source, row]) => {
+      const history = [...this.buildLogs, ...this.runtimeLogs]
+        .filter((candidate) => observationLogSource(candidate) === source && activityBefore(candidate, row))
+        .sort((left, right) => dateMs(right.timestamp) - dateMs(left.timestamp) || String(right.id).localeCompare(String(left.id)))
+        .slice(0, 1001);
+      return { source, rows: deepClone(history.slice(0, 1000).reverse()), complete: history.length <= 1000 };
+    });
   }
 
   listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) {
@@ -1980,6 +1996,11 @@ function uniqueRepositories(repositories: Array<Record<string, any> | null>) {
     byName.set(key, existing ? { ...existing, serviceIds: [...new Set([...(existing.serviceIds || []), ...(repository.serviceIds || [])])] } : repository);
   }
   return [...byName.values()];
+}
+
+function activityBefore(candidate: Record<string, any>, row: Record<string, any>) {
+  const timestampDifference = dateMs(candidate.timestamp) - dateMs(row.timestamp);
+  return timestampDifference < 0 || (timestampDifference === 0 && String(candidate.id).localeCompare(String(row.id)) < 0);
 }
 
 function cancelActiveBuildWorkflowJobs(jobs: Record<string, any>[], deploymentId: string, reason: string) {

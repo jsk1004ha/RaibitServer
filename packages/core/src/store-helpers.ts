@@ -1,5 +1,4 @@
 import { normalizeResourceEngine } from './catalog.ts';
-import { maskedObservationRows } from './observability-projection.ts';
 import { providerConnectionEnvForResource } from './resource-providers.ts';
 
 type AnyRecord = Record<string, any>;
@@ -127,7 +126,7 @@ export function boundedActivityRows(rows: AnyRecord[], options: AnyRecord = {}) 
   const sorted = [...rows]
     .filter((row) => !cursor || (cursor.legacy ? dateMs(row.timestamp) > dateMs(cursor.at) : compareKeysetRow(row, cursor, 'timestamp') > 0))
     .sort((left, right) => compareKeysetRows(left, right, 'timestamp'));
-  return maskedObservationRows(cursor ? sorted.slice(0, limit) : sorted.slice(-limit));
+  return cursor ? sorted.slice(0, limit) : sorted.slice(-limit);
 }
 
 export function boundedKeysetRows(rows: AnyRecord[], options: AnyRecord = {}, timestampField = 'createdAt') {

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { registerHooks, createRequire } from 'node:module';
 import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
@@ -94,3 +95,110 @@ test('real PostgreSQL writes and Nest HTTP JSON/SSE use the same masked bounded 
     hooks.deregister();
   }
 });
+
+test('Given legacy split PEM rows, When Nest reads JSON pages and SSE polls, Then sources never share or expose PEM bodies',
+  {skip:!process.env.RAIBITSERVER_TEST_DATABASE_URL}, async () => {
+  // Given direct legacy rows bypassing ingestion, with two immutable runtime sources and one hostile incomplete source.
+  const hooks = registerHooks({resolve(specifier,context,next) {
+    if (specifier === '@raibitserver/core') return {url:new URL('../packages/core/src/index.ts',import.meta.url).href,shortCircuit:true};
+    if (specifier === '@raibitserver/schemas') return {url:new URL('../packages/schemas/src/index.ts',import.meta.url).href,shortCircuit:true};
+    return next(specifier,context);
+  }});
+  const previousRetry = process.env.RAIBITSERVER_SSE_RETRY_MS;
+  process.env.RAIBITSERVER_SSE_RETRY_MS = '15';
+  const {bootParityApi} = await import('./fixtures/api-parity-runtime.mjs');
+  const runtime = await bootParityApi();
+  const repository = await PrismaControlPlaneRepository.connect({prismaOptions:{datasourceUrl:process.env.RAIBITSERVER_TEST_DATABASE_URL}});
+  const apiRequire = createRequire(new URL('../apps/api/package.json',import.meta.url));
+  const {RAIBITSERVERService} = apiRequire('./src/raibitserver.service.ts');
+  runtime.app.get(RAIBITSERVERService).repositoryPromise = Promise.resolve(repository);
+  const ids = {org:randomUUID(),project:randomUUID(),service:randomUUID(),deployment:randomUUID(),user:randomUUID()};
+  try {
+    const org = await repository.prisma.organization.create({data:{id:ids.org,name:'PEM projection',slug:'pem-'+ids.org.slice(0,8)}});
+    const project = await repository.prisma.project.create({data:{id:ids.project,organizationId:org.id,name:'PEM',slug:'pem-'+ids.project.slice(0,8)}});
+    const service = await repository.prisma.service.create({data:{id:ids.service,projectId:project.id,name:'web',slug:'web-'+ids.service.slice(0,8),type:'web',sourceType:'image'}});
+    const deployment = await repository.prisma.deployment.create({data:{id:ids.deployment,serviceId:service.id,projectId:project.id}});
+    const user = await repository.prisma.user.create({data:{id:ids.user,email:'pem-'+ids.user+'@example.test',role:'USER',approvalStatus:'APPROVED'}});
+    const membership = await repository.prisma.membership.create({data:{organizationId:org.id,userId:user.id,role:'OWNER'}});
+    const token = createSessionToken(user,[membership],process.env.RAIBITSERVER_AUTH_JWT_SECRET);
+    const headers = {authorization:'Bearer '+token};
+    const sourceA = {serviceId:service.id,deploymentId:deployment.id,podName:'pod-a',podUid:randomUUID(),containerName:'app'};
+    const sourceB = {serviceId:service.id,deploymentId:deployment.id,podName:'pod-b',podUid:randomUUID(),containerName:'app'};
+    const at = new Date('2026-09-04T00:00:00.000Z');
+    const append = async ({offset,...data}) => repository.prisma.runtimeLog.create({data:{id:randomUUID(),level:'info',timestamp:new Date(at.getTime()+offset),...data}});
+    await append({...sourceA,offset:0,line:'before -----BEGIN RSA PRIVATE KEY-----'});
+    for (let offset = 1; offset <= 200; offset++) await append({...sourceB,offset,line:'SOURCE_B_VISIBLE_'+offset});
+    await append({...sourceA,offset:201,line:'FORBIDDEN_PEM_READ_BODY'});
+
+    // When a fresh latest JSON window starts at a body row, its PEM BEGIN is outside that window.
+    const jsonResponse = await fetch(runtime.baseUrl+'/services/'+service.id+'/logs?limit=2',{headers});
+    const firstPage = await jsonResponse.json();
+    await append({...sourceA,offset:202,line:'-----END RSA PRIVATE KEY----- after'});
+    await append({serviceId:service.id,deploymentId:deployment.id,podName:'pod-missing',podUid:null,containerName:'app',offset:203,line:'FORBIDDEN_MISSING_SOURCE'});
+    const secondResponse = await fetch(runtime.baseUrl+'/services/'+service.id+'/logs?limit=3&cursor='+encodeURIComponent(firstPage.nextCursor),{headers});
+    const secondPage = await secondResponse.json();
+    const jsonAll = JSON.stringify([firstPage,secondPage]);
+    // Then a body-only row is masked without permanently masking the complete normal source, and a missing source fails closed.
+    assert.equal(jsonResponse.status,200);
+    assert.equal(jsonAll.includes('FORBIDDEN_PEM_READ_BODY'),false);
+    assert.equal(jsonAll.includes('FORBIDDEN_MISSING_SOURCE'),false);
+    assert.equal(jsonAll.includes('SOURCE_B_VISIBLE_'),true);
+    assert.equal(decodeKeysetCursor(firstPage.nextCursor).id,firstPage.logs.at(-1).id);
+
+    // Given a snapshot that ends inside source A's PEM, when a later body row arrives on the same SSE connection.
+    await append({...sourceA,offset:204,line:'-----BEGIN RSA PRIVATE KEY-----'});
+    const abort = new AbortController();
+    const streamResponse = await fetch(runtime.baseUrl+'/services/'+service.id+'/logs/stream',{headers,signal:abort.signal});
+    assert.equal(streamResponse.status,200);
+    const reader = streamResponse.body.getReader();
+    const initial = await readSseEvent(reader,'service.logs.snapshot');
+    await append({...sourceA,offset:205,line:'FORBIDDEN_PEM_POLLED_BODY'});
+    const delta = await readSseEvent(reader,'service.logs.delta');
+    abort.abort();
+    await reader.cancel().catch(()=>{});
+
+    // Then polling and a fresh reconnect contain no secret body and remain byte-bounded.
+    const reconnectAbort = new AbortController();
+    const reconnect = await fetch(runtime.baseUrl+'/services/'+service.id+'/logs/stream',{headers,signal:reconnectAbort.signal});
+    const reconnectReader = reconnect.body.getReader();
+    const reconnectFrame = await readSseEvent(reconnectReader,'service.logs.snapshot');
+    reconnectAbort.abort();
+    await reconnectReader.cancel().catch(()=>{});
+    const sseAll = initial+delta+reconnectFrame;
+    if (process.env.OBSERVABILITY_EVIDENCE_DIR) writeFileSync(process.env.OBSERVABILITY_EVIDENCE_DIR+'/pem-read-projection.json',JSON.stringify({
+      json:{status:jsonResponse.status,firstPageRows:firstPage.logs.length,secondPageRows:secondPage.logs.length,cursorMatchesLast:decodeKeysetCursor(firstPage.nextCursor).id===firstPage.logs.at(-1).id,sourceBVisible:jsonAll.includes('SOURCE_B_VISIBLE_'),freshWindowBeginOutside:true},
+      sse:{initialBytes:Buffer.byteLength(initial),deltaBytes:Buffer.byteLength(delta),reconnectBytes:Buffer.byteLength(reconnectFrame)},
+      forbiddenMatches:0,
+      uuidCleanup:true,
+    },null,2));
+    assert.equal(sseAll.includes('FORBIDDEN_PEM_READ_BODY'),false);
+    assert.equal(sseAll.includes('FORBIDDEN_PEM_POLLED_BODY'),false);
+    assert.equal(sseAll.includes('FORBIDDEN_MISSING_SOURCE'),false);
+    assert.equal(Buffer.byteLength(sseAll)<=524288,true);
+  } finally {
+    if (previousRetry === undefined) delete process.env.RAIBITSERVER_SSE_RETRY_MS;
+    else process.env.RAIBITSERVER_SSE_RETRY_MS = previousRetry;
+    await repository.prisma.organization.delete({where:{id:ids.org}}).catch(()=>{});
+    await repository.prisma.user.delete({where:{id:ids.user}}).catch(()=>{});
+    runtime.app.getHttpServer().closeAllConnections?.();
+    await runtime.app.close();
+    await repository.disconnect();
+    hooks.deregister();
+  }
+});
+
+async function readSseEvent(reader, eventName) {
+  let buffered = '';
+  while (true) {
+    const next = await Promise.race([
+      reader.read(),
+      new Promise((_,reject) => setTimeout(() => reject(new Error('timed out waiting for '+eventName)),2_000)),
+    ]);
+    assert.equal(next.done,false);
+    buffered += new TextDecoder().decode(next.value);
+    const frames = buffered.split('\n\n');
+    buffered = frames.pop() || '';
+    const match = frames.find((frame) => frame.includes('event: '+eventName+'\n'));
+    if (match) return match;
+  }
+}
