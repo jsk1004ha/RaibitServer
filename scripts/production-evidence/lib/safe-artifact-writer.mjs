@@ -8,6 +8,10 @@ const MAX_PATH_BYTES = 512;
 const MAX_SEGMENTS = 8;
 const SEGMENT = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const WINDOWS_DEVICE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+export const PRIVATE_WRITER_SESSION_PATH = '.raibit-evidence-writer-session';
+const SESSION_BYTES = Buffer.from('{"schema":"raibitserver.production-evidence-writer-session/v1","privateMetadata":true,"redacted":true}\n');
+
+export const isPrivateArtifactWriterMetadata = (relativePath) => relativePath === PRIVATE_WRITER_SESSION_PATH;
 
 function parseRelativePath(value) {
   if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value) > MAX_PATH_BYTES
@@ -37,7 +41,7 @@ async function checkedDirectory(root, candidate) {
   if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new EvidenceError('invalid_artifact');
   const resolved = await realpath(candidate);
   if (resolved !== candidate || (candidate !== root && !pathIsWithin(root, resolved))) throw new EvidenceError('invalid_artifact');
-  return Object.freeze({ path: candidate, dev: metadata.dev, ino: metadata.ino });
+  return Object.freeze({ path: candidate, dev: metadata.dev, ino: metadata.ino, mode: metadata.mode });
 }
 
 async function ensureParent(root, segments) {
@@ -89,6 +93,41 @@ function parseTestHooks(value, unsafeFixture) {
   return Object.freeze({ ...value });
 }
 
+async function createWriterSession(root, unsafeFixture) {
+  const target = path.join(root, PRIVATE_WRITER_SESSION_PATH);
+  const rootIdentity = await checkedDirectory(root, root);
+  if (!unsafeFixture && (rootIdentity.mode & 0o077) !== 0) throw new EvidenceError('artifact_platform_not_release_safe');
+  const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
+  let handle;
+  try {
+    handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'EEXIST') throw new EvidenceError('run_already_opened');
+    throw error;
+  }
+  try {
+    const opened = await handle.stat();
+    const current = await lstat(target);
+    const currentRoot = await checkedDirectory(root, root);
+    if (!opened.isFile() || opened.nlink !== 1 || current.isSymbolicLink() || !current.isFile() || current.nlink !== 1
+      || opened.dev !== current.dev || opened.ino !== current.ino || rootIdentity.dev !== currentRoot.dev || rootIdentity.ino !== currentRoot.ino
+      || await realpath(target) !== target || (!unsafeFixture && (opened.mode & 0o077) !== 0)) throw new EvidenceError('artifact_write_failed');
+    await handle.writeFile(SESSION_BYTES);
+    await handle.sync();
+    if (!unsafeFixture) {
+      const directory = await open(root, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | noFollow);
+      try { await directory.sync(); }
+      finally { await directory.close(); }
+    }
+    return handle;
+  } catch (error) {
+    try { await handle.close(); }
+    catch { /* The durable marker remains and prevents a restarted writer. */ }
+    if (error instanceof EvidenceError) throw error;
+    throw new EvidenceError('artifact_write_failed');
+  }
+}
+
 async function createArtifactWriter({ runDirectory, allowedPaths, unsafeFixture, testHooks }) {
   if (typeof runDirectory !== 'string' || !path.isAbsolute(runDirectory)) throw new EvidenceError('invalid_run_directory');
   const root = path.resolve(runDirectory);
@@ -96,13 +135,23 @@ async function createArtifactWriter({ runDirectory, allowedPaths, unsafeFixture,
   const isAllowed = allowedPathPredicate(allowedPaths);
   const hooks = parseTestHooks(testHooks, unsafeFixture);
   let poisoned = false;
+  let sessionClosed = false;
   if (!unsafeFixture && (process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number')) {
     throw new EvidenceError('artifact_platform_not_release_safe');
   }
+  const sessionHandle = await createWriterSession(root, unsafeFixture);
 
   return Object.freeze({
+    async close() {
+      poisoned = true;
+      if (sessionClosed) return;
+      try { await sessionHandle.close(); sessionClosed = true; }
+      catch { throw new EvidenceError('artifact_write_failed'); }
+    },
     async writeJson(relativePath, value) {
       if (poisoned) throw new EvidenceError('artifact_write_failed');
+      try { await sessionHandle.stat(); }
+      catch { poisoned = true; throw new EvidenceError('artifact_write_failed'); }
       const segments = parseRelativePath(relativePath);
       if (isAllowed(relativePath) !== true) throw new EvidenceError('invalid_artifact');
       const encoded = JSON.stringify(value);

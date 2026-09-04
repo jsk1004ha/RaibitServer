@@ -4,7 +4,7 @@ import { link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, w
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createSafeArtifactWriter, createUnsafeFixtureArtifactWriter } from '../scripts/production-evidence/lib/safe-artifact-writer.mjs';
+import { createSafeArtifactWriter, createUnsafeFixtureArtifactWriter, isPrivateArtifactWriterMetadata, PRIVATE_WRITER_SESSION_PATH } from '../scripts/production-evidence/lib/safe-artifact-writer.mjs';
 
 async function sandbox(t) {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'raibit-artifact-writer-'));
@@ -14,10 +14,16 @@ async function sandbox(t) {
   return { parent, runDirectory: await realpath(run) };
 }
 
+async function fixtureWriter(t, options) {
+  const writer = await createUnsafeFixtureArtifactWriter(options);
+  t.after(async () => { await writer.close(); });
+  return writer;
+}
+
 test('Given an approved path, When JSON is written, Then one immutable redacted artifact is created', async (t) => {
   // Given
   const { runDirectory } = await sandbox(t);
-  const writer = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: ['artifacts/lifecycle/runtime.json'] });
+  const writer = await fixtureWriter(t, { runDirectory, allowedPaths: ['artifacts/lifecycle/runtime.json'] });
 
   // When
   const descriptor = await writer.writeJson('artifacts/lifecycle/runtime.json', { schema: 'test/v1', status: 'PASS', redacted: true });
@@ -31,22 +37,26 @@ test('Given an approved path, When JSON is written, Then one immutable redacted 
   const written = await readFile(path.join(runDirectory, ...descriptor.path.split('/')));
   assert.equal(written.toString('utf8'), '{"schema":"test/v1","status":"PASS","redacted":true}\n');
   assert.equal(descriptor.sha256, createHash('sha256').update(written).digest('hex'));
-  if (process.platform !== 'win32') assert.equal((await lstat(path.join(runDirectory, ...descriptor.path.split('/')))).mode & 0o777, 0o600);
+  assert.equal(await readFile(path.join(runDirectory, PRIVATE_WRITER_SESSION_PATH), 'utf8'), '{"schema":"raibitserver.production-evidence-writer-session/v1","privateMetadata":true,"redacted":true}\n');
+  assert.equal(isPrivateArtifactWriterMetadata(PRIVATE_WRITER_SESSION_PATH), true);
+  assert.equal(isPrivateArtifactWriterMetadata(descriptor.path), false);
+  if (process.platform !== 'win32') {
+    assert.equal((await lstat(path.join(runDirectory, ...descriptor.path.split('/')))).mode & 0o777, 0o600);
+    assert.equal((await lstat(path.join(runDirectory, PRIVATE_WRITER_SESSION_PATH))).mode & 0o777, 0o600);
+  }
   await assert.rejects(writer.writeJson(descriptor.path, { redacted: true }), { reason: 'reused_artifact' });
+  await assert.rejects(createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: ['artifacts/other.json'] }), { reason: 'run_already_opened' });
 });
 
 test('Given traversal, device, ADS, or unapproved paths, When writing, Then every path is rejected', async (t) => {
   // Given
   const { runDirectory } = await sandbox(t);
-  const writer = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: () => true });
+  const writer = await fixtureWriter(t, { runDirectory, allowedPaths: (value) => value === 'artifacts/approved.json' });
   const invalidPaths = ['../escape.json', 'artifacts\\escape.json', '/absolute.json', 'artifacts/./x.json', 'artifacts/a:b.json', 'artifacts/nul.json', 'artifacts/file.', 'artifacts//x.json'];
 
   // When / Then
   for (const artifactPath of invalidPaths) await assert.rejects(writer.writeJson(artifactPath, { redacted: true }), { reason: 'invalid_artifact' });
-  await assert.rejects(
-    (await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: ['artifacts/approved.json'] })).writeJson('artifacts/other.json', { redacted: true }),
-    { reason: 'invalid_artifact' },
-  );
+  await assert.rejects(writer.writeJson('artifacts/other.json', { redacted: true }), { reason: 'invalid_artifact' });
 });
 
 test('Given a link in the artifact ancestry, When writing, Then the link escape is rejected', async (t) => {
@@ -56,7 +66,7 @@ test('Given a link in the artifact ancestry, When writing, Then the link escape 
   await mkdir(outside);
   await mkdir(path.join(runDirectory, 'artifacts'));
   await symlink(outside, path.join(runDirectory, 'artifacts', 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
-  const writer = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: ['artifacts/linked/escape.json'] });
+  const writer = await fixtureWriter(t, { runDirectory, allowedPaths: ['artifacts/linked/escape.json'] });
 
   // When / Then
   await assert.rejects(writer.writeJson('artifacts/linked/escape.json', { redacted: true }), { reason: 'invalid_artifact' });
@@ -71,7 +81,7 @@ test('Given a link at the final artifact path, When writing, Then it is rejected
   else await writeFile(outside, '{"outside":true}\n');
   await mkdir(path.join(runDirectory, 'artifacts'));
   await symlink(outside, path.join(runDirectory, 'artifacts', 'linked.json'), process.platform === 'win32' ? 'junction' : 'file');
-  const writer = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: ['artifacts/linked.json'] });
+  const writer = await fixtureWriter(t, { runDirectory, allowedPaths: ['artifacts/linked.json'] });
 
   // When / Then
   await assert.rejects(writer.writeJson('artifacts/linked.json', { redacted: true }), { reason: 'invalid_artifact' });
@@ -80,23 +90,24 @@ test('Given a link at the final artifact path, When writing, Then it is rejected
 
 test('Given stat, write, sync, or close failure, When retrying the failed path, Then the run stays poisoned and O_EXCL blocks reuse', async (t) => {
   // Given
-  const { runDirectory } = await sandbox(t);
   for (const stage of ['stat', 'write', 'sync', 'close']) {
+    const { runDirectory } = await sandbox(t);
     const artifactPath = `artifacts/lifecycle/${stage}.json`;
     const testHooks = stage === 'stat' ? { stat: async () => { throw new Error('injected_stat_failure'); } }
       : stage === 'write' ? { write: async () => { throw new Error('injected_write_failure'); } }
       : stage === 'sync' ? { sync: async () => { throw new Error('injected_sync_failure'); } }
         : { close: async (handle) => { await handle.close(); throw new Error('injected_close_failure'); } };
-    const failing = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: [artifactPath], testHooks });
+    const failing = await fixtureWriter(t, { runDirectory, allowedPaths: [artifactPath], testHooks });
 
     // When
     await assert.rejects(failing.writeJson(artifactPath, { stage, redacted: true }), { reason: 'artifact_write_failed' });
     await assert.rejects(failing.writeJson(artifactPath, { stage, redacted: true }), { reason: 'artifact_write_failed' });
-    const retry = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: [artifactPath] });
+    await failing.close();
 
     // Then
-    await assert.rejects(retry.writeJson(artifactPath, { stage, redacted: true }), { reason: 'reused_artifact' });
+    await assert.rejects(createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: [`artifacts/lifecycle/${stage}-other.json`] }), { reason: 'run_already_opened' });
     assert.equal((await lstat(path.join(runDirectory, ...artifactPath.split('/')))).isFile(), true);
+    await assert.rejects(readFile(path.join(runDirectory, 'artifacts', 'lifecycle', `${stage}-other.json`)), { code: 'ENOENT' });
   }
 });
 
@@ -105,7 +116,7 @@ test('Given a parent swap between validation and open, When writing, Then it is 
   const { parent: sandboxRoot, runDirectory } = await sandbox(t);
   const outside = path.join(sandboxRoot, 'outside');
   await mkdir(outside);
-  const writer = await createUnsafeFixtureArtifactWriter({
+  const writer = await fixtureWriter(t, {
     runDirectory,
     allowedPaths: ['artifacts/lifecycle/runtime.json'],
     testHooks: { beforeOpen: async ({ parent }) => {
@@ -124,7 +135,7 @@ test('Given a hardlink added after exclusive open, When writing, Then link-count
   // Given
   const { parent, runDirectory } = await sandbox(t);
   const outside = path.join(parent, 'outside-hardlink.json');
-  const writer = await createUnsafeFixtureArtifactWriter({
+  const writer = await fixtureWriter(t, {
     runDirectory,
     allowedPaths: ['artifacts/runtime.json'],
     testHooks: { afterOpen: async ({ target }) => { await link(target, outside); } },
@@ -139,7 +150,7 @@ test('Given a hardlink added after exclusive open, When writing, Then link-count
 test('Given final-path substitution after open, When validation fails, Then neither replacement nor opened inode is pathname-unlinked', async (t) => {
   // Given
   const { runDirectory } = await sandbox(t);
-  const writer = await createUnsafeFixtureArtifactWriter({
+  const writer = await fixtureWriter(t, {
     runDirectory,
     allowedPaths: ['artifacts/runtime.json'],
     testHooks: {
@@ -154,8 +165,8 @@ test('Given final-path substitution after open, When validation fails, Then neit
   await assert.rejects(writer.writeJson('artifacts/runtime.json', { redacted: true }), { reason: 'invalid_artifact' });
   assert.equal(await readFile(path.join(runDirectory, 'artifacts', 'runtime.json'), 'utf8'), '{"adversary":true}\n');
   assert.equal((await readFile(path.join(runDirectory, 'artifacts', 'runtime.json.partial'))).length, 0);
-  const retry = await createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: ['artifacts/runtime.json'] });
-  await assert.rejects(retry.writeJson('artifacts/runtime.json', { redacted: true }), { reason: 'reused_artifact' });
+  await assert.rejects(createUnsafeFixtureArtifactWriter({ runDirectory, allowedPaths: ['artifacts/other.json'] }), { reason: 'run_already_opened' });
+  await assert.rejects(readFile(path.join(runDirectory, 'artifacts', 'other.json')), { code: 'ENOENT' });
 });
 
 test('Given Windows without a portable no-reparse ACL guarantee, When creating a release writer, Then it fails closed', { skip: process.platform !== 'win32' }, async (t) => {
