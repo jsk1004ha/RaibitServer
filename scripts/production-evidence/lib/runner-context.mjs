@@ -1,8 +1,14 @@
 import { spawn } from 'node:child_process';
 import https from 'node:https';
+import { checkServerIdentity, rootCertificates } from 'node:tls';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
+import { resolvePublicHttpsTarget } from './public-endpoint.mjs';
+
+const MAX_REQUEST_BYTES = 1024 * 1024;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_REQUEST_TIMEOUT_MS = 30_000;
 
 function boundedTimeout(deadlineAt, requested, now) {
   const remaining = Date.parse(deadlineAt) - Date.parse(now());
@@ -16,7 +22,42 @@ function safeRelativeArtifact(component, name) {
   return component === 'cleanup' ? `cleanup/${name}` : `artifacts/${component}/${name}`;
 }
 
-export function createRunnerContext(runDirectory, deadlineAt, clock = { now: () => new Date() }) {
+function safeHeaders(value) {
+  if (value === undefined) return {};
+  if (value === null || Array.isArray(value) || typeof value !== 'object' || Object.keys(value).length > 32) throw new EvidenceError('invalid_request');
+  const headers = {};
+  for (const [name, entry] of Object.entries(value)) {
+    const lower = name.toLowerCase();
+    if (/authorization|cookie|token|secret|api-key/.test(lower)) throw new EvidenceError('redaction');
+    if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(lower) || /^(?:host|content-length|connection|transfer-encoding|upgrade|proxy-)/.test(lower)
+      || typeof entry !== 'string' || entry.length > 4096 || /[\r\n]/.test(entry)) throw new EvidenceError('invalid_request');
+    assertRedacted(entry);
+    headers[lower] = entry;
+  }
+  return headers;
+}
+
+function jsonBody(value) {
+  if (value === undefined) return undefined;
+  let text;
+  try { text = JSON.stringify(value); }
+  catch (error) { if (error instanceof TypeError) throw new EvidenceError('invalid_request'); throw error; }
+  if (text === undefined || Buffer.byteLength(text) > MAX_REQUEST_BYTES) throw new EvidenceError('invalid_request');
+  assertRedacted(text);
+  return Buffer.from(text);
+}
+
+function assertPublicResponseSafe(value) {
+  assertRedacted(value);
+  const text = JSON.stringify(value);
+  if (/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/.test(text)
+    || /\b(?:sk|pk)_(?:live|prod)_[A-Za-z0-9_-]{12,}\b/i.test(text)) throw new EvidenceError('redaction');
+}
+
+export function createRunnerContext(runDirectory, deadlineAt, clock = { now: () => new Date() }, adapters = {}) {
+  if ((adapters.lookup !== undefined && typeof adapters.lookup !== 'function')
+    || (adapters.request !== undefined && typeof adapters.request !== 'function')) throw new EvidenceError('invalid_request');
+  const requestAdapter = adapters.request ?? https.request;
   const inheritedNames = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LANG', 'LC_ALL'];
   const inherited = Object.fromEntries(inheritedNames.filter((name) => typeof process.env[name] === 'string').map((name) => [name, process.env[name]]));
   const now = () => {
@@ -56,29 +97,43 @@ export function createRunnerContext(runDirectory, deadlineAt, clock = { now: () 
     },
     async requestJson(request) {
       const allowedKeys = ['method', 'url', 'headers', 'body', 'timeoutMs'];
-      if (!request || Object.keys(request).some((key) => !allowedKeys.includes(key))
-        || !['GET', 'POST', 'PATCH', 'DELETE'].includes(request.method)) throw new EvidenceError('invalid_request');
-      let url;
-      try { url = new URL(request.url); }
-      catch (error) { if (error instanceof TypeError) throw new EvidenceError('invalid_request'); throw error; }
-      if (url.protocol !== 'https:' || url.username || url.password) throw new EvidenceError('invalid_request');
-      if (request.headers && Object.keys(request.headers).some((name) => /authorization|cookie|token|secret|api-key/i.test(name))) throw new EvidenceError('redaction');
-      if (request.headers) assertRedacted(request.headers);
-      const body = request.body === undefined ? undefined : Buffer.from(JSON.stringify(request.body));
-      if (body) assertRedacted(body.toString('utf8'));
-      const timeoutMs = boundedTimeout(deadlineAt, request.timeoutMs, now);
+      if (!request || Array.isArray(request) || typeof request !== 'object' || Object.keys(request).some((key) => !allowedKeys.includes(key))
+        || !['GET', 'POST', 'PATCH', 'DELETE'].includes(request.method)
+        || (request.method === 'GET' && request.body !== undefined)
+        || (request.timeoutMs !== undefined && (!Number.isInteger(request.timeoutMs) || request.timeoutMs < 1 || request.timeoutMs > MAX_REQUEST_TIMEOUT_MS))) {
+        throw new EvidenceError('invalid_request');
+      }
+      const headers = safeHeaders(request.headers);
+      const body = jsonBody(request.body);
+      const target = await resolvePublicHttpsTarget(request.url, adapters.lookup);
+      const timeoutMs = boundedTimeout(deadlineAt, request.timeoutMs ?? MAX_REQUEST_TIMEOUT_MS, now);
+      const outgoingHeaders = { ...headers, host: target.url.host, accept: headers.accept ?? 'application/json' };
+      if (body !== undefined) {
+        outgoingHeaders['content-type'] = headers['content-type'] ?? 'application/json';
+        outgoingHeaders['content-length'] = String(body.byteLength);
+      }
       return await new Promise((resolve, reject) => {
-        const outgoing = https.request(url, { method: request.method, headers: request.headers, signal: AbortSignal.timeout(timeoutMs) }, (response) => {
+        const options = { protocol: 'https:', hostname: target.address, family: target.family, port: 443,
+          path: `${target.url.pathname}${target.url.search}`, method: request.method, headers: outgoingHeaders,
+          rejectUnauthorized: true, checkServerIdentity, ca: rootCertificates, signal: AbortSignal.timeout(timeoutMs) };
+        if (target.servername !== undefined) options.servername = target.servername;
+        const outgoing = requestAdapter(options, (response) => {
+          if (response.statusCode >= 300 && response.statusCode < 400) {
+            response.resume(); reject(new EvidenceError('redirect_not_allowed')); return;
+          }
+          if (Object.keys(response.headers ?? {}).some((name) => /authorization|set-cookie|token|secret|api-key/i.test(name))) {
+            response.resume(); reject(new EvidenceError('redaction')); return;
+          }
           let bytes = '';
           response.once('error', reject);
           response.setEncoding('utf8'); response.on('data', (chunk) => {
             bytes += chunk;
-            if (Buffer.byteLength(bytes) > 4 * 1024 * 1024) response.destroy(new EvidenceError('response_output_limit'));
+            if (Buffer.byteLength(bytes) > MAX_RESPONSE_BYTES) response.destroy(new EvidenceError('response_output_limit'));
           });
           response.on('end', async () => {
             try {
               const parsed = bytes ? JSON.parse(bytes) : null;
-              assertRedacted(parsed);
+              assertPublicResponseSafe(parsed);
               resolve(Object.freeze({ statusCode: response.statusCode ?? 0, body: parsed, observedAt: now() }));
             } catch (error) { reject(error); }
           });
