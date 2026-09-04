@@ -226,6 +226,8 @@ type cacheClient interface {
 	dbSize(context.Context) (int64, error)
 	usedMemory(context.Context) (int64, error)
 	ready(context.Context) error
+	serverTime(context.Context) (int64, error)
+	expireTime(context.Context, []byte) (int64, error)
 	databaseIndexes(context.Context) ([]uint16, error)
 	version(context.Context, engine) (string, error)
 	set(context.Context, []byte, []byte, time.Duration, bool) error

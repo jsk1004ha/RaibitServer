@@ -130,6 +130,41 @@ func Test_RESP_reads_memory_and_requires_complete_RDB_load(t *testing.T) {
 	}
 }
 
+func Test_RESP_reads_server_TIME_and_absolute_expiry(t *testing.T) {
+	// Given
+	transport := &trackingReadWriteCloser{reader: bytes.NewBufferString("*2\r\n$10\r\n1800000000\r\n$6\r\n123000\r\n:1800000010000\r\n")}
+	client := newRESPClient(transport)
+	defer func() {
+		if err := client.close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}()
+
+	// When
+	now, timeErr := client.serverTime(t.Context())
+	deadline, expiryErr := client.expireTime(t.Context(), []byte("key"))
+
+	// Then
+	if timeErr != nil || expiryErr != nil || now != 1_800_000_000_123 || deadline != 1_800_000_010_000 {
+		t.Fatalf("now=%d deadline=%d timeErr=%v expiryErr=%v", now, deadline, timeErr, expiryErr)
+	}
+}
+
+func Test_RESP_rejects_malformed_TIME_and_PEXPIRETIME(t *testing.T) {
+	// Given
+	badTime := newRESPClient(&trackingReadWriteCloser{reader: bytes.NewBufferString("*2\r\n$1\r\n1\r\n$7\r\n1000000\r\n")})
+	badExpiry := newRESPClient(&trackingReadWriteCloser{reader: bytes.NewBufferString(":-3\r\n")})
+
+	// When
+	_, timeErr := badTime.serverTime(t.Context())
+	_, expiryErr := badExpiry.expireTime(t.Context(), []byte("key"))
+
+	// Then
+	if !errors.Is(timeErr, ErrOperation) || !errors.Is(expiryErr, ErrOperation) {
+		t.Fatalf("time=%v expiry=%v", timeErr, expiryErr)
+	}
+}
+
 type trackingReadWriteCloser struct {
 	reader io.Reader
 	writes bytes.Buffer

@@ -99,6 +99,10 @@ type fakeCache struct {
 	usedMemoryValue          int64
 	readyErr                 error
 	versionValue             string
+	serverTimeValue          int64
+	serverTimeErr            error
+	expiryTimes              map[string]int64
+	expireTimeErr            error
 }
 
 func newFakeCache(values map[string]keySnapshot) *fakeCache {
@@ -127,6 +131,32 @@ func (f *fakeCache) usedMemory(context.Context) (int64, error) {
 	return f.usedMemoryValue, nil
 }
 func (f *fakeCache) ready(context.Context) error { return f.readyErr }
+func (f *fakeCache) serverTime(context.Context) (int64, error) {
+	if f.serverTimeErr != nil {
+		return 0, f.serverTimeErr
+	}
+	if f.serverTimeValue == 0 {
+		return 1_800_000_000_000, nil
+	}
+	return f.serverTimeValue, nil
+}
+func (f *fakeCache) expireTime(_ context.Context, key []byte) (int64, error) {
+	if f.expireTimeErr != nil {
+		return 0, f.expireTimeErr
+	}
+	if deadline, ok := f.expiryTimes[string(key)]; ok {
+		return deadline, nil
+	}
+	value, ok := f.values[string(key)]
+	if !ok {
+		return -2, nil
+	}
+	if value.pttl == -1 {
+		return -1, nil
+	}
+	now, _ := f.serverTime(context.Background())
+	return now + value.pttl, nil
+}
 func (f *fakeCache) databaseIndexes(context.Context) ([]uint16, error) {
 	if f.databaseIndexesValue != nil {
 		return slices.Clone(f.databaseIndexesValue), nil

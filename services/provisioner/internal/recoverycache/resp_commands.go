@@ -78,6 +78,27 @@ func (c *respClient) ready(ctx context.Context) error {
 	return nil
 }
 
+func (c *respClient) serverTime(ctx context.Context) (int64, error) {
+	value, err := c.command(ctx, []byte("TIME"))
+	if err != nil || value.kind != replyArray || len(value.array) != 2 || value.array[0].kind != replyBulk || value.array[1].kind != replyBulk {
+		return 0, ErrOperation
+	}
+	seconds, secondsErr := strconv.ParseInt(string(value.array[0].data), 10, 64)
+	micros, microsErr := strconv.ParseInt(string(value.array[1].data), 10, 64)
+	if secondsErr != nil || microsErr != nil || seconds < 0 || micros < 0 || micros >= 1_000_000 || seconds > (1<<63-1)/1000 {
+		return 0, ErrOperation
+	}
+	return seconds*1000 + micros/1000, nil
+}
+
+func (c *respClient) expireTime(ctx context.Context, key []byte) (int64, error) {
+	value, err := c.command(ctx, []byte("PEXPIRETIME"), key)
+	if err != nil || value.kind != replyInteger || value.integer < -2 {
+		return 0, ErrOperation
+	}
+	return value.integer, nil
+}
+
 func (c *respClient) databaseIndexes(ctx context.Context) ([]uint16, error) {
 	value, err := c.command(ctx, []byte("INFO"), []byte("KEYSPACE"))
 	if err != nil || value.kind != replyBulk {
