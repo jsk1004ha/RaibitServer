@@ -264,6 +264,10 @@ spec:
       expression: "variables.isPodWorkload && has(variables.podSpec.containers) && variables.podSpec.containers.size() == 1 ? variables.podSpec.containers[0] : variables.target"
     - name: ingressHost
       expression: "variables.target.kind == 'Ingress' && has(variables.target.metadata.annotations) && 'raibitserver.io/hostname' in variables.target.metadata.annotations ? variables.target.metadata.annotations['raibitserver.io/hostname'] : ''"
+    - name: isPreviewRoute
+      expression: "variables.target.kind == 'Ingress' && has(variables.target.metadata.labels) && 'raibitserver.io/preview-route' in variables.target.metadata.labels && variables.target.metadata.labels['raibitserver.io/preview-route'] == 'true'"
+    - name: previewBackendService
+      expression: "variables.isPreviewRoute ? variables.target.metadata.labels['raibitserver.io/preview-backend-service'] : ''"
   validations:
     - expression: >-
         has(namespaceObject.metadata.labels) &&
@@ -287,6 +291,21 @@ spec:
         ['app.kubernetes.io/managed-by', 'raibitserver.io/managed', 'raibitserver.io/project-id', 'raibitserver.io/service-id'].all(key,
           key in oldObject.metadata.labels && object.metadata.labels[key] == oldObject.metadata.labels[key]))
       message: "orchestrator workload ownership labels are immutable"
+    - expression: >-
+        !has(variables.target.metadata.labels) || !('raibitserver.io/preview-route' in variables.target.metadata.labels) ||
+        (variables.target.kind == 'Ingress' && variables.target.metadata.labels['raibitserver.io/preview-route'] == 'true')
+      message: "the preview-route marker is reserved for compiler-owned Ingresses"
+    - expression: >-
+        request.operation != 'UPDATE' || variables.target.kind != 'Ingress' ||
+        (has(oldObject.metadata.labels) && has(object.metadata.labels) &&
+        (('raibitserver.io/preview-route' in oldObject.metadata.labels) == ('raibitserver.io/preview-route' in object.metadata.labels)) &&
+        (!('raibitserver.io/preview-route' in oldObject.metadata.labels) ||
+        (oldObject.metadata.labels['raibitserver.io/preview-route'] == 'true' && object.metadata.labels['raibitserver.io/preview-route'] == 'true' &&
+        ['app.kubernetes.io/name', 'raibitserver.io/project-id', 'raibitserver.io/service-id', 'raibitserver.io/preview-lineage-id'].all(key,
+          key in oldObject.metadata.labels && key in object.metadata.labels && object.metadata.labels[key] == oldObject.metadata.labels[key]) &&
+        (['raibitserver.io/deployment-id', 'raibitserver.io/preview-generation', 'raibitserver.io/preview-backend-service'].all(key, object.metadata.labels[key] == oldObject.metadata.labels[key]) ||
+        ['raibitserver.io/deployment-id', 'raibitserver.io/preview-generation', 'raibitserver.io/preview-backend-service'].all(key, object.metadata.labels[key] != oldObject.metadata.labels[key])))))
+      message: "preview Ingresses preserve route lineage and atomically retarget current candidate provenance"
     - expression: >-
         !variables.isPodWorkload ||
         (variables.podTemplate.metadata.labels == variables.target.metadata.labels &&
@@ -376,6 +395,7 @@ spec:
       message: "orchestrator Services must remain compiler-shaped internal ClusterIP services"
     - expression: >-
         variables.target.kind != 'Ingress' ||
+        ((!variables.isPreviewRoute &&
         (variables.target.metadata.name == variables.appName && variables.target.metadata.annotations.size() == {{ $ingressAnnotationCount }} &&
         {{- if .Values.hostedErrors.enabled }}
         'nginx.ingress.kubernetes.io/custom-http-errors' in variables.target.metadata.annotations &&
@@ -391,8 +411,35 @@ spec:
         variables.target.spec.rules[0].host == variables.ingressHost && variables.target.spec.rules[0].http.paths.size() == 1 &&
         variables.target.spec.rules[0].http.paths[0].path == '/' && variables.target.spec.rules[0].http.paths[0].pathType == 'Prefix' &&
         variables.target.spec.rules[0].http.paths[0].backend.service.name == variables.appName &&
-        variables.target.spec.rules[0].http.paths[0].backend.service.port.number >= 1 && variables.target.spec.rules[0].http.paths[0].backend.service.port.number <= 65535)
-      message: "orchestrator Ingresses require one exact non-wildcard compiler route"
+        variables.target.spec.rules[0].http.paths[0].backend.service.port.number >= 1 && variables.target.spec.rules[0].http.paths[0].backend.service.port.number <= 65535)) ||
+        (variables.isPreviewRoute && variables.target.metadata.labels.size() == 10 &&
+        ['app.kubernetes.io/name', 'app.kubernetes.io/managed-by', 'raibitserver.io/managed', 'raibitserver.io/project-id', 'raibitserver.io/service-id', 'raibitserver.io/deployment-id', 'raibitserver.io/preview-route', 'raibitserver.io/preview-lineage-id', 'raibitserver.io/preview-generation', 'raibitserver.io/preview-backend-service'].all(key, key in variables.target.metadata.labels) &&
+        variables.target.metadata.name == variables.appName &&
+        variables.target.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        variables.target.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        variables.target.metadata.labels['raibitserver.io/project-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/service-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/deployment-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/preview-lineage-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/preview-generation'].matches('^[1-9][0-9]*$') &&
+        variables.previewBackendService.size() <= 63 && variables.previewBackendService.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') &&
+        variables.target.metadata.annotations.size() == {{ $ingressAnnotationCount }} &&
+        {{- if .Values.hostedErrors.enabled }}
+        'nginx.ingress.kubernetes.io/custom-http-errors' in variables.target.metadata.annotations &&
+        variables.target.metadata.annotations['nginx.ingress.kubernetes.io/custom-http-errors'] == {{ join "," .Values.hostedErrors.statuses | squote }} &&
+        {{- end }}
+        {{- if and .Values.hostedErrors.enabled .Values.hostedErrors.traefik.enabled }}
+        'traefik.ingress.kubernetes.io/router.middlewares' in variables.target.metadata.annotations &&
+        variables.target.metadata.annotations['traefik.ingress.kubernetes.io/router.middlewares'] == {{ printf "%s-%s-hosted-errors@kubernetescrd" .Release.Namespace (include "raibitserver.fullname" .) | squote }} &&
+        {{- end }}
+        variables.ingressHost.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$') && !variables.ingressHost.startsWith('*.') &&
+        !has(variables.target.spec.defaultBackend) && variables.target.spec.ingressClassName == {{ $ingressClassName | squote }} &&
+        (!has(variables.target.spec.tls) || variables.target.spec.tls.size() == 0) && variables.target.spec.rules.size() == 1 &&
+        variables.target.spec.rules[0].host == variables.ingressHost && variables.target.spec.rules[0].http.paths.size() == 1 &&
+        variables.target.spec.rules[0].http.paths[0].path == '/' && variables.target.spec.rules[0].http.paths[0].pathType == 'Prefix' &&
+        variables.target.spec.rules[0].http.paths[0].backend.service.name == variables.previewBackendService &&
+        variables.target.spec.rules[0].http.paths[0].backend.service.port.number >= 1 && variables.target.spec.rules[0].http.paths[0].backend.service.port.number <= 65535))
+      message: "orchestrator Ingresses require one exact compiler route or frozen preview route"
     - expression: >-
         variables.target.kind != 'NetworkPolicy' ||
         (variables.target.spec.podSelector.matchLabels.size() == 1 &&
