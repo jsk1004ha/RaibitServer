@@ -49,9 +49,9 @@ function oneBinding(bindings, kind, predicate = () => true) {
   if (matches.length !== 1) throw new EvidenceError('missing_bindings');
   return matches[0];
 }
-function verifyBindingJournal(manifest, options) {
-  if (!manifest.bindingJournal || !manifest.bindingsDigest || !manifest.capabilitySnapshot || !options.bindingJournal) throw new EvidenceError('missing_binding_journal');
-  const parsed = VerifiedBindingJournalSchema.safeParse(options.bindingJournal); if (!parsed.success) throw new EvidenceError('invalid_binding_journal');
+function readVerifiedBindingJournal(manifest, options) {
+  if (!manifest.bindingJournal || !manifest.bindingsDigest || !manifest.capabilitySnapshot || typeof options.verifyBindingJournal !== 'function') throw new EvidenceError('missing_binding_journal');
+  const request = Object.freeze({ identityDigest: digest(manifest.identity), journal: manifest.bindingJournal }), parsed = VerifiedBindingJournalSchema.safeParse(options.verifyBindingJournal(request)); if (!parsed.success) throw new EvidenceError('invalid_binding_journal');
   const journal = parsed.data;
   if (digest(journal.journal) !== digest(manifest.bindingJournal) || journal.identityDigest !== digest(manifest.identity)
     || journal.bindingsDigest !== manifest.bindingsDigest || digest(journal.entries) !== journal.bindingsDigest
@@ -167,7 +167,7 @@ export function verifyManifest(value, options = {}) {
     if (manifest.status !== 'PASS') return fail('assertion_failed');
     if (!componentMode) {
       verifyCapabilitySnapshot(manifest.capabilitySnapshot);
-      verifyBindingGraph(manifest, options, verifyBindingJournal(manifest, options));
+      verifyBindingGraph(manifest, options, readVerifiedBindingJournal(manifest, options));
     }
     if (manifest.cleanup.status !== 'PASS') return fail('cleanup_failed');
     const allPaths = manifest.fragments.flatMap(({ artifacts }) => artifacts.map(({ path }) => path));

@@ -45,7 +45,7 @@ function fullManifest(profile = 'train-a') {
   manifest.cleanup.assertions[0].artifactPaths = ['resources.json'];
   return manifest;
 }
-const verified = (manifest, options = {}) => ({ now, bindingJournal: bindingJournalVerification(manifest, digest), ...options });
+const verified = (manifest, options = {}) => ({ now, verifyBindingJournal: () => bindingJournalVerification(manifest, digest), ...options });
 function operatorInputs() {
   const values = ['fixture-context', 'fixture-prefix', 'fixture.example', 'registry.example/fixture', 'fixture/repository', '123', 'https://backup.example', 'fixture-backups'];
   return { schema: 'raibitserver.operator-input-values/v1', approvedInputSha256: APPROVED_INPUT_SHA256, operatorContractDigest: OPERATOR_CONTRACT_DIGEST,
@@ -106,6 +106,7 @@ for (const field of identityKeys.filter((field) => field !== 'approvedInputSha25
 test('Given immutable run identity, When tenant identifiers are embedded, Then the schema rejects them', () => {
   const manifest = fullManifest(); manifest.identity.projectId = 'ambient-project'; assert.equal(verifyManifest(manifest, { now }).reason, 'invalid_schema');
 });
+test('Given verified-looking request JSON, When no physical verifier capability is supplied, Then journal evidence is rejected', () => { const manifest = fullManifest(), bindingJournal = bindingJournalVerification(manifest, digest); assert.equal(verifyManifest(manifest, { now, bindingJournal }).reason, 'missing_binding_journal'); });
 for (const [reason, mutate, options] of [
   ['binding_journal_mismatch', (m) => { m.bindingsDigest = 'a'.repeat(64); }],
   ['binding_journal_mismatch', (m) => { m.fragments[0].bindingsDigest = 'a'.repeat(64); }],
@@ -123,7 +124,7 @@ for (const [reason, mutate, options] of [
   ['capability_snapshot_mismatch', (m) => { m.capabilitySnapshot.canonicalDigest = 'a'.repeat(64); }],
   ['capability_snapshot_mismatch', (m) => { m.capabilitySnapshot.requiredEngines.push('forged-engine'); }],
 ]) test(`Given ${reason}, When full release evidence is verified, Then it fails closed`, () => {
-  const manifest = fullManifest(), journal = bindingJournalVerification(manifest, digest); mutate(manifest, journal); assert.equal(verifyManifest(manifest, { now, bindingJournal: journal, ...options }).reason, reason); });
+  const manifest = fullManifest(), journal = bindingJournalVerification(manifest, digest); mutate(manifest, journal); assert.equal(verifyManifest(manifest, { now, verifyBindingJournal: () => journal, ...options }).reason, reason); });
 for (const [index, [reason, mutate]] of mutations.entries()) test(`Given ${reason} mutation ${index}, When verifying, Then fail closed`, () => {
   const manifest = fullManifest(); mutate(manifest);
   const result = verifyManifest(manifest, verified(manifest)); assert.equal(result.releaseEligible, false); assert.equal(result.reason, reason);
