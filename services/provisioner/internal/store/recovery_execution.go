@@ -70,14 +70,14 @@ func recoveryResourceMetadata(r *Resource) (RecoveryResourceMetadata, error) {
 	if err != nil {
 		return RecoveryResourceMetadata{}, err
 	}
-	connection, err := recoveryConnection(r, p)
+	connection, err := recoveryConnection(r, p, generation)
 	if err != nil {
 		return RecoveryResourceMetadata{}, err
 	}
 	return RecoveryResourceMetadata{ID: r.ID, ProjectID: r.ProjectID, Engine: r.Engine, Provider: r.Provider, Version: r.Version, Namespace: p.ProviderIdentity.Namespace, Name: p.ProviderIdentity.Name, SecretName: r.ConnectionSecretName, SecretUID: p.CredentialUID, SecretGeneration: p.CredentialGeneration, Image: p.ProviderImage.Image, WorkloadUID: p.ProviderImage.WorkloadUID, WorkloadGeneration: p.ProviderImage.WorkloadGeneration, Generation: generation, Connection: connection}, nil
 }
 
-func recoveryConnection(r *Resource, provenance recoveryProvenance) (RecoveryConnectionProjection, error) {
+func recoveryConnection(r *Resource, provenance recoveryProvenance, generation string) (RecoveryConnectionProjection, error) {
 	if strings.EqualFold(r.Engine, "sqlite") {
 		return RecoveryConnectionProjection{}, fmt.Errorf("%w: SQLite recovery volume authority is not configured", ErrRecoverySource)
 	}
@@ -97,15 +97,65 @@ func recoveryConnection(r *Resource, provenance recoveryProvenance) (RecoveryCon
 	providerResult, resultOK := r.DesiredState["providerResult"].(map[string]any)
 	resultKeys, keysOK := stringSlice(providerResult["environmentKeys"])
 	sort.Strings(resultKeys)
-	if !ok || !resultOK || !keysOK || endpoint != wantEndpoint || secret != r.ConnectionSecretName || secret != provenance.ProviderIdentity.Name+"-connection" || !slices.Equal(keys, contract.EnvironmentKeys) || !slices.Equal(resultKeys, contract.EnvironmentKeys) || stringMapValue(providerResult, "engine") != strings.ToLower(r.Engine) || stringMapValue(providerResult, "provider") != r.Provider || stringMapValue(providerResult, "endpoint") != wantEndpoint || stringMapValue(providerResult, "namespace") != provenance.ProviderIdentity.Namespace || stringMapValue(providerResult, "name") != provenance.ProviderIdentity.Name || stringMapValue(providerResult, "secretName") != secret || provenance.CredentialUID == "" || provenance.CredentialGeneration == "" {
+	database, user := stringMapValue(state, "database"), stringMapValue(state, "user")
+	if !ok || !resultOK || !keysOK || stringMapValue(state, "sourceGeneration") != generation || endpoint != wantEndpoint || stringMapValue(state, "engine") != strings.ToLower(r.Engine) || stringMapValue(state, "host") != contract.Host || intMapValue(state, "port") != int(contract.Port) || database != contract.Database || user != contract.User || stringMapValue(state, "secretKey") != contract.CredentialKey || stringMapValue(state, "credentialUID") != provenance.CredentialUID || stringMapValue(state, "credentialGeneration") != provenance.CredentialGeneration || secret != r.ConnectionSecretName || secret != provenance.ProviderIdentity.Name+"-connection" || !slices.Equal(keys, contract.EnvironmentKeys) || !slices.Equal(resultKeys, contract.EnvironmentKeys) || stringMapValue(providerResult, "engine") != strings.ToLower(r.Engine) || stringMapValue(providerResult, "provider") != r.Provider || stringMapValue(providerResult, "endpoint") != wantEndpoint || stringMapValue(providerResult, "database") != database || stringMapValue(providerResult, "user") != user || stringMapValue(providerResult, "namespace") != provenance.ProviderIdentity.Namespace || stringMapValue(providerResult, "name") != provenance.ProviderIdentity.Name || stringMapValue(providerResult, "secretName") != secret || provenance.CredentialUID == "" || provenance.CredentialGeneration == "" {
 		return RecoveryConnectionProjection{}, ErrRecoverySource
 	}
-	return RecoveryConnectionProjection{Host: contract.Host, Port: contract.Port, Database: contract.Database, User: contract.User, Index: contract.Index, SecretNamespace: provenance.ProviderIdentity.Namespace, SecretName: secret, SecretKey: contract.CredentialKey, CredentialUID: provenance.CredentialUID, CredentialGeneration: provenance.CredentialGeneration}, nil
+	return RecoveryConnectionProjection{Host: contract.Host, Port: contract.Port, Database: database, User: user, Index: contract.Index, SecretNamespace: provenance.ProviderIdentity.Namespace, SecretName: secret, SecretKey: contract.CredentialKey, CredentialUID: provenance.CredentialUID, CredentialGeneration: provenance.CredentialGeneration}, nil
+}
+
+func providerConnectionState(r *Resource, desiredState map[string]any, provider, secretName, endpoint string, secretKeys []string) (map[string]any, error) {
+	legacy := map[string]any{"secretName": secretName, "environmentKeys": secretKeys, "endpoint": endpoint}
+	result, ok := desiredState["providerResult"].(map[string]any)
+	if !ok {
+		if providercontract.SupportsRecovery(r.Engine) {
+			return nil, ErrRecoverySource
+		}
+		return legacy, nil
+	}
+	identity, identityOK := desiredState["providerIdentity"].(map[string]any)
+	name, namespace := stringMapValue(identity, "name"), stringMapValue(identity, "namespace")
+	contract, err := providercontract.RecoveryFor(r.Engine, name, namespace, r.Name, r.DesiredSpec)
+	if err != nil {
+		return legacy, nil
+	}
+	keys := slices.Clone(secretKeys)
+	sort.Strings(keys)
+	resultKeys, resultKeysOK := stringSlice(result["environmentKeys"])
+	sort.Strings(resultKeys)
+	if !identityOK || !resultKeysOK || stringMapValue(result, "engine") != strings.ToLower(r.Engine) || stringMapValue(result, "provider") != provider || stringMapValue(result, "name") != name || stringMapValue(result, "namespace") != namespace || endpoint != net.JoinHostPort(contract.Host, strconv.Itoa(int(contract.Port))) || secretName != name+"-connection" || secretName != stringMapValue(result, "secretName") || stringMapValue(result, "database") != contract.Database || stringMapValue(result, "user") != contract.User || !slices.Equal(keys, contract.EnvironmentKeys) || !slices.Equal(resultKeys, contract.EnvironmentKeys) {
+		return nil, ErrRecoverySource
+	}
+	uid, _ := desiredState["credentialSecretUID"].(string)
+	generation, _ := desiredState["credentialSecretGeneration"].(string)
+	if uid == "" || generation == "" {
+		return nil, ErrRecoverySource
+	}
+	snapshot := *r
+	snapshot.Provider = provider
+	snapshot.ConnectionSecretName = secretName
+	snapshot.DesiredState = desiredState
+	sourceGeneration, generationErr := recoverySourceGeneration(&snapshot)
+	if generationErr != nil {
+		return nil, generationErr
+	}
+	return map[string]any{"engine": strings.ToLower(r.Engine), "host": contract.Host, "port": int(contract.Port), "database": contract.Database, "user": contract.User, "secretName": secretName, "secretKey": contract.CredentialKey, "credentialUID": uid, "credentialGeneration": generation, "environmentKeys": keys, "endpoint": endpoint, "sourceGeneration": sourceGeneration}, nil
 }
 
 func stringMapValue(values map[string]any, key string) string {
 	value, _ := values[key].(string)
 	return value
+}
+
+func intMapValue(values map[string]any, key string) int {
+	switch value := values[key].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
 }
 
 func stringSlice(value any) ([]string, bool) {

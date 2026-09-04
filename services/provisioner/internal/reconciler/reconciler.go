@@ -747,7 +747,7 @@ func (r *Reconciler) providerImage(engine string) string {
 
 func publicProviderPlan(plan *provider.Plan) map[string]any {
 	return map[string]any{
-		"engine": plan.Engine, "provider": plan.Provider, "name": plan.Name, "namespace": plan.Namespace,
+		"engine": plan.Engine, "provider": plan.Provider, "name": plan.Name, "namespace": plan.Namespace, "database": plan.Database, "user": plan.User,
 		"secretName": plan.SecretName, "environmentKeys": plan.ConnectionKeys, "endpoint": plan.Endpoint,
 		"objects": []any{"Namespace/" + plan.Namespace, "PersistentVolumeClaim/" + plan.PVCName, "Service/" + plan.Name, "StatefulSet/" + plan.Name, "NetworkPolicy/" + plan.Name + "-provider"},
 	}

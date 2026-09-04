@@ -16,12 +16,22 @@ type Recovery struct {
 	EnvironmentKeys                     []string
 }
 
+func SupportsRecovery(engine string) bool {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "postgresql", "mysql", "mariadb", "mongodb", "redis", "valkey":
+		return true
+	default:
+		return false
+	}
+}
+
 func RecoveryFor(engine, name, namespace, resourceName string, spec map[string]any) (Recovery, error) {
+	engine = strings.ToLower(strings.TrimSpace(engine))
 	database := identifier(first(stringValue(spec, "databaseName"), resourceName, "app"))
 	user := identifier(first(stringValue(spec, "username"), name+"-app"))
 	host := name + "." + namespace + ".svc.cluster.local"
 	result := Recovery{Host: host, Database: database, User: user}
-	switch strings.ToLower(strings.TrimSpace(engine)) {
+	switch engine {
 	case "postgresql":
 		result.Port, result.CredentialKey = 5432, "PGPASSWORD"
 		result.EnvironmentKeys = []string{"DATABASE_URL", "PGDATABASE", "PGHOST", "PGPASSWORD", "PGPORT", "PGUSER", "POSTGRES_URL"}

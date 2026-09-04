@@ -79,7 +79,7 @@ func Test_NewRecoveryArtifact_when_Task23_bytes_do_not_match_stream(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := newJobReceipt("job-1", 4, job, dumpDirection)
+	receipt, err := newJobReceipt(testCompletedJob(job, "job-1"), 4, job, dumpDirection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func Test_NewRecoveryArtifact_when_Task23_authenticated_readback_succeeds(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := newJobReceipt("job-1", 4, job, dumpDirection)
+	receipt, err := newJobReceipt(testCompletedJob(job, "job-1"), 4, job, dumpDirection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,13 +136,26 @@ func Test_NewRecoveryArtifact_when_Task23_authenticated_readback_succeeds(t *tes
 	}
 }
 
-func Test_NewRecoveryArtifact_when_constructor_signature_is_inspected(t *testing.T) {
-	// Given: raw Task23 Candidate/ArtifactRecord values and the recovery constructor type.
-	constructor := reflect.TypeOf(NewRecoveryArtifact)
-	verifiedType := reflect.TypeOf(VerifiedArtifact{})
-	// When / Then: only the opaque verified capability can cross parameter two.
-	if constructor.In(1) != verifiedType || constructor.In(1) == reflect.TypeOf(Candidate{}) || constructor.In(1) == reflect.TypeOf(ArtifactRecord{}) {
-		t.Fatalf("artifact input=%v", constructor.In(1))
+func Test_NewRecoveryArtifact_when_readback_capability_is_missing(t *testing.T) {
+	source := testNetworkConnection(t, "source", "source.db.internal", "source-secret", "DATABASE_URL", "16.4")
+	request, err := NewDumpRequest(source, source.Generation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := NewIsolatedJob(testJobSpec(t, source, StreamStdout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := newJobReceipt(testCompletedJob(job, "dump-job"), 4, job, dumpDirection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newDumpResult(request, receipt, testFormat(t, source.Engine()), testBaseline(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewRecoveryArtifact(result, VerifiedArtifact{}); !errors.Is(err, ErrRecoveryRequest) {
+		t.Fatalf("artifact without authenticated Task23 readback accepted: %v", err)
 	}
 }
 

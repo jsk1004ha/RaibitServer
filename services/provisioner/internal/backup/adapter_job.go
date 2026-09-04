@@ -3,6 +3,7 @@ package backup
 import (
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -158,7 +159,7 @@ type IsolatedJob struct {
 }
 
 func NewIsolatedJob(spec IsolatedJobSpec) (IsolatedJob, error) {
-	if !recoveryPart.MatchString(spec.Namespace) || spec.Image != spec.Connection.toolImage || spec.OperationID != spec.Connection.operationID || spec.Attempt != spec.Connection.attempt || spec.Connection.spec.ResourceID == "" || spec.RunAsUser < 1 || spec.CPUMilli < 1 || spec.CPUMilli > 4000 || spec.MemoryMiB < 16 || spec.MemoryMiB > 8192 || spec.EphemeralMiB < 16 || spec.EphemeralMiB > 16384 || spec.Deadline < time.Second || spec.Deadline > MaxDuration || len(spec.Steps) == 0 || len(spec.Steps) > 8 || len(spec.Secrets) > 16 || len(spec.SecretFiles) > 8 {
+	if !recoveryPart.MatchString(spec.Namespace) || spec.Namespace != spec.Connection.spec.Provenance.spec.Namespace || spec.Image != spec.Connection.toolImage || spec.OperationID != spec.Connection.operationID || spec.Attempt != spec.Connection.attempt || spec.Connection.spec.ResourceID == "" || spec.RunAsUser < 1 || spec.CPUMilli < 1 || spec.CPUMilli > 4000 || spec.MemoryMiB < 16 || spec.MemoryMiB > 8192 || spec.EphemeralMiB < 16 || spec.EphemeralMiB > 16384 || spec.Deadline < time.Second || spec.Deadline > MaxDuration || len(spec.Steps) == 0 || len(spec.Steps) > 8 || len(spec.Secrets) > 16 || len(spec.SecretFiles) > 8 {
 		return IsolatedJob{}, ErrRecoveryJob
 	}
 	streamBindings := 0
@@ -179,9 +180,11 @@ func NewIsolatedJob(spec IsolatedJobSpec) (IsolatedJob, error) {
 	}
 	spec.Steps, spec.Secrets, spec.SecretFiles = slices.Clone(spec.Steps), slices.Clone(spec.Secrets), slices.Clone(spec.SecretFiles)
 	fence := FenceIdentity{operationID: spec.OperationID, attempt: spec.Attempt}
-	labels := map[string]string{"raibitserver.io/owned-by": "recovery", "raibitserver.io/operation": spec.OperationID, "raibitserver.io/resource": spec.Connection.ResourceID()}
+	labels := map[string]string{"raibitserver.io/owned-by": "recovery", "raibitserver.io/operation": spec.OperationID, "raibitserver.io/resource": spec.Connection.ResourceID(), "raibitserver.io/attempt": strconv.Itoa(spec.Attempt)}
 	security := RuntimeSecurity{runAsUser: spec.RunAsUser, runAsNonRoot: true, readOnlyRootFilesystem: true, dropAllCapabilities: true}
-	return IsolatedJob{spec: spec, security: security, policy: policy, labels: labels, fence: fence}, nil
+	job := IsolatedJob{spec: spec, security: security, policy: policy, labels: labels, fence: fence}
+	job.labels["raibitserver.io/spec-identity"] = isolatedJobIdentity(job)
+	return job, nil
 }
 
 func validJobSecrets(spec IsolatedJobSpec) bool {

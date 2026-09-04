@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -48,13 +49,23 @@ func recoveryDBWithID(t *testing.T, id string) recoveryFixture {
 	})
 	f.exec(t, `INSERT INTO "Organization" (id,name,slug,"updatedAt") VALUES ($1,$1,$1,CURRENT_TIMESTAMP)`, id)
 	f.exec(t, `INSERT INTO "Project" (id,"organizationId",name,slug,status,"updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE',CURRENT_TIMESTAMP)`, id)
-	f.exec(t, `INSERT INTO "Resource" (id,"projectId",name,slug,type,engine,provider,plan,region,status,"desiredSpec","desiredState","connectionSecretName","updatedAt") VALUES ($1,$1,$1,$1,'database','postgresql','raibitserver','shared-small','local','READY','{}',$2,'db-connection',CURRENT_TIMESTAMP)`, id, recoveryState())
+	resource := &Resource{ID: id, ProjectID: id, Name: id, Type: "database", Engine: "postgresql", Provider: "raibitserver", Plan: "shared-small", Region: "local", ConnectionSecretName: "db-connection", DesiredSpec: map[string]any{"databaseName": "app", "username": "provider"}, DesiredState: decodeMap([]byte(recoveryState()))}
+	generation, err := recoverySourceGeneration(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource.DesiredState["providerConnection"].(map[string]any)["sourceGeneration"] = generation
+	state, err := json.Marshal(resource.DesiredState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.exec(t, `INSERT INTO "Resource" (id,"projectId",name,slug,type,engine,provider,plan,region,status,"desiredSpec","desiredState","connectionSecretName","updatedAt") VALUES ($1,$1,$1,$1,'database','postgresql','raibitserver','shared-small','local','READY','{"databaseName":"app","username":"provider"}',$2,'db-connection',CURRENT_TIMESTAMP)`, id, state)
 	return f
 }
 
 func recoveryState() string {
 	keys := `"DATABASE_URL","PGDATABASE","PGHOST","PGPASSWORD","PGPORT","PGUSER","POSTGRES_URL"`
-	return `{"providerIdentity":{"namespace":"tenant","name":"db"},"providerResult":{"engine":"postgresql","provider":"raibitserver","name":"db","namespace":"tenant","secretName":"db-connection","endpoint":"db.tenant.svc.cluster.local:5432","environmentKeys":[` + keys + `]},"providerConnection":{"secretName":"db-connection","endpoint":"db.tenant.svc.cluster.local:5432","environmentKeys":[` + keys + `]},"credentialSecretUID":"secret-uid","credentialSecretGeneration":"` + strings.Repeat("a", 43) + `","providerImageProvenance":{"schema":"raibitserver.provider-image/v1","image":"registry.invalid/postgres@sha256:` + strings.Repeat("1", 64) + `","workloadUid":"workload-uid","workloadGeneration":1,"observedAt":"2026-09-03T00:00:00Z"}}`
+	return `{"providerIdentity":{"namespace":"tenant","name":"db"},"providerResult":{"engine":"postgresql","provider":"raibitserver","name":"db","namespace":"tenant","secretName":"db-connection","endpoint":"db.tenant.svc.cluster.local:5432","database":"app","user":"provider","environmentKeys":[` + keys + `]},"providerConnection":{"engine":"postgresql","host":"db.tenant.svc.cluster.local","port":5432,"secretName":"db-connection","secretKey":"PGPASSWORD","credentialUID":"secret-uid","credentialGeneration":"` + strings.Repeat("a", 43) + `","endpoint":"db.tenant.svc.cluster.local:5432","database":"app","user":"provider","environmentKeys":[` + keys + `]},"credentialSecretUID":"secret-uid","credentialSecretGeneration":"` + strings.Repeat("a", 43) + `","providerImageProvenance":{"schema":"raibitserver.provider-image/v1","image":"registry.invalid/postgres@sha256:` + strings.Repeat("1", 64) + `","workloadUid":"workload-uid","workloadGeneration":1,"observedAt":"2026-09-03T00:00:00Z"}}`
 }
 
 func (f recoveryFixture) exec(t *testing.T, q string, args ...any) {
@@ -66,7 +77,7 @@ func (f recoveryFixture) exec(t *testing.T, q string, args ...any) {
 
 func (f recoveryFixture) backup(t *testing.T) {
 	t.Helper()
-	resource := &Resource{ID: f.id, ProjectID: f.id, Type: "database", Engine: "postgresql", Provider: "raibitserver", Plan: "shared-small", Region: "local", ConnectionSecretName: "db-connection", DesiredState: decodeMap([]byte(recoveryState()))}
+	resource := &Resource{ID: f.id, ProjectID: f.id, Type: "database", Engine: "postgresql", Provider: "raibitserver", Plan: "shared-small", Region: "local", ConnectionSecretName: "db-connection", DesiredSpec: map[string]any{"databaseName": "app", "username": "provider"}, DesiredState: decodeMap([]byte(recoveryState()))}
 	generation, err := recoverySourceGeneration(resource)
 	if err != nil {
 		t.Fatal(err)

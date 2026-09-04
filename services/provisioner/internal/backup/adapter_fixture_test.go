@@ -87,7 +87,7 @@ func testArtifact(t *testing.T, source Connection) RecoveryArtifact {
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := newJobReceipt("dump-job", 4, job, dumpDirection)
+	receipt, err := newJobReceipt(testCompletedJob(job, "dump-job"), 4, job, dumpDirection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func testRestoreReceipt(t *testing.T, target Connection) JobReceipt {
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := newJobReceipt("restore-job", 4, job, restoreDirection)
+	receipt, err := newJobReceipt(testCompletedJob(job, "restore-job"), 4, job, restoreDirection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,9 +121,13 @@ func testRestoreReceipt(t *testing.T, target Connection) JobReceipt {
 
 type writeRunner struct{ payload string }
 
-func (r writeRunner) Run(_ context.Context, _ IsolatedJob, stream JobStream) (JobExecution, error) {
+func (r writeRunner) Run(_ context.Context, job IsolatedJob, stream JobStream) (completedJobObservation, error) {
 	if _, err := io.Copy(stream.Output(), strings.NewReader(r.payload)); err != nil {
-		return JobExecution{}, err
+		return completedJobObservation{}, err
 	}
-	return NewJobExecution("job-1")
+	return testCompletedJob(job, "job-1"), nil
+}
+
+func testCompletedJob(job IsolatedJob, name string) completedJobObservation {
+	return completedJobObservation{name: name, uid: name + "-uid", specIdentity: job.Identity()}
 }

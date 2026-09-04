@@ -20,7 +20,6 @@ type streamState struct {
 	output    io.WriteCloser
 	max       int64
 	bytes     atomic.Int64
-	done      chan struct{}
 	ioMu      sync.Mutex
 	endpoint  sync.Once
 	closeOnce sync.Once
@@ -29,7 +28,6 @@ type streamState struct {
 
 func (s *streamState) close() error {
 	s.closeOnce.Do(func() {
-		close(s.done)
 		var errs []error
 		if s.input != nil {
 			errs = append(errs, s.input.Close())
@@ -143,7 +141,7 @@ func NewRestoreHandoff(ctx context.Context, input io.ReadCloser, maxBytes int64)
 }
 
 func newStreamHandoff(ctx context.Context, input io.ReadCloser, output io.WriteCloser, maxBytes int64, direction streamDirection) *StreamHandoff {
-	state := &streamState{input: input, output: output, max: maxBytes, done: make(chan struct{})}
+	state := &streamState{input: input, output: output, max: maxBytes}
 	return &StreamHandoff{stream: JobStream{state: state, direction: direction}, constructorCtx: ctx}
 }
 
@@ -180,7 +178,7 @@ func (h *StreamHandoff) Execute(ctx context.Context, job IsolatedJob, runner Job
 	if err := errors.Join(ctx.Err(), h.constructorCtx.Err()); err != nil {
 		return JobReceipt{}, err
 	}
-	return newJobReceipt(execution.name, h.stream.Bytes(), job, h.stream.direction)
+	return newJobReceipt(execution, h.stream.Bytes(), job, h.stream.direction)
 }
 
 func (h *StreamHandoff) claim() bool {
@@ -206,35 +204,25 @@ func bindingMatches(job IsolatedJob, direction streamDirection) bool {
 	return false
 }
 
-type JobExecution struct{ name string }
-
-func NewJobExecution(name string) (JobExecution, error) {
-	if !recoveryPart.MatchString(name) {
-		return JobExecution{}, ErrRecoveryJob
-	}
-	return JobExecution{name: name}, nil
-}
-
-func (e JobExecution) Name() string { return e.name }
-
 type JobReceipt struct {
-	name       string
+	name, uid  string
 	bytes      int64
 	resourceID string
 	fence      FenceIdentity
 	direction  streamDirection
 }
 
-func newJobReceipt(name string, streamedBytes int64, job IsolatedJob, direction streamDirection) (JobReceipt, error) {
-	if !recoveryPart.MatchString(name) || streamedBytes < 0 || streamedBytes > MaxStoredBytes || job.spec.Connection.spec.ResourceID == "" || job.fence.attempt < 1 || direction < dumpDirection || direction > restoreDirection {
+func newJobReceipt(observed completedJobObservation, streamedBytes int64, job IsolatedJob, direction streamDirection) (JobReceipt, error) {
+	if !recoveryPart.MatchString(observed.name) || !providerUIDPattern.MatchString(observed.uid) || observed.specIdentity != isolatedJobIdentity(job) || streamedBytes < 0 || streamedBytes > MaxStoredBytes || job.spec.Connection.spec.ResourceID == "" || job.fence.attempt < 1 || direction < dumpDirection || direction > restoreDirection {
 		return JobReceipt{}, ErrRecoveryJob
 	}
-	return JobReceipt{name: name, bytes: streamedBytes, resourceID: job.spec.Connection.ResourceID(), fence: job.fence, direction: direction}, nil
+	return JobReceipt{name: observed.name, uid: observed.uid, bytes: streamedBytes, resourceID: job.spec.Connection.ResourceID(), fence: job.fence, direction: direction}, nil
 }
 
 func (r JobReceipt) Name() string { return r.name }
+func (r JobReceipt) UID() string  { return r.uid }
 func (r JobReceipt) Bytes() int64 { return r.bytes }
 
 type JobRunner interface {
-	Run(context.Context, IsolatedJob, JobStream) (JobExecution, error)
+	Run(context.Context, IsolatedJob, JobStream) (completedJobObservation, error)
 }

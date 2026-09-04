@@ -257,7 +257,7 @@ func TestDryRunReturnsResourceToProvisioningWithoutReadyTransition(t *testing.T)
 }
 
 func TestLiveReconcileWaitsForProviderReadyBeforeReadyTransition(t *testing.T) {
-	resource := &store.Resource{ID: "res-1", ProjectID: "project-1", OrganizationID: "org-1", ProjectSlug: "demo", Name: "db", Slug: "db", Engine: "postgresql", Plan: "shared-small", Status: store.StatusProvisioning, ClaimToken: "claim-1"}
+	resource := &store.Resource{ID: "res-1", ProjectID: "project-1", OrganizationID: "org-1", ProjectSlug: "demo", Name: "db", Slug: "db", Engine: "postgresql", Plan: "shared-small", Status: store.StatusProvisioning, ClaimToken: "claim-1", DesiredSpec: map[string]any{"databaseName": "Customer Data", "username": "App Owner"}}
 	name, _, secretName, _, err := provider.ObjectNames(resource)
 	if err != nil {
 		t.Fatal(err)
@@ -290,6 +290,10 @@ func TestLiveReconcileWaitsForProviderReadyBeforeReadyTransition(t *testing.T) {
 	}
 	if state.lastDesiredState["credentialSecretUID"] != testCredentialSecretUID || state.persistedCredentialUID != testCredentialSecretUID || state.lastDesiredState["healthManaged"] != true {
 		t.Fatalf("READY state must retain the server-assigned credential Secret UID: %#v", state)
+	}
+	providerResult, _ := state.lastDesiredState["providerResult"].(map[string]any)
+	if providerResult["database"] != "customer_data" || providerResult["user"] != "app_owner" {
+		t.Fatalf("READY state lost normalized provider identity: %#v", providerResult)
 	}
 	if strings.Contains(strings.Join(runner.calls, "\n"), "password") {
 		t.Fatalf("secret values must not appear in command arguments: %#v", runner.calls)

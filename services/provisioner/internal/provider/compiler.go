@@ -31,6 +31,8 @@ type Plan struct {
 	SecretName      string
 	PVCName         string
 	Endpoint        string
+	Database        string
+	User            string
 	ConnectionKeys  []string
 	ProbeCommand    []string
 	SecretData      map[string]string
@@ -77,7 +79,18 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate provider reconcile token: %w", err)
 	}
-	database := identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "databaseName"), resource.Name, "app"))
+	database, username := "", ""
+	host := name + "." + namespace + ".svc.cluster.local"
+	if providercontract.SupportsRecovery(engine) {
+		recovery, recoveryErr := providercontract.RecoveryFor(engine, name, namespace, resource.Name, resource.DesiredSpec)
+		if recoveryErr != nil {
+			return nil, recoveryErr
+		}
+		database, username, host = recovery.Database, recovery.User, recovery.Host
+	} else {
+		database = identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "databaseName"), resource.Name, "app"))
+		username = identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "username"), name+"-app"))
+	}
 	target := database
 	switch engine {
 	case "object-storage":
@@ -87,18 +100,8 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	case "nats":
 		target = identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "topic"), stringValue(resource.DesiredSpec, "databaseName"), resource.Name, "app"))
 	}
-	username := identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "username"), name+"-app"))
 	if (engine == "mysql" || engine == "mariadb") && username == "root" {
 		return nil, fmt.Errorf("provider username %q is reserved by the %s image", username, engine)
-	}
-	host := name + "." + namespace + ".svc.cluster.local"
-	if engine == "postgresql" || engine == "mysql" || engine == "mariadb" || engine == "mongodb" || engine == "redis" || engine == "valkey" {
-		recovery, recoveryErr := providercontract.RecoveryFor(engine, name, namespace, resource.Name, resource.DesiredSpec)
-		if recoveryErr != nil {
-			return nil, recoveryErr
-		}
-		database, username = recovery.Database, recovery.User
-		host = recovery.Host
 	}
 	port, data, connectionKeys, container := providerContract(engine, host, target, username, password, secondary, secretName)
 	endpoint := fmt.Sprintf("%s:%d", host, port)
@@ -114,7 +117,7 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	plan := &Plan{
 		Image:  image,
 		Engine: engine, Provider: "raibitserver-local-" + engine, Name: name, Namespace: namespace,
-		SecretName: secretName, PVCName: pvcName, Endpoint: endpoint, ConnectionKeys: connectionKeys, ProbeCommand: container.ProbeCommand, SecretData: data, Labels: labels,
+		SecretName: secretName, PVCName: pvcName, Endpoint: endpoint, Database: database, User: username, ConnectionKeys: connectionKeys, ProbeCommand: container.ProbeCommand, SecretData: data, Labels: labels,
 	}
 	plan.PublicManifests = []map[string]any{
 		tenantNamespaceManifest(namespace, resource.ProjectID, resource.ProjectSlug),

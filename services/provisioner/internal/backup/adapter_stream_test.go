@@ -280,12 +280,12 @@ func Test_JobStream_when_shared_input_reads_concurrently(t *testing.T) {
 
 type readRunner struct{}
 
-func (readRunner) Run(_ context.Context, _ IsolatedJob, stream JobStream) (JobExecution, error) {
+func (readRunner) Run(_ context.Context, job IsolatedJob, stream JobStream) (completedJobObservation, error) {
 	_, err := io.Copy(io.Discard, stream.Input())
 	if err != nil {
-		return JobExecution{}, err
+		return completedJobObservation{}, err
 	}
-	return NewJobExecution("job-1")
+	return testCompletedJob(job, "job-1"), nil
 }
 
 type countingWriteCloser struct {

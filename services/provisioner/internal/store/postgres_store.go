@@ -500,9 +500,11 @@ func (s *PostgresStore) MarkResourceReady(ctx context.Context, resource *Resourc
 	if err != nil {
 		return fmt.Errorf("invalid resource claim token: %w", err)
 	}
-	publicState := mergeMap(desiredState, map[string]any{
-		"providerConnection": map[string]any{"secretName": secretName, "environmentKeys": secretKeys, "endpoint": endpoint},
-	})
+	connection, err := providerConnectionState(resource, desiredState, provider, secretName, endpoint, secretKeys)
+	if err != nil {
+		return err
+	}
+	publicState := mergeMap(desiredState, map[string]any{"providerConnection": connection})
 	payload, err := json.Marshal(maskSecrets(publicState))
 	if err != nil {
 		return err
