@@ -1,5 +1,6 @@
 import { ProductionEvidenceSchema } from '../../../packages/schemas/src/production-evidence.ts';
 import { RESOURCE_LIFECYCLE_ASSERTIONS } from '../../../packages/schemas/src/resource-lifecycle-evidence.ts';
+import resourceCapabilities from '../../../packages/schemas/src/resource-capabilities-v1.json' with { type: 'json' };
 import { APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST, EvidenceError, assertRedacted, digest } from './operator-inputs.mjs';
 
 export const MAX_RUN_AGE_MS = 4 * 60 * 60 * 1000;
@@ -33,7 +34,7 @@ function bindingKey(binding) {
   switch (binding.kind) {
     case 'organization-membership': return `${binding.kind}:${binding.membershipId}`;
     case 'github-repository': return `${binding.kind}:${binding.repositoryId}`;
-    case 'tenant-revision': return `${binding.kind}:${binding.repositoryId}:${binding.branch}`;
+    case 'tenant-revision': return `${binding.kind}:${binding.tenantRevisionId}`;
     case 'project': return `${binding.kind}:${binding.projectId}`;
     case 'service': return `${binding.kind}:${binding.serviceId}`;
     case 'deployment': return `${binding.kind}:${binding.role}`;
@@ -48,10 +49,9 @@ function oneBinding(bindings, kind, predicate = () => true) {
   if (matches.length !== 1) throw new EvidenceError('missing_bindings');
   return matches[0];
 }
-function verifyReleaseBindings(manifest, options) {
+function verifyBindingGraph(manifest, options) {
   if (!manifest.bindings || !manifest.bindingsDigest || !manifest.capabilitySnapshot) throw new EvidenceError('missing_bindings');
   if (digest(manifest.bindings) !== manifest.bindingsDigest
-    || digest(manifest.capabilitySnapshot.engines) !== manifest.capabilitySnapshot.digest
     || manifest.fragments.some((fragment) => fragment.bindingsDigest !== manifest.bindingsDigest)) throw new EvidenceError('bindings_digest_mismatch');
   const assigned = new Map();
   for (const binding of manifest.bindings) {
@@ -59,24 +59,29 @@ function verifyReleaseBindings(manifest, options) {
     if (assigned.has(key)) throw new EvidenceError(assigned.get(key) === digest(binding) ? 'duplicate_binding' : 'binding_reassigned');
     assigned.set(key, digest(binding));
   }
-  const engines = manifest.capabilitySnapshot.engines;
-  if (new Set(engines.map(({ engine }) => engine)).size !== engines.length) throw new EvidenceError('binding_reassigned');
-  const requiredEngines = engines.filter(({ enabled, required }) => enabled || required);
-  if (requiredEngines.some(({ release, liveEvidenceRelease }) => liveEvidenceRelease !== 'verified'
-    || RELEASE_FEATURES.some((feature) => release[feature] !== true))) throw new EvidenceError('release_capability_not_verified');
   const membership = oneBinding(manifest.bindings, 'organization-membership');
   const repository = oneBinding(manifest.bindings, 'github-repository');
-  const revision = oneBinding(manifest.bindings, 'tenant-revision');
+  const candidateRevision = oneBinding(manifest.bindings, 'tenant-revision', (binding) => binding.purpose === 'candidate');
+  const failureRevision = oneBinding(manifest.bindings, 'tenant-revision', (binding) => binding.purpose === 'failure');
   const project = oneBinding(manifest.bindings, 'project');
   const service = oneBinding(manifest.bindings, 'service');
   if (options.repository && repository.repository !== options.repository) throw new EvidenceError('binding_graph_mismatch');
-  if (revision.tenantCommitSha === manifest.identity.sourceCommitSha) throw new EvidenceError('tenant_revision_mismatch');
-  if (revision.repositoryId !== repository.repositoryId || revision.branch !== repository.branch
+  if ([candidateRevision, failureRevision].some(({ tenantCommitSha }) => tenantCommitSha === manifest.identity.sourceCommitSha)
+    || candidateRevision.tenantCommitSha === failureRevision.tenantCommitSha) throw new EvidenceError('tenant_revision_mismatch');
+  if (candidateRevision.repositoryId !== repository.repositoryId || candidateRevision.repository !== repository.repository
+    || candidateRevision.branch !== repository.branch || failureRevision.repositoryId !== repository.repositoryId
+    || failureRevision.repository !== repository.repository
     || project.organizationId !== membership.organizationId || service.projectId !== project.projectId) throw new EvidenceError('binding_graph_mismatch');
   const deployments = ['candidate', 'preview', 'failed', 'rollback'].map((role) => oneBinding(manifest.bindings, 'deployment', (binding) => binding.role === role));
   if (new Set(deployments.map(({ deploymentId }) => deploymentId)).size !== deployments.length
     || deployments.some((deployment) => deployment.serviceId !== service.serviceId)) throw new EvidenceError('binding_graph_mismatch');
-  for (const { engine } of requiredEngines) {
+  for (const deployment of deployments) {
+    const revision = deployment.role === 'failed' ? failureRevision : candidateRevision;
+    if (deployment.tenantRevisionId !== revision.tenantRevisionId || deployment.tenantCommitSha !== revision.tenantCommitSha
+      || deployment.repositoryId !== revision.repositoryId || deployment.repository !== revision.repository
+      || deployment.branch !== revision.branch) throw new EvidenceError('binding_graph_mismatch');
+  }
+  for (const engine of manifest.capabilitySnapshot.requiredEngines) {
     const source = oneBinding(manifest.bindings, 'resource', (binding) => binding.engine === engine && binding.role === 'source');
     const target = oneBinding(manifest.bindings, 'resource', (binding) => binding.engine === engine && binding.role === 'restore-target');
     const backup = oneBinding(manifest.bindings, 'backup', (binding) => binding.engine === engine);
@@ -85,6 +90,19 @@ function verifyReleaseBindings(manifest, options) {
       || backup.sourceResourceId !== source.resourceId || restore.backupId !== backup.backupId
       || restore.targetResourceId !== target.resourceId) throw new EvidenceError('binding_graph_mismatch');
   }
+}
+function verifyCapabilitySnapshot(snapshot) {
+  const canonicalRequired = resourceCapabilities.engines.filter(({ runtime }) => runtime === 'dedicated-local').map(({ engine }) => engine);
+  if (snapshot.canonicalDigest !== digest(resourceCapabilities)
+    || JSON.stringify(snapshot.requiredEngines) !== JSON.stringify(canonicalRequired)) throw new EvidenceError('capability_snapshot_mismatch');
+  const required = snapshot.requiredEngines.map((engine) => resourceCapabilities.engines.find((item) => item.engine === engine));
+  if (required.some((capability) => !capability)) throw new EvidenceError('capability_snapshot_mismatch');
+  return required;
+}
+function verifyReleaseCapabilities(snapshot) {
+  const required = verifyCapabilitySnapshot(snapshot);
+  if (required.some((capability) => capability.liveEvidence.release !== 'verified'
+    || RELEASE_FEATURES.some((feature) => capability.release[feature] !== true))) throw new EvidenceError('release_capability_not_verified');
 }
 export function verifyManifest(value, options = {}) {
   try {
@@ -129,7 +147,10 @@ export function verifyManifest(value, options = {}) {
     if (required.some((component) => !components.includes(component))) return fail('missing_fragment');
     if (manifest.status === 'NOT_RUN') return fail('not_run');
     if (manifest.status !== 'PASS') return fail('assertion_failed');
-    if (!componentMode) verifyReleaseBindings(manifest, options);
+    if (!componentMode) {
+      verifyCapabilitySnapshot(manifest.capabilitySnapshot);
+      verifyBindingGraph(manifest, options);
+    }
     if (manifest.cleanup.status !== 'PASS') return fail('cleanup_failed');
     const allPaths = manifest.fragments.flatMap(({ artifacts }) => artifacts.map(({ path }) => path));
     if (new Set(allPaths).size !== allPaths.length) return fail('reused_artifact');
@@ -150,6 +171,7 @@ export function verifyManifest(value, options = {}) {
     }
     if (!componentMode && manifest.fixture) return fail('fixture_not_release_evidence');
     if (!manifest.fixture && manifest.preflight.status !== 'PASS') return fail('missing_credentials');
+    if (!componentMode) verifyReleaseCapabilities(manifest.capabilitySnapshot);
     return { valid: true, releaseEligible: !componentMode, reason: componentMode ? 'component_only' : 'eligible', manifestDigest: digest(manifest) };
   } catch (error) {
     if (error instanceof EvidenceError) return fail(error.reason);

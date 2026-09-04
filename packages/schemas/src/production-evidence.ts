@@ -41,12 +41,14 @@ export const EvidenceBindingSchema = z.discriminatedUnion('kind', [
     membershipId: IdentifierSchema, userId: IdentifierSchema, role: IdentifierSchema }).readonly(),
   z.strictObject({ kind: z.literal('github-repository'), installationId: IdentifierSchema,
     repositoryId: IdentifierSchema, repository: RepositorySchema, branch: BranchSchema }).readonly(),
-  z.strictObject({ kind: z.literal('tenant-revision'), repositoryId: IdentifierSchema,
-    branch: BranchSchema, tenantCommitSha: TenantCommitShaSchema }).readonly(),
+  z.strictObject({ kind: z.literal('tenant-revision'), tenantRevisionId: IdentifierSchema,
+    purpose: z.enum(['candidate', 'failure']), repositoryId: IdentifierSchema, repository: RepositorySchema,
+    branch: BranchSchema, tenantCommitSha: TenantCommitShaSchema, controlled: z.literal(true) }).readonly(),
   z.strictObject({ kind: z.literal('project'), projectId: IdentifierSchema, organizationId: IdentifierSchema }).readonly(),
   z.strictObject({ kind: z.literal('service'), serviceId: IdentifierSchema, projectId: IdentifierSchema }).readonly(),
   z.strictObject({ kind: z.literal('deployment'), role: z.enum(['candidate', 'preview', 'failed', 'rollback']),
-    deploymentId: IdentifierSchema, serviceId: IdentifierSchema }).readonly(),
+    deploymentId: IdentifierSchema, serviceId: IdentifierSchema, tenantRevisionId: IdentifierSchema,
+    tenantCommitSha: TenantCommitShaSchema, repositoryId: IdentifierSchema, repository: RepositorySchema, branch: BranchSchema }).readonly(),
   z.strictObject({ kind: z.literal('resource'), role: z.enum(['source', 'restore-target']), engine: ResourceEngineSchema,
     resourceId: IdentifierSchema, projectId: IdentifierSchema }).readonly(),
   z.strictObject({ kind: z.literal('backup'), engine: ResourceEngineSchema,
@@ -55,14 +57,10 @@ export const EvidenceBindingSchema = z.discriminatedUnion('kind', [
     restoreId: IdentifierSchema, backupId: IdentifierSchema, targetResourceId: IdentifierSchema }).readonly(),
 ]);
 export const EvidenceBindingsSchema = z.array(EvidenceBindingSchema).readonly();
-const ReleaseCapabilitySchema = z.strictObject({
-  provision: z.boolean(), authenticatedHealth: z.boolean(), attach: z.boolean(), query: z.boolean(),
-  schema: z.boolean(), backup: z.boolean(), restore: z.boolean(),
-}).readonly();
 export const EvidenceCapabilitySnapshotSchema = z.strictObject({
-  digest: Sha256Schema,
-  engines: z.array(z.strictObject({ engine: ResourceEngineSchema, enabled: z.boolean(), required: z.boolean(),
-    release: ReleaseCapabilitySchema, liveEvidenceRelease: z.enum(['not-recorded', 'verified']) }).readonly()).min(1).readonly(),
+  schema: z.literal('raibitserver.resource-capability-snapshot/v1'),
+  canonicalDigest: Sha256Schema,
+  requiredEngines: z.array(ResourceEngineSchema).min(1).readonly(),
 }).readonly();
 export const EvidenceArtifactPathSchema = z.string().regex(/^[a-zA-Z0-9_-][a-zA-Z0-9_./-]*$/).refine((v) => !v.split('/').includes('..'));
 export const EvidenceArtifactSchema = z.strictObject({

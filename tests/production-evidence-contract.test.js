@@ -12,13 +12,13 @@ import { componentSample, runComponent } from '../scripts/production-evidence/ru
 import { createRun, writeFragment, verifyArtifacts } from '../scripts/production-evidence/lib/run.mjs';
 import { preflight, parseOperatorInputs as ciParser } from '../scripts/production-evidence/preflight.mjs';
 import { parseOperatorInputs, inputsFromEnvironment, loadOperatorContract, verifyApprovedSnapshot, digest, environmentFingerprint, assertRedacted, APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST } from '../scripts/production-evidence/lib/operator-inputs.mjs';
-import { capabilityEngines, releaseBindings } from './fixtures/production-evidence/bindings-v1.mjs';
+import resourceCapabilities from '../packages/schemas/src/resource-capabilities-v1.json' with { type: 'json' };
+import { releaseBindings } from './fixtures/production-evidence/bindings-v1.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const contract = await loadOperatorContract();
 const now = Date.parse('2026-09-02T10:00:00.000Z');
-const identityKeys = ['runId', 'environmentFingerprint', 'sourceCommitSha', 'migrationDigest', 'approvedInputSha256', 'operatorContractDigest', 'operatorInputFingerprint'];
-const capabilitySnapshot = { digest: digest(capabilityEngines), engines: capabilityEngines };
+const identityKeys = ['runId', 'environmentFingerprint', 'sourceCommitSha', 'migrationDigest', 'approvedInputSha256', 'operatorContractDigest', 'operatorInputFingerprint'], capabilitySnapshot = { schema: 'raibitserver.resource-capability-snapshot/v1', canonicalDigest: digest(resourceCapabilities), requiredEngines: resourceCapabilities.engines.filter(({ runtime }) => runtime === 'dedicated-local').map(({ engine }) => engine) };
 function sample(observedAt = new Date(now).toISOString()) {
   const result = componentSample('resources', observedAt);
   result.manifest.identity = Object.fromEntries(Object.entries(result.manifest.identity).filter(([key]) => identityKeys.includes(key)));
@@ -62,10 +62,9 @@ async function sandbox(t) {
 }
 function cli(args, cwd = root) { return spawnSync(process.execPath, [path.join(root, 'scripts/verify-production-evidence.mjs'), ...args], { cwd, encoding: 'utf8' }); }
 
-for (const profile of ['train-a', 'final']) test(`Given complete synthetic ${profile} observations, When aggregating, Then contract eligibility is true`, () => {
+for (const profile of ['train-a', 'final']) test(`Given current unverified canonical capabilities and synthetic ${profile} observations, When aggregating, Then release stays NOT_RUN`, () => {
   const result = verifyManifest(fullManifest(profile), { now });
-  assert.equal(result.releaseEligible, true);
-  assert.equal(result.manifestDigest.length, 64);
+  assert.equal(result.releaseEligible, false); assert.equal(result.reason, 'release_capability_not_verified');
 });
 for (const component of ['resources', 'domains']) test(`Given a fresh ${component} fixture, When component verification runs, Then release is false`, () => {
   assert.deepEqual(verifyManifest(componentSample(component, new Date(now).toISOString()).manifest, { now }).releaseEligible, false);
@@ -117,11 +116,12 @@ for (const [reason, mutate, options] of [
   ['binding_reassigned', (m) => { const project = m.bindings.find((binding) => binding.kind === 'project'); m.bindings.push({ ...project, organizationId: 'org-2' }); m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
   ['binding_graph_mismatch', (m) => { m.bindings.find((binding) => binding.kind === 'service').projectId = 'other-project'; m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
   ['binding_graph_mismatch', () => {}, { repository: 'other/repository' }],
-  ['release_capability_not_verified', (m) => { m.capabilitySnapshot.engines[0].release.backup = false; m.capabilitySnapshot.digest = digest(m.capabilitySnapshot.engines); }],
+  ['binding_graph_mismatch', (m) => { m.bindings.find((binding) => binding.kind === 'deployment' && binding.role === 'failed').tenantCommitSha = '3'.repeat(40); m.bindingsDigest = digest(m.bindings); for (const fragment of m.fragments) fragment.bindingsDigest = m.bindingsDigest; }],
+  ['invalid_schema', (m) => { m.bindings.find((binding) => binding.kind === 'tenant-revision' && binding.purpose === 'failure').controlled = false; }],
+  ['capability_snapshot_mismatch', (m) => { m.capabilitySnapshot.canonicalDigest = 'a'.repeat(64); }],
+  ['capability_snapshot_mismatch', (m) => { m.capabilitySnapshot.requiredEngines.push('forged-engine'); }],
 ]) test(`Given ${reason}, When full release evidence is verified, Then it fails closed`, () => {
-  const manifest = fullManifest(); mutate(manifest);
-  assert.equal(verifyManifest(manifest, { now, ...options }).reason, reason);
-});
+  const manifest = fullManifest(); mutate(manifest); assert.equal(verifyManifest(manifest, { now, ...options }).reason, reason); });
 for (const [index, [reason, mutate]] of mutations.entries()) test(`Given ${reason} mutation ${index}, When verifying, Then fail closed`, () => {
   const manifest = fullManifest();
   mutate(manifest);
