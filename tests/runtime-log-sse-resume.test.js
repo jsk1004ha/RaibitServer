@@ -49,8 +49,8 @@ test('Given a scoped resume token, When another service uses it, Then the reques
   const project = controlPlane.store.createProject({ organizationId: organization.id, name: 'App', slug: 'app' });
   const firstService = controlPlane.store.createService({ projectId: project.id, name: 'first' });
   const secondService = controlPlane.store.createService({ projectId: project.id, name: 'second' });
-  controlPlane.store.appendRuntimeLog({ serviceId: firstService.id, line: 'FIRST_SERVICE_SECRET' });
-  controlPlane.store.appendRuntimeLog({ serviceId: secondService.id, line: 'SECOND_SERVICE_SECRET' });
+  controlPlane.store.appendRuntimeLog({ serviceId: firstService.id, sourceInstanceId: 'first-service-runtime', line: 'FIRST_SERVICE_SECRET' });
+  controlPlane.store.appendRuntimeLog({ serviceId: secondService.id, sourceInstanceId: 'second-service-runtime', line: 'SECOND_SERVICE_SECRET' });
   const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'disabled', allowDisabled: true } }));
   server.listen(0);
   await once(server, 'listening');
@@ -95,7 +95,7 @@ test('Given a valid resume token, When authentication or project access is missi
   const member = controlPlane.store.createUser({ email: 'member@example.test', role: 'USER', approvalStatus: 'APPROVED' });
   const outsider = controlPlane.store.createUser({ email: 'outsider@example.test', role: 'USER', approvalStatus: 'APPROVED' });
   controlPlane.store.addMember({ organizationId: organization.id, userId: member.id, role: 'viewer' });
-  controlPlane.store.appendRuntimeLog({ serviceId: service.id, line: 'PRIVATE_LOG' });
+  controlPlane.store.appendRuntimeLog({ serviceId: service.id, sourceInstanceId: 'private-service-runtime', line: 'PRIVATE_LOG' });
   const secret = 'runtime-resume-test-secret';
   const memberToken = signJwtHs256({ sub: member.id, role: 'viewer', organizationId: organization.id }, secret);
   const outsiderToken = signJwtHs256({ sub: outsider.id, role: 'viewer' }, secret);
