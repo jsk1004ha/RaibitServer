@@ -45,6 +45,7 @@ export { parseGitHubRepository, githubIntegrationSummary, githubCloneOptionsFrom
 export { createGitHubAppInstallationPlan, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, signGitHubAppInstallationState, verifyGitHubAppInstallationState, resolveGitHubAppInstallationSelection } from './github-app.ts';
 export type { GitHubAppInstallationState, GitHubInstallationRepository } from './github-app.ts';
 export { previewKey, previewWorkloadName, previewRuntimePlan } from './preview-deployments.ts';
+export * from './preview-contract.ts';
 export { createControlPlaneRepository, resolveControlPlaneRepositoryConfig, InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from './persistence.ts';
 export { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 export type * from './types.ts';
