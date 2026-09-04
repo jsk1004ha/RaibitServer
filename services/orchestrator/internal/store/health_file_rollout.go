@@ -48,6 +48,16 @@ func (s *FileStore) CompleteRollout(ctx context.Context, input RolloutCompletion
 	if observation != nil && (observation.ProjectID != stringField(d, "projectId") || observation.ServiceID != stringField(d, "serviceId")) {
 		return nil, ErrHealthObservation
 	}
+	if stringField(d, "previewLineageId") != "" {
+		raw, err := json.Marshal(input.PreviewOwned)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := ParsePreviewInventory(raw); err != nil {
+			return nil, err
+		}
+		d["previewOwnedObjects"] = input.PreviewOwned
+	}
 	d["status"] = "READY"
 	for _, key := range []string{"deployedAt", "finishedAt", "updatedAt"} {
 		d[key] = input.Now.Format(time.RFC3339Nano)
@@ -95,6 +105,14 @@ func currentFileObservation(state map[string]any, p HealthObservation) bool {
 	}
 	if service := findRecord(recordSlice(state, "services"), p.ServiceID); stringField(service, "projectId") != p.ProjectID {
 		return false
+	}
+	if lineageID := stringField(d, "previewLineageId"); lineageID != "" {
+		lineage := findRecord(recordSlice(state, "previewLineages"), lineageID)
+		generation := intField(d, "previewGeneration")
+		runtime, err := ParsePreviewRuntime(rawJSONFromRecord(d, "previewRuntime"), lineageID, p.DeploymentID, generation)
+		return err == nil && lineage != nil && runtime.LineageVersion == intField(lineage, "version") && stringField(lineage, "state") == PreviewStateOpen &&
+			((stringField(lineage, "candidateDeploymentId") == p.DeploymentID && intField(lineage, "candidateGeneration") == generation) ||
+				(stringField(lineage, "currentDeploymentId") == p.DeploymentID && intField(lineage, "currentGeneration") == generation))
 	}
 	for _, other := range recordSlice(state, "deployments") {
 		if stringField(other, "serviceId") != p.ServiceID || stringField(other, "id") == p.DeploymentID || stringField(other, "deploymentType") != stringField(d, "deploymentType") || intField(other, "pullRequestNumber") != intField(d, "pullRequestNumber") {

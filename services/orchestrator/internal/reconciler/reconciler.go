@@ -130,6 +130,9 @@ func (r *ServiceReconciler) RunOnceResult(ctx context.Context) (*ReconcileResult
 		return r.reconcileProjectDeletion(ctx, project)
 	}
 	if !r.config.DryRun {
+		if result, err := r.runNextPreviewRoute(ctx); result != nil || err != nil {
+			return result, err
+		}
 		if result, err := r.runNextHealth(ctx); result != nil || err != nil {
 			return result, err
 		}
@@ -536,32 +539,7 @@ func productionPruneSelector(plan kube.DeploymentPlan) (string, error) {
 }
 
 func (r *ServiceReconciler) cleanupPreview(ctx context.Context, project *store.Project, service *store.Service, deployment *store.Deployment) (*ReconcileResult, error) {
-	plan := r.newDeploymentPlan(kube.SpecFromState(project, service, deployment, r.config.BaseDomain))
-	if !plan.Safe {
-		failure := errors.New(plan.Error)
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, failure, "workload.failed")
-	}
-	cleanupManifests := kube.CleanupManifests(plan)
-	if len(cleanupManifests) == 0 {
-		failure := errors.New("preview cleanup plan contains no exact deployment-owned resources")
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, failure)
-	}
-	manifestFile, err := r.writeManifest(deployment.ID, cleanupManifests, "cleanup")
-	if err != nil {
-		return nil, err
-	}
-	_ = r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "preview.cleanup.started", Message: "deleting preview Kubernetes desired state", Metadata: map[string]any{"manifestFile": manifestFile, "dryRun": r.config.DryRun}})
-	deleteResult, err := r.runKubectl(ctx, []string{"delete", "--ignore-not-found", "-f", manifestFile})
-	_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment.ID, "preview-cleanup", deleteResult)
-	if err != nil {
-		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: []string{deleteResult.Command}, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err)
-	}
-	_, err = r.store.TransitionDeployment(ctx, deployment.Lease(), map[string]any{"status": store.DeploymentStatusCleanedUp, "finishedAt": time.Now().UTC().Format(time.RFC3339Nano)})
-	if err != nil {
-		return nil, err
-	}
-	_ = r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "preview.cleanup.completed", Message: "preview Kubernetes objects cleaned up", Metadata: map[string]any{"namespace": plan.Service.Namespace, "service": plan.Service.Name, "workloadKind": plan.Kind, "workloadName": plan.WorkloadName}})
-	return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: []string{deleteResult.Command}, DryRun: r.config.DryRun, Status: store.DeploymentStatusCleanedUp}, nil
+	return r.cleanupOwnedPreview(ctx, project, service, deployment)
 }
 
 func (r *ServiceReconciler) newDeploymentPlan(spec kube.AppServiceSpec) kube.DeploymentPlan {

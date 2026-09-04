@@ -112,7 +112,7 @@ func (r *ServiceReconciler) checkHealth(ctx context.Context, job *store.HealthJo
 	if err != nil {
 		return health.Result{}, fmt.Errorf("health service: %w", err)
 	}
-	route := kube.SpecFromState(project, service, &store.Deployment{ID: payload.DeploymentID, ProjectID: payload.ProjectID, ServiceID: payload.ServiceID, DeploymentType: job.DeploymentType, PullRequestNumber: job.PullRequestNumber}, r.config.BaseDomain)
+	route := kube.SpecFromState(project, service, &store.Deployment{ID: payload.DeploymentID, ProjectID: payload.ProjectID, ServiceID: payload.ServiceID, DeploymentType: job.DeploymentType, PullRequestNumber: job.PullRequestNumber, PreviewLineageID: job.PreviewLineageID, PreviewGeneration: job.PreviewGeneration, PreviewRuntimeJSON: job.PreviewRuntime}, r.config.BaseDomain)
 	if route.Host != payload.GeneratedHost || route.Name != payload.WorkloadName || route.Namespace != payload.Namespace {
 		return health.Result{}, kube.ErrWorkloadObservation
 	}

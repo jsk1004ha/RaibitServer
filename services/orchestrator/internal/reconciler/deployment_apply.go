@@ -71,7 +71,11 @@ func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Pr
 	if observeErr != nil {
 		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, observeErr)
 	}
-	_, err = r.store.CompleteRollout(ctx, store.RolloutCompletion{Lease: deployment.Lease(), Now: r.now().UTC(), Observation: observation, ImageURL: spec.Image, LeaseDuration: r.config.ClaimLease})
+	owned, inventoryErr := r.observePreviewInventory(ctx, plan, deployment)
+	if inventoryErr != nil {
+		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, inventoryErr)
+	}
+	_, err = r.store.CompleteRollout(ctx, store.RolloutCompletion{Lease: deployment.Lease(), Now: r.now().UTC(), Observation: observation, ImageURL: spec.Image, LeaseDuration: r.config.ClaimLease, PreviewOwned: owned})
 	if err != nil {
 		if result, parentErr := r.abortIfParentDeleting(ctx, project, service, deployment, manifestFile, commands); result != nil || parentErr != nil {
 			return result, parentErr

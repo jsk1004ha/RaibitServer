@@ -48,6 +48,7 @@ type DesiredStateStore interface {
 
 type ReconcileStore interface {
 	HealthStore
+	PreviewRouteStore
 	ClaimNextServiceDeletion(ctx context.Context, options ClaimOptions) (*Service, error)
 	ClaimNextProjectDeletion(ctx context.Context, options ClaimOptions) (*Project, error)
 	RenewServiceDeletionLease(ctx context.Context, lease DeletionLease, now time.Time) (DeletionLease, error)
@@ -163,6 +164,10 @@ type Deployment struct {
 	ReconcileLockedBy   string
 	ReconcileLockedAt   time.Time
 	ReconcileAttempts   int
+	PreviewLineageID    string
+	PreviewGeneration   int
+	PreviewRuntimeJSON  json.RawMessage
+	PreviewOwnedJSON    json.RawMessage
 }
 
 func (deployment *Deployment) Lease() DeploymentLease {
@@ -742,7 +747,18 @@ func serviceFromRecord(row record) *Service {
 }
 
 func deploymentFromRecord(row record) *Deployment {
-	return &Deployment{PublicHealthStatus: defaultString(stringField(row, "publicHealthStatus"), "UNKNOWN"), HealthCheckedAt: parseTimestamp(stringField(row, "healthCheckedAt")), HealthFailureCode: stringField(row, "healthFailureCode"), ObservedGeneration: intField(row, "observedGeneration"), ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts"), DesiredSpecSnapshot: snapshotJSONFromRecord(row), SnapshotVersion: snapshotVersionFromRecord(row), SourceDeploymentID: stringField(row, "sourceDeploymentId"), RetryOfDeploymentID: stringField(row, "retryOfDeploymentId")}
+	return &Deployment{PublicHealthStatus: defaultString(stringField(row, "publicHealthStatus"), "UNKNOWN"), HealthCheckedAt: parseTimestamp(stringField(row, "healthCheckedAt")), HealthFailureCode: stringField(row, "healthFailureCode"), ObservedGeneration: intField(row, "observedGeneration"), ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts"), DesiredSpecSnapshot: snapshotJSONFromRecord(row), SnapshotVersion: snapshotVersionFromRecord(row), SourceDeploymentID: stringField(row, "sourceDeploymentId"), RetryOfDeploymentID: stringField(row, "retryOfDeploymentId"), PreviewLineageID: stringField(row, "previewLineageId"), PreviewGeneration: intField(row, "previewGeneration"), PreviewRuntimeJSON: rawJSONFromRecord(row, "previewRuntime"), PreviewOwnedJSON: rawJSONFromRecord(row, "previewOwnedObjects")}
+}
+
+func rawJSONFromRecord(row record, key string) json.RawMessage {
+	if row == nil || row[key] == nil {
+		return nil
+	}
+	raw, err := json.Marshal(row[key])
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 func deletionClaimClock(options ClaimOptions) (time.Time, time.Duration) {
@@ -913,8 +929,12 @@ func recordOwnsDeploymentLease(row record, lease DeploymentLease) bool {
 }
 
 func parseTimestamp(value string) time.Time {
-	parsed, _ := time.Parse(time.RFC3339Nano, value)
-	return parsed
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999", "2006-01-02T15:04:05.999"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 func recordSlice(state map[string]any, key string) []record {

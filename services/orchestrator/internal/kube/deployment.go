@@ -69,6 +69,8 @@ type AppServiceSpec struct {
 	BaseServiceName    string            `json:"baseServiceName,omitempty"`
 	PublicEgress       bool              `json:"publicEgress,omitempty"`
 	AllowTenantIngress bool              `json:"allowTenantIngress,omitempty"`
+	PreviewLineageID   string            `json:"previewLineageId,omitempty"`
+	PreviewGeneration  int               `json:"previewGeneration,omitempty"`
 	InvalidReason      string            `json:"-"`
 }
 
@@ -120,6 +122,9 @@ func NewDeploymentPlan(spec AppServiceSpec, options ...DeploymentOptions) Deploy
 	}
 	spec.ServiceType = descriptor.serviceType
 	manifests := compileServiceManifests(spec, descriptor, ingressGatewayNamespace, ingressClassName, ingressErrors)
+	if spec.PreviewLineageID != "" {
+		manifests = previewCandidateManifests(manifests)
+	}
 	return DeploymentPlan{
 		Kind:              descriptor.kind,
 		WorkloadName:      descriptor.name,
@@ -129,6 +134,17 @@ func NewDeploymentPlan(spec AppServiceSpec, options ...DeploymentOptions) Deploy
 		Reconcile:         "apply-" + descriptor.readiness + "-sync",
 		Manifests:         manifests,
 	}
+}
+
+func previewCandidateManifests(manifests []map[string]any) []map[string]any {
+	owned := make([]map[string]any, 0, 3)
+	for _, manifest := range manifests {
+		switch manifest["kind"] {
+		case "Deployment", "Service", "Ingress":
+			owned = append(owned, manifest)
+		}
+	}
+	return owned
 }
 
 func unsafeDeploymentPlan(spec AppServiceSpec, err error) DeploymentPlan {
@@ -198,6 +214,7 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	serviceRouteLabel := boundedDNSName("apps--"+serviceRouteIdentity, "apps--"+serviceRouteIdentity, 63)
 	host := serviceRouteLabel + "." + domain
 	preview := false
+	var previewRuntime store.PreviewRuntime
 	if deployment.DeploymentType == "preview" && deployment.PullRequestNumber > 0 {
 		preview = true
 		previewKey := "pr-" + strconv.Itoa(deployment.PullRequestNumber)
@@ -206,6 +223,17 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 		host = previewLabel + "." + domain
 		serviceName = previewKey + "-" + baseServiceName
 		serviceName = identityDNSName(serviceName, deployment.ID, 63)
+	}
+	if deployment.PreviewLineageID != "" {
+		var runtimeErr error
+		previewRuntime, runtimeErr = store.ParsePreviewRuntime(deployment.PreviewRuntimeJSON, deployment.PreviewLineageID, deployment.ID, deployment.PreviewGeneration)
+		if runtimeErr != nil {
+			return AppServiceSpec{ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID, InvalidReason: runtimeErr.Error()}
+		}
+		preview = true
+		host = previewRuntime.ProbeHost
+		serviceName = previewRuntime.WorkloadName
+		tenantLabel = previewRuntime.Namespace
 	}
 	image, err := ResolveImageReference(firstNonEmpty(deployment.ImageURL, service.ImageURL), deployment.ImageDigest, true)
 	if err != nil {
@@ -225,6 +253,7 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 		ProjectID: project.ID, ServiceID: service.ID, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug,
 		ServiceType: firstNonEmpty(runtimeService.Type, "web"), DeploymentID: deployment.ID, Command: command, Args: args, Schedule: schedule, Env: environment, SecretEnv: secretEnv,
 		Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName,
+		PreviewLineageID: deployment.PreviewLineageID, PreviewGeneration: deployment.PreviewGeneration,
 		PublicEgress: servicePublicEgress(runtimeService), AllowTenantIngress: serviceTenantIngress(runtimeService), InvalidReason: invalidReason,
 	}
 }
@@ -348,6 +377,10 @@ func workloadLabels(spec AppServiceSpec) map[string]any {
 		labels["raibitserver.io/preview"] = "true"
 		labels["raibitserver.io/pull-request"] = strconv.Itoa(spec.PullRequestNumber)
 		labels["raibitserver.io/base-service"] = spec.BaseServiceName
+		if spec.PreviewLineageID != "" {
+			labels["raibitserver.io/preview-lineage-id"] = spec.PreviewLineageID
+			labels["raibitserver.io/preview-generation"] = strconv.Itoa(spec.PreviewGeneration)
+		}
 	}
 	return labels
 }

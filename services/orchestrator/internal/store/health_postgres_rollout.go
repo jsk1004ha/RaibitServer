@@ -48,13 +48,25 @@ func (s *PostgresStore) CompleteRollout(ctx context.Context, input RolloutComple
 			}
 			generation = sql.NullInt64{Int64: int64(observation.ObservedGeneration), Valid: true}
 		}
+		var previewOwned any
+		if stringField(d, "previewLineageId") != "" {
+			raw, err := json.Marshal(input.PreviewOwned)
+			if err != nil {
+				return err
+			}
+			if _, err := ParsePreviewInventory(raw); err != nil {
+				return err
+			}
+			previewOwned = string(raw)
+		}
 		image := input.ImageURL
 		if image == "" {
 			image = stringField(d, "imageUrl")
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE "Deployment" SET status='READY',"deployedAt"=$2,"finishedAt"=$2,"updatedAt"=$2,
  "errorCode"=NULL,"errorMessage"=NULL,"reconcileAction"=NULL,"reconcileLockedBy"=NULL,"reconcileLockedAt"=NULL,
- "publicHealthStatus"='UNKNOWN',"healthCheckedAt"=NULL,"healthFailureCode"=NULL,"observedGeneration"=$3,"imageUrl"=$4 WHERE id=$1`, input.Lease.DeploymentID, input.Now, generation, nullable(image))
+ "publicHealthStatus"='UNKNOWN',"healthCheckedAt"=NULL,"healthFailureCode"=NULL,"observedGeneration"=$3,"imageUrl"=$4,
+ "previewOwnedObjects"=CASE WHEN "previewLineageId" IS NULL THEN "previewOwnedObjects" ELSE $5::jsonb END WHERE id=$1`, input.Lease.DeploymentID, input.Now, generation, nullable(image), previewOwned)
 		if err != nil {
 			return err
 		}

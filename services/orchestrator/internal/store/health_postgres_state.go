@@ -68,6 +68,11 @@ func (h healthTransaction) current(p HealthObservation) (record, bool, error) {
 	if !sameFileObservation(d, p) || stringField(d, "status") != "READY" {
 		return d, false, nil
 	}
+	if lineageID := stringField(d, "previewLineageId"); lineageID != "" {
+		var current bool
+		err = h.tx.QueryRowContext(h.ctx, `SELECT EXISTS (SELECT 1 FROM "PreviewLineage" l WHERE l.id=$1 AND l.state='OPEN' AND l.version::text=d."previewRuntime"->>'lineageVersion' AND ((l."candidateDeploymentId"=d.id AND l."candidateGeneration"=d."previewGeneration") OR (l."currentDeploymentId"=d.id AND l."currentGeneration"=d."previewGeneration"))) FROM "Deployment" d WHERE d.id=$2`, lineageID, p.DeploymentID).Scan(&current)
+		return d, current, err
+	}
 	var newer bool
 	err = h.tx.QueryRowContext(h.ctx, `SELECT EXISTS (SELECT 1 FROM "Deployment" n JOIN "Deployment" d ON d.id=$1
  WHERE n."serviceId"=d."serviceId" AND n.id<>d.id AND n."deploymentType"=d."deploymentType"

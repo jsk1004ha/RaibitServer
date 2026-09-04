@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"time"
@@ -35,6 +36,7 @@ type RolloutCompletion struct {
 	Observation   *HealthObservation
 	ImageURL      string
 	LeaseDuration time.Duration
+	PreviewOwned  []PreviewOwnedObject
 }
 
 type HealthObservation struct {
@@ -56,6 +58,9 @@ type HealthObservation struct {
 type HealthJob struct {
 	DeploymentType    string
 	PullRequestNumber int
+	PreviewLineageID  string
+	PreviewGeneration int
+	PreviewRuntime    json.RawMessage
 	ID                string
 	Payload           HealthObservation
 	Attempts          int
