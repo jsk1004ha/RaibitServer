@@ -139,6 +139,7 @@ export function OrganizationMembers({ initialInvites, initialMembers, organizati
 
   async function confirmAction(): Promise<void> {
     if (!confirming || actionState.kind === 'pending') return;
+    if (confirming.kind === 'revoke' && !canInvite) return;
     setActionState({ kind: 'pending' });
     const target = confirming.target;
     const result = confirming.kind === 'leave'
@@ -163,7 +164,7 @@ export function OrganizationMembers({ initialInvites, initialMembers, organizati
   }
 
   async function resend(invite: OrganizationInvite): Promise<void> {
-    if (actionState.kind === 'pending') return;
+    if (!canInvite || actionState.kind === 'pending') return;
     setActionState({ kind: 'pending' });
     const result = await request(`/organizations/${encodeURIComponent(organizationId)}/invites`, 'POST', { email: invite.email, role: invite.role });
     const issued = record(result.body)?.invite;
@@ -213,7 +214,7 @@ export function OrganizationMembers({ initialInvites, initialMembers, organizati
       <Card>
         <CardHeader><CardTitle><h2>보낸 초대</h2></CardTitle><CardDescription>다시 보내면 기존 초대 링크는 취소되고 새 링크가 발급됩니다.</CardDescription></CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {invites.map((invite) => <article className="flex flex-col gap-3 rounded-md border border-border p-3 sm:flex-row sm:items-center" key={invite.id}><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-foreground">{invite.email}</p><p className="text-xs text-muted-foreground">{roleLabel(invite.role)} · {invite.revokedAt ? '취소됨' : invite.acceptedAt ? '수락됨' : '대기 중'}</p></div>{!invite.revokedAt && !invite.acceptedAt ? <div className="flex flex-wrap gap-2"><Button disabled={actionState.kind === 'pending'} onClick={() => void resend(invite)} size="sm" type="button" variant="outline">다시 보내기</Button><Button disabled={actionState.kind === 'pending'} onClick={() => setConfirming({ kind: 'revoke', target: invite })} size="sm" type="button" variant="destructive">취소</Button></div> : null}</article>)}
+          {invites.map((invite) => <article className="flex flex-col gap-3 rounded-md border border-border p-3 sm:flex-row sm:items-center" key={invite.id}><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-foreground">{invite.email}</p><p className="text-xs text-muted-foreground">{roleLabel(invite.role)} · {invite.revokedAt ? '취소됨' : invite.acceptedAt ? '수락됨' : '대기 중'}</p></div>{!invite.revokedAt && !invite.acceptedAt ? <div className="flex flex-wrap gap-2"><Button disabled={!canInvite || actionState.kind === 'pending'} onClick={() => void resend(invite)} size="sm" type="button" variant="outline">다시 보내기</Button><Button disabled={!canInvite || actionState.kind === 'pending'} onClick={() => setConfirming({ kind: 'revoke', target: invite })} size="sm" type="button" variant="destructive">취소</Button></div> : null}</article>)}
           {!invites.length ? <p className="text-sm text-muted-foreground">보낸 초대가 없습니다.</p> : null}
         </CardContent>
       </Card>
