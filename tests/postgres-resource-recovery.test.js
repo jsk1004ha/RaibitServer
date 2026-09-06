@@ -6,7 +6,9 @@ import { PostgresRecoveryTransaction } from '../packages/core/src/resource-recov
 import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 import { fixture, request, scope, fence, readyBackup, artifact, commonRecoveryMatrix } from './resource-recovery-fixture.test.js';
 
-test('resource recovery state happy path and resource recovery adversarial matrix on actual owned PostgreSQL', async t => {
+const postgresOptions = { skip: !process.env.RAIBITSERVER_TEST_DATABASE_URL && process.env.RAIBITSERVER_REQUIRE_POSTGRES_TESTS !== '1' ? 'NOT_RUN: disposable PostgreSQL URL not configured' : false };
+
+test('resource recovery state happy path and resource recovery adversarial matrix on actual owned PostgreSQL', postgresOptions, async t => {
   // Given a dedicated UUID database migrated 1..14, when twenty independent clients race, then only one operation/job is committed.
   assert.ok(process.env.RAIBITSERVER_TEST_DATABASE_URL, 'owned PostgreSQL URL required');
   const url = new URL(process.env.RAIBITSERVER_TEST_DATABASE_URL);

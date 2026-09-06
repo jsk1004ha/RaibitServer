@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 
 const require = createRequire(import.meta.url);
+const postgresOptions = { skip: !process.env.RAIBITSERVER_TEST_DATABASE_URL && process.env.RAIBITSERVER_REQUIRE_POSTGRES_TESTS !== '1' ? 'NOT_RUN: disposable PostgreSQL URL not configured' : false };
 
 test('Prisma deployment retry sends SQL NULL preview identity for a production successor', async () => {
   // Given: a production source whose immutable successor has no preview lineage.
@@ -40,7 +41,7 @@ test('Prisma deployment retry sends SQL NULL preview identity for a production s
   assert.equal(Object.hasOwn(deploymentWrites[0], 'previewRuntime'), false);
 });
 
-test('retry and redeploy immutable lineage / deployment retry adversarial matrix on real PostgreSQL with 20 connections', async t => {
+test('retry and redeploy immutable lineage / deployment retry adversarial matrix on real PostgreSQL with 20 connections', postgresOptions, async t => {
   // Given: a UUID-owned migrated schema and twenty independent database clients.
   assert.equal(typeof PrismaControlPlaneRepository.prototype.createDeploymentOperation, 'function');
   assert.ok(process.env.RAIBITSERVER_TEST_DATABASE_URL, 'real disposable PostgreSQL URL required');
