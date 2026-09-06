@@ -248,8 +248,8 @@ test('production provisioner wires digest-pinned providers behind tenant-scoped 
   const tenantRole = workerSecurity.slice(tenantRoleStart, tenantRoleEnd);
   const tenantSecretRule = tenantRole.match(/resources: \["secrets"\][\s\S]{0,240}?verbs: \[([^\]]+)\]/)?.[1] ?? '';
   assert.ok(tenantSecretRule, 'tenant Secret RBAC rule must exist');
-  assert.match(tenantSecretRule, /^"create", "patch", "delete"$/, 'credential Secret crash recovery needs dry-run metadata patch plus create/delete');
-  for (const forbiddenVerb of ['get', 'list', 'watch', 'update']) {
+  assert.match(tenantSecretRule, /^"get", "create", "patch", "delete"$/, 'credential Secret crash recovery needs a fenced source read plus dry-run metadata patch, create, and delete');
+  for (const forbiddenVerb of ['list', 'watch', 'update']) {
     assert.doesNotMatch(tenantSecretRule, new RegExp(`"${forbiddenVerb}"`), `tenant Secret RBAC must not grant ${forbiddenVerb}`);
   }
   assert.match(tenantRole, /resources: \["persistentvolumeclaims", "services"\][\s\S]*verbs: \["get", "create", "patch", "update", "delete"\]/);
@@ -295,7 +295,7 @@ test('production provisioner wires digest-pinned providers behind tenant-scoped 
     assert.match(verifier, new RegExp(renderedContract), `Helm verifier must inspect ${renderedContract}`);
   }
   assert.match(verifier, /provisioner RBAC must not grant pod exec/);
-  assert.match(verifier, /provisioner tenant Secret RBAC must grant only create, dry-run metadata patch, and delete/);
+  assert.match(verifier, /provisioner tenant Secret RBAC must grant only get, create, dry-run metadata patch, and delete/);
 });
 
 test('orchestrator cluster authority is admission-confined to compiler-owned application tenants', async () => {
@@ -524,8 +524,9 @@ test('provider tenant admission accepts only compiler-shaped resources and prese
   assert.match(workerSecurity, /podSelector\.matchLabels\['app\.kubernetes\.io\/name'\] == variables\.providerName/);
 
   assert.match(secretPolicy, /variables\.target\.metadata\.name == variables\.providerName \+ '-connection'/);
-  assert.match(secretPolicy, /provisioner-service-account-or-connection-reservation/);
-  assert.match(secretPolicy, /request\.userInfo\.username == [^\n]+-provisioner[^\n]+\|\|/);
+  assert.match(secretPolicy, /connection-reservation/);
+  assert.match(secretPolicy, /request\.operation == 'CREATE' \? object\.metadata\.name\.endsWith\('-connection'\) : oldObject\.metadata\.name\.endsWith\('-connection'\)/);
+  assert.doesNotMatch(secretPolicy, /request\.userInfo\.username == [^\n]+-provisioner[^\n]+\|\|/, 'the provisioner identity must not bypass the connection-name reservation');
   assert.match(secretPolicy, /request\.operation == 'DELETE' \? oldObject : object/);
   assert.match(secretPolicy, /variables\.target\.metadata\.labels\['raibitserver\.io\/project-id'\] == namespaceObject\.metadata\.labels\['raibitserver\.io\/project-id'\]/);
   assert.match(secretPolicy, /oldObject\.metadata\.name\.endsWith\('-connection'\)/, 'connection Secret names must stay reserved even without managed labels');
