@@ -23,7 +23,7 @@ export function AccountMenu({ avatarUrl, email, logoutAction, name, organization
       <UserAvatar avatarUrl={avatarUrl} email={email} name={name} size="sm" />
       <span className="min-w-0"><span className="block truncate text-xs font-medium text-foreground">{label}</span><span className="block truncate text-xs text-muted-foreground">{email || '이메일 정보 없음'}</span></span>
     </DropdownMenuTrigger>
-    <DropdownMenuContent align="end" className="w-72" finalFocus={triggerRef} portalContainer={portalContainer}>
+    <DropdownMenuContent align="end" className="w-72" finalFocus={(closeType) => closeType === 'keyboard' ? triggerRef.current : false} portalContainer={portalContainer}>
       <DropdownMenuGroup>
         <DropdownMenuLabel className="space-y-1"><span className="block truncate text-sm text-foreground">{label}</span><span className="block truncate font-normal">{email || '이메일 정보 없음'}</span><span className="block font-normal">{organization} · {role}</span></DropdownMenuLabel>
         <DropdownMenuSeparator />
