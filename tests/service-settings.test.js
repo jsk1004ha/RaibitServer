@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 import YAML from 'yaml';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
@@ -104,7 +105,7 @@ test('Given a deployed service, When identity is patched or explicitly replaced,
   assert.deepEqual(repository.store.getDeployment(deployment.id).desiredSpecSnapshot, { branch: 'main' });
 });
 
-test('Given the real in-memory HTTP API, When settings are previewed, saved, conflicted, and replaced, Then each typed outcome is observable', async () => {
+test('Given the real in-memory HTTP API, When the dashboard settings replacement action is used, Then each typed outcome is observable', async () => {
   // Given
   const controlPlane = new RAIBITSERVERControlPlane();
   const organization = controlPlane.store.createOrganization({ name: 'HTTP settings', slug: 'http-settings' });
@@ -116,12 +117,17 @@ test('Given the real in-memory HTTP API, When settings are previewed, saved, con
   await once(server, 'listening');
 
   try {
+    const dashboardSource = await readFile(new URL('../apps/dashboard/components/project-hub/service-settings.tsx', import.meta.url), 'utf8');
+    const replacementExpression = dashboardSource.match(/const result = await api\((.+), 'POST', \{ expectedUpdatedAt: snapshot.updatedAt, confirmed: true/)?.[1];
+    assert.ok(replacementExpression, 'dashboard replacement request expression must exist');
+    const replacementAction = runInNewContext(replacementExpression, { actionBase: `/api/control/services/${service.id}/settings` });
     // When
     const snapshot = await request(server, 'GET', `/services/${service.id}/settings`);
     const preview = await request(server, 'POST', `/services/${service.id}/settings/preview`, { expectedUpdatedAt: snapshot.body.updatedAt, changes: { branch: 'release' } });
     const saved = await request(server, 'PATCH', `/services/${service.id}/settings`, { expectedUpdatedAt: snapshot.body.updatedAt, changes: { branch: 'release' } });
     const stale = await request(server, 'PATCH', `/services/${service.id}/settings`, { expectedUpdatedAt: snapshot.body.updatedAt, changes: { port: 9090 } });
-    const replacement = await request(server, 'POST', `/services/${service.id}/replacements`, { expectedUpdatedAt: saved.body.updatedAt, confirmed: true, name: 'Web v2', source: { sourceType: 'image', image: 'example/web:v2' } });
+    const wrongRoute = await request(server, 'POST', `/services/${service.id}/settings/replacements`, {});
+    const replacement = await request(server, 'POST', replacementAction.replace(/^\/api\/control/, ''), { expectedUpdatedAt: saved.body.updatedAt, confirmed: true, name: 'Web v2', source: { sourceType: 'image', image: 'example/web:v2' } });
 
     // Then
     assert.deepEqual([snapshot.statusCode, preview.statusCode, saved.statusCode, stale.statusCode, replacement.statusCode], [200, 200, 200, 409, 201]);
@@ -129,6 +135,7 @@ test('Given the real in-memory HTTP API, When settings are previewed, saved, con
     assert.equal(saved.body.settings.branch, 'release');
     assert.match(JSON.stringify(stale.body), /STALE_SERVICE/);
     assert.equal(replacement.body.impact, 'old_service_preserved');
+    assert.equal(wrongRoute.statusCode, 404);
     assert.equal(controlPlane.store.workflowJobs.length, 0);
   } finally {
     server.close();

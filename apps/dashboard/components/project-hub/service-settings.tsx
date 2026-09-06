@@ -187,7 +187,7 @@ export function ServiceSettingsForm({ actionBase, service }: Readonly<{ actionBa
     if (!snapshot || !draft) return;
     setStatus('pending-replacement'); setMessage('');
     const source = { sourceType: draft.sourceType, repoUrl: draft.repoUrl || undefined, image: draft.imageUrl || undefined, imageUrl: draft.imageUrl || undefined };
-    const result = await api(`${actionBase}/replacements`, 'POST', { expectedUpdatedAt: snapshot.updatedAt, confirmed: true, name: draft.name, source });
+    const result = await api(actionBase.replace(/\/settings$/, '/replacements'), 'POST', { expectedUpdatedAt: snapshot.updatedAt, confirmed: true, name: draft.name, source });
     if (result.status === 409) { setStatus('stale'); setMessage('현재 설정이 오래되었습니다. 교체 전 최신 상태를 다시 확인하세요.'); setReplacementOpen(false); return; }
     if (!result.status.toString().startsWith('2')) { setStatus(result.status === 401 || result.status === 403 ? 'permission' : 'failed'); setMessage(errorText(result.payload)); return; }
     setReplacementOpen(false); setStatus('saved'); setMessage('새 서비스 교체를 만들었습니다. 기존 서비스와 배포 스냅샷은 보존됩니다.');
