@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import typescript from 'typescript';
+import { apiOperations } from '../../../../../packages/schemas/src/api-contract.ts';
 import {
   DEFAULT_PUBLIC_SITE_SCENARIO,
   FIXTURE_IDS,
@@ -46,12 +47,15 @@ test('Given OWNER and ADMIN fixture sessions, when a member role is changed, the
     [TOKENS.roleOwner, 'OWNER', 'ADMIN'],
     [TOKENS.roleAdmin, 'ADMIN', 'MAINTAINER'],
   ]) {
+    apiOperations['auth-me'].response.parse(request('GET', '/auth/me', token).body);
     const initial = request('GET', '/organizations/org_fixture_001/members', token);
     assert.equal(initial.status, 200);
+    apiOperations['organizations-members'].response.parse(initial.body);
     assert.equal(initial.body.members.find((member) => member.id === 'mem_fixture_actor')?.role, currentRole);
     const target = initial.body.members.find((member) => member.id === 'mem_fixture_target');
     const changed = request('PATCH', '/organizations/org_fixture_001/members/mem_fixture_target', token, { body: { role: nextRole, expectedVersion: target.version } });
     assert.equal(changed.status, 200);
+    apiOperations['organizations-members-patch'].response.parse(changed.body);
     assert.equal(changed.body.membership.role, nextRole);
     assert.equal(request('GET', '/organizations/org_fixture_001/members', token).body.members.find((member) => member.id === 'mem_fixture_target')?.role, nextRole);
   }
@@ -62,6 +66,7 @@ test('Given lower organization roles, when each directly changes a member role, 
   for (const token of [TOKENS.roleMaintainer, TOKENS.roleDeveloper, TOKENS.roleDbAdmin, TOKENS.roleViewer]) {
     const before = request('GET', '/organizations/org_fixture_001/members', token);
     assert.equal(before.status, 200);
+    apiOperations['organizations-members'].response.parse(before.body);
     assert.deepEqual(request('GET', '/organizations/org_fixture_001/invites', token), { status: 200, body: { invites: [] } });
     const target = before.body.members.find((member) => member.id === 'mem_fixture_target');
     const denied = request('PATCH', '/organizations/org_fixture_001/members/mem_fixture_target', token, { body: { role: 'DEVELOPER', expectedVersion: target.version } });
@@ -85,8 +90,10 @@ test('Given a platform ADMIN without an organization membership, when a tenant i
   const created = request('POST', '/organizations', TOKENS.roleGlobalAdmin, { body: { name: 'Global admin tenant', slug: 'global-admin-tenant' } });
   const foreignMutation = request('PATCH', '/organizations/org_fixture_001/members/mem_fixture_target', TOKENS.roleGlobalAdmin, { body: { role: 'ADMIN', expectedVersion: 1 } });
   assert.equal(identity.body.user.role, 'ADMIN');
+  apiOperations['auth-me'].response.parse(identity.body);
   assert.deepEqual(identity.body.memberships, []);
   assert.equal(created.status, 201);
+  apiOperations['organizations-post'].response.parse(created.body);
   assert.equal(created.body.membership.role, 'OWNER');
   assert.equal(created.body.membership.userId, identity.body.user.id);
   assert.deepEqual(foreignMutation, { status: 403, body: { error: 'forbidden' } });
