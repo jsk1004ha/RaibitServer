@@ -8,6 +8,7 @@ import { terminateProcessTree, waitForPortsFree } from './process-tree.mjs';
 
 const dashboardDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const nextBin = path.join(dashboardDirectory, 'node_modules', 'next', 'dist', 'bin', 'next');
+const projectNodeModules = path.resolve(dashboardDirectory, '../..', 'node_modules');
 const configuredOutput = process.env.RAIBITSERVER_E2E_FIXTURE_OUTPUT_DIR;
 if (configuredOutput && !path.isAbsolute(configuredOutput)) throw new Error('dashboard_fixture_output_directory_must_be_absolute');
 const fixtureOutput = configuredOutput ?? await mkdtemp(path.join(tmpdir(), 'raibitserver-dashboard-fixture-'));
@@ -38,7 +39,7 @@ try {
 }
 
 function start(command, args, extraEnv = {}) {
-  const child = spawn(command, args, { cwd: dashboardDirectory, env: { ...process.env, ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+  const child = spawn(command, args, { cwd: dashboardDirectory, env: { ...process.env, ...extraEnv, NODE_PATH: [projectNodeModules, process.env.NODE_PATH, extraEnv.NODE_PATH].filter(Boolean).join(path.delimiter) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
   child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr); children.push(child); return child;
 }
 function run(command, args, extraEnv) {
