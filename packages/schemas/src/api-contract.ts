@@ -175,7 +175,10 @@ export function createOpenApiDocument() {
     if (!registry.has(contract.response)) registry.add(contract.response, { id: `${id}Response` });
     if (!registry.has(contract.input.shape.body)) registry.add(contract.input.shape.body, { id: `${id}Body` });
   }
-  const schemas = z.toJSONSchema(registry, { uri: (id) => `#/components/schemas/${id}` }).schemas;
+  const generatedSchemas = z.toJSONSchema(registry, { uri: (id) => `#/components/schemas/${id}` }).schemas;
+  const schemas = JSON.parse(JSON.stringify(generatedSchemas, (key, value) => key === '$ref' && typeof value === 'string'
+    ? value.replace('#/components/schemas/__shared#/$defs/', '#/components/schemas/__shared/$defs/')
+    : value)) as typeof generatedSchemas;
   // OpenAPI component references are document fragments, not JSON Schema base IDs.
   for (const schema of Object.values(schemas)) delete schema.$id;
   const reference = (schema: z.ZodType) => ({ $ref: `#/components/schemas/${registry.get(schema)?.id}` });

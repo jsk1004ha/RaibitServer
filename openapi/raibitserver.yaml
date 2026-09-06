@@ -4160,7 +4160,7 @@ components:
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema0"
+                $ref: "#/components/schemas/__shared/$defs/schema0"
             - type: "null"
         requestedByUserId:
           anyOf:
@@ -4303,7 +4303,7 @@ components:
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema0"
+                $ref: "#/components/schemas/__shared/$defs/schema0"
             - type: "null"
         requestedByUserId:
           anyOf:
@@ -5306,7 +5306,7 @@ components:
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema1"
+                $ref: "#/components/schemas/__shared/$defs/schema1"
           required:
             - intent
             - engine
@@ -6866,11 +6866,11 @@ components:
                 minLength: 1
               before:
                 anyOf:
-                  - $ref: "#/components/schemas/__shared#/$defs/schema2"
+                  - $ref: "#/components/schemas/__shared/$defs/schema2"
                   - type: "null"
               after:
                 anyOf:
-                  - $ref: "#/components/schemas/__shared#/$defs/schema3"
+                  - $ref: "#/components/schemas/__shared/$defs/schema3"
                   - type: "null"
             required:
               - field
@@ -6960,7 +6960,7 @@ components:
             - type
             - sourceType
           additionalProperties:
-            $ref: "#/components/schemas/__shared#/$defs/schema4"
+            $ref: "#/components/schemas/__shared/$defs/schema4"
       required:
         - impact
         - oldServiceId
@@ -7655,7 +7655,7 @@ components:
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema0"
+                $ref: "#/components/schemas/__shared/$defs/schema0"
             - type: "null"
         requestedByUserId:
           anyOf:
@@ -8131,7 +8131,7 @@ components:
         - resourceId
         - serviceId
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema5"
+        $ref: "#/components/schemas/__shared/$defs/schema5"
     resources-attachBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -8396,7 +8396,7 @@ components:
         tables:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema6"
+            $ref: "#/components/schemas/__shared/$defs/schema6"
       required:
         - engine
         - tables
@@ -8411,7 +8411,7 @@ components:
         rows:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema7"
+            $ref: "#/components/schemas/__shared/$defs/schema7"
         fields:
           type: array
           items:
@@ -8451,7 +8451,7 @@ components:
         collections:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema8"
+            $ref: "#/components/schemas/__shared/$defs/schema8"
       required:
         - engine
         - collections
@@ -8480,7 +8480,7 @@ components:
         keys:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema9"
+            $ref: "#/components/schemas/__shared/$defs/schema9"
       required:
         - engine
         - keys
@@ -8733,7 +8733,7 @@ components:
       required:
         - accepted
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema10"
+        $ref: "#/components/schemas/__shared/$defs/schema10"
     github-webhooksBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -8745,7 +8745,7 @@ components:
         installation:
           $ref: "#/components/schemas/JsonFields"
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema11"
+        $ref: "#/components/schemas/__shared/$defs/schema11"
     github-importResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -8755,7 +8755,7 @@ components:
       required:
         - service
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema12"
+        $ref: "#/components/schemas/__shared/$defs/schema12"
     github-importBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -8882,7 +8882,7 @@ components:
         - quotas
         - auditLogs
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema13"
+        $ref: "#/components/schemas/__shared/$defs/schema13"
     usage-meResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -8902,7 +8902,7 @@ components:
         warnings:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema14"
+            $ref: "#/components/schemas/__shared/$defs/schema14"
       required:
         - unlimited
         - quota
@@ -8911,7 +8911,7 @@ components:
         - gauges
         - warnings
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema15"
+        $ref: "#/components/schemas/__shared/$defs/schema15"
     __shared:
       $defs:
         schema0:
@@ -8922,12 +8922,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema0"
+                $ref: "#/components/schemas/__shared/$defs/schema0"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema0"
+                $ref: "#/components/schemas/__shared/$defs/schema0"
         schema1:
           anyOf:
             - type: string
@@ -8936,12 +8936,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema1"
+                $ref: "#/components/schemas/__shared/$defs/schema1"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema1"
+                $ref: "#/components/schemas/__shared/$defs/schema1"
         schema2:
           anyOf:
             - type: string
@@ -8950,12 +8950,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema2"
+                $ref: "#/components/schemas/__shared/$defs/schema2"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema2"
+                $ref: "#/components/schemas/__shared/$defs/schema2"
         schema3:
           anyOf:
             - type: string
@@ -8964,12 +8964,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema3"
+                $ref: "#/components/schemas/__shared/$defs/schema3"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema3"
+                $ref: "#/components/schemas/__shared/$defs/schema3"
         schema4:
           anyOf:
             - type: string
@@ -8978,12 +8978,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema4"
+                $ref: "#/components/schemas/__shared/$defs/schema4"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema4"
+                $ref: "#/components/schemas/__shared/$defs/schema4"
         schema5:
           anyOf:
             - type: string
@@ -8992,12 +8992,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema5"
+                $ref: "#/components/schemas/__shared/$defs/schema5"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema5"
+                $ref: "#/components/schemas/__shared/$defs/schema5"
         schema6:
           anyOf:
             - type: string
@@ -9006,12 +9006,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema6"
+                $ref: "#/components/schemas/__shared/$defs/schema6"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema6"
+                $ref: "#/components/schemas/__shared/$defs/schema6"
         schema7:
           anyOf:
             - type: string
@@ -9020,12 +9020,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema7"
+                $ref: "#/components/schemas/__shared/$defs/schema7"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema7"
+                $ref: "#/components/schemas/__shared/$defs/schema7"
         schema8:
           anyOf:
             - type: string
@@ -9034,12 +9034,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema8"
+                $ref: "#/components/schemas/__shared/$defs/schema8"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema8"
+                $ref: "#/components/schemas/__shared/$defs/schema8"
         schema9:
           anyOf:
             - type: string
@@ -9048,12 +9048,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema9"
+                $ref: "#/components/schemas/__shared/$defs/schema9"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema9"
+                $ref: "#/components/schemas/__shared/$defs/schema9"
         schema10:
           anyOf:
             - type: string
@@ -9062,12 +9062,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema10"
+                $ref: "#/components/schemas/__shared/$defs/schema10"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema10"
+                $ref: "#/components/schemas/__shared/$defs/schema10"
         schema11:
           anyOf:
             - type: string
@@ -9076,12 +9076,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema11"
+                $ref: "#/components/schemas/__shared/$defs/schema11"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema11"
+                $ref: "#/components/schemas/__shared/$defs/schema11"
         schema12:
           anyOf:
             - type: string
@@ -9090,12 +9090,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema12"
+                $ref: "#/components/schemas/__shared/$defs/schema12"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema12"
+                $ref: "#/components/schemas/__shared/$defs/schema12"
         schema13:
           anyOf:
             - type: string
@@ -9104,12 +9104,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema13"
+                $ref: "#/components/schemas/__shared/$defs/schema13"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema13"
+                $ref: "#/components/schemas/__shared/$defs/schema13"
         schema14:
           anyOf:
             - type: string
@@ -9118,12 +9118,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema14"
+                $ref: "#/components/schemas/__shared/$defs/schema14"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema14"
+                $ref: "#/components/schemas/__shared/$defs/schema14"
         schema15:
           anyOf:
             - type: string
@@ -9132,12 +9132,12 @@ components:
             - type: "null"
             - type: array
               items:
-                $ref: "#/components/schemas/__shared#/$defs/schema15"
+                $ref: "#/components/schemas/__shared/$defs/schema15"
             - type: object
               propertyNames:
                 type: string
               additionalProperties:
-                $ref: "#/components/schemas/__shared#/$defs/schema15"
+                $ref: "#/components/schemas/__shared/$defs/schema15"
   securitySchemes:
     bearerAuth:
       type: http
