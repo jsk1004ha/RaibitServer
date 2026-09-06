@@ -24,6 +24,12 @@ const workerService = {
   id: 'svc_fixture_worker', projectId: project.id, name: 'worker', slug: 'worker', type: 'worker', status: 'running',
   sourceType: 'github', repoUrl: 'https://github.com/raibit/fixture-app', branch: 'main', dockerfilePath: 'Dockerfile', port: 3000,
 };
+const serviceSettings = {
+  ...service,
+  branch: 'main', rootDirectory: '', buildContext: '', dockerfilePath: 'Dockerfile', installCommand: '', buildCommand: '', startCommand: '', outputDirectory: '',
+  healthCheckPath: '/healthz', livenessPath: '/healthz/live', readinessPath: '/healthz/ready', publicHealthPath: '/healthz',
+  resources: { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '500m', memory: '512Mi' } },
+};
 const githubIntegration = { id: 'ghi_fixture', provider: 'github', status: 'connected', login: 'raibit-fixture' };
 const githubInstallation = {
   id: '9001', installationId: '9001', integrationId: githubIntegration.id, accountLogin: 'raibit-fixture', repositoryCount: 1,
@@ -162,6 +168,9 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
     fullName: githubRepository.fullName, defaultBranch: githubRepository.defaultBranch, synced: true,
   });
   if (pathname === `/projects/${project.id}/overview`) return json(200, { project, services: [service, workerService], deployments: [deployment], resources: [resource] });
+  if (pathname === `/services/${service.id}/settings`) return serviceSettingsResponse({ body, method });
+  if (pathname === `/services/${service.id}/settings/preview`) return serviceSettingsPreviewResponse({ body, method });
+  if (pathname === `/services/${service.id}/replacements`) return serviceReplacementResponse({ body, method });
   const deploymentFixture = deploymentFixtureForPath(pathname);
   if (deploymentFixture) return deploymentResponse({ body, deploymentFixture, method, pathname, state });
   if (pathname === `/resources/${resource.id}`) return json(200, resource);
@@ -227,6 +236,33 @@ function projectDeletionResponse({ actor, body, method }) {
   if (Object.keys(body).length !== 1 || body.confirmed !== true) return json(400, { error: 'invalid_request_body' });
   if (settingsProject.deletionRequestedAt === null) settingsProject = { ...settingsProject, deletionRequestedAt: '2026-08-31T03:00:02.000Z' };
   return json(202, { projectId: project.id, status: 'DELETE_REQUESTED', deletionRequestedAt: settingsProject.deletionRequestedAt, scheduled: true });
+}
+
+function serviceSettingsSnapshot(settings = serviceSettings) {
+  return { serviceId: service.id, projectId: project.id, updatedAt: FIXED_TIME, deployed: true, settings };
+}
+
+function serviceSettingsResponse({ body, method }) {
+  if (method === 'GET') return json(200, serviceSettingsSnapshot());
+  if (method === 'PATCH') {
+    if (body.expectedUpdatedAt !== FIXED_TIME || !body.changes || typeof body.changes !== 'object') return json(409, { error: 'fixture_settings_stale' });
+    return json(200, serviceSettingsSnapshot({ ...serviceSettings, ...body.changes }));
+  }
+  return json(405, { error: 'fixture_settings_method_not_allowed' });
+}
+
+function serviceSettingsPreviewResponse({ body, method }) {
+  if (method !== 'POST') return json(405, { error: 'fixture_settings_preview_method_not_allowed' });
+  if (body.expectedUpdatedAt !== FIXED_TIME || !body.changes || typeof body.changes !== 'object') return json(409, { error: 'fixture_settings_stale' });
+  const next = { ...serviceSettings, ...body.changes };
+  const diff = Object.entries(body.changes).map(([field, after]) => ({ field, before: serviceSettings[field] ?? null, after }));
+  return json(200, { snapshot: serviceSettingsSnapshot(next), settings: next, diff, buildPlan: { before: { mode: 'dockerfile', dockerfilePath: serviceSettings.dockerfilePath }, after: { mode: 'dockerfile', dockerfilePath: next.dockerfilePath } } });
+}
+
+function serviceReplacementResponse({ body, method }) {
+  if (method !== 'POST') return json(405, { error: 'fixture_replacement_method_not_allowed' });
+  if (body.expectedUpdatedAt !== FIXED_TIME || body.confirmed !== true || !body.source || typeof body.name !== 'string') return json(409, { error: 'fixture_replacement_stale' });
+  return json(201, { impact: 'old_service_preserved', oldServiceId: service.id, service: { ...service, id: 'svc_fixture_replacement', name: body.name, ...body.source } });
 }
 
 function publicSitesResponse(scenario, searchParams) {

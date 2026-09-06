@@ -62,6 +62,28 @@ test('Given the populated fixture, when GitHub happy-path endpoints are called, 
   });
 });
 
+test('Given deployed service settings, when preview, conditional save, and replacement are requested, then the fixture keeps the prior service and deployment data immutable', () => {
+  const settingsPath = '/services/svc_fixture_web/settings';
+  const expectedUpdatedAt = '2026-08-31T03:00:00.000Z';
+  const changes = { dockerfilePath: 'docker/Dockerfile' };
+  const loaded = request('GET', settingsPath);
+  const preview = request('POST', `${settingsPath}/preview`, TOKENS.user, { body: { expectedUpdatedAt, changes } });
+  const saved = request('PATCH', settingsPath, TOKENS.user, { body: { expectedUpdatedAt, changes } });
+  const replacement = request('POST', '/services/svc_fixture_web/replacements', TOKENS.user, {
+    body: { expectedUpdatedAt, confirmed: true, name: 'web-v2', source: { sourceType: 'github', repoUrl: 'https://github.com/raibit/fixture-app' } },
+  });
+
+  assert.equal(loaded.status, 200);
+  assert.equal(preview.status, 200);
+  assert.deepEqual(preview.body.diff, [{ field: 'dockerfilePath', before: 'Dockerfile', after: 'docker/Dockerfile' }]);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.settings.dockerfilePath, 'docker/Dockerfile');
+  assert.equal(replacement.status, 201);
+  assert.equal(replacement.body.impact, 'old_service_preserved');
+  assert.equal(replacement.body.oldServiceId, 'svc_fixture_web');
+  assert.equal(request('GET', settingsPath).body.settings.dockerfilePath, 'Dockerfile');
+});
+
 test('Given non-populated sessions, when GitHub data loads, then empty and authorization behavior stay deterministic', () => {
   assert.deepEqual(request('GET', '/github/installations', TOKENS.empty), { status: 200, body: { installations: [] } });
   assert.deepEqual(request('GET', '/github/installations', TOKENS.expired), { status: 401, body: { error: 'session_expired' } });
