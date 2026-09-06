@@ -182,16 +182,32 @@ export async function loadTask49Coverage(sourceRoot = SOURCE_ROOT) {
   }
   const executableRows = matrix.PLATFORM_EXPANSION_EXECUTABLE_ROWS;
   const negativeRows = matrix.PLATFORM_EXPANSION_NEGATIVE_ROWS;
-  if (!Array.isArray(executableRows) || !Array.isArray(negativeRows)) throw new BaselineError('platform_expansion_matrix_invalid');
+  const delegatedScenarios = matrix.PLATFORM_EXPANSION_DELEGATED_PLAYWRIGHT_SCENARIOS;
+  if (!Array.isArray(executableRows) || !Array.isArray(negativeRows) || !Array.isArray(delegatedScenarios)) throw new BaselineError('platform_expansion_matrix_invalid');
   const executableIds = executableRows.map((row) => row?.id);
   const negativeIds = negativeRows.map((row) => row?.id);
-  if (executableIds.length === 0 || executableIds.some((id) => typeof id !== 'string' || id.length === 0) || new Set(executableIds).size !== executableIds.length || !sameIds(negativeIds, executableIds.filter((id) => negativeIds.includes(id)))) {
+  const delegatedIds = delegatedScenarios.map((scenario) => scenario?.id);
+  const delegatedTitles = delegatedScenarios.map((scenario) => scenario?.title);
+  if (
+    executableIds.length === 0
+    || executableIds.some((id) => typeof id !== 'string' || id.length === 0)
+    || new Set(executableIds).size !== executableIds.length
+    || !sameIds(negativeIds, executableIds.filter((id) => negativeIds.includes(id)))
+    || delegatedScenarios.length === 0
+    || delegatedIds.some((id) => typeof id !== 'string' || id.length === 0)
+    || new Set(delegatedIds).size !== delegatedIds.length
+    || new Set([...executableIds, ...delegatedIds]).size !== executableIds.length + delegatedIds.length
+    || delegatedTitles.some((title) => typeof title !== 'string' || title.length === 0)
+    || new Set(delegatedTitles).size !== delegatedTitles.length
+    || delegatedScenarios.some((scenario) => !isRecord(scenario) || (scenario.kind !== 'positive' && scenario.kind !== 'negative'))
+  ) {
     throw new BaselineError('platform_expansion_matrix_invalid');
   }
   const negativeIdSet = new Set(negativeIds);
   const coverage = Object.freeze({
     positiveIds: Object.freeze(executableIds.filter((id) => !negativeIdSet.has(id))),
     negativeIds: Object.freeze(negativeIds),
+    delegatedScenarios: Object.freeze(delegatedScenarios.map((scenario) => Object.freeze({ id: scenario.id, kind: scenario.kind, title: scenario.title }))),
   });
   if (coverage.positiveIds.length === 0 || coverage.negativeIds.length === 0) throw new BaselineError('platform_expansion_matrix_invalid');
   task49CoverageBySourceRoot.set(canonicalSourceRoot, coverage);
@@ -258,6 +274,7 @@ async function validatePlaywrightReport(reportPath, coverage) {
   const expectedTitles = [
     ...coverage.positiveIds.map((id) => `@platform-expansion ${id}`),
     ...coverage.negativeIds.map((id) => `@platform-expansion ${id}`),
+    ...coverage.delegatedScenarios.map((scenario) => scenario.title),
   ];
   const stats = report.stats;
   if (!isCount(stats.expected) || !isCount(stats.skipped) || !isCount(stats.unexpected) || !isCount(stats.flaky)
@@ -278,7 +295,7 @@ async function platformExpansionEvidenceAssertionCount(sourceRoot, reportPath, p
   await validateTask49Report(reportPath, 'positive', coverage.positiveIds);
   await validateTask49Report(path.join(path.dirname(reportPath), 'task-49-platform-expansion-negative-evidence.json'), 'negative', coverage.negativeIds);
   await validatePlaywrightReport(playwrightReportPath, coverage);
-  return coverage.positiveIds.length + coverage.negativeIds.length;
+  return coverage.positiveIds.length + coverage.negativeIds.length + coverage.delegatedScenarios.length;
 }
 
 async function writeJson(target, value) {

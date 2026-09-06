@@ -36,6 +36,7 @@ function playwrightReport(coverage) {
   const specs = [
     ...coverage.positiveIds.map((id) => ({ title: `@platform-expansion ${id}`, tests: [{ results: [{ status: 'passed' }] }] })),
     ...coverage.negativeIds.map((id) => ({ title: `@platform-expansion ${id}`, tests: [{ results: [{ status: 'passed' }] }] })),
+    ...coverage.delegatedScenarios.map(({ title }) => ({ title, tests: [{ results: [{ status: 'passed' }] }] })),
   ];
   const expected = specs.length;
   return { suites: [{ specs }], stats: { expected, skipped: 0, unexpected: 0, flaky: 0 } };
@@ -125,7 +126,7 @@ test('Next distDir resolves approved external paths without a source-tree write'
   assert.throws(() => relativeExternalDistDir({ externalDistDir: 'D:\\evidence\\attempt', dashboardDirectory: windowsDirectory, pathApi: path.win32 }), /dashboard_next_dist_dir_unrepresentable/);
 });
 
-test('baseline runner uses the Task49 report for exact scenario IDs and counts', async () => {
+test('baseline runner accepts fixture reports plus delegated Playwright union', async () => {
   const coverage = await loadTask49Coverage(sourceRoot);
   const { externalRoot } = await fixtureRoot();
   const result = await runBaseline({
@@ -144,7 +145,7 @@ test('baseline runner uses the Task49 report for exact scenario IDs and counts',
   const receipt = result.receipts.find(({ id }) => id === 'dashboard-platform-e2e');
   assert.equal(result.exitCode, 0);
   assert.equal(receipt.status, 'PASS');
-  assert.equal(receipt.assertionCount, coverage.positiveIds.length + coverage.negativeIds.length);
+  assert.equal(receipt.assertionCount, coverage.positiveIds.length + coverage.negativeIds.length + coverage.delegatedScenarios.length);
 });
 
 test('baseline runner rejects a Task49 report with skipped or mismatched outcomes', async () => {
@@ -232,6 +233,30 @@ test('baseline runner rejects a skipped Playwright matrix report', async () => {
         await writeTask49Evidence(environment, coverage);
         const report = playwrightReport(coverage);
         report.stats.skipped = 1;
+        await writeFile(environment.RAIBITSERVER_PLAYWRIGHT_REPORT_PATH, JSON.stringify(report));
+      }
+      return { exitCode: 0, stdout: fixtureOutput(command), stderr: '' };
+    },
+    probeTool: async () => true,
+    gitFingerprint: fixtureFingerprint,
+  });
+  const receipt = result.receipts.find(({ id }) => id === 'dashboard-platform-e2e');
+  assert.equal(result.exitCode, 1);
+  assert.equal(receipt.reason, 'platform_expansion_playwright_report_invalid');
+});
+
+test('baseline runner rejects a missing delegated Playwright scenario', async () => {
+  const coverage = await loadTask49Coverage(sourceRoot);
+  const { externalRoot } = await fixtureRoot();
+  const result = await runBaseline({
+    attemptDir: path.join(externalRoot, 'run'), externalRoot, sourceRoot, runId: 'fixture-run',
+    execute: async (command, environment) => {
+      if (command.command === 'kind') return { exitCode: 0, stdout: 'other-cluster\n', stderr: '' };
+      if (command.id === 'dashboard-platform-e2e') {
+        await writeTask49Evidence(environment, coverage);
+        const report = playwrightReport(coverage);
+        report.suites[0].specs.pop();
+        report.stats.expected -= 1;
         await writeFile(environment.RAIBITSERVER_PLAYWRIGHT_REPORT_PATH, JSON.stringify(report));
       }
       return { exitCode: 0, stdout: fixtureOutput(command), stderr: '' };
