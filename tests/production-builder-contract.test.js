@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 
 const helm = process.env.HELM_BINARY || 'helm';
 const chart = 'infra/helm/raibitserver';
@@ -48,4 +49,10 @@ test('builder projection rejects an empty Secret data key', () => {
   // Then.
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /valid public trust Secret data key/);
+});
+
+test('CI production values project the foreign admission trust key locally', async () => {
+  const values = await readFile('infra/helm/raibitserver/ci-production-values.yaml', 'utf8');
+  assert.match(values, /builder:[\s\S]*verification:\s*\n\s+existingSecret: ci-raibitserver-cosign-trust-root-projection\s*\n\s+key: cosign\.pub/);
+  assert.match(values, /security:[\s\S]*trustRoot:\s*\n\s+namespace: trust-system\s*\n\s+existingSecret: raibitserver-cosign-trust-root\s*\n\s+key: cosign\.pub/);
 });
