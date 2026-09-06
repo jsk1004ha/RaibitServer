@@ -77,9 +77,10 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
     await openRow(page, row);
     await page.getByLabel('이메일').fill('user@fixture.test');
     await page.getByLabel('비밀번호').fill('fixture-user-pass');
-    const responsePromise = page.waitForResponse((candidate) => candidate.url().includes('/api/auth/login') && candidate.request().method() === 'POST');
-    await page.getByLabel('비밀번호').press('Enter');
-    const response = await responsePromise;
+    const [response] = await Promise.all([
+      page.waitForResponse((candidate) => candidate.url().includes('/api/control/auth/login') && candidate.request().method() === 'POST'),
+      page.getByLabel('비밀번호').press('Enter'),
+    ]);
     await expect(page).toHaveURL(/\/org\/raibit\/projects\?notice=saved$/);
     const body = await responseBody(response);
     const safeBody = body !== null && typeof body === 'object' && !Array.isArray(body) && 'user' in body ? { user: body.user } : { redacted: true };
@@ -113,7 +114,8 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
     expect(response.status()).toBe(status);
     if (status === 200) await expect(page.getByRole('status')).toContainText('RAIBITSERVER 연결이 해제되었습니다.');
     else {
-      await expect(page.getByRole('alert')).toBeVisible();
+      const alert = page.getByRole('alert').filter({ hasText: status === 409 ? '연결 상태가 변경되었습니다.' : '연결을 해제하지 못했습니다.' });
+      await expect(alert).toBeVisible();
       await expect(page.getByRole('status')).not.toContainText('RAIBITSERVER 연결이 해제되었습니다.');
     }
     const after = status === 200 ? null : await apiJson(page, '/api/control/integrations/github');
@@ -149,10 +151,11 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
     await page.getByRole('button', { name: '삭제 요청 등록' }).click();
     const response = await responsePromise;
     expect(response.status()).toBe(403);
-    await expect(page.getByRole('alert')).toContainText('권한');
+    const alert = page.getByRole('alert').filter({ hasText: '이 작업을 수행할 권한이 없습니다.' });
+    await expect(alert).toContainText('권한');
     await expect(page.getByText('삭제 요청이 대기열에 등록되었습니다.')).toHaveCount(0);
     const after = await apiJson(page, '/api/control/projects/prj_fixture_001/settings');
-    return record(page, row, testInfo, await httpObservation(response, { alert: await page.getByRole('alert').innerText(), deletionConfirmationCount: 0 }, unchanged(before, after)), recorder);
+    return record(page, row, testInfo, await httpObservation(response, { alert: await alert.innerText(), deletionConfirmationCount: 0 }, unchanged(before, after)), recorder);
   }
   if (row.driver === 'service-preview') {
     await openRow(page, row);
