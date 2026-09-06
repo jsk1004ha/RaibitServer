@@ -39,7 +39,7 @@ export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgL
         <SheetTrigger render={<Button variant="outline" size="icon" aria-label="콘솔 메뉴 열기" />}><MenuIcon data-icon="inline-start" /></SheetTrigger>
         <a className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium text-foreground" href="/console"><Brand className="shrink-0" height={26} width={26} /><span className="truncate">RAIBIT SERVER</span></a>
       </div>
-      <SheetContent className="w-[calc(100%-2rem)] overflow-hidden sm:max-w-sm" side="left">
+      <SheetContent className="data-[side=left]:w-[calc(100%-2rem)] overflow-hidden sm:max-w-sm" side="left">
         <SheetHeader className="border-b border-border"><SheetTitle>RAIBIT SERVER 콘솔</SheetTitle><SheetDescription>{orgValue} · {projectValue}</SheetDescription></SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
           <div className="flex flex-col gap-3 border-b border-border px-2 pb-4">
