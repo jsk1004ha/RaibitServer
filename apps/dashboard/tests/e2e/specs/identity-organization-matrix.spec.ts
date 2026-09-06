@@ -158,8 +158,8 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
           expect(denied.status()).toBe(401);
           expect(await json(denied)).toEqual(journey.role === 'pending' ? { error: 'account_not_approved' } : { error: 'authentication_required' });
           await page.goto(journey.route, { waitUntil: 'networkidle' });
-          await expectRoute(page, '/login', journey.role === 'pending' ? { next: journey.route } : {});
-          expect(new URL(page.url()).search).toBe(journey.role === 'pending' ? `?next=${encodeURIComponent(journey.route)}` : '');
+          await expectRoute(page, '/login', { next: journey.route });
+          expect(new URL(page.url()).search).toBe(`?next=${encodeURIComponent(journey.route)}`);
           await expect(page.getByRole('heading', { name: '로그인' })).toBeVisible();
           expect(mutationRequests).toEqual([]);
         } else if (journey.intent === 'member-mutation') {
