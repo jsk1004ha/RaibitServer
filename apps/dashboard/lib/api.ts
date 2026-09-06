@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { fetchWithInitialResponseTimeout, readBoundedBody, SESSION_COOKIE_NAME } from './request-security.js';
 import { controlPlaneErrorCode } from './control-plane-errors.js';
 
-export { apiAction } from './api-action.js';
+export { apiAction } from './api-action';
 
 const CONTROL_PLANE_CONNECT_TIMEOUT_MS = 10_000;
 const CONTROL_PLANE_BODY_TIMEOUT_MS = 15_000;
