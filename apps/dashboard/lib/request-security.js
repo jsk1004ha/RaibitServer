@@ -250,6 +250,8 @@ export function withFlashMessage(requestUrl, returnPath, kind, value) {
 }
 
 export function publicUpstreamErrorCode(payload, status) {
+	const message = typeof payload?.message === 'string' ? payload.message : '';
+	if (status === 401 && ['account is not approved', 'account is banned', 'session has been revoked'].includes(message)) return 'session_reauthentication_required';
 	for (const candidate of [payload?.error, payload?.message]) {
 		if (
 			typeof candidate === 'string'

@@ -13,6 +13,7 @@ import { Icon } from './icon';
 import type { IconName } from './icon';
 import { SectionNavigationScroll } from './section-navigation-scroll';
 import { UserAvatar } from './user-avatar';
+import { AccountMenu } from './account-menu';
 import { OrganizationSwitcher, type OrganizationSwitcherMembership } from './organization-switcher';
 
 type JsonCardProps = {
@@ -75,6 +76,7 @@ export async function ConsoleShell({
     ?? organizationMemberships[0]?.organizationId
     ?? resolveOrganizationRouteValue({ subject, memberships: me.body?.memberships });
   const organizationLinks = consoleOrganizationLinks(resolvedOrgRouteValue);
+  const membershipRole = organizationMemberships.find((membership) => membership.organizationId === resolvedOrgRouteValue)?.role || '권한 확인 중';
   const navItems: NavItem[] = [
     { id: 'overview', label: '개요', href: '/console', icon: 'squares-2x2' },
     { id: 'projects', label: '프로젝트', href: organizationLinks.projects, icon: 'folder' },
@@ -131,18 +133,11 @@ export async function ConsoleShell({
           })}
         </nav>
         <div className="border-t border-border p-3">
-          <div className="flex min-w-0 items-center gap-2 px-2 pb-2">
-            <UserAvatar avatarUrl={user?.avatarUrl} email={user?.email} name={user?.name} size="sm" />
-            <div className="min-w-0">
-              <p className="truncate text-xs font-medium text-foreground" title={user?.name || '로그인 사용자'}>{user?.name || '로그인 사용자'}</p>
-              <p className="truncate text-xs text-muted-foreground" title={user?.email || '로그인 사용자'}>{user?.email || '로그인 사용자'}</p>
-            </div>
-          </div>
-          <form method="post" action={apiAction('/auth/logout')}><input type="hidden" name="_returnTo" value="/login" /><button className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'w-full justify-start')} type="submit">로그아웃</button></form>
+          <AccountMenu avatarUrl={user?.avatarUrl} email={user?.email} logoutAction={logoutAction} name={user?.name} organization={orgValue} role={membershipRole} />
         </div>
       </aside>
       <header className="flex min-w-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
-        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} organizationMemberships={organizationMemberships} organizationRouteValue={resolvedOrgRouteValue} projectLabel={projectLabel} projectValue={projectValue} userAvatarUrl={user?.avatarUrl} userEmail={user?.email || '로그인 사용자'} userName={user?.name} />
+        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} organizationMemberships={organizationMemberships} organizationRouteValue={resolvedOrgRouteValue} projectLabel={projectLabel} projectValue={projectValue} role={membershipRole} userAvatarUrl={user?.avatarUrl} userEmail={user?.email || '로그인 사용자'} userName={user?.name} />
         <div className="flex shrink-0 items-center gap-2" aria-label="모바일 콘솔 도구">
           <ConsoleSearch compact items={searchItems} />
           <ThemeMenu />

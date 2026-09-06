@@ -189,9 +189,12 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
   if (!upstream.ok) {
     const code = publicUpstreamErrorCode(payload, upstream.status);
     if (isFormSubmission) {
-      return formErrorRedirect(browserRequestUrl, returnPath, code);
+      const response = formErrorRedirect(browserRequestUrl, returnPath, code);
+      if (upstream.status === 401) clearSessionCookie(response);
+      return response;
     }
     const response = NextResponse.json({ error: code }, { status: upstream.status });
+    if (upstream.status === 401) clearSessionCookie(response);
     copyRetryAfterHeader(response, upstream.headers.get('retry-after'));
     return response;
   }
@@ -218,6 +221,7 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
     if (path === '/organizations' && payload?.reauthenticationRequired === true) {
       response.cookies.set(SESSION_COOKIE_NAME, '', { ...sessionCookieOptions(), sameSite: 'lax', maxAge: 0 });
     }
+    if (path === '/auth/password-reset/complete') clearSessionCookie(response);
     response.headers.set('cache-control', 'no-store');
     copyRetryAfterHeader(response, upstream.headers.get('retry-after'));
     return response;
@@ -249,7 +253,11 @@ function applySessionCookie(response: NextResponse, path: string, payload: any) 
   const token = extractSessionToken(payload);
   const cookieOptions = { ...sessionCookieOptions(), sameSite: 'lax' as const };
   if (token) response.cookies.set(SESSION_COOKIE_NAME, token, cookieOptions);
-  if (path === '/auth/logout') response.cookies.set(SESSION_COOKIE_NAME, '', { ...cookieOptions, maxAge: 0 });
+  if (path === '/auth/logout') clearSessionCookie(response);
+}
+
+function clearSessionCookie(response: NextResponse) {
+  response.cookies.set(SESSION_COOKIE_NAME, '', { ...sessionCookieOptions(), sameSite: 'lax', maxAge: 0 });
 }
 
 async function handleGitHubOAuthRequest(request: NextRequest, browserRequestUrl: string, path: string) {

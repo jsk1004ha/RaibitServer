@@ -42,6 +42,13 @@ test('Given an upstream failure, when its message is unsafe or unbounded, then t
 	assert.equal(publicUpstreamErrorCode({}, undefined), 'request_failed_500');
 });
 
+test('Given an invalidated account session, when the upstream guard returns an allowlisted reason, then the browser receives one generic re-login code', () => {
+	assert.equal(publicUpstreamErrorCode({ message: 'account is not approved' }, 401), 'session_reauthentication_required');
+	assert.equal(publicUpstreamErrorCode({ message: 'account is banned' }, 401), 'session_reauthentication_required');
+	assert.equal(publicUpstreamErrorCode({ message: 'session has been revoked' }, 401), 'session_reauthentication_required');
+	assert.equal(publicUpstreamErrorCode({ message: 'foreign id 123' }, 401), 'request_failed_401');
+});
+
 test('session cookie is host-only, HttpOnly and only Secure when configured or in production', () => {
   assert.equal(SESSION_COOKIE_NAME, 'raibitserver_session');
   assert.deepEqual(sessionCookieOptions({ NODE_ENV: 'development' }), {

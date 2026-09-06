@@ -166,6 +166,7 @@ function errorMessage(code: string): string {
     invalid_credentials: '이메일 또는 비밀번호를 확인해 주세요.',
     email_not_verified: '먼저 이메일 인증을 완료해 주세요.',
     session_expired: '세션이 만료되었습니다. 다시 로그인해 주세요.',
+    session_reauthentication_required: '계정 또는 조직 권한이 변경되어 다시 로그인해야 합니다.',
     github_account_not_registered: 'GitHub 인증 이메일과 일치하는 승인 계정을 찾지 못했습니다.',
     github_oauth_denied: 'GitHub 로그인이 취소되었습니다.',
     github_oauth_not_configured: 'GitHub 로그인이 아직 설정되지 않았습니다.',

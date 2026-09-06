@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { Brand } from './brand';
 import { Icon, type IconName } from './icon';
 import { UserAvatar } from './user-avatar';
+import { AccountMenu } from './account-menu';
 import { OrganizationSwitcher, type OrganizationSwitcherMembership } from './organization-switcher';
 
 type MobileNavItem = { readonly id: string; readonly label: string; readonly href: string; readonly icon: IconName };
@@ -23,12 +24,13 @@ type ConsoleMobileNavProps = {
   readonly organizationRouteValue: string;
   readonly projectLabel: string;
   readonly projectValue: string;
+  readonly role: string;
   readonly userAvatarUrl?: string;
   readonly userEmail: string;
   readonly userName?: string;
 };
 
-export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgLabel, orgValue, organizationMemberships, organizationRouteValue, projectLabel, projectValue, userAvatarUrl, userEmail, userName }: ConsoleMobileNavProps) {
+export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgLabel, orgValue, organizationMemberships, organizationRouteValue, projectLabel, projectValue, role, userAvatarUrl, userEmail, userName }: ConsoleMobileNavProps) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -53,14 +55,7 @@ export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgL
           </nav>
         </div>
         <SheetFooter className="border-t border-border">
-          <div className="flex min-w-0 items-center gap-2">
-            <UserAvatar avatarUrl={userAvatarUrl} email={userEmail} name={userName} size="sm" />
-            <div className="min-w-0">
-              <p className="truncate text-xs font-medium text-foreground" title={userName || '로그인 사용자'}>{userName || '로그인 사용자'}</p>
-              <p className="truncate text-xs text-muted-foreground" title={userEmail}>{userEmail}</p>
-            </div>
-          </div>
-          <form method="post" action={logoutAction}><input type="hidden" name="_returnTo" value="/login" /><button className={cn(buttonVariants({ variant: 'ghost' }), 'w-full justify-start')} type="submit">로그아웃</button></form>
+          <AccountMenu avatarUrl={userAvatarUrl} email={userEmail} logoutAction={logoutAction} name={userName} organization={orgValue} role={role} />
           <SheetClose render={<Button className="w-full" variant="outline" />}>메뉴 닫기</SheetClose>
         </SheetFooter>
       </SheetContent>
