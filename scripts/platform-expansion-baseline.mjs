@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -125,6 +125,7 @@ function commandSetError(commands) {
 
 function parseAssertions(kind, output) {
   const normalized = `${output ?? ''}`;
+  if (kind === 'command') return { count: 0, skipped: 0 };
   const skipped = [...normalized.matchAll(/(?:#\s*skipped|\bskipped\s*[:=]?\s*)(\d+)/gi)]
     .reduce((total, match) => total + Number(match[1]), 0);
   if (skipped > 0) return { count: 0, skipped };
@@ -143,6 +144,48 @@ function parseAssertions(kind, output) {
 
 function digest(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isCount(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+async function platformExpansionReportAssertionCount(reportPath) {
+  let report;
+  try {
+    const reportStat = await lstat(reportPath);
+    if (!reportStat.isFile() || reportStat.isSymbolicLink()) throw new BaselineError('platform_expansion_report_invalid');
+    report = JSON.parse(await readFile(reportPath, 'utf8'));
+  } catch (error) {
+    if (error instanceof BaselineError) throw error;
+    if (error?.code === 'ENOENT') throw new BaselineError('platform_expansion_report_missing');
+    throw new BaselineError('platform_expansion_report_invalid');
+  }
+  if (!isRecord(report) || report.schema !== 'raibit.task49.v1' || report.kind !== 'positive' || !Array.isArray(report.expectedScenarioIds) || !Array.isArray(report.outcomes) || !isRecord(report.summary)) {
+    throw new BaselineError('platform_expansion_report_invalid');
+  }
+  const expected = report.expectedScenarioIds;
+  if (expected.length === 0 || expected.some((id) => typeof id !== 'string' || id.length === 0) || new Set(expected).size !== expected.length) {
+    throw new BaselineError('platform_expansion_report_invalid');
+  }
+  const summary = report.summary;
+  if (!isCount(summary.expected) || !isCount(summary.passed) || !isCount(summary.failed) || !isCount(summary.skipped) || !isCount(summary.unexpected) || !isCount(summary.flaky)
+    || summary.expected !== expected.length || summary.passed !== expected.length || summary.failed !== 0 || summary.skipped !== 0 || summary.unexpected !== 0 || summary.flaky !== 0) {
+    throw new BaselineError('platform_expansion_report_invalid');
+  }
+  const outcomes = report.outcomes;
+  if (outcomes.length !== expected.length || outcomes.some((outcome) => !isRecord(outcome) || typeof outcome.id !== 'string' || outcome.status !== 'passed')) {
+    throw new BaselineError('platform_expansion_report_invalid');
+  }
+  const outcomeIds = outcomes.map((outcome) => outcome.id);
+  if (new Set(outcomeIds).size !== outcomeIds.length || outcomeIds.some((id) => !expected.includes(id))) {
+    throw new BaselineError('platform_expansion_report_invalid');
+  }
+  return expected.length;
 }
 
 async function writeJson(target, value) {
@@ -212,7 +255,10 @@ export async function runBaseline(options) {
     TMP: directories.tmp,
     RAIBITSERVER_E2E_OUTPUT_DIR: directories.reports,
     PLAYWRIGHT_OUTPUT_DIR: directories.screenshots,
-    PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(directories.reports, 'dashboard-platform-expansion.json'),
+    RAIBITSERVER_PLAYWRIGHT_OUTPUT_DIR: directories.screenshots,
+    RAIBITSERVER_PLAYWRIGHT_REPORT_PATH: path.join(directories.reports, 'dashboard-platform-expansion.json'),
+    RAIBITSERVER_E2E_FIXTURE_OUTPUT_DIR: path.join(directories.tmp, 'dashboard-fixture'),
+    RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH: path.join(attemptDir, 'task-49-platform-expansion-evidence.json'),
     RAIBITSERVER_LIVE_E2E_CLUSTER: `raibit-baseline-${runId.replaceAll('-', '').slice(0, 18)}`,
   };
   const receipts = [];
@@ -258,18 +304,23 @@ export async function runBaseline(options) {
           const stdout = `${result.stdout ?? ''}`;
           const stderr = `${result.stderr ?? ''}`;
           const assertions = parseAssertions(command.assertion, `${stdout}\n${stderr}`);
+          const platformReportCount = command.id === 'dashboard-platform-e2e' && result.exitCode === 0
+            ? await platformExpansionReportAssertionCount(environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH)
+            : null;
           receipt.exitCode = result.exitCode;
-          receipt.assertionCount = assertions.count;
-          receipt.skippedCount = assertions.skipped;
+          receipt.assertionCount = platformReportCount ?? assertions.count;
+          receipt.skippedCount = platformReportCount === null ? assertions.skipped : 0;
           receipt.stdoutSha256 = digest(stdout);
           receipt.stderrSha256 = digest(stderr);
           await writeFile(path.join(attemptDir, receipt.log), `${stdout}${stderr}`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
           if (result.exitCode !== 0) failure = { id: command.id, code: 'command_failed', exitCode: result.exitCode || 1 };
-          else if (assertions.skipped > 0) failure = { id: command.id, code: 'skipped_assertions', exitCode: 1 };
-          else if (assertions.count === 0) failure = { id: command.id, code: 'empty_assertions', exitCode: 1 };
+          else if (command.id !== 'dashboard-platform-e2e' && command.assertion !== 'command' && assertions.skipped > 0) failure = { id: command.id, code: 'skipped_assertions', exitCode: 1 };
+          else if (command.id !== 'dashboard-platform-e2e' && command.assertion !== 'command' && assertions.count === 0) failure = { id: command.id, code: 'empty_assertions', exitCode: 1 };
           else receipt.status = 'PASS';
         } catch (error) {
-          failure = { id: command.id, code: error?.code === 'ENOENT' ? `missing_tool:${command.command}` : 'command_spawn_failed', exitCode: 127 };
+          failure = error instanceof BaselineError
+            ? { id: command.id, code: error.code, exitCode: 1 }
+            : { id: command.id, code: error?.code === 'ENOENT' ? `missing_tool:${command.command}` : 'command_spawn_failed', exitCode: 127 };
         }
       }
       if (failure && receipt.status !== 'PASS') {
