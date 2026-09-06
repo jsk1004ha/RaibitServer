@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -49,6 +51,38 @@ async function sandbox(t) {
   const directory = await mkdtemp(path.join(tmpdir(), 'raibit-auth-client-'));
   t.after(async () => rm(directory, { recursive: true, force: true }));
   return directory;
+}
+
+async function startKubectlDiscoveryFixture(t, directory) {
+  const requests = [];
+  const responses = {
+    '/api': { apiVersion: 'v1', kind: 'APIVersions', serverAddressByClientCIDRs: [], versions: ['v1'] },
+    '/api/v1': { apiVersion: 'v1', kind: 'APIResourceList', groupVersion: 'v1', resources: [] },
+    '/apis': { apiVersion: 'v1', kind: 'APIGroupList', groups: [{ name: 'networking.k8s.io', versions: [{ groupVersion: 'networking.k8s.io/v1', version: 'v1' }], preferredVersion: { groupVersion: 'networking.k8s.io/v1', version: 'v1' } }] },
+    '/apis/networking.k8s.io/v1': { apiVersion: 'v1', kind: 'APIResourceList', groupVersion: 'networking.k8s.io/v1', resources: [{ name: 'networkpolicies', singularName: 'networkpolicy', namespaced: true, kind: 'NetworkPolicy', verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch'] }] },
+  };
+  const server = createServer((request, response) => {
+    const pathname = new URL(request.url, 'http://127.0.0.1').pathname;
+    requests.push({ method: request.method, pathname });
+    const body = request.method === 'GET' ? responses[pathname] : undefined;
+    response.writeHead(body ? 200 : request.method === 'GET' ? 404 : 405, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(body ?? { kind: 'Status', status: 'Failure' }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+  const kubeconfigPath = path.join(directory, 'kubeconfig');
+  await writeFile(kubeconfigPath, [
+    'apiVersion: v1', 'kind: Config', 'clusters:', '- name: fixture', '  cluster:', `    server: http://127.0.0.1:${address.port}`,
+    'contexts:', '- name: fixture', '  context:', '    cluster: fixture', 'current-context: fixture', '',
+  ].join('\n'), { flag: 'wx', mode: 0o600 });
+  return { cacheDirectory: path.join(directory, 'kubectl-cache'), kubeconfigPath, requests };
+}
+
+function executeKubectl(args) {
+  return new Promise(resolve => execFile('kubectl', args, { encoding: 'utf8', timeout: 10_000 }, (error, stdout, stderr) => resolve({ error, stderr, stdout })));
 }
 
 function fakeKubectl(fixtures = kubeFixtures(), options = {}) {
@@ -252,11 +286,14 @@ test('Given an available stock kubectl client, When a NetworkPolicy fixture is r
   const runDirectory = await sandbox(t);
   const fixturePath = path.join(runDirectory, 'networkpolicy.json');
   await writeFile(fixturePath, `${JSON.stringify(evidenceClientNetworkPolicy({ name: 'evidence-client-run-27-safe', namespace: 'raibit-system', runId: RUN_ID, releaseName: 'raibit-prod' }))}\n`, { flag: 'wx', mode: 0o600 });
-  const rendered = spawnSync('kubectl', ['create', '--dry-run=client', '--validate=false', '-f', fixturePath, '-o=json'], { encoding: 'utf8' });
-  assert.equal(rendered.status, 0, rendered.stderr);
+  const discovery = await startKubectlDiscoveryFixture(t, runDirectory);
+  const rendered = await executeKubectl(['create', '--dry-run=client', '--validate=false', '--kubeconfig', discovery.kubeconfigPath, '--cache-dir', discovery.cacheDirectory, '-f', fixturePath, '-o=json']);
+  assert.equal(rendered.error, null, rendered.stderr);
   const parsed = JSON.parse(rendered.stdout);
   assert.equal(parsed.kind, 'NetworkPolicy');
   assert.deepEqual(parsed.spec.policyTypes, ['Egress']);
+  assert.ok(discovery.requests.some(request => request.pathname === '/apis/networking.k8s.io/v1'));
+  assert.ok(discovery.requests.every(request => request.method === 'GET'));
 });
 
 test('Given malformed auth membership, When auth/me is projected, Then zero or multiple memberships are rejected', async t => {
