@@ -16,10 +16,10 @@ function colorScheme(theme: PlatformExpansionRow['theme']): 'light' | 'dark' | '
   return theme === 'system' ? 'no-preference' : theme;
 }
 
-async function openRow(page: Page, row: PlatformExpansionRow): Promise<Response> {
+async function openRow(page: Page, row: PlatformExpansionRow, waitUntil: 'load' | 'commit' = 'load'): Promise<Response> {
   await page.setViewportSize(row.viewport);
   await page.emulateMedia({ colorScheme: colorScheme(row.theme), reducedMotion: row.accessibility.includes('reduced-motion') ? 'reduce' : 'no-preference' });
-  const response = await page.goto(row.route);
+  const response = await page.goto(row.route, { waitUntil });
   if (!response) throw new TypeError('platform_expansion_navigation_response_missing:' + row.id);
   if (row.zoom === 200) await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
   expect(page.viewportSize()).toEqual(row.viewport);
@@ -81,20 +81,30 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
       page.waitForResponse((candidate) => candidate.url().includes('/api/control/auth/login') && candidate.request().method() === 'POST'),
       page.getByLabel('비밀번호').press('Enter'),
     ]);
+    expect(response.status()).toBe(303);
     await expect(page).toHaveURL(/\/org\/raibit\/projects\?notice=saved$/);
-    const body = await responseBody(response);
-    const safeBody = body !== null && typeof body === 'object' && !Array.isArray(body) && 'user' in body ? { user: body.user } : { redacted: true };
+    const location = response.headers().location;
+    if (!location) throw new TypeError('platform_expansion_login_redirect_missing');
+    const redirect = new URL(location, page.url());
+    expect(redirect.origin).toBe(new URL(page.url()).origin);
+    expect(`${redirect.pathname}${redirect.search}`).toBe('/org/raibit/projects?notice=saved');
     const observation: PlatformExpansionObservation = {
-      kind: 'http', request: { method: response.request().method(), url: response.request().url() }, response: { status: response.status(), url: response.url(), body: safeBody },
+      kind: 'http', request: { method: response.request().method(), url: response.request().url() }, response: { status: response.status(), url: response.url(), body: { body: null, location: `${redirect.pathname}${redirect.search}` } },
       resultingState: { source: 'ui', value: { pathname: new URL(page.url()).pathname, notice: new URL(page.url()).searchParams.get('notice') } },
     };
     return record(page, row, testInfo, observation, recorder);
   }
   if (row.driver === 'loading-boundary') {
     await installSession(page.context(), 'fixture-user-populated');
-    const response = await openRow(page, row);
-    await expect(page.locator('main#main-content')).toHaveAttribute('aria-busy', 'true');
-    return record(page, row, testInfo, await httpObservation(response, { ariaBusy: await page.locator('main#main-content').getAttribute('aria-busy') }), recorder);
+    const response = await openRow(page, row, 'commit');
+    const main = page.locator('main#main-content');
+    await expect(main).toHaveAttribute('aria-busy', 'true');
+    return record(page, row, testInfo, {
+      kind: 'http',
+      request: { method: response.request().method(), url: response.request().url() },
+      response: { status: response.status(), url: response.url(), body: { headers: { contentType: response.headers()['content-type'] ?? null }, body: null } },
+      resultingState: { source: 'ui', value: { ariaBusy: await main.getAttribute('aria-busy') } },
+    }, recorder);
   }
   if (row.driver === 'empty-projects') {
     await installSession(page.context(), 'fixture-user-empty');
