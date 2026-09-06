@@ -229,7 +229,7 @@ test('Given adversarial predecessor history, When PostgreSQL establishes PEM con
     await repository.prisma.runtimeLog.create({data:{id:source.id,serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:source.timestamp,line:'after-history'}});
     await repository.prisma.$executeRawUnsafe('ANALYZE "RuntimeLog"');
 
-    const statement = runtimePemContextQuery([source]);
+    const statement = await runtimePemContextQuery([source]);
     const rows = await repository.prisma.$queryRaw(statement);
     // The statement text is the production factory's static SQL; its source values remain bound.
     const explain = await repository.prisma.$queryRawUnsafe(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statement.text}`,...statement.values);

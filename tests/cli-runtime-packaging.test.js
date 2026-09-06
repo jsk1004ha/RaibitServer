@@ -53,8 +53,10 @@ test('Given production dependencies, when Docker packages the CLI, then Node loa
     const deployArgs = ['--filter', '@raibitserver/cli', 'deploy', '--legacy', '--prod', path.relative(root, deployed)];
     if (pnpmScript?.includes('pnpm')) run('deploy', process.execPath, [pnpmScript, ...deployArgs]);
     else run('deploy', process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', deployArgs, { shell: process.platform === 'win32' });
-    materializeWorkspacePackage(deployed, 'api-client');
-    materializeWorkspacePackage(deployed, 'schemas');
+    if (process.platform === 'win32') {
+      materializeWorkspacePackage(deployed, 'api-client');
+      materializeWorkspacePackage(deployed, 'schemas');
+    }
     run('build', process.execPath, ['scripts/build-cli-runtime.mjs', deployed]);
     const probe = `
       import assert from 'node:assert/strict';
