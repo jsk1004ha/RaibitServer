@@ -92,7 +92,7 @@ test('approved console users can open the organization creation surface without 
   assert.match(form, /body: JSON\.stringify\(\{ name, slug \}\)/);
   assert.match(form, /organization-name/);
   assert.match(form, /organization-slug/);
-  assert.match(form, /pattern="\[a-z0-9\]\(\?:\[a-z0-9-\]\*\[a-z0-9\]\)\?"/);
+  assert.match(form, /pattern="\[a-z0-9\]\(\?:\[a-z0-9\\-\]\*\[a-z0-9\]\)\?"/);
   assert.match(form, /status === 409/);
   assert.match(form, /response\.status === 401 \? \{ kind: 'auth-required' \}/);
   assert.match(form, /kind: 'created-needs-reauthentication'/);
