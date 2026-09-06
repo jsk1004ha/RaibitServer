@@ -57,11 +57,12 @@ export async function receiptAuthoritySealContext(value) {
   const receipts = await authority.loadCommitted();
   const snapshot = await authority.snapshot();
   const genuine = committedSealReceipts.get(authority);
-  if (snapshot.entryCount !== STEP_NAMES.length || genuine.length !== STEP_NAMES.length || receipts.some(({ receipt }) => receipt.status !== 'PASS'
+  const context = sealContexts.get(authority), pinned = completedSealJournals.get(authority);
+  const stepNames = stepNamesForIdentity(context.identity);
+  if (snapshot.entryCount !== stepNames.length || genuine.length !== stepNames.length || receipts.some(({ receipt }) => receipt.status !== 'PASS'
     || receipt.assertions.some(({ status }) => status !== 'PASS'))) fail('incomplete_receipt_authority');
   const claims = values => values.map(({ step, requestSha256, receipt, descriptor }) => ({ step, requestSha256, receipt, descriptor }));
   if (digest(claims(receipts)) !== digest(claims(genuine))) fail('receipt_authority_mutated');
-  const context = sealContexts.get(authority), pinned = completedSealJournals.get(authority);
   const runtime = { context: context.fullOperatorInput.selectors.RAIBITSERVER_RELEASE_KUBE_CONTEXT,
     namespace: context.fullOperatorInput.secretRefs.find(reference => reference.role === 'runtime')?.namespace };
   const [bindings, cleanup] = await Promise.all([context.journalAuthority.bindingSnapshot(), context.journalAuthority.cleanupSnapshot({ approvedRuntimeSelector: runtime })]);
@@ -210,7 +211,7 @@ async function create(options, unsafeFixture) {
       const loaded = await load(); return loaded.views.at(-1);
     }, runDirectory);
       if (!unsafeFixture || options.bootstrap) await appendReceiptProvenance({ committed, journalAuthority, observations: await verifyCandidateArtifacts(runDirectory, committed.receipt, unsafeFixture) });
-      if (committed.step === STEP_NAMES.at(-1)) {
+      if (committed.step === stepNamesForIdentity(identity).at(-1)) {
         const runtime = { context: fullOperatorInput.selectors.RAIBITSERVER_RELEASE_KUBE_CONTEXT,
           namespace: fullOperatorInput.secretRefs.find(reference => reference.role === 'runtime')?.namespace };
         const [bindings, cleanup] = await Promise.all([journalAuthority.bindingSnapshot(), journalAuthority.cleanupSnapshot({ approvedRuntimeSelector: runtime })]);

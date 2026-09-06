@@ -1,15 +1,18 @@
 import { assertVerifiedBindingJournal } from './journal-authority.mjs';
 import { digest, EvidenceError } from './operator-inputs.mjs';
+import { assertDurableReceiptProof } from './durable-receipt-authority.mjs';
 
 export function readVerifiedBindingJournal(manifest, options) {
   if (!manifest.bindingJournal || !manifest.bindingsDigest || !manifest.capabilitySnapshot
-    || !options.journalAuthority || !options.verifiedBindingJournal) {
+    || (!options.durableReceiptProof && (!options.journalAuthority || !options.verifiedBindingJournal))) {
     throw new EvidenceError('missing_binding_journal');
   }
 
   let journal;
   try {
-    journal = assertVerifiedBindingJournal(options.verifiedBindingJournal, options.journalAuthority);
+    journal = options.durableReceiptProof
+      ? assertDurableReceiptProof(options.durableReceiptProof, manifest).verifiedBindingJournal
+      : assertVerifiedBindingJournal(options.verifiedBindingJournal, options.journalAuthority);
   } catch {
     throw new EvidenceError('invalid_binding_journal');
   }

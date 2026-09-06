@@ -255,7 +255,8 @@ test('Given missing or altered artifacts, When verifying physical evidence, Then
 test('Given identity mismatch, When the CLI runs, Then stdout is empty and stderr contains only the typed reason', async (t) => {
   const directory = await sandbox(t), manifest = fullManifest(); manifest.fragments[0].identity.environmentFingerprint = 'a'.repeat(64);
   const file = path.join(directory, 'manifest.json'); await writeFile(file, JSON.stringify(manifest));
-  const result = cli([file]); assert.equal(result.status, 1); assert.equal(result.stdout, ''); assert.equal(result.stderr.trim(), 'receipt_authority_unavailable');
+  const result = cli([file]); assert.equal(result.status, 1); assert.equal(result.stdout, '');
+  assert.equal(result.stderr.trim(), process.platform === 'win32' ? 'receipt_platform_not_release_safe' : 'receipt_authority_unavailable');
 });
 test('Given a direct component scaffold call, Then execution is forbidden before attempt I/O', async (t) => {
   const parent = await sandbox(t), { manifest } = sample();
@@ -275,7 +276,8 @@ for (const [reason, mutate] of mutations.slice(0, 22)) test(`Given ${reason} in 
   const file = path.join(directory, 'manifest.json'); await writeFile(file, JSON.stringify(manifest));
   const result = cli([file]);
   const requiresJournalIntegration = ['not_run', 'assertion_failed', 'cleanup_failed', 'missing_credentials', 'level_mismatch', 'missing_assertion', 'missing_artifact', 'fixture_not_release_evidence'].includes(reason); assert.equal(result.status, 1); assert.equal(result.stdout, '');
-  assert.equal(result.stderr.trim(), !manifest.fixture ? 'receipt_authority_unavailable' : requiresJournalIntegration ? 'missing_binding_journal' : reason);
+  assert.equal(result.stderr.trim(), !manifest.fixture ? process.platform === 'win32' ? 'receipt_platform_not_release_safe' : 'receipt_authority_unavailable'
+    : requiresJournalIntegration ? 'missing_binding_journal' : reason);
 });
 test('Given only committed runtime files, When preflight runs in a copied tree without .omo, Then contract verification succeeds', async (t) => {
   const directory = await sandbox(t);

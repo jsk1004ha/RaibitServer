@@ -7,7 +7,7 @@ import { parseEvidenceBindingEntry } from './binding-journal.mjs';
 import { parseCleanupIntentRecord, parseCleanupOutcomeRecord, validateIntentScope } from './binding-graph.mjs';
 import { journalFiles } from './journal-io.mjs';
 import { loadReceiptState, verifyCandidateArtifacts } from './receipt-authority-files.mjs';
-import { STEP_NAMES } from './step-contract.mjs';
+import { stepNamesForIdentity } from './step-contract.mjs';
 import { verifyReceiptProvenance } from './receipt-provenance.mjs';
 import { snapshotJournalData } from './journal-data-snapshot.mjs';
 
@@ -111,7 +111,7 @@ export async function readDurableEvidence(root, { fixture, operatorInputs }) {
   if (manifest.fixture !== fixture || path.basename(root) !== manifest.identity.runId || run?.schema !== 'raibitserver.evidence-run/v1'
     || digest(run.identity) !== digest(manifest.identity) || run.startedAt !== manifest.startedAt) fail('identity_mismatch');
   const state = await loadReceiptState(root, manifest.identity, fixture);
-  if (state.entries.length !== STEP_NAMES.length || state.preparations.length !== state.entries.length) fail('incomplete_receipt_authority');
+  if (state.entries.length !== stepNamesForIdentity(manifest.identity).length || state.preparations.length !== state.entries.length) fail('incomplete_receipt_authority');
   const observations = [];
   const declared = new Map(manifest.fragments.flatMap(fragment => fragment.artifacts.map(artifact => [artifact.path, artifact.sha256])));
   for (const record of state.receipts) {

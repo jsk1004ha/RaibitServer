@@ -17,6 +17,7 @@ import { deriveProductionEvidenceStepState } from './state-projection.mjs';
 import { executeStepRequest } from '../run-component.mjs';
 import { preflight } from '../preflight.mjs';
 import { verifyEvidenceFile } from '../../verify-production-evidence.mjs';
+import { sealProductionEvidence, verifyDurableEvidenceFile } from './durable-receipt-authority.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const RUN_BUDGET_MS = 4 * 60 * 60_000;
@@ -173,6 +174,15 @@ export async function runProductionEvidence(options) {
     try { verification = await verifyEvidenceFile(manifestPath, { now: Date.parse(observedAt), profile: options.profile, journalAuthority,
       receiptAuthority: authority, ...(bindingJournal.entryCount > 0 ? { verifiedBindingJournal: await journalAuthority.verifyBindingJournal() } : {}) }); }
     catch (error) { verification = { valid: false, releaseEligible: false, reason: error instanceof EvidenceError ? error.reason : 'evidence_io_failed' }; }
+    if (!fixture && verification.valid && verification.releaseEligible) {
+      try {
+        await sealProductionEvidence({ receiptAuthority: authority, journalAuthority });
+        const durable = await verifyDurableEvidenceFile(manifestPath, { expectedIdentity: identity, now: Date.parse(observedAt) });
+        verification = { valid: durable.valid, releaseEligible: durable.releaseEligible, reason: durable.reason, manifestDigest: durable.manifestDigest };
+      } catch (error) {
+        verification = { valid: false, releaseEligible: false, reason: error instanceof EvidenceError ? error.reason : 'evidence_io_failed' };
+      }
+    }
     return { status: manifest.status, reason: verification.valid ? null : fault?.boundary === 'verifier' ? verification.reason
       : blockingReason ?? cleanupStep.receipt.reason ?? verification.reason, runId, runDirectory, manifestPath, verification };
   } finally {
