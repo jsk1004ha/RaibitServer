@@ -55,8 +55,53 @@ func TestGitHubAppCredentialIssuerRestrictsTokenToExactNumericRepository(t *test
 	if permissions["contents"] != "read" || len(permissions) != 1 {
 		t.Fatalf("token request permissions were not read-only: %v", permissions)
 	}
-	if credential.Token != "ghs_short-lived-secret" || credential.InstallationID != "202" || credential.RepositoryID != "101" || !credential.ExpiresAt.Equal(now.Add(time.Hour)) {
+	if credential.Token != "ghs_short-lived-secret" || credential.InstallationID != "202" || credential.RepositoryID != "101" || !credential.UpstreamExpiresAt.Equal(now.Add(time.Hour)) {
 		t.Fatalf("unexpected credential: %+v", credential)
+	}
+}
+
+func TestGitHubAppCredentialIssuerRestrictsPullRequestTokenToExactRepository(t *testing.T) {
+	now := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
+	var repositoryIDs []int64
+	var permissions map[string]string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/installation/token" {
+			response.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var payload struct {
+			RepositoryIDs []int64           `json:"repository_ids"`
+			Permissions   map[string]string `json:"permissions"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		repositoryIDs = payload.RepositoryIDs
+		permissions = payload.Permissions
+		response.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"token":        "ghs_pr-read-fixture",
+			"expires_at":   now.Add(time.Hour).Format(time.RFC3339),
+			"repositories": []map[string]any{{"id": 101}},
+			"permissions":  map[string]string{"pull_requests": "read"},
+		})
+	}))
+	defer server.Close()
+
+	issuer := newTestGitHubAppIssuer(t, server, now)
+	prIssuer, ok := issuer.(GitHubPullRequestCredentialIssuer)
+	if !ok {
+		t.Fatal("configured GitHub App issuer does not provide the trusted PR-read capability")
+	}
+	credential, err := prIssuer.IssuePullRequestCredential(context.Background(), "202", "101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositoryIDs) != 1 || repositoryIDs[0] != 101 || len(permissions) != 1 || permissions["pull_requests"] != "read" {
+		t.Fatalf("PR token was not exact repository pull_requests:read: repositories=%v permissions=%v", repositoryIDs, permissions)
+	}
+	if credential.Token != "ghs_pr-read-fixture" || credential.RepositoryID != "101" {
+		t.Fatalf("unexpected PR credential: %+v", credential)
 	}
 }
 
@@ -107,4 +152,24 @@ func newTestGitHubAppIssuer(t *testing.T, server *httptest.Server, now time.Time
 		t.Fatal(err)
 	}
 	return issuer
+}
+
+func TestGitHubCredentialFailureMatrixIssuerRedirect(t *testing.T) {
+	var redirected int
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirected++; w.WriteHeader(500) }))
+	defer target.Close()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	issuer := newTestGitHubAppIssuer(t, server, time.Now())
+	if _, err := issuer.IssueRepositoryCredential(context.Background(), "202", "101"); err == nil {
+		t.Fatal("issuer accepted redirect")
+	}
+	if err := issuer.RevokeRepositoryCredential(context.Background(), "ghs_redirect_fixture"); err == nil {
+		t.Fatal("revoker accepted redirect")
+	}
+	if redirected != 0 {
+		t.Fatal("authorization reached redirected origin")
+	}
 }

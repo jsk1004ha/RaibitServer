@@ -10,6 +10,7 @@ const operations = await readFile(
   new URL("app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx", dashboardRoot),
   "utf8",
 );
+const deploymentRecovery = await readFile(new URL("components/project-hub/deployment-recovery-action.tsx", dashboardRoot), "utf8");
 const resources = await readFile(
   new URL("app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx", dashboardRoot),
   "utf8",
@@ -40,7 +41,7 @@ test("Given the RAIBIT theme contract, when legacy CSS is retired, then green al
   assert.match(css, /--primary:\s*#091936;/);
   assert.match(css, /--canvas-night:\s*#1c1c1c;/);
   assert.match(css, /--destructive:\s*color-mix\(in srgb, var\(--integration-crimson\) 78%, var\(--foreground\)\);/);
-  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*#111315;/);
+  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*var\(--raibit-dark-canvas\);/);
   assert.match(css, /prefers-color-scheme:\s*dark[\s\S]*\[data-theme="system"\]/);
 });
 
@@ -63,12 +64,13 @@ test("Given surviving non-Tailwind consumers, when classes are composed dynamica
   assert.match(login, /className="auth-form"/);
   assert.match(login, /className="auth-message/);
   assert.match(login, /className="auth-resend"/);
-  assert.match(operations, /className="confirmation-control"/);
+  assert.match(operations, /<DeploymentRecoveryAction action=\{history\.eligibleAction\}/);
+  assert.match(deploymentRecovery, /action\.type === 'rollback' \? <input name="confirmed" type="hidden" value="true"/);
   assert.match(resources, /className="confirmation-control"/);
 
   const selectors = [...new Set([...css.matchAll(/(?<![\w-])\.([a-z][a-z0-9-]*)/g)].map((match) => match[1]))].sort();
   assert.deepEqual(selectors, [
-    "auth-form", "auth-message", "auth-resend", "badge", "card-title", "code-panel",
+    "admin-responsive-table", "admin-table-card", "auth-form", "auth-message", "auth-resend", "badge", "card-title", "code-panel",
     "confirmation-control", "console-data-block", "danger", "icon", "info", "load-error-summary",
     "log-line", "log-viewer", "metric-detail", "metric-item", "metric-label", "metric-meter",
     "metric-strip", "metric-value", "muted", "ok", "section-nav", "section-nav-index",

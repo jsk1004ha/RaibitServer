@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -30,6 +29,7 @@ const (
 )
 
 type Config struct {
+	GitCredentialHelperExecutable      string
 	WorkerID                           string
 	WorkspaceDir                       string
 	Registry                           string
@@ -59,6 +59,7 @@ type Config struct {
 	Sign                               bool
 	Signer                             string
 	SigningKeyPath                     string
+	VerificationKeyPath                string
 }
 
 type Builder struct {
@@ -89,24 +90,25 @@ type StepResult struct {
 }
 
 type buildContext struct {
-	Job          *controlplane.WorkflowJob
-	Deployment   *controlplane.Deployment
-	Service      *controlplane.Service
-	Project      *controlplane.Project
-	Plan         buildplan.Plan
-	WorkspaceDir string
-	MetadataDir  string
-	SourceDir    string
-	Dockerfile   string
-	ContextDir   string
-	Image        string
-	Push         bool
-	MetadataFile string
-	RegistryEnv  map[string]string
-	Generated    []string
-	Steps        []StepResult
-	ScanEvidence map[string]any
-	SignEvidence map[string]any
+	Job            *controlplane.WorkflowJob
+	Deployment     *controlplane.Deployment
+	Service        *controlplane.Service
+	Project        *controlplane.Project
+	Plan           buildplan.Plan
+	WorkspaceDir   string
+	MetadataDir    string
+	SourceDir      string
+	Dockerfile     string
+	ContextDir     string
+	Image          string
+	Push           bool
+	MetadataFile   string
+	RegistryEnv    map[string]string
+	Generated      []string
+	Steps          []StepResult
+	ScanEvidence   map[string]any
+	SignEvidence   map[string]any
+	VerifyEvidence map[string]any
 }
 
 type prebuiltImageAuthorizer interface {
@@ -115,6 +117,8 @@ type prebuiltImageAuthorizer interface {
 
 type gitHubRepositoryCredentialStore interface {
 	IssueGitHubRepositoryCredential(context.Context, controlplane.GitHubRepositoryCredentialRequest) (*controlplane.GitHubRepositoryCredential, error)
+	ReleaseGitHubRepositoryCredential(context.Context, bool) error
+	CheckGitHubRepositoryCredential(context.Context) error
 }
 
 func New(store controlplane.Store, runner CommandRunner, config Config) *Builder {
@@ -187,6 +191,9 @@ func New(store controlplane.Store, runner CommandRunner, config Config) *Builder
 	if config.Signer == "" {
 		config.Signer = "cosign"
 	}
+	if config.VerificationKeyPath == "" {
+		config.VerificationKeyPath = strings.TrimSpace(os.Getenv("RAIBITSERVER_VERIFICATION_KEY"))
+	}
 	return &Builder{Store: store, Runner: runner, Config: config}
 }
 
@@ -250,7 +257,7 @@ func (b *Builder) leaseHeartbeat(ctx context.Context, lease controlplane.Workflo
 	}
 }
 
-func (b *Builder) processClaimedJob(ctx context.Context, job *controlplane.WorkflowJob) (*Result, error) {
+func (b *Builder) processClaimedJob(ctx context.Context, job *controlplane.WorkflowJob) (result *Result, err error) {
 	state, err := b.resolveState(ctx, job)
 	if err != nil {
 		return &Result{Processed: true, JobID: job.ID, DryRun: b.Config.DryRun}, err
@@ -258,11 +265,11 @@ func (b *Builder) processClaimedJob(ctx context.Context, job *controlplane.Workf
 	if err := validateBuildOwnership(state); err != nil {
 		return &Result{Processed: true, JobID: job.ID, DryRun: b.Config.DryRun}, err
 	}
-	result := &Result{Processed: true, JobID: job.ID, DeploymentID: state.Deployment.ID, ServiceID: state.Service.ID, ProjectID: state.Project.ID, DryRun: b.Config.DryRun}
+	result = &Result{Processed: true, JobID: job.ID, DeploymentID: state.Deployment.ID, ServiceID: state.Service.ID, ProjectID: state.Project.ID, DryRun: b.Config.DryRun}
 	if err := b.prepareJobArtifacts(state); err != nil {
 		return result, b.failClaimedBuild(ctx, state, err)
 	}
-	defer b.cleanupJobArtifacts(state)
+	defer func() { err = errors.Join(err, b.cleanupJobArtifacts(state)) }()
 	if err := currentTargetDeletionError(state); err != nil {
 		result.Reason = "build_target_deleting"
 		b.recordDeletionCancellation(ctx, state)
@@ -327,10 +334,23 @@ func (b *Builder) processClaimedJob(ctx context.Context, job *controlplane.Workf
 			return result, b.failClaimedBuild(ctx, state, err)
 		}
 	}
+	if err := b.verifyImage(ctx, state, digest); err != nil {
+		if errors.Is(err, controlplane.ErrBuildTargetDeleting) {
+			result.Reason = "build_target_deleting"
+			b.recordDeletionCancellation(ctx, state)
+			return result, err
+		}
+		return result, b.failClaimedBuild(ctx, state, err)
+	}
 	if err := b.Store.RenewWorkflowJobLease(ctx, job.Lease(), time.Now().UTC()); err != nil {
 		return result, err
 	}
-	supplyChain := map[string]any{"scan": state.ScanEvidence, "signing": state.SignEvidence}
+	supplyChain := map[string]any{"scan": state.ScanEvidence, "signing": state.SignEvidence, "verification": state.VerifyEvidence}
+	if strings.EqualFold(state.Service.GitHubRepositoryVisibility, "private") {
+		if err := b.cleanupJobArtifacts(state); err != nil {
+			return result, b.failClaimedBuild(ctx, state, err)
+		}
+	}
 	if err := b.Store.PublishImageReady(ctx, controlplane.ImagePublicationInput{
 		Lease:           job.Lease(),
 		DeploymentID:    state.Deployment.ID,
@@ -382,7 +402,11 @@ func (b *Builder) resolveState(ctx context.Context, job *controlplane.WorkflowJo
 	if err != nil {
 		return nil, err
 	}
-	return &buildContext{Job: job, Deployment: deployment, Service: service, Project: project}, nil
+	service, resolvedJob, err := deployment.BuildInputs(service, job)
+	if err != nil {
+		return nil, err
+	}
+	return &buildContext{Job: resolvedJob, Deployment: deployment, Service: service, Project: project}, nil
 }
 
 func (b *Builder) recheckTargetDeletion(ctx context.Context, state *buildContext) error {
@@ -470,40 +494,44 @@ func (b *Builder) prepareJobArtifacts(state *buildContext) error {
 	}
 	state.WorkspaceDir = workspaceDir
 	if err := os.Chmod(workspaceDir, 0o700); err != nil {
-		b.cleanupJobArtifacts(state)
-		return err
+		return errors.Join(err, b.cleanupJobArtifacts(state))
 	}
 	metadataRoot := b.metadataDir()
 	if err := os.MkdirAll(metadataRoot, 0o700); err != nil {
-		b.cleanupJobArtifacts(state)
-		return err
+		return errors.Join(err, b.cleanupJobArtifacts(state))
 	}
 	metadataDir, err := os.MkdirTemp(metadataRoot, prefix)
 	if err != nil {
-		b.cleanupJobArtifacts(state)
-		return err
+		return errors.Join(err, b.cleanupJobArtifacts(state))
 	}
 	state.MetadataDir = metadataDir
 	if err := os.Chmod(metadataDir, 0o700); err != nil {
-		b.cleanupJobArtifacts(state)
-		return err
+		return errors.Join(err, b.cleanupJobArtifacts(state))
 	}
 	return nil
 }
 
-func (b *Builder) cleanupJobArtifacts(state *buildContext) {
+func (b *Builder) cleanupJobArtifacts(state *buildContext) error {
 	if state == nil {
-		return
+		return nil
 	}
+	var cleanupErr error
 	for _, path := range state.Generated {
-		_ = os.Remove(path)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanupErr = errors.New("build artifact cleanup failed")
+		}
 	}
 	if state.MetadataDir != "" {
-		_ = os.RemoveAll(state.MetadataDir)
+		if err := os.RemoveAll(state.MetadataDir); err != nil {
+			cleanupErr = errors.New("build metadata cleanup failed")
+		}
 	}
 	if state.WorkspaceDir != "" {
-		_ = os.RemoveAll(state.WorkspaceDir)
+		if err := os.RemoveAll(state.WorkspaceDir); err != nil {
+			cleanupErr = errors.New("build workspace cleanup failed")
+		}
 	}
+	return cleanupErr
 }
 
 func buildIdentityHash(state *buildContext) string {
@@ -522,6 +550,8 @@ func buildIdentityHash(state *buildContext) string {
 }
 
 func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error {
+	ctx, cancel := context.WithTimeout(ctx, b.stageTimeout(sourceStageLimit))
+	defer cancel()
 	workspace := state.WorkspaceDir
 	localPath := firstNonEmpty(stringValue(state.Job.Payload["localPath"]), state.Service.LocalPath)
 	if localPath != "" {
@@ -557,30 +587,19 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 	}
 	privateRepository := bound && strings.EqualFold(state.Service.GitHubRepositoryVisibility, "private")
 	gitEnv := isolatedGitEnvironment(workspace)
-	if privateRepository {
-		credentialStore, ok := b.Store.(gitHubRepositoryCredentialStore)
-		if !ok {
-			return errors.New("private GitHub repository builds require an exact-repository short-lived credential from a per-build credential broker")
-		}
-		credential, credentialErr := credentialStore.IssueGitHubRepositoryCredential(ctx, controlplane.GitHubRepositoryCredentialRequest{
-			ServiceID:      state.Service.ID,
-			InstallationID: state.Service.GitHubInstallationID,
-			RepositoryID:   state.Service.GitHubRepositoryID,
-		})
-		if credentialErr != nil {
-			return credentialErr
-		}
-		gitEnv["GIT_CONFIG_COUNT"] = "1"
-		gitEnv["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
-		gitEnv["GIT_CONFIG_VALUE_0"] = "AUTHORIZATION: basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+credential.Token))
-	} else if b.Config.Production && !b.Config.AllowAnonymousGit {
+	if !privateRepository && b.Config.Production && !b.Config.AllowAnonymousGit {
 		return errors.New("anonymous Git source policy is disabled for production builds")
 	}
 	branch := firstNonEmpty(state.Deployment.Branch, state.Service.Branch, "main")
 	destination := filepath.Join(workspace, "source")
 	args := []string{"clone", "--depth", "1", "--branch", branch, repoURL, destination}
 	command := Command{Name: "git", Args: args, Env: gitEnv, CleanGitEnv: true, Redacted: "git " + strings.Join(redactArgs(args), " ")}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout, Sensitive: privateRepository})
+	var result CommandResult
+	if privateRepository {
+		result, err = b.cloneWithGitHubCredential(ctx, state, command)
+	} else {
+		result, err = b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(sourceStageLimit)})
+	}
 	state.Steps = append(state.Steps, StepResult{Type: "git-clone", Command: result.Command, DryRun: result.DryRun})
 	_ = b.writeCommandLogs(ctx, state, "clone", result)
 	if err != nil {
@@ -590,7 +609,7 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 	commit := firstNonEmpty(state.Deployment.CommitSHA, state.Deployment.CommitHash)
 	if commit != "" {
 		checkout := Command{Name: "git", Args: []string{"checkout", commit}, Dir: destination, Env: gitEnv, CleanGitEnv: true}
-		checkoutResult, err := b.Runner.Run(ctx, checkout, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+		checkoutResult, err := b.Runner.Run(ctx, checkout, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(sourceStageLimit)})
 		state.Steps = append(state.Steps, StepResult{Type: "git-checkout", Command: checkoutResult.Command, DryRun: checkoutResult.DryRun})
 		_ = b.writeCommandLogs(ctx, state, "clone", checkoutResult)
 		if err != nil {
@@ -598,7 +617,7 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 		}
 	} else {
 		revision := Command{Name: "git", Args: []string{"rev-parse", "HEAD"}, Dir: destination, Env: gitEnv, CleanGitEnv: true}
-		revisionResult, err := b.Runner.Run(ctx, revision, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+		revisionResult, err := b.Runner.Run(ctx, revision, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(sourceStageLimit)})
 		state.Steps = append(state.Steps, StepResult{Type: "git-revision", Command: revisionResult.Command, DryRun: revisionResult.DryRun})
 		_ = b.writeCommandLogs(ctx, state, "clone", revisionResult)
 		if err != nil {
@@ -879,7 +898,7 @@ func (b *Builder) executeBuild(ctx context.Context, state *buildContext) error {
 		args = append(args, state.ContextDir)
 		command = Command{Name: "docker", Args: args, Env: state.RegistryEnv, Redacted: "docker " + strings.Join(redactArgs(args), " "), CleanRegistryEnv: true}
 	}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(registryStageLimit)})
 	state.Steps = append(state.Steps, StepResult{Type: "buildkit-build", Command: result.Command, DryRun: result.DryRun})
 	_ = b.writeCommandLogs(ctx, state, "build", result)
 	if err != nil {
@@ -899,8 +918,8 @@ func (b *Builder) scanImage(ctx context.Context, state *buildContext, digest str
 	if err != nil {
 		return err
 	}
-	command := Command{Name: b.Config.Scanner, Args: []string{"image", "--quiet", "--exit-code", "1", "--severity", b.Config.ScanSeverity, "--ignore-unfixed", image}, Env: state.RegistryEnv, CleanRegistryEnv: true}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout, Sensitive: true})
+	command := Command{Name: b.Config.Scanner, Args: []string{"image", "--quiet", "--exit-code", "1", "--scanners", "vuln", "--severity", b.Config.ScanSeverity, "--ignore-unfixed=false", image}, Env: state.RegistryEnv, CleanRegistryEnv: true}
+	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(registryStageLimit), Sensitive: true})
 	state.Steps = append(state.Steps, StepResult{Type: "image-scan", Command: result.Command, DryRun: result.DryRun})
 	if err != nil {
 		_ = b.Store.AppendDeploymentEvent(ctx, controlplane.DeploymentEventInput{DeploymentID: state.Deployment.ID, Type: "build.image_scan_failed", Message: "image vulnerability policy failed", Metadata: map[string]any{"tool": b.Config.Scanner, "digest": digest, "result": "failed", "dryRun": b.Config.DryRun}})
@@ -934,7 +953,7 @@ func (b *Builder) signImage(ctx context.Context, state *buildContext, digest str
 	}
 	args = append(args, image)
 	command := Command{Name: b.Config.Signer, Args: args, Env: state.RegistryEnv, CleanRegistryEnv: true}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout, Sensitive: true})
+	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(registryStageLimit), Sensitive: true})
 	state.Steps = append(state.Steps, StepResult{Type: "image-sign", Command: result.Command, DryRun: result.DryRun})
 	if err != nil {
 		_ = b.Store.AppendDeploymentEvent(ctx, controlplane.DeploymentEventInput{DeploymentID: state.Deployment.ID, Type: "build.image_sign_failed", Message: "image signing failed", Metadata: map[string]any{"tool": b.Config.Signer, "digest": digest, "result": "failed", "dryRun": b.Config.DryRun}})
@@ -949,7 +968,7 @@ func (b *Builder) signImage(ctx context.Context, state *buildContext, digest str
 
 func (b *Builder) runDockerPush(ctx context.Context, state *buildContext) error {
 	command := Command{Name: "docker", Args: []string{"push", state.Image}, Env: state.RegistryEnv, CleanRegistryEnv: true}
-	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.Config.Timeout})
+	result, err := b.Runner.Run(ctx, command, CommandOptions{DryRun: b.Config.DryRun, Timeout: b.stageTimeout(registryStageLimit)})
 	state.Steps = append(state.Steps, StepResult{Type: "registry-push", Command: result.Command, DryRun: result.DryRun})
 	_ = b.writeCommandLogs(ctx, state, "push", result)
 	return err
@@ -1234,7 +1253,7 @@ func (b *Builder) validateRuntimeConfig() error {
 			return errors.New("configured live image signing requires a secret-backed signing key path")
 		}
 	}
-	return nil
+	return b.validateVerificationPolicy()
 }
 
 func validateBuildkitConnectionConfig(config Config) error {
@@ -1349,6 +1368,7 @@ func ConfigFromEnv() Config {
 		Sign:                              boolFromEnv("RAIBITSERVER_SIGN"),
 		Signer:                            envOr("RAIBITSERVER_SIGNER", "cosign"),
 		SigningKeyPath:                    os.Getenv("RAIBITSERVER_SIGNING_KEY"),
+		VerificationKeyPath:               strings.TrimSpace(os.Getenv("RAIBITSERVER_VERIFICATION_KEY")),
 	}
 }
 
@@ -1569,12 +1589,14 @@ func deterministicDigest(parts ...string) string {
 	return "sha256:" + hex.EncodeToString(hash[:])
 }
 
-var slugPattern = regexp.MustCompile(`[^a-z0-9._-]+`)
-var sha256DigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-var buildArgNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-var secretBuildArgPattern = regexp.MustCompile(`(?i)(secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)`)
-var secretQueryKeyPattern = regexp.MustCompile(`(?i)(secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)`)
-var githubRepositoryPartPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+var (
+	slugPattern                 = regexp.MustCompile(`[^a-z0-9._-]+`)
+	sha256DigestPattern         = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	buildArgNamePattern         = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	secretBuildArgPattern       = regexp.MustCompile(`(?i)(secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)`)
+	secretQueryKeyPattern       = regexp.MustCompile(`(?i)(secret|password|passwd|token|private.?key|credential|database.?url|api.?key|access.?key|auth)`)
+	githubRepositoryPartPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+)
 
 func slug(value string) string {
 	out := strings.ToLower(strings.TrimSpace(value))

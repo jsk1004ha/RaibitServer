@@ -128,19 +128,23 @@ type Service struct {
 }
 
 type Deployment struct {
-	ID                string
-	ServiceID         string
-	ProjectID         string
-	Status            string
-	DeploymentType    string
-	TriggerType       string
-	Branch            string
-	CommitSHA         string
-	CommitHash        string
-	PullRequestNumber int
-	PreviewURL        string
-	ImageURL          string
-	ImageDigest       string
+	ID                  string
+	ServiceID           string
+	ProjectID           string
+	Status              string
+	DeploymentType      string
+	TriggerType         string
+	Branch              string
+	CommitSHA           string
+	CommitHash          string
+	PullRequestNumber   int
+	PreviewURL          string
+	ImageURL            string
+	ImageDigest         string
+	DesiredSpecSnapshot json.RawMessage
+	SnapshotVersion     *int
+	SourceDeploymentID  string
+	RetryOfDeploymentID string
 }
 
 type BuildLogInput struct {
@@ -379,7 +383,8 @@ func (s *FileStore) GetDeployment(ctx context.Context, deploymentID string) (*De
 	if rec == nil {
 		return nil, notFound("deployment", deploymentID)
 	}
-	return deploymentFromRecord(rec), nil
+	deployment := deploymentFromRecord(rec)
+	return deployment, deployment.decodeSnapshotRecord(rec)
 }
 
 func (s *FileStore) UpdateDeployment(ctx context.Context, deploymentID string, updates map[string]any) (*Deployment, error) {
@@ -433,7 +438,8 @@ func (s *FileStore) updateDeployment(ctx context.Context, lease *WorkflowLease, 
 	if err := s.save(state); err != nil {
 		return nil, err
 	}
-	return deploymentFromRecord(rows[idx]), nil
+	deployment := deploymentFromRecord(rows[idx])
+	return deployment, deployment.decodeSnapshotRecord(rows[idx])
 }
 
 var fullGitCommitPattern = regexp.MustCompile(`(?i)^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
@@ -1039,19 +1045,21 @@ func serviceFromRecord(row record) *Service {
 
 func deploymentFromRecord(row record) *Deployment {
 	return &Deployment{
-		ID:                stringField(row, "id"),
-		ServiceID:         stringField(row, "serviceId"),
-		ProjectID:         stringField(row, "projectId"),
-		Status:            stringField(row, "status"),
-		DeploymentType:    stringField(row, "deploymentType"),
-		TriggerType:       stringField(row, "triggerType"),
-		Branch:            stringField(row, "branch"),
-		CommitSHA:         stringField(row, "commitSha"),
-		CommitHash:        stringField(row, "commitHash"),
-		PullRequestNumber: intField(row, "pullRequestNumber"),
-		PreviewURL:        stringField(row, "previewUrl"),
-		ImageURL:          stringField(row, "imageUrl"),
-		ImageDigest:       stringField(row, "imageDigest"),
+		ID:                  stringField(row, "id"),
+		ServiceID:           stringField(row, "serviceId"),
+		ProjectID:           stringField(row, "projectId"),
+		Status:              stringField(row, "status"),
+		DeploymentType:      stringField(row, "deploymentType"),
+		TriggerType:         stringField(row, "triggerType"),
+		Branch:              stringField(row, "branch"),
+		CommitSHA:           stringField(row, "commitSha"),
+		CommitHash:          stringField(row, "commitHash"),
+		PullRequestNumber:   intField(row, "pullRequestNumber"),
+		PreviewURL:          stringField(row, "previewUrl"),
+		ImageURL:            stringField(row, "imageUrl"),
+		ImageDigest:         stringField(row, "imageDigest"),
+		SourceDeploymentID:  stringField(row, "sourceDeploymentId"),
+		RetryOfDeploymentID: stringField(row, "retryOfDeploymentId"),
 	}
 }
 

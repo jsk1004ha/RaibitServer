@@ -30,6 +30,7 @@
     "./execution": "./src/execution.ts"
   },
   "dependencies": {
+    "@raibitserver/schemas": "workspace:*",
     "yaml": "2.9.0"
   }
 }

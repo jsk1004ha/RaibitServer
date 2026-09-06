@@ -1,0 +1,121 @@
+{
+  "schema": "raibitserver.operator-inputs/v1",
+  "approvedInputSha256": "0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2",
+  "selectors": [
+    {
+      "name": "RAIBITSERVER_RELEASE_KUBE_CONTEXT",
+      "type": "context"
+    },
+    {
+      "name": "RAIBITSERVER_RELEASE_NAMESPACE_PREFIX",
+      "type": "dns-label"
+    },
+    {
+      "name": "RAIBITSERVER_RELEASE_BASE_DOMAIN",
+      "type": "hostname"
+    },
+    {
+      "name": "RAIBITSERVER_RELEASE_REGISTRY_REPOSITORY",
+      "type": "oci-repository"
+    },
+    {
+      "name": "RAIBITSERVER_RELEASE_FIXTURE_REPOSITORY",
+      "type": "github-repository"
+    },
+    {
+      "name": "RAIBITSERVER_RELEASE_GITHUB_INSTALLATION_ID",
+      "type": "positive-integer"
+    },
+    {
+      "name": "RAIBITSERVER_RELEASE_BACKUP_ENDPOINT",
+      "type": "https-url"
+    },
+    {
+      "name": "RAIBITSERVER_RELEASE_BACKUP_BUCKET",
+      "type": "bucket"
+    }
+  ],
+  "secretBindings": [
+    {
+      "role": "database",
+      "kind": "helm-existingSecret",
+      "binding": "database",
+      "keyFields": {
+        "urlKey": "DATABASE_URL"
+      },
+      "availability": "existing-helm-binding"
+    },
+    {
+      "role": "runtime",
+      "kind": "helm-existingSecret",
+      "binding": "runtimeSecrets",
+      "keyFields": {},
+      "availability": "existing-helm-binding"
+    },
+    {
+      "role": "registry",
+      "kind": "helm-existingSecret",
+      "binding": "builder.registryCredentials",
+      "keyFields": {
+        "tokenKey": "token"
+      },
+      "availability": "existing-helm-binding"
+    },
+    {
+      "role": "github",
+      "kind": "helm-existingSecret",
+      "binding": "builder.githubAppCredentials",
+      "keyFields": {
+        "appIdKey": "app-id",
+        "privateKeyKey": "private-key.pem"
+      },
+      "availability": "existing-helm-binding"
+    },
+    {
+      "role": "signing",
+      "kind": "helm-existingSecret",
+      "binding": "builder.signing",
+      "keyFields": {
+        "keyKey": "cosign.key",
+        "passwordKey": "cosign.password"
+      },
+      "availability": "existing-helm-binding"
+    },
+    {
+      "role": "dispatch",
+      "kind": "helm-existingSecret",
+      "binding": "builder.dispatch",
+      "keyFields": {
+        "caKey": "ca.crt",
+        "serverCertificateKey": "server.crt",
+        "serverKeyKey": "server.key",
+        "clientCertificateKey": "client.crt",
+        "clientKeyKey": "client.key"
+      },
+      "availability": "existing-helm-binding"
+    },
+    {
+      "role": "trust-root",
+      "kind": "helm-existingSecret",
+      "binding": "security.imageVerification.trustRoot",
+      "keyFields": {
+        "key": "cosign.pub"
+      },
+      "availability": "existing-helm-binding"
+    },
+    {
+      "role": "scanner",
+      "kind": "worker-secretKeyRef",
+      "binding": "scanner",
+      "keyFields": {},
+      "availability": "planned-worker-binding"
+    },
+    {
+      "role": "backup",
+      "kind": "worker-secretKeyRef",
+      "binding": "backup",
+      "keyFields": {},
+      "availability": "planned-worker-binding"
+    }
+  ]
+}

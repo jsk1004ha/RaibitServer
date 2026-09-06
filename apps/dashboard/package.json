@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "lint": "next lint",
     "test": "node --test lib/*.test.mjs",
     "test:e2e": "playwright test",

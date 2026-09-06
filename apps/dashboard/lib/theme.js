@@ -7,11 +7,6 @@ export function normalizeThemePreference(value) {
   return THEME_PREFERENCES.includes(value) ? value : 'system';
 }
 
-export function nextThemePreference(value) {
-  const currentIndex = THEME_PREFERENCES.indexOf(normalizeThemePreference(value));
-  return THEME_PREFERENCES[(currentIndex + 1) % THEME_PREFERENCES.length];
-}
-
 export function themePreferenceFromCookieHeader(cookieHeader) {
   if (!cookieHeader) return null;
 

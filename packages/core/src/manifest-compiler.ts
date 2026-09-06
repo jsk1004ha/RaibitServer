@@ -1,8 +1,10 @@
 import { DEFAULT_CONTAINER_SECURITY_CONTEXT, DEFAULT_POD_SECURITY_CONTEXT, secureContainerDefaults, splitEnvForSecret, validateServiceSecurity } from './security.ts';
+import { serviceHealthProbes } from './deployment-health.ts';
 import { connectionEnvForResource, injectResourceEnv } from './env-injection.ts';
 import { resolveBuildStrategy } from './build-strategy.ts';
 import { DEFAULT_DOMAIN, DEFAULT_PORT, SERVICE_TYPES, trustedIngressGatewayNamespace } from './constants.ts';
 import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
+import { requireResourceCapability } from './resource-capabilities.ts';
 import { slugify } from './ids.ts';
 import { boundedDnsLabel, domainPlanForProject, serviceHostname, tenantProjectLabel } from './domain-router.ts';
 
@@ -172,8 +174,7 @@ function containerFor(service: AnyRecord, image: string, port: number, plain: An
     },
     volumeMounts: [{ name: 'tmp', mountPath: '/tmp' }],
     securityContext: secureContainerDefaults(service),
-    readinessProbe: service.healthCheck?.path ? httpProbe(service.healthCheck.path, port) : undefined,
-    livenessProbe: service.healthCheck?.path ? httpProbe(service.healthCheck.path, port) : undefined,
+    ...serviceHealthProbes(service, port),
   };
 }
 
@@ -371,16 +372,6 @@ function configMapManifest(namespace: string, name: string, labels: AnyRecord, d
   };
 }
 
-function httpProbe(path: string, port: number): AnyRecord {
-  return {
-    httpGet: { path, port: 'http' },
-    initialDelaySeconds: 10,
-    periodSeconds: 10,
-    timeoutSeconds: 2,
-    failureThreshold: 3,
-  };
-}
-
 function networkPolicyManifests(namespace: string, projectSlug: string, services: AnyRecord[], resources: AnyRecord[], ingressGatewayNamespace: string): AnyRecord[] {
   const base = tenantIsolationNetworkPolicy(namespace, services, resources, ingressGatewayNamespace);
   const publicEgress = services
@@ -489,6 +480,7 @@ function arrayStrings(value: any) {
 
 function resourcePlan(resource: AnyRecord, namespace: string, projectSlug: string): AnyRecord {
   const engine = normalizeResourceEngine(resource.engine || resource.type);
+  const capabilities = requireResourceCapability(engine, 'provision');
   const entry = getCatalogEntry(engine);
   return {
     name: slugify(resource.name),
@@ -502,8 +494,8 @@ function resourcePlan(resource: AnyRecord, namespace: string, projectSlug: strin
     provider: resource.provider || 'hybrid-managed',
     operator: entry.operator,
     plan: resource.plan || 'shared-small',
-    lifecycle: ['provision', 'credential', 'backup', 'metrics', 'restore', 'delete'],
+    capabilities,
+    lifecycle: Object.entries(capabilities.local).filter(([, enabled]) => enabled).map(([operation]) => operation),
     env: entry.env,
-    backup: resource.backup || { schedule: 'daily', retentionDays: 7 },
   };
 }

@@ -41,7 +41,7 @@ test('GitHub repository attachment requires a verified same-organization install
   );
   assert.throws(
     () => store.attachGitHubRepositoryToService({ projectId: projectA.id, serviceId: serviceA.id, integrationId: unverified.id, repoUrl: 'alice/web' }),
-    /verified GitHub App installation/i,
+    (error) => error.code === 'GITHUB_SOURCE_DISCONNECTED' && error.recovery?.action === 'REATTACH_INSTALLATION',
   );
   assert.throws(
     () => store.attachGitHubRepositoryToService({ projectId: projectA.id, serviceId: serviceA.id, integrationId: integrationB.id, repoUrl: 'bob/private' }),
@@ -49,7 +49,7 @@ test('GitHub repository attachment requires a verified same-organization install
   );
   assert.throws(
     () => store.attachGitHubRepositoryToService({ projectId: projectA.id, serviceId: serviceA.id, integrationId: integrationA.id, repoUrl: 'bob/private' }),
-    /repository is not available to the selected GitHub installation/i,
+    (error) => error.code === 'GITHUB_SOURCE_ACCESS_REVOKED' && error.recovery?.action === 'REFRESH_CATALOG',
   );
 
   const attached = store.attachGitHubRepositoryToService({
@@ -73,7 +73,7 @@ test('GitHub repository attachment requires a verified same-organization install
   );
   assert.throws(
     () => store.attachGitHubRepositoryToService({ projectId: projectA.id, serviceId: serviceA.id, integrationId: integrationA.id, repoUrl: 'alice/other' }),
-    /repository binding is immutable|repository is not available/i,
+    (error) => error.code === 'GITHUB_SOURCE_ACCESS_REVOKED' && error.recovery?.action === 'REFRESH_CATALOG',
   );
 });
 
@@ -86,7 +86,7 @@ test('GitHub repository import resolves the authoritative installation record in
 
   assert.throws(
     () => store.importGitHubRepository({ projectId: project.id, integrationId: integration.id, repository: 'victim/private' }),
-    /repository is not available to the selected GitHub installation/i,
+    (error) => error.code === 'GITHUB_SOURCE_ACCESS_REVOKED' && error.recovery?.action === 'REFRESH_CATALOG',
   );
 
   const imported = store.importGitHubRepository({ projectId: project.id, integrationId: integration.id, repositoryId: '101', repository: 'alice/web' });
@@ -134,9 +134,11 @@ test('Prisma repository boundary enforces verified same-organization authoritati
     unverified: { id: 'unverified', organizationId: project.organizationId, installationId: 'installation-u', accountLogin: 'mallory', verifiedAt: null },
     cross: { id: 'cross', organizationId: 'organization-b', installationId: 'installation-b', accountLogin: 'bob', verifiedAt: new Date() },
   };
-  const repositories = [{ id: 'record-101', installationId: 'installation-a', githubRepoId: '101', fullName: 'Alice/Web', defaultBranch: 'trunk', private: true }];
+  const repositories = [{ id: 'record-101', installationId: 'installation-a', githubRepoId: '101', fullName: 'Alice/Web', defaultBranch: 'trunk', private: true, accessState: 'ACCESSIBLE', generation: 0 }];
   let updateData = null;
   const prisma = {
+    $transaction: async (callback) => callback(prisma),
+    deployment: { findFirst: async () => null },
     service: {
       findUnique: async () => service,
       update: async ({ data }) => {
@@ -145,6 +147,7 @@ test('Prisma repository boundary enforces verified same-organization authoritati
       },
     },
     gitHubIntegration: { findUnique: async ({ where }) => integrations[where.id] || null },
+    gitHubInstallation: { findUnique: async () => ({ installationId: 'installation-a', generation: 0, refreshStatus: 'IDLE' }) },
     gitHubRepository: { findMany: async ({ where }) => repositories.filter((row) => row.installationId === where.installationId) },
     auditLog: { create: async () => ({}) },
   };
@@ -156,7 +159,7 @@ test('Prisma repository boundary enforces verified same-organization authoritati
   );
   await assert.rejects(
     repository.attachGitHubRepositoryToService({ projectId: project.id, serviceId: service.id, integrationId: 'unverified', repositoryId: '101' }),
-    /verified GitHub App installation/i,
+    (error) => error.code === 'GITHUB_SOURCE_DISCONNECTED' && error.recovery?.action === 'REATTACH_INSTALLATION',
   );
   await assert.rejects(
     repository.attachGitHubRepositoryToService({ projectId: project.id, serviceId: service.id, integrationId: 'cross', repositoryId: '101' }),
@@ -164,7 +167,7 @@ test('Prisma repository boundary enforces verified same-organization authoritati
   );
   await assert.rejects(
     repository.attachGitHubRepositoryToService({ projectId: project.id, serviceId: service.id, integrationId: 'verified', repository: 'victim/private' }),
-    /repository is not available/i,
+    (error) => error.code === 'GITHUB_SOURCE_ACCESS_REVOKED' && error.recovery?.action === 'REFRESH_CATALOG',
   );
 
   const attached = await repository.attachGitHubRepositoryToService({

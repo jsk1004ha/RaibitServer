@@ -1,5 +1,7 @@
 export const SESSION_COOKIE_NAME = 'raibitserver_session';
 export const GITHUB_INSTALL_STATE_COOKIE_NAME = 'raibitserver_github_install_state';
+export const GITHUB_OAUTH_STATE_COOKIE_NAME = 'raibitserver_github_oauth_state';
+export const GITHUB_OAUTH_VERIFIER_COOKIE_NAME = 'raibitserver_github_oauth_verifier';
 
 const BROWSER_SECRET_KEYS = new Set([
   'token',
@@ -35,6 +37,43 @@ export function githubInstallStateCookieOptions(env = process.env) {
     path: '/github/callback',
     maxAge: 7 * 24 * 60 * 60,
   };
+}
+
+export function githubOAuthCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: true,
+    path: '/api/control/auth/github/callback',
+    maxAge: 600,
+  };
+}
+
+export function isGitHubOAuthState(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{32,128}$/.test(value);
+}
+
+export function isGitHubOAuthCodeVerifier(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9._~-]{43,128}$/.test(value);
+}
+
+export function githubOAuthAuthorizeHref(value, expected = {}) {
+  if (typeof value !== 'string' || value.length > 4096) return null;
+  try {
+    const url = new URL(value);
+    const allowedKeys = new Set(['client_id', 'redirect_uri', 'scope', 'state', 'code_challenge', 'code_challenge_method']);
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.pathname !== '/login/oauth/authorize' || url.username || url.password || url.hash) return null;
+    const queryKeys = [...url.searchParams.keys()];
+    if (queryKeys.length !== allowedKeys.size || new Set(queryKeys).size !== allowedKeys.size || queryKeys.some((key) => !allowedKeys.has(key))) return null;
+    if (!/^[A-Za-z0-9._-]{1,255}$/.test(url.searchParams.get('client_id') || '')) return null;
+    if (url.searchParams.get('state') !== expected.state || url.searchParams.get('redirect_uri') !== expected.redirectUri) return null;
+    if (url.searchParams.get('code_challenge') !== expected.codeChallenge || url.searchParams.get('code_challenge_method') !== 'S256') return null;
+    const scopes = new Set((url.searchParams.get('scope') || '').split(/\s+/).filter(Boolean));
+    if (scopes.size !== 2 || !scopes.has('read:user') || !scopes.has('user:email')) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 export function configuredConsoleHref(value, fallback = '/console') {
@@ -188,6 +227,17 @@ export function formMutationMethod(requestMethod, body = {}) {
 	return override;
 }
 
+export function resourceRecoveryPayloadFromForm(path, method, body = {}) {
+	if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+	const normalized = { ...body };
+	const isCreate = method === 'POST' && /^\/resources\/[^/]+\/backups$/.test(path);
+	const isRestore = method === 'POST' && /^\/backups\/[^/]+\/restores$/.test(path);
+	const isDelete = method === 'DELETE' && /^\/backups\/[^/]+$/.test(path);
+	if ((isCreate || isRestore) && normalized.formatVersion === '1') normalized.formatVersion = 1;
+	if (isDelete && normalized.confirmed === 'true') normalized.confirmed = true;
+	return normalized;
+}
+
 export function withFlashMessage(requestUrl, returnPath, kind, value) {
 	const safePath = safeReturnPath(requestUrl, returnPath, null);
 	const request = new URL(requestUrl);
@@ -200,8 +250,14 @@ export function withFlashMessage(requestUrl, returnPath, kind, value) {
 }
 
 export function publicUpstreamErrorCode(payload, status) {
+	const message = typeof payload?.message === 'string' ? payload.message : '';
+	if (status === 401 && ['account is not approved', 'account is banned', 'session has been revoked'].includes(message)) return 'session_reauthentication_required';
 	for (const candidate of [payload?.error, payload?.message]) {
-		if (typeof candidate === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(candidate)) return candidate;
+		if (
+			typeof candidate === 'string'
+			&& /^[A-Za-z0-9_.:-]{1,80}$/.test(candidate)
+			&& !/(?:^|[_.:-])(?:secret|password|passwd|token|credential|api[_.:-]?key|private[_.:-]?key)(?:$|[_.:-])/i.test(candidate)
+		) return candidate;
 	}
 	return `request_failed_${Number.isInteger(status) ? status : 500}`;
 }
@@ -377,7 +433,7 @@ export function dashboardSecurityHeaders({ nonce, production = false, https = fa
     `default-src 'self'`,
     `script-src ${scriptPolicy.join(' ')}`,
     `style-src 'self' 'unsafe-inline'`,
-    `img-src 'self' data: blob:`,
+    `img-src 'self' data: blob: https://avatars.githubusercontent.com`,
     `font-src 'self'`,
     `connect-src 'self'${production ? '' : ' ws: wss:'}`,
     `worker-src 'self' blob:`,

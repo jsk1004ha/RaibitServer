@@ -12,7 +12,7 @@ test('CI dry-run CLI smoke commands return stable PaaS and DBaaS artifacts', asy
   const manifest = await runCli(['manifest', 'examples/project.json']);
   assert.equal(manifest.kind, 'ProjectDeploymentPlan');
   assert.equal(manifest.manifests.some((resource) => resource.kind === 'Deployment'), true);
-  assert.equal(manifest.resourcePlans.some((resource) => resource.catalogKey === 'postgresql' && resource.operator === 'CloudNativePG'), true);
+  assert.equal(manifest.resourcePlans.some((resource) => resource.catalogKey === 'postgresql' && resource.operator === 'dedicated-local' && resource.capabilities.local.provision), true);
 
   const compose = await runCli(['compose', 'examples/docker-compose.yml']);
   assert.deepEqual(compose.resources.map((resource) => resource.engine).sort(), ['object-storage', 'postgresql', 'redis']);

@@ -1,9 +1,43 @@
 import { z } from 'zod';
+export * from './resource-recovery.ts';
+export * from './password-recovery.ts';
+export * from './project-settings.ts';
+export * from './domain.ts';
+export * from './github-conflict.ts';
+import { ServiceHealthFields, refineServiceHealth, type DeploymentHealth } from './deployment-health.ts';
+export * from './deployment-health.ts';
+export * from './deployment-operation.ts';
+export * from './deployment-history.ts';
+export * from './preview.ts';
+import type { DeploymentStatus } from './lifecycle.ts';
+export * from './lifecycle.ts';
+import { OrganizationRouteSlugSchema } from './organization-role.ts';
+import { SupportedResourceEngineSchema } from './resource-execution.ts';
+export * from './resource-execution.ts';
+
+export {
+  LEGACY_ORGANIZATION_ROLE_ALIASES,
+  MembershipRoleMutationSchema,
+  MembershipRoleReadSchema,
+  ORGANIZATION_MEMBERSHIP_ROLES,
+  OrganizationRouteSlugSchema,
+  normalizeOrganizationRoleForRead,
+  parseOrganizationMembershipRoleForMutation,
+  parseOrganizationRouteSlug,
+} from './organization-role.ts';
+export type { OrganizationMembershipReadRole, OrganizationMembershipRole, OrganizationRouteSlugResult } from './organization-role.ts';
+export * from './api-contract.ts';
+export * from './desired-state-mutations.ts';
+export * from './service-settings.ts';
+export * from './production-evidence.ts';
+export * from './organization-invite.ts';
+export * from './membership-transition.ts';
+export * from './organization-create.ts';
 
 export const AccountTypeSchema = z.enum(['CLUB_MEMBER', 'NON_CLUB']);
 export const ApprovalStatusSchema = z.enum(['APPROVED', 'PENDING', 'REJECTED']);
 export const UserRoleSchema = z.enum(['ADMIN', 'USER']);
-export const MembershipRoleSchema = z.enum(['OWNER', 'ADMIN', 'DEVELOPER', 'VIEWER']);
+export const MembershipRoleSchema = z.enum(['OWNER', 'ADMIN', 'MAINTAINER', 'DEVELOPER', 'DB_ADMIN', 'VIEWER']);
 export const OrganizationTypeSchema = z.enum(['CLUB', 'PERSONAL', 'SCHOOL']);
 export const ServiceTypeSchema = z.enum(['web', 'private', 'worker', 'cron', 'job', 'WEB', 'PRIVATE', 'WORKER', 'CRON', 'JOB']).transform((v) => v.toLowerCase() as ServiceType);
 export const SourceTypeSchema = z.enum(['github', 'gitlab', 'zip', 'image', 'local', 'GITHUB', 'GITLAB', 'ZIP', 'IMAGE', 'LOCAL']).transform((v) => v.toLowerCase() as SourceType);
@@ -16,12 +50,13 @@ export const ResourceEngineSchema = z.enum([
 
 export const OrganizationCreateSchema = z.object({
   name: z.string().min(1),
-  slug: z.string().min(1).optional(),
+  slug: OrganizationRouteSlugSchema.optional(),
   type: OrganizationTypeSchema.optional(),
   plan: z.enum(['free', 'club', 'pro', 'school', 'enterprise']).optional(),
 });
 
 export const ServiceCreateSchema = z.object({
+  ...ServiceHealthFields,
   name: z.string().min(1),
   slug: z.string().min(1).optional(),
   type: ServiceTypeSchema.default('web'),
@@ -48,13 +83,13 @@ export const ServiceCreateSchema = z.object({
   resources: z.object({ requests: z.record(z.string(), z.string()).optional(), limits: z.record(z.string(), z.string()).optional() }).optional(),
   scaling: z.record(z.string(), z.unknown()).optional(),
   desiredSpec: z.record(z.string(), z.unknown()).optional(),
-}).passthrough();
+}).passthrough().superRefine(refineServiceHealth);
 
 export const ResourceCreateSchema = z.object({
   name: z.string().min(1),
   slug: z.string().optional(),
   type: ResourceTypeSchema.default('database'),
-  engine: ResourceEngineSchema,
+  engine: SupportedResourceEngineSchema,
   provider: z.string().default('local'),
   plan: z.string().default('shared-small'),
   region: z.string().default('local'),
@@ -65,7 +100,7 @@ export const ResourceCreateSchema = z.object({
 
 export const ProjectCreateSchema = z.object({
   organizationId: z.string().optional(),
-  organizationSlug: z.string().optional(),
+  organizationSlug: OrganizationRouteSlugSchema.optional(),
   organization: OrganizationCreateSchema.partial().optional(),
   name: z.string().min(1),
   slug: z.string().optional(),
@@ -96,14 +131,13 @@ export type SourceType = 'github' | 'gitlab' | 'zip' | 'image' | 'local';
 export type BuildMode = 'auto' | 'dockerfile' | 'buildpack' | 'custom' | 'prebuilt-image' | 'generated' | 'framework';
 export type ResourceType = 'database' | 'cache' | 'storage' | 'vector' | 'queue';
 export type ResourceEngine = 'postgresql' | 'mysql' | 'mariadb' | 'mongodb' | 'redis' | 'valkey' | 'sqlite' | 'object-storage' | 'qdrant' | 'weaviate' | 'milvus' | 'nats' | 'rabbitmq' | 'kafka' | 'redpanda' | 'vector-db' | 'message-queue';
-export type DeploymentStatus = 'queued' | 'building' | 'deploying' | 'ready' | 'failed' | 'cancelled' | string;
 
 export type OrganizationCreate = z.input<typeof OrganizationCreateSchema>;
 export type ServiceSpec = z.input<typeof ServiceCreateSchema> & { id?: string; projectId?: string };
 export type ResourceSpec = z.input<typeof ResourceCreateSchema> & { id?: string; projectId?: string };
 export type ProjectSpec = z.input<typeof ProjectCreateSchema> & { id?: string };
 export type DeploymentRequest = z.input<typeof DeploymentCreateSchema> & { projectId?: string; serviceId?: string };
-export interface DeploymentSpec extends DeploymentRequest { id?: string; projectId?: string; serviceId: string; status?: DeploymentStatus; imageDigest?: string | null; errorCode?: string | null; errorMessage?: string | null; previewUrl?: string | null; workflowJob?: Record<string, unknown>; }
+export interface DeploymentSpec extends DeploymentRequest, Partial<DeploymentHealth> { id?: string; projectId?: string; serviceId: string; status?: DeploymentStatus; imageDigest?: string | null; errorCode?: string | null; errorMessage?: string | null; previewUrl?: string | null; workflowJob?: Record<string, unknown>; readonly sourceDeploymentId?: string | null; readonly retryOfDeploymentId?: string | null; readonly requestIdempotencyKey?: string | null; readonly requestedByUserId?: string | null; readonly snapshotVersion?: number | null; readonly desiredSpecSnapshot?: Readonly<Record<string, unknown>> | null; }
 export interface ProjectListResponse { projects: ProjectSpec[]; nextCursor?: string | null; }
 export interface ServiceListResponse { services: ServiceSpec[]; nextCursor?: string | null; }
 export interface ResourceListResponse { resources: ResourceSpec[]; nextCursor?: string | null; }

@@ -1,4 +1,5 @@
 import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
+import { requireResourceCapability } from './resource-capabilities.ts';
 import { connectionEnvForResource } from './env-injection.ts';
 import { slugify } from './ids.ts';
 import { applyManifests } from './kubernetes.ts';
@@ -8,6 +9,7 @@ import { buildPostgresProviderPlan, buildResourceProviderPlan, provisionResource
 
 export function compileResourceProvisioningPlan(resource: Record<string, any>, { namespace = 'default', projectSlug = 'project', organizationSlug = 'org' } = {}) {
   const engine = normalizeResourceEngine(resource.engine || resource.type);
+  const capabilities = requireResourceCapability(engine, 'provision');
   const entry = getCatalogEntry(engine);
   const name = slugify(resource.name || engine);
   const kind = managedKindFor(entry.type, entry.key);
@@ -40,7 +42,6 @@ export function compileResourceProvisioningPlan(resource: Record<string, any>, {
         topic: ['message-queue', 'nats'].includes(entry.key) ? (resource.topic || slugify(resource.name || 'events')) : undefined,
         username: supportsUsername(entry.type) ? (resource.username || slugify(resource.username || resource.name || 'app')) : undefined,
         provider: resource.provider || 'shared-provider',
-        backup: resource.backup || defaultBackup(entry.type),
         credentialsMode: providerGeneratedCredentials ? 'provider-generated' : (Object.keys(secret).length ? 'provided-secret' : 'none'),
         ...(providerGeneratedCredentials ? { generatedCredentialsSecretName: credentialsSecretName } : {}),
         ...(!providerGeneratedCredentials && Object.keys(secret).length ? { credentialsSecretName } : {}),
@@ -65,7 +66,8 @@ export function compileResourceProvisioningPlan(resource: Record<string, any>, {
     resourceKind: kind,
     operator: entry.operator,
     provider: resource.provider || 'shared-provider',
-    lifecycle: providerLifecycle(entry.key, resource.provider),
+    capabilities,
+    lifecycle: Object.entries(capabilities.local).filter(([, enabled]) => enabled).map(([operation]) => operation),
     envKeys: entry.env,
     providerPlan: providerPlanForResource(entry.key, resource),
     consoleSurface: providerConsoleSurface(resource),
@@ -94,6 +96,9 @@ export function compileProjectProvisioning(projectSpec: Record<string, any>) {
 }
 
 export async function provisionProjectResources(projectSpec: Record<string, any>, options: Record<string, any> = {}) {
+  if (options.dryRun === false || options.execute === true) {
+    throw new Error('Live resource provisioning must be requested through the API and reconciled by the authoritative Go provisioner.');
+  }
   const provisioning = compileProjectProvisioning(projectSpec);
   const apply = await applyManifests(provisioning.manifests, options);
   const providerResults = [];
@@ -122,20 +127,10 @@ function supportsUsername(type: string) {
   return ['database', 'queue'].includes(type);
 }
 
-function defaultBackup(type: string) {
-  if (['database', 'storage', 'vector'].includes(type)) return { schedule: 'daily', retentionDays: 7 };
-  return null;
-}
-
 function defaultStorageGb(engine: string) {
   if (['postgresql', 'mysql', 'mariadb', 'mongodb'].includes(engine)) return 10;
   if (engine === 'redis' || engine === 'valkey') return 1;
   return 5;
-}
-
-function providerLifecycle(engine: string, provider: any) {
-  if (engine === 'postgresql' && String(provider || '').includes('direct')) return ['desired-state-write', 'create-user', 'create-database', 'grant-privileges', 'provider-secret', 'connection-test', 'backup-plan', 'metrics'];
-  return ['desired-state-write', 'shared-provider-reconcile', 'credentials-secret', 'backup-policy', 'metrics'];
 }
 
 function providerPlanForResource(engine: string, resource: Record<string, any>) {

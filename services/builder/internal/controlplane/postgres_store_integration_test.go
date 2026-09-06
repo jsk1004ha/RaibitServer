@@ -13,6 +13,139 @@ import (
 	"time"
 )
 
+func TestPostgresDeploymentSnapshotQualification(t *testing.T) {
+	// Given an isolated database with the authoritative migrations through 000012.
+	dsn := strings.TrimSpace(os.Getenv("RAIBITSERVER_TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("snapshot qualification requires RAIBITSERVER_TEST_POSTGRES_DSN")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := sql.Open(postgresDriverName, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := fmt.Sprintf("snapshot-%d", time.Now().UnixNano())
+	org, project, service, deployment, jobID := prefix+"-org", prefix+"-project", prefix+"-service", prefix+"-deployment", prefix+"-job"
+	defer func() {
+		cleanupCtx, done := context.WithTimeout(context.Background(), 10*time.Second)
+		defer done()
+		for _, query := range []string{
+			`DELETE FROM "WorkflowJob" WHERE id LIKE $1`, `DELETE FROM "DeploymentEvent" WHERE "deploymentId" LIKE $1`,
+			`DELETE FROM "Deployment" WHERE id LIKE $1`, `DELETE FROM "Service" WHERE id LIKE $1`,
+			`DELETE FROM "Project" WHERE id LIKE $1`, `DELETE FROM "Organization" WHERE id LIKE $1`,
+		} {
+			if _, err := db.ExecContext(cleanupCtx, query, prefix+"%"); err != nil {
+				t.Errorf("fixture cleanup: %v", err)
+			}
+		}
+		if err := db.Close(); err != nil {
+			t.Errorf("close fixture database: %v", err)
+		}
+	}()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	snapshot := `{"sourceType":"github","repoUrl":"https://github.com/acme/frozen.git","buildMode":"dockerfile","buildContext":"frozen","dockerfilePath":"frozen.Dockerfile","buildArgs":{"VERSION":42}}`
+	commit := strings.Repeat("a", 40)
+	exec(`INSERT INTO "Organization" (id,name,slug,"updatedAt") VALUES ($1,$1,$1,$2)`, org, now)
+	exec(`INSERT INTO "Project" (id,"organizationId",name,slug,"updatedAt") VALUES ($1,$2,$1,$1,$3)`, project, org, now)
+	exec(`INSERT INTO "Service" (id,"projectId",name,slug,type,"sourceType","repoUrl","buildMode","buildContext","updatedAt") VALUES ($1,$2,$1,$1,'web','github','https://github.com/acme/changed.git','generated','changed',$3)`, service, project, now)
+	exec(`INSERT INTO "Deployment" (id,"serviceId","projectId",status,"triggerType",branch,"commitSha","desiredSpecSnapshot","snapshotVersion","sourceDeploymentId","retryOfDeploymentId","updatedAt") VALUES ($1,$2,$3,'queued','retry','release',$4,$5::jsonb,1,'source','source',$6)`, deployment, service, project, commit, snapshot, now)
+	exec(`INSERT INTO "WorkflowJob" (id,type,status,"targetType","targetId",payload,"runAfter","updatedAt") VALUES ($1,'build-and-deploy','queued','deployment',$2,jsonb_build_object('deploymentId',$2::text,'buildContext','payload-override','commitSha','HEAD'),$3,$3)`, jobID, deployment, now)
+	store := NewPostgresStore(db)
+	// When the PostgreSQL claim and actual Deployment reader resolve a v1 build.
+	job, err := store.ClaimNextWorkflowJob(ctx, ClaimOptions{WorkerID: "snapshot-worker", LeaseSeconds: 300, Now: now})
+	if err != nil || job == nil || job.ID != jobID {
+		t.Fatalf("snapshot claim: job=%+v err=%v", job, err)
+	}
+	t.Run("claim_and_stored_snapshot", func(t *testing.T) {
+		stored, err := store.GetDeployment(ctx, deployment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		live, err := store.GetService(ctx, service)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolved, _, err := stored.BuildInputs(live, job)
+		// Then JSONB, lineage and bound source win over later live/job configuration.
+		if err != nil || stored.SourceDeploymentID != "source" || stored.RetryOfDeploymentID != "source" || stored.CommitSHA != commit || resolved.BuildContext != "frozen" || resolved.RepoURL != "https://github.com/acme/frozen.git" {
+			t.Fatalf("stored snapshot lost: %v", err)
+		}
+	})
+	t.Run("lease_update_returning_snapshot", func(t *testing.T) {
+		if err := store.StartBuild(ctx, BuildStartInput{Lease: job.Lease(), DeploymentID: deployment, ServiceID: service, ProjectID: project, StartedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		updated, err := store.UpdateDeploymentForLease(ctx, job.Lease(), deployment, map[string]any{"status": "BUILDING"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec, err := updated.BuildSpec()
+		if err != nil || spec.BuildContext != "frozen" || updated.SnapshotVersion == nil || *updated.SnapshotVersion != 1 || updated.SourceDeploymentID != "source" {
+			t.Fatalf("UPDATE RETURNING lost snapshot: %v", err)
+		}
+	})
+	t.Run("stale_lease", func(t *testing.T) {
+		stale := WorkflowLease{JobID: jobID, WorkerID: "old-worker", Attempt: job.Attempts}
+		if _, err := store.UpdateDeploymentForLease(ctx, stale, deployment, map[string]any{"status": "BUILD_FAILED"}); !errors.Is(err, ErrWorkflowLeaseLost) {
+			t.Fatalf("stale snapshot writer accepted: %v", err)
+		}
+	})
+	publication := ImagePublicationInput{Lease: job.Lease(), DeploymentID: deployment, ServiceID: service, ProjectID: project, ImageURL: "registry.example.test/image@sha256:" + strings.Repeat("b", 64), ImageDigest: "sha256:" + strings.Repeat("b", 64)}
+	t.Run("live_deletion_fence", func(t *testing.T) {
+		exec(`UPDATE "Service" SET status='DELETE_REQUESTED' WHERE id=$1`, service)
+		if err := store.PublishImageReady(ctx, publication); !errors.Is(err, ErrBuildTargetDeleting) {
+			t.Fatalf("snapshot ignored live deletion: %v", err)
+		}
+		exec(`UPDATE "Service" SET status='CREATED' WHERE id=$1`, service)
+	})
+	t.Run("cancelled_lease_fence", func(t *testing.T) {
+		exec(`UPDATE "WorkflowJob" SET status='cancelled',"lockedBy"=NULL,"lockedAt"=NULL WHERE id=$1`, jobID)
+		if err := store.PublishImageReady(ctx, publication); !errors.Is(err, ErrWorkflowLeaseLost) {
+			t.Fatalf("snapshot ignored cancellation: %v", err)
+		}
+		var images, events int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM "Deployment" WHERE id=$1 AND "imageUrl" IS NOT NULL`, deployment).Scan(&images); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM "DeploymentEvent" WHERE "deploymentId"=$1 AND type='build.image_ready'`, deployment).Scan(&events); err != nil {
+			t.Fatal(err)
+		}
+		if images != 0 || events != 0 {
+			t.Fatal("fenced snapshot produced image publication")
+		}
+	})
+	for _, row := range []struct {
+		name, trigger string
+		version       any
+		snapshot      any
+		valid         bool
+	}{
+		{"legacy_initial", "manual", nil, nil, true},
+		{"missing_lineaged", "retry", nil, nil, false},
+		{"unknown_version", "retry", 2, snapshot, false},
+		{"malformed_snapshot", "retry", 1, `[]`, false},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			id := prefix + "-" + row.name
+			exec(`INSERT INTO "Deployment" (id,"serviceId","projectId","triggerType","snapshotVersion","desiredSpecSnapshot","updatedAt") VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)`, id, service, project, row.trigger, row.version, row.snapshot, now)
+			_, err := store.GetDeployment(ctx, id)
+			if row.valid && err != nil {
+				t.Fatal(err)
+			}
+			if !row.valid && !errors.Is(err, ErrDeploymentSnapshot) {
+				t.Fatalf("invalid SQL snapshot accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestPostgresClaimReapsExpiredExhaustedBuild(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("RAIBITSERVER_TEST_POSTGRES_DSN"))
 	if dsn == "" {

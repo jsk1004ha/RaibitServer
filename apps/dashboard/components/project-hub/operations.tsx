@@ -1,15 +1,19 @@
 import { apiAction } from '@/lib/api';
+import { RESOURCE_CAPABILITIES } from '../../../../packages/core/src/resource-capabilities';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants, ActionLink } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { HubEmpty, MetricGrid, Panel, ProjectStatusBadge, RuntimeLogViewer } from './shared';
+import { DeploymentHistory } from './deployment-history';
+import { HubEmpty, MetricGrid, Panel, ProjectStatusBadge } from './shared';
+import { LogServiceSelector, RuntimeLogStream } from './runtime-log-stream';
 import type { AgentPlan, ProjectHubData } from './types';
 
 export function DeploymentsView({ data }: Readonly<{ data: ProjectHubData }>) {
+  if (data.deploymentHistory) return <DeploymentHistory base={data.base} history={data.deploymentHistory} services={data.services} />;
   return (
     <Panel title="배포 내역" description="운영 및 미리보기 배포의 로그와 이벤트">
       {data.deployments.length > 0 ? <>
@@ -56,9 +60,38 @@ export function ResourcesView({ data }: Readonly<{ data: ProjectHubData }>) {
 }
 
 function NewResourceView({ data }: Readonly<{ data: ProjectHubData }>) {
-  return <Card className="mx-auto w-full max-w-3xl"><CardHeader><CardTitle><h2>리소스 추가</h2></CardTitle><CardDescription>관리형 데이터 계층</CardDescription></CardHeader><form action={apiAction(`/projects/${data.projectId}/resources`)} method="post"><input name="_returnTo" type="hidden" value={`${data.base}?view=resources`} /><CardContent><FieldGroup><Field><FieldLabel htmlFor="resource-name">리소스 이름</FieldLabel><Input id="resource-name" name="name" placeholder="예: postgres" required /></Field><Field><FieldLabel htmlFor="resource-engine">엔진</FieldLabel><Select defaultValue="postgresql" id="resource-engine" name="engine">{[['postgresql', 'PostgreSQL'], ['sqlite', 'SQLite'], ['redis', 'Redis'], ['valkey', 'Valkey'], ['mysql', 'MySQL'], ['mariadb', 'MariaDB'], ['mongodb', 'MongoDB'], ['object-storage', '객체 저장소'], ['qdrant', 'Qdrant'], ['nats', 'NATS']].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field></FieldGroup></CardContent><CardFooter className="mt-raibit-xl justify-end gap-raibit-sm"><a className={buttonVariants({ variant: 'ghost' })} href={`${data.base}?view=resources`}>취소</a><button className={buttonVariants()} type="submit">리소스 추가</button></CardFooter></form></Card>;
+  const liveEngines = new Set((data.resourceOptions || []).filter((entry) => entry.live && entry.permitted).map((entry) => entry.engine));
+  return (
+    <Card className="mx-auto w-full max-w-3xl">
+      <CardHeader><CardTitle><h2>리소스 추가</h2></CardTitle><CardDescription>실제 실행 요청 생성 · 로컬 전용 · 운영 릴리스 검증 전</CardDescription></CardHeader>
+      <form action={apiAction(`/projects/${data.projectId}/resources`)} method="post">
+        <input name="_returnTo" type="hidden" value={`${data.base}?view=resources`} />
+        <CardContent><FieldGroup>
+          <Field><FieldLabel htmlFor="resource-name">리소스 이름</FieldLabel><Input id="resource-name" name="name" placeholder="예: postgres" required /></Field>
+          <Field>
+            <FieldLabel htmlFor="resource-engine">엔진</FieldLabel>
+            <Select defaultValue={[...liveEngines][0] || ''} id="resource-engine" name="engine" required disabled={liveEngines.size === 0} aria-describedby="resource-capability-help">
+              {liveEngines.size === 0 ? <option value="">실행 가능한 엔진 없음</option> : null}
+              {RESOURCE_CAPABILITIES.map((entry) => <option key={entry.engine} value={entry.engine} disabled={!liveEngines.has(entry.engine)}>
+                {entry.displayName} · {liveEngines.has(entry.engine) ? '로컬 전용' : entry.local.provision ? '사용 불가' : '준비 중'}
+              </option>)}
+            </Select>
+            <FieldDescription className="break-keep" id="resource-capability-help">추가하면 실제 실행 희망 상태가 저장됩니다. 준비 완료는 공급자 검증 후 표시됩니다. SQLite는 로컬 파일 전용이며 관리형 백업·복구는 아직 제공하지 않습니다.</FieldDescription>
+            {liveEngines.size === 0 ? <FieldDescription className="break-keep">서버 설정 또는 권한상 생성할 수 있는 엔진이 없습니다. 운영 릴리스 지원은 아직 검증되지 않았습니다.</FieldDescription> : null}
+          </Field>
+          <Field>
+            <FieldLabel>준비 중인 엔진</FieldLabel>
+            {RESOURCE_CAPABILITIES.filter((entry) => !entry.local.provision).map((entry) => <FieldDescription className="break-keep" key={entry.engine} data-resource-engine={entry.engine} data-reason-code={entry.reasonCode}>
+              {entry.displayName}: {entry.reasonKo}
+            </FieldDescription>)}
+          </Field>
+        </FieldGroup></CardContent>
+        <CardFooter className="mt-raibit-xl justify-end gap-raibit-sm"><a className={buttonVariants({ variant: 'ghost' })} href={`${data.base}?view=resources`}>취소</a><button className={buttonVariants()} type="submit" disabled={liveEngines.size === 0}>리소스 추가 · 실제 실행 요청</button></CardFooter>
+      </form>
+    </Card>
+  );
 }
 
 export function LogsView({ data }: Readonly<{ data: ProjectHubData }>) {
-  return <Panel title="런타임 로그" description={data.logService?.name || '서비스'}>{data.logService ? <RuntimeLogViewer rows={data.runtimeLogs} /> : <HubEmpty title="서비스 없음" description="로그를 확인할 서비스를 먼저 만드세요." action={<a className={buttonVariants()} href={`${data.base}?view=new-service`}>서비스 만들기</a>} />}</Panel>;
+  return <Panel title="런타임 로그" description="선택한 서비스의 초기 로그와 실시간 스트림" action={data.logService ? <LogServiceSelector base={data.base} selectedServiceId={data.logService.id} services={data.services} /> : undefined}>{data.logService ? <RuntimeLogStream initialRows={data.runtimeLogs} serviceId={data.logService.id} /> : <HubEmpty title="서비스 없음" description="로그를 확인할 서비스를 먼저 만드세요." action={<a className={buttonVariants()} href={`${data.base}?view=new-service`}>서비스 만들기</a>} />}</Panel>;
 }

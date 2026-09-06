@@ -17,6 +17,7 @@ import {
   githubInstallStateCookieOptions,
   isSameOriginMutation,
 	projectCreatePayloadFromForm,
+	resourceRecoveryPayloadFromForm,
 	publicUpstreamErrorCode,
 	publicHostnameForConsole,
 	readBoundedBody,
@@ -35,9 +36,17 @@ test('Given an upstream failure, when its code is a bounded safe identifier, the
 
 test('Given an upstream failure, when its message is unsafe or unbounded, then the public proxy exposes only the status fallback', () => {
 	assert.equal(publicUpstreamErrorCode({ error: '<script>alert(1)</script>' }, 500), 'request_failed_500');
+	assert.equal(publicUpstreamErrorCode({ error: 'fixture_upstream_secret_must_not_escape' }, 500), 'request_failed_500');
 	assert.equal(publicUpstreamErrorCode({ message: 'secret='.concat('x'.repeat(81)) }, 418), 'request_failed_418');
 	assert.equal(publicUpstreamErrorCode({ error: 'safe', message: 'ignored' }, undefined), 'safe');
 	assert.equal(publicUpstreamErrorCode({}, undefined), 'request_failed_500');
+});
+
+test('Given an invalidated account session, when the upstream guard returns an allowlisted reason, then the browser receives one generic re-login code', () => {
+	assert.equal(publicUpstreamErrorCode({ message: 'account is not approved' }, 401), 'session_reauthentication_required');
+	assert.equal(publicUpstreamErrorCode({ message: 'account is banned' }, 401), 'session_reauthentication_required');
+	assert.equal(publicUpstreamErrorCode({ message: 'session has been revoked' }, 401), 'session_reauthentication_required');
+	assert.equal(publicUpstreamErrorCode({ message: 'foreign id 123' }, 401), 'request_failed_401');
 });
 
 test('session cookie is host-only, HttpOnly and only Secure when configured or in production', () => {
@@ -216,6 +225,19 @@ test('HTML forms can safely request only supported mutation methods', () => {
 		() => formMutationMethod('POST', { _method: 'PUT' }),
 		(error) => error?.code === 'invalid_form_method',
 	);
+});
+
+test('Given native recovery forms, when their route-scoped values are normalized, then only strict public JSON primitives reach the upstream contract', () => {
+	assert.deepEqual(resourceRecoveryPayloadFromForm('/resources/res_1/backups', 'POST', {
+		requestIdempotencyKey: 'backup_1', formatVersion: '1', _returnTo: '/console',
+	}), { requestIdempotencyKey: 'backup_1', formatVersion: 1, _returnTo: '/console' });
+	assert.deepEqual(resourceRecoveryPayloadFromForm('/backups/bak_1/restores', 'POST', {
+		requestIdempotencyKey: 'restore_1', formatVersion: '1', name: 'restored-primary',
+	}), { requestIdempotencyKey: 'restore_1', formatVersion: 1, name: 'restored-primary' });
+	assert.deepEqual(resourceRecoveryPayloadFromForm('/backups/bak_1', 'DELETE', { confirmed: 'true' }), { confirmed: true });
+	assert.deepEqual(resourceRecoveryPayloadFromForm('/resources/res_1/backups', 'POST', { formatVersion: '01' }), { formatVersion: '01' });
+	assert.deepEqual(resourceRecoveryPayloadFromForm('/backups/bak_1', 'DELETE', { confirmed: 'yes' }), { confirmed: 'yes' });
+	assert.deepEqual(resourceRecoveryPayloadFromForm('/projects/prj_1', 'POST', { formatVersion: '1' }), { formatVersion: '1' });
 });
 
 test('auth credentials are extracted for HttpOnly storage and removed from browser JSON', () => {

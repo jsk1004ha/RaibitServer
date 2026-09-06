@@ -27,7 +27,7 @@ export function resolveBuildStrategy(service: AnyRecord = {}, files: AnyRecord =
   const customBuildCommand = service.buildCommand || service.customBuildCommand || null;
   const image = service.image || service.imageUrl || null;
 
-  if (sourceType === SOURCE_TYPES.IMAGE || requestedMode === BUILD_MODES.PREBUILT_IMAGE) {
+  if (sourceType === SOURCE_TYPES.IMAGE || (requestedMode === BUILD_MODES.PREBUILT_IMAGE && !service.dockerfilePath && !discovery.dockerfilePath)) {
     if (!image) {
       throw new Error('prebuilt image source requires service.image or service.imageUrl');
     }

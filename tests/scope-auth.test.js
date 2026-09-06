@@ -86,6 +86,7 @@ test('thin API resolves projectIds-scoped update and delete against the project 
     assert.equal(controlPlane.store.projects.has(projectB.id), true);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -111,20 +112,15 @@ test('maintainer project updates cannot mutate deletion state or project identit
       slug: project.slug,
       unknown: 'attacker-controlled',
     }, token);
-    assert.equal(updated.statusCode, 200);
-    assert.equal(updated.body.name, 'After');
-    assert.equal(updated.body.description, 'after');
-    assert.equal(updated.body.id, project.id);
-    assert.equal(updated.body.organizationId, organization.id);
-    assert.equal(updated.body.status, project.status);
-    assert.equal(updated.body.slug, project.slug);
-    assert.equal(updated.body.unknown, undefined);
+    assert.equal(updated.statusCode, 409);
+    assert.deepEqual(controlPlane.store.getProject(project.id), { ...project, organizationSlug: organization.slug, organization: { id: organization.id, name: organization.name, slug: organization.slug } });
 
     const renamedSlug = await request(port, 'PATCH', `/projects/${project.id}`, { slug: 'attacker-slug' }, token);
     assert.equal(renamedSlug.statusCode, 409);
     assert.equal(controlPlane.store.getProject(project.id).slug, project.slug);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -162,6 +158,7 @@ test('project create derives scope from nested organization before persistence',
     assert.equal(created.statusCode, 201);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -185,6 +182,7 @@ test('nested organization project creation requires project:create, not project:
     assert.equal(created.statusCode, 201);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -197,7 +195,7 @@ test('log snapshot endpoints enforce the same tenant scope as streams', async ()
   const serviceB = controlPlane.store.createService({ projectId: projectB.id, name: 'web', type: 'web', sourceType: 'image', image: 'example/web:1' });
   const deploymentB = controlPlane.store.createDeployment({ projectId: projectB.id, serviceId: serviceB.id });
   controlPlane.store.appendBuildLog({ deploymentId: deploymentB.id, step: 'build', line: 'tenant-b-secret-log' });
-  controlPlane.store.appendRuntimeLog({ serviceId: serviceB.id, deploymentId: deploymentB.id, podName: 'web-0', containerName: 'web', line: 'tenant-b-runtime-log' });
+  controlPlane.store.appendRuntimeLog({ serviceId: serviceB.id, deploymentId: deploymentB.id, podName: 'web-0', sourceInstanceId: 'tenant-b-web-incarnation', containerName: 'web', line: 'tenant-b-runtime-log' });
   const userA = controlPlane.store.createUser({ email: 'tenant-a-user@example.com', approvalStatus: 'APPROVED' });
   controlPlane.store.addMember({ organizationId: orgA.id, userId: userA.id, role: 'viewer' });
 
@@ -215,6 +213,7 @@ test('log snapshot endpoints enforce the same tenant scope as streams', async ()
     assert.equal(runtimeLogs.statusCode, 403);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 

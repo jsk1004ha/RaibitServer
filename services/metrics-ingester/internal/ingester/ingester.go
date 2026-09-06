@@ -4,13 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"math"
-	"regexp"
 	"sort"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/raibitserver/metrics-ingester/internal/identity"
 )
 
 const (
@@ -25,6 +24,8 @@ type Config struct {
 	MaxSamplesPerRun    int
 	MaxRunDuration      time.Duration
 	Retention           time.Duration
+	MaxBytesPerRun      int
+	Now                 func() time.Time
 }
 
 type ContainerMetrics struct {
@@ -43,6 +44,8 @@ type PodMetrics struct {
 }
 
 type Record struct {
+	Scope         identity.Scope
+	Namespace     string
 	SourceKey     string
 	ServiceID     string
 	DeploymentID  string
@@ -60,16 +63,38 @@ type Source interface {
 }
 
 type Store interface {
-	Insert(ctx context.Context, records []Record) (int, error)
+	Resolve(ctx context.Context, deploymentID string) (identity.Scope, error)
+	Insert(ctx context.Context, batch Batch) (Persisted, error)
 	DeleteOlderThan(ctx context.Context, before time.Time) (int64, error)
 }
 
 type Result struct {
-	Pods     int
-	Samples  int
-	Inserted int
-	Deleted  int64
+	Pods       int
+	Samples    int
+	Inserted   int
+	Deleted    int64
+	Observed   bool
+	LagSeconds float64
 }
+
+type (
+	Batch struct {
+		Records []Record
+		Limit   int
+		Now     time.Time
+	}
+	Persisted struct {
+		Inserted int
+		Newest   time.Time
+	}
+	VerifiedPod struct {
+		UID       string
+		CreatedAt time.Time
+	}
+	IdentitySource interface {
+		Verify(context.Context, PodMetrics, identity.Scope) (VerifiedPod, error)
+	}
+)
 
 type Ingester struct {
 	config Config
@@ -78,6 +103,9 @@ type Ingester struct {
 }
 
 func New(config Config, source Source, store Store) *Ingester {
+	if config.Now == nil {
+		config.Now = time.Now
+	}
 	if config.PageSize <= 0 || config.PageSize > 500 {
 		config.PageSize = 100
 	}
@@ -93,7 +121,10 @@ func New(config Config, source Source, store Store) *Ingester {
 	if config.MaxRunDuration <= 0 || config.MaxRunDuration > 2*time.Minute {
 		config.MaxRunDuration = 20 * time.Second
 	}
-	if config.Retention <= 0 {
+	if config.MaxBytesPerRun <= 0 || config.MaxBytesPerRun > 16*1024*1024 {
+		config.MaxBytesPerRun = 16 * 1024 * 1024
+	}
+	if config.Retention <= 0 || config.Retention > 30*24*time.Hour {
 		config.Retention = 30 * 24 * time.Hour
 	}
 	return &Ingester{config: config, source: source, store: store}
@@ -104,8 +135,14 @@ func (i *Ingester) RunOnce(ctx context.Context, now time.Time) (Result, error) {
 		return Result{}, fmt.Errorf("metrics ingester source and store are required")
 	}
 	now = now.UTC()
+	ctx, cancel := context.WithTimeout(ctx, i.config.MaxRunDuration)
+	defer cancel()
+	ctx = WithByteBudget(ctx, i.config.MaxBytesPerRun)
+	verifier, ok := i.source.(IdentitySource)
+	if !ok {
+		return Result{}, identity.ErrIdentity
+	}
 	result := Result{}
-	started := time.Now()
 	continueToken := ""
 	seenPods := 0
 	podMetrics := make([]PodMetrics, 0)
@@ -132,16 +169,30 @@ func (i *Ingester) RunOnce(ctx context.Context, now time.Time) (Result, error) {
 	perPodContainers := min(i.config.MaxContainersPerPod, max(1, (i.config.MaxSamplesPerRun+2*max(1, len(podMetrics))-1)/(2*max(1, len(podMetrics)))))
 	pendingRecords := make([]Record, 0, min(i.config.MaxSamplesPerRun, 1000))
 	for _, pod := range podMetrics {
-		if result.Samples+2 > i.config.MaxSamplesPerRun || time.Since(started) >= i.config.MaxRunDuration {
-			break
-		}
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		serviceID := strings.TrimSpace(pod.Labels[serviceLabel])
-		if serviceID == "" || pod.Timestamp.IsZero() {
+		if pod.Timestamp.IsZero() || pod.Timestamp.After(now.Add(30*time.Second)) || pod.Timestamp.Before(now.Add(-i.config.Retention)) {
 			continue
 		}
+		scope, resolveErr := i.store.Resolve(ctx, pod.Labels[deploymentLabel])
+		if resolveErr != nil {
+			if errors.Is(resolveErr, identity.ErrIdentity) {
+				continue
+			}
+			return result, &Failure{Code: "database"}
+		}
+		verified, verifyErr := verifier.Verify(ctx, pod, scope)
+		if verifyErr != nil {
+			if errors.Is(verifyErr, identity.ErrIdentity) {
+				continue
+			}
+			return result, verifyErr
+		}
+		if pod.Timestamp.Before(verified.CreatedAt) || verified.UID == "" {
+			continue
+		}
+		pod.UID = verified.UID
 		result.Pods++
 		containers := append([]ContainerMetrics(nil), pod.Containers...)
 		sort.Slice(containers, func(a, b int) bool { return containers[a].Name < containers[b].Name })
@@ -155,7 +206,10 @@ func (i *Ingester) RunOnce(ctx context.Context, now time.Time) (Result, error) {
 			if cpuErr != nil || memoryErr != nil || cpu < 0 || memory < 0 {
 				continue
 			}
-			base := Record{ServiceID: serviceID, DeploymentID: strings.TrimSpace(pod.Labels[deploymentLabel]), PodName: pod.Name, PodUID: pod.UID, ContainerName: container.Name, Timestamp: pod.Timestamp.UTC()}
+			if container.Name != scope.ContainerName {
+				continue
+			}
+			base := Record{Scope: scope, Namespace: pod.Namespace, ServiceID: scope.ServiceID, DeploymentID: scope.DeploymentID, PodName: pod.Name, PodUID: pod.UID, ContainerName: container.Name, Timestamp: pod.Timestamp.UTC()}
 			cpuRecord := base
 			cpuRecord.Metric, cpuRecord.Value, cpuRecord.Unit = "cpu", cpu, "cores"
 			cpuRecord.SourceKey = sourceKey(pod, container.Name, "cpu")
@@ -167,11 +221,16 @@ func (i *Ingester) RunOnce(ctx context.Context, now time.Time) (Result, error) {
 		pendingRecords = append(pendingRecords, records...)
 		result.Samples += len(records)
 	}
-	inserted, err := i.store.Insert(ctx, pendingRecords)
+	persisted, err := i.store.Insert(ctx, Batch{Records: pendingRecords, Limit: i.config.MaxSamplesPerRun, Now: now})
 	if err != nil {
 		return result, fmt.Errorf("persist runtime metrics: %w", err)
 	}
-	result.Inserted = inserted
+	result.Inserted = persisted.Inserted
+	result.Samples = persisted.Inserted
+	result.Observed = !persisted.Newest.IsZero()
+	if result.Observed {
+		result.LagSeconds = max(0, i.config.Now().Sub(persisted.Newest).Seconds())
+	}
 	deleted, err := i.store.DeleteOlderThan(ctx, now.Add(-i.config.Retention))
 	if err != nil {
 		return result, fmt.Errorf("enforce runtime-metric retention: %w", err)
@@ -183,39 +242,4 @@ func (i *Ingester) RunOnce(ctx context.Context, now time.Time) (Result, error) {
 func sourceKey(pod PodMetrics, container, metric string) string {
 	digest := sha256.Sum256([]byte(pod.UID + "\x00" + pod.Namespace + "\x00" + pod.Name + "\x00" + container + "\x00" + metric + "\x00" + pod.Timestamp.UTC().Format(time.RFC3339Nano)))
 	return hex.EncodeToString(digest[:])
-}
-
-var quantityPattern = regexp.MustCompile(`^([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))([numkKMGTPE]i?|[eE][+-]?[0-9]+)?$`)
-
-func ParseQuantity(value string) (float64, error) {
-	match := quantityPattern.FindStringSubmatch(strings.TrimSpace(value))
-	if match == nil {
-		return 0, fmt.Errorf("invalid Kubernetes quantity %q", value)
-	}
-	number, err := strconv.ParseFloat(match[1], 64)
-	if err != nil || math.IsInf(number, 0) || math.IsNaN(number) {
-		return 0, fmt.Errorf("invalid Kubernetes quantity %q", value)
-	}
-	suffix := match[2]
-	multipliers := map[string]float64{
-		"": 1, "n": 1e-9, "u": 1e-6, "m": 1e-3, "k": 1e3, "K": 1e3,
-		"M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15, "E": 1e18,
-		"Ki": 1024, "Mi": 1024 * 1024, "Gi": 1024 * 1024 * 1024,
-		"Ti": math.Pow(1024, 4), "Pi": math.Pow(1024, 5), "Ei": math.Pow(1024, 6),
-	}
-	multiplier, ok := multipliers[suffix]
-	if !ok && (strings.HasPrefix(suffix, "e") || strings.HasPrefix(suffix, "E")) {
-		exponent, parseErr := strconv.Atoi(suffix[1:])
-		if parseErr == nil {
-			multiplier, ok = math.Pow10(exponent), true
-		}
-	}
-	if !ok {
-		return 0, fmt.Errorf("unsupported Kubernetes quantity suffix %q", suffix)
-	}
-	result := number * multiplier
-	if math.IsInf(result, 0) || math.IsNaN(result) {
-		return 0, fmt.Errorf("Kubernetes quantity %q overflows", value)
-	}
-	return result, nil
 }

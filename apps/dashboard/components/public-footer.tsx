@@ -11,11 +11,11 @@ export function PublicFooter() {
           <span>RAIBIT SERVER</span>
         </a>
         <nav className="flex flex-wrap items-center gap-x-raibit-lg gap-y-raibit-xs" aria-label="푸터 탐색">
-          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/support">Support</a>
-          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/status">System Status</a>
+          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/support">지원</a>
+          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/status">운영 현황</a>
           <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href={githubUrl} target="_blank" rel="noreferrer">GitHub</a>
-          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/contributors">Contributors</a>
-          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/privacy">Privacy Policy</a>
+          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/contributors">기여자</a>
+          <a className="inline-flex min-h-11 min-w-11 items-center justify-center hover:text-foreground" href="/privacy">개인정보 처리방침</a>
         </nav>
         <span>© 2026 Raibit, ISHS.</span>
       </div>

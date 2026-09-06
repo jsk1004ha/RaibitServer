@@ -40,6 +40,8 @@ trap 'rm -rf "$OUTPUT_DIR"' EXIT HUP INT TERM
   --set-string hostedErrors.fallbackIngress.tls.existingSecret= >"$OUTPUT_DIR/production-with-shared-ingress-tls.yaml"
 
 grep -q 'helm.sh/hook: pre-install,pre-upgrade' "$OUTPUT_DIR/production.yaml"
+test "$(grep -A 1 'name: RAIBITSERVER_RESOURCE_ENVIRONMENT' "$OUTPUT_DIR/default.yaml" | grep -c 'value: "local"')" -eq 2
+test "$(grep -A 1 'name: RAIBITSERVER_RESOURCE_ENVIRONMENT' "$OUTPUT_DIR/production.yaml" | grep -c 'value: "release"')" -eq 2
 grep -q 'kind: ValidatingAdmissionPolicy' "$OUTPUT_DIR/production.yaml"
 grep -q 'kind: CustomResourceDefinition' "$OUTPUT_DIR/production.yaml"
 grep -q 'app.kubernetes.io/name: raibitserver-dashboard' "$OUTPUT_DIR/production.yaml"
@@ -161,10 +163,10 @@ if ! awk '
   /^---$/ { tenant = 0; secret = 0 }
   /^  name: raibitserver-provisioner-tenant$/ { tenant = 1 }
   tenant && /resources: \["secrets"\]/ { secret = 1 }
-  tenant && secret && /verbs:/ { found = 1; if ($0 !~ /verbs: \["create", "patch", "delete"\]/) exit 1; secret = 0 }
+  tenant && secret && /verbs:/ { found = 1; if ($0 !~ /verbs: \["get", "create", "patch", "delete"\]/) exit 1; secret = 0 }
   END { if (!found) exit 2 }
 ' "$OUTPUT_DIR/production.yaml"; then
-  echo "provisioner tenant Secret RBAC must grant only create, dry-run metadata patch, and delete" >&2
+  echo "provisioner tenant Secret RBAC must grant only get, create, dry-run metadata patch, and delete" >&2
   exit 1
 fi
 if ! awk '
@@ -281,7 +283,11 @@ expect_render_failure missing-mongodb-provider-image --set-string provisioner.pr
 expect_render_failure missing-redis-provider-image --set-string provisioner.providerImages.redis=
 expect_render_failure missing-valkey-provider-image --set-string provisioner.providerImages.valkey=
 expect_render_failure mutable-redis-provider-image --set-string provisioner.providerImages.redis=docker.io/library/redis:latest
-expect_render_failure mutable-plan-only-provider-image --set-string provisioner.providerImages.minio=docker.io/minio/minio:latest
+"$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" \
+  --set-string provisioner.providerImages.minio=docker.io/minio/minio:latest >"$OUTPUT_DIR/production-with-unsupported-provider-image.yaml"
+grep -q 'value: "docker.io/minio/minio:latest"' "$OUTPUT_DIR/production-with-unsupported-provider-image.yaml"
+grep -Fq 'variables.provider in ["postgresql","mysql","mariadb","mongodb","redis","valkey"]' \
+  "$OUTPUT_DIR/production-with-unsupported-provider-image.yaml"
 "$HELM" template raibitserver "$CHART" --namespace raibitserver-system --values "$PRODUCTION_VALUES" \
   --set-string provisioner.providerImages.minio= \
   --set-string provisioner.providerImages.qdrant= \

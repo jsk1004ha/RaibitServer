@@ -36,6 +36,12 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - { name: NODE_ENV, value: production }
+            - name: RAIBITSERVER_RESOURCE_ENVIRONMENT
+              value: {{ ternary "release" "local" .Values.production | quote }}
+            {{- range $provider := (include "raibitserver.localProviderEngines" . | fromJsonArray) }}
+            - name: RAIBITSERVER_PROVIDER_{{ $provider | upper }}_IMAGE
+              value: {{ default "" (index $.Values.provisioner.providerImages $provider) | quote }}
+            {{- end }}
             - { name: PORT, value: {{ .Values.api.port | quote }} }
             - name: RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE
               value: {{ .Values.ingress.gatewayNamespace | quote }}

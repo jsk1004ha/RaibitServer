@@ -6,7 +6,23 @@
 
 이 문서는 resource catalog, provider-neutral desired-state plan, dry-run/live provider mode, secret 처리 원칙을 설명합니다.
 
+## 계획 미리보기와 실제 실행 요청
+
+기존 리소스의 `POST /resources/:resourceId/provision`은 `{ "intent": "preview-plan" }` 또는 `{ "intent": "live-provision" }`만 받습니다. `dryRun`, `execute`, 빈 본문은 허용하지 않습니다. 미리보기는 `PLAN_ONLY`와 마스킹된 계획을 반환하며 리소스·타임스탬프·감사 로그·작업 대기열을 변경하지 않습니다. 생성 및 실제 실행 요청은 서버가 `desiredState.resourceExecution`에 live intent, 환경과 이미지 digest를 기록하고 `PROVISIONING`으로 유지합니다. API는 외부 공급자를 실행하거나 READY를 만들지 않습니다.
+
+API와 Go worker의 신뢰된 운영 설정은 `RAIBITSERVER_RESOURCE_ENVIRONMENT=local|release`입니다. 미설정·잘못된 값은 실제 쓰기를 거부합니다. production Helm은 항상 `release`를 설정하므로 현재 매트릭스에서는 생성·실행이 차단됩니다. 호출자의 environment/region/provider 값으로 승격할 수 없습니다. 로컬 6개 엔진은 각각 `RAIBITSERVER_PROVIDER_<ENGINE>_IMAGE=repository@sha256:<64 lowercase hex>`가 있어야 저장·claim할 수 있습니다. SQLite는 로컬 파일 전용이며 Go claim 대상이 아닙니다.
+
+Go는 실제 SQL claim의 UPDATE 전에 환경·지원 엔진·일치하는 digest·live intent를 필터링합니다. legacy pending 행에 intent가 없으면 자동 실행하지 않습니다. 운영자가 기존 행을 재검토하고 지원되는 로컬 환경에서 명시적으로 실행 요청해야 합니다. 이 안전성 검증은 실제 엔진 lifecycle의 release 증거를 대신하지 않습니다.
+
+CLI: `raibitserver resources provision --resource-id ID --intent preview-plan` 또는 `--intent live-provision`. 로컬 `node src/cli.js provision-plan project.json`은 컴파일 전용이고, TypeScript의 `provision --execute`는 Go 전용 실행 경계에서 거부됩니다.
+
 ## 지원 catalog
+
+지원 여부의 유일한 원본은 `test-fixtures/contracts/resource-capabilities-v1.json`입니다. `local`은 구현된 로컬 기능, `release`는 운영 릴리스 기능이며 현재 release 기능은 모두 false입니다. `planOnly`의 명령 계획과 `liveEvidence: not-recorded`는 실행 성공이 아닙니다. MySQL/MariaDB/MongoDB/Redis/Valkey의 query/schema는 아직 계획 전용입니다. 관리형 backup/list/delete와 새 격리 리소스로의 restore API·desired-state lifecycle은 구현되어 있지만, capability catalog의 release backup/restore가 false인 동안 실제 provider 백업 실행이 제공된다고 해석하지 않습니다.
+
+백업 생성은 idempotency key와 format version을 받고 비동기 상태를 기록합니다. 삭제는 명시적 확인이 필요하며, restore는 원본 리소스를 덮어쓰지 않고 이름이 다른 새 target resource를 만듭니다. 공개 응답은 connection secret과 backup artifact key를 반환하지 않습니다. 이 API 계약과 로컬 상태 테스트는 실제 dump, object storage, provider restore 또는 복구 리허설의 live PASS가 아닙니다.
+
+변경 후 `node scripts/generate-resource-capabilities.mjs`로 TypeScript/CLI/Go/Helm 패키지 내부의 복제 파일을 생성하고 `node --test tests/resource-capability-parity.test.js`로 byte/hash drift를 검사합니다. production Helm 패키징은 dedicated-local 지원 6개 엔진의 digest-pinned 이미지를 요구하지만 운영 인증을 부여하지 않습니다.
 
 - PostgreSQL
 - MySQL
@@ -15,20 +31,20 @@
 - Redis
 - Valkey
 - SQLite
-- Object Storage
-- Qdrant/vector
-- NATS/queue
+- Object Storage — 준비 중 (`ENGINE_NOT_IMPLEMENTED`), 생성 불가
+- Qdrant/vector — 준비 중 (`ENGINE_NOT_IMPLEMENTED`), 생성 불가
+- NATS/queue — 준비 중 (`ENGINE_NOT_IMPLEMENTED`), 생성 불가
 
 ## Desired-state plan
 
-`packages/core/src/provisioner.ts`는 각 resource를 provider-neutral plan으로 compile합니다.
+`packages/core/src/provisioner.ts`는 지원되는 로컬 resource를 provider-neutral plan으로 compile하며 미지원 엔진은 거부합니다.
 
-- `ManagedDatabase`, `ManagedCache`, `ManagedObjectStorage`, `ManagedVectorDatabase`, `ManagedMessageQueue` 형태의 CR-style manifest
+- `ManagedDatabase`, `ManagedCache` 형태의 CR-style manifest (storage/vector/queue 형태는 미활성 계약)
 - provider 이름과 plan (`shared-small` 기본값). 이는 provider-neutral 목표 계약이며 현재 Go live adapter의 실행 방식과 동일하다는 뜻은 아닙니다.
-- storage, version, backup policy, credential secret 이름
+- storage, version, credential secret 이름 (자동 backup policy 없음)
 - connection environment variable용 Secret manifest
 
-`provisionProjectResources`는 workload Kubernetes apply와 같은 dry-run/execute command surface로 이 manifest를 적용합니다.
+`provisionProjectResources`는 이 manifest의 dry-run 계획만 반환합니다. 실제 공급자 실행은 Go provisioner가 담당하며 TypeScript의 execute 요청은 거부됩니다.
 
 ## 목표 Shared provider model
 
@@ -101,7 +117,7 @@ Authoritative Go provisioner의 live mode는 다음 원칙을 적용합니다.
 - Kubernetes 명령을 실행하기 직전에 DB claim heartbeat를 갱신하되 원래 CAS claim token은 바꾸지 않습니다. 따라서 긴 rollout/delete 중 stale lease가 다른 worker에 넘어가지 않으며, 지속적인 deletion/health/provisioning backlog도 교대 슬롯으로 서로를 무기한 굶기지 않습니다.
 - live mode에서 성공적으로 한 리소스를 처리한 경우 polling sleep 없이 다음 backlog 항목을 처리합니다. idle/error와 상태를 다시 `PROVISIONING`으로 되돌리는 dry-run은 같은 row를 hot-loop하지 않도록 `provisioner.reconcileIntervalSeconds`만큼 대기합니다.
 - provisioner의 cluster 권한은 managed namespace와 제한된 RoleBinding bootstrap에만 사용합니다. 실제 provider object 권한은 managed tenant namespace에 생성한 전용 RoleBinding으로 한정하며 Secret read와 `pods/exec`는 부여하지 않습니다.
-- Object Storage/Qdrant/NATS는 bucket/collection/stream bootstrap과 authenticated semantic check가 없으므로 live 요청을 Kubernetes object 생성 전에 fail-closed 합니다. dry-run plan은 계속 생성할 수 있습니다.
+- Object Storage/Qdrant/NATS는 bucket/collection/stream bootstrap과 authenticated semantic check가 없어 API 입력과 TS/Go 컴파일 단계에서 거부합니다. 이미지 설정이나 과거 템플릿 존재만으로 활성화되지 않습니다.
 
 - PostgreSQL console query는 sealed provider `connectionSecretName`에서 connection material을 가져옵니다.
 - tenant request body와 resource-create payload는 connection URL/URI/DSN/JDBC variants를 제공할 수 없습니다.

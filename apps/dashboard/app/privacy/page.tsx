@@ -63,7 +63,7 @@ export default function PrivacyPage() {
               </h1>
             </div>
             <div>
-              <p className="text-body-md text-pretty text-secondary-foreground">
+              <p className="break-keep [overflow-wrap:anywhere] text-body-md text-pretty text-secondary-foreground">
                 RAIBIT SERVER는 서비스 운영에 필요한 최소한의 개인정보를
                 처리하고 안전하게 보호합니다.
               </p>

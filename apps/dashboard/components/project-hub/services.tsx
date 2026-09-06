@@ -5,6 +5,8 @@ import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { OperationSubmit } from '@/components/operation-submit';
+import { ServiceSettingsForm } from './service-settings';
 import { HubEmpty, ProjectStatusBadge } from './shared';
 import type { ProjectHubData, ServiceRecord } from './types';
 
@@ -44,15 +46,14 @@ function ServiceFields({ service }: Readonly<{ service?: ServiceRecord | null }>
 }
 
 function ServiceForm({ data, service }: Readonly<{ data: ProjectHubData; service?: ServiceRecord | null }>) {
-  const editing = Boolean(service);
+  if (service) return <ServiceSettingsForm actionBase={apiAction(`/services/${service.id}/settings`)} service={service} />;
   return (
     <Card className="mx-auto w-full max-w-5xl">
-      <CardHeader><CardTitle><h2>{editing ? `${service?.name || '서비스'} 설정` : '서비스 만들기'}</h2></CardTitle><CardDescription>{editing ? '빌드와 실행 설정' : '컨테이너 실행 단위'}</CardDescription></CardHeader>
-      <form action={apiAction(editing ? `/services/${service?.id}` : `/projects/${data.projectId}/services`)} method="post">
-        {editing ? <input name="_method" type="hidden" value="PATCH" /> : null}
+      <CardHeader><CardTitle><h2>서비스 만들기</h2></CardTitle><CardDescription>컨테이너 실행 단위</CardDescription></CardHeader>
+      <form action={apiAction(`/projects/${data.projectId}/services`)} method="post">
         <input name="_returnTo" type="hidden" value={`${data.base}?view=services`} />
         <CardContent><ServiceFields service={service} /></CardContent>
-        <CardFooter className="mt-raibit-xl justify-end gap-raibit-sm bg-muted/40"><a className={buttonVariants({ variant: 'ghost' })} href={`${data.base}?view=services`}>취소</a><button className={buttonVariants()} type="submit">{editing ? '설정 저장' : '서비스 만들기'}</button></CardFooter>
+        <CardFooter className="mt-raibit-xl justify-end gap-raibit-sm bg-muted/40"><a className={buttonVariants({ variant: 'ghost' })} href={`${data.base}?view=services`}>취소</a><button className={buttonVariants()} type="submit">서비스 만들기</button></CardFooter>
       </form>
     </Card>
   );
@@ -72,7 +73,9 @@ export function ServicesView({ data }: Readonly<{ data: ProjectHubData }>) {
 }
 
 function DeployActions({ data, service }: Readonly<{ data: ProjectHubData; service: ServiceRecord }>) {
-  return <div className="flex flex-wrap gap-raibit-sm"><form action={apiAction(`/projects/${data.projectId}/services/${service.id}/deployments`)} method="post"><input name="_returnTo" type="hidden" value={`${data.base}?view=deployments`} /><input name="deploymentType" type="hidden" value="production" /><button className={buttonVariants({ size: 'sm' })} type="submit">운영 배포</button></form><form action={apiAction(`/projects/${data.projectId}/services/${service.id}/deployments`)} method="post"><input name="_returnTo" type="hidden" value={`${data.base}?view=deployments`} /><input name="deploymentType" type="hidden" value="preview" /><button className={buttonVariants({ variant: 'outline', size: 'sm' })} type="submit">미리보기</button></form></div>;
+  const action = apiAction(`/projects/${data.projectId}/services/${service.id}/deployments`);
+  const returnTo = `${data.base}?view=deployments`;
+  return <div className="flex flex-wrap items-start gap-raibit-sm"><OperationSubmit action={action} className="contents" pendingLabel="운영 배포 요청을 확인하고 있습니다." returnTo={returnTo} submitClassName={buttonVariants({ size: 'sm' })} submitLabel="운영 배포"><input name="deploymentType" type="hidden" value="production" /></OperationSubmit><OperationSubmit action={action} className="contents" pendingLabel="미리보기 배포 요청을 확인하고 있습니다." returnTo={returnTo} submitClassName={buttonVariants({ variant: 'outline', size: 'sm' })} submitLabel="미리보기"><input name="deploymentType" type="hidden" value="preview" /></OperationSubmit></div>;
 }
 
 function ServiceItem({ data, service }: Readonly<{ data: ProjectHubData; service: ServiceRecord }>) {

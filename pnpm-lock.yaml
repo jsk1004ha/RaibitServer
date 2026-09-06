@@ -13,9 +13,21 @@ importers:
 
   .:
     devDependencies:
+      '@nestjs/common':
+        specifier: 11.1.21
+        version: 11.1.21(reflect-metadata@0.2.2)(rxjs@7.8.1)
+      '@nestjs/core':
+        specifier: 11.1.21
+        version: 11.1.21(@nestjs/common@11.1.21(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/platform-express@11.1.21)(reflect-metadata@0.2.2)(rxjs@7.8.1)
       '@prisma/client':
         specifier: 6.19.0
         version: 6.19.0(prisma@6.19.0(typescript@6.0.3))(typescript@6.0.3)
+      '@raibitserver/api-client':
+        specifier: workspace:*
+        version: link:packages/api-client
+      '@raibitserver/core':
+        specifier: workspace:*
+        version: link:packages/core
       '@types/node':
         specifier: 25.9.0
         version: 25.9.0
@@ -37,6 +49,9 @@ importers:
       yaml:
         specifier: 2.9.0
         version: 2.9.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   apps/api:
     dependencies:
@@ -187,6 +202,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@raibitserver/schemas':
+        specifier: workspace:*
+        version: link:../schemas
       '@prisma/client':
         specifier: ^6.19.0
         version: 6.19.0(prisma@6.19.0(typescript@6.0.3))(typescript@6.0.3)

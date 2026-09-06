@@ -2,6 +2,8 @@ import { cookies } from 'next/headers';
 import { fetchWithInitialResponseTimeout, readBoundedBody, SESSION_COOKIE_NAME } from './request-security.js';
 import { controlPlaneErrorCode } from './control-plane-errors.js';
 
+export { apiAction } from './api-action';
+
 const CONTROL_PLANE_CONNECT_TIMEOUT_MS = 10_000;
 const CONTROL_PLANE_BODY_TIMEOUT_MS = 15_000;
 const CONTROL_PLANE_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -39,12 +41,6 @@ export async function dashboardApiContext(): Promise<DashboardApiContext> {
 
 export function publicDashboardApiContext(): DashboardApiContext {
   return { baseUrl: dashboardApiBaseUrl(), headers: {} };
-}
-
-// Browser navigation and mutations stay on the dashboard origin. The Route Handler
-// reads the HttpOnly session and attaches the Authorization header server-side.
-export function apiAction(path: string, _context?: DashboardApiContext) {
-  return `/api/control${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 export async function getJson(path: string, fallback: any = null, context?: DashboardApiContext): Promise<DashboardApiResult> {
@@ -170,14 +166,16 @@ export async function loadResourceConsole(resourceId: string, view = 'overview',
   const resolved = context || await dashboardApiContext();
   const needsOverviewData = view === 'overview' || view === 'schema';
   const needsStructureData = view === 'schema';
+  const needsBackupsData = view === 'backups';
   const fallback = <T,>(body: T): DashboardApiResult<T> => ({ ok: true, status: 200, body });
-  const [resource, schema, tables, collections, keys, browse] = await Promise.all([
+  const [resource, schema, tables, collections, keys, browse, backups] = await Promise.all([
     getJson(`/resources/${encodeURIComponent(resourceId)}`, { id: resourceId }, resolved),
     needsOverviewData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/schema`, { schema: {} }, resolved) : fallback({ schema: {} }),
     needsStructureData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/tables`, { tables: [] }, resolved) : fallback({ tables: [] }),
     needsStructureData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/collections`, { collections: [] }, resolved) : fallback({ collections: [] }),
     needsStructureData ? getJson(`/resources/${encodeURIComponent(resourceId)}/console/keys`, { keys: [] }, resolved) : fallback({ keys: [] }),
     needsStructureData ? postJson(`/resources/${encodeURIComponent(resourceId)}/console/browse`, {}, {}, resolved) : fallback({}),
+    needsBackupsData ? getJson(`/resources/${encodeURIComponent(resourceId)}/backups`, { backups: [], nextCursor: null }, resolved) : fallback({ backups: [], nextCursor: null }),
   ]);
   return {
     context: resolved,
@@ -187,6 +185,7 @@ export async function loadResourceConsole(resourceId: string, view = 'overview',
     collections: collections.body,
     keys: keys.body,
     browse: browse.body,
+    backups: backups.body,
     loadErrors: collectLoadIssues([
       ['리소스 정보', resource],
       ['스키마', schema],
@@ -194,6 +193,7 @@ export async function loadResourceConsole(resourceId: string, view = 'overview',
       ['컬렉션', collections],
       ['키', keys],
       ['데이터 탐색', browse],
+      ['백업', backups],
     ]),
   };
 }
@@ -223,38 +223,50 @@ export async function loadAdminConsole(context?: DashboardApiContext) {
   };
 }
 
-export async function loadGitHubConsole(context?: DashboardApiContext) {
+export async function loadGitHubConsole(context?: DashboardApiContext, catalog?: { readonly installationId?: string; readonly cursor?: string; readonly q?: string }) {
   const resolved = context || await dashboardApiContext();
-  const [integrations, installations, projects] = await Promise.all([
+  const [integrations, installations, projects, me] = await Promise.all([
     getJson('/integrations/github', { integrations: [] }, resolved),
     getJson('/github/installations', { installations: [] }, resolved),
     getJson('/projects', { projects: [] }, resolved),
+    getJson('/auth/me', { subject: null, memberships: [] }, resolved),
   ]);
   const projectRows = projects.body?.projects || [];
   const installationRows = installations.body?.installations || [];
-  const [repositoryLoads, serviceLoads] = await Promise.all([
-    Promise.all(installationRows.map(async (installation: any) => {
-      const result = await getJson(`/github/installations/${encodeURIComponent(installation.installationId || installation.id)}/repositories`, { repositories: [] }, resolved);
-      return { installationId: installation.installationId || installation.id, result };
-    })),
+  const catalogInstallationId = catalog?.installationId && installationRows.some((installation: any) => String(installation.installationId || installation.id) === catalog.installationId)
+    ? catalog.installationId
+    : installationRows[0] ? String(installationRows[0].installationId || installationRows[0].id) : '';
+  const catalogSearch = new URLSearchParams();
+  if (catalog?.cursor) catalogSearch.set('cursor', catalog.cursor);
+  if (catalog?.q) catalogSearch.set('q', catalog.q);
+  const catalogPath = catalogInstallationId
+    ? `/github/installations/${encodeURIComponent(catalogInstallationId)}/repositories${catalogSearch.size ? `?${catalogSearch.toString()}` : ''}`
+    : null;
+  const [repositoryLoad, serviceLoads] = await Promise.all([
+    catalogPath
+      ? getJson(catalogPath, { repositories: [] }, resolved)
+      : Promise.resolve({ ok: true, status: 200, body: { repositories: [] } }),
     Promise.all(projectRows.map(async (project: any) => {
       const result = await getJson(`/projects/${encodeURIComponent(project.id)}/services`, { services: [] }, resolved);
       return { projectId: project.id, projectName: project.name || project.slug, result };
     })),
   ]);
-  const repositoriesByInstallation = repositoryLoads.map((row) => ({ installationId: row.installationId, repositories: row.result.body?.repositories || [] }));
+  const repositoriesByInstallation = catalogInstallationId ? [{ installationId: catalogInstallationId, repositories: repositoryLoad.body?.repositories || [] }] : [];
   const servicesByProject = serviceLoads.map((row) => ({ projectId: row.projectId, projectName: row.projectName, services: row.result.body?.services || [] }));
   return {
     context: resolved,
     integrations: integrations.body?.integrations || [],
     installations: installationRows,
     repositoriesByInstallation,
+    repositoryCatalog: repositoryLoad.body || { repositories: [] },
     repositories: repositoriesByInstallation.flatMap((row) => row.repositories.map((repository: any) => ({ ...repository, installationId: row.installationId }))),
     projects: projectRows,
     services: servicesByProject.flatMap((row) => row.services.map((service: any) => ({ ...service, projectId: row.projectId, projectName: row.projectName }))),
+    subject: me.body?.subject || null,
+    memberships: me.body?.memberships || [],
     loadErrors: [
-      ...collectLoadIssues([['GitHub 연동', integrations], ['GitHub 설치', installations], ['프로젝트', projects]]),
-      ...collectLoadIssues(repositoryLoads.map((row) => ['설치 저장소', row.result] as [string, DashboardApiResult])),
+      ...collectLoadIssues([['GitHub 연동', integrations], ['GitHub 설치', installations], ['프로젝트', projects], ['조직 권한', me]]),
+      ...collectLoadIssues(catalogPath ? [['설치 저장소', repositoryLoad] as [string, DashboardApiResult]] : []),
       ...collectLoadIssues(serviceLoads.map((row) => ['프로젝트 서비스', row.result] as [string, DashboardApiResult])),
     ],
   };

@@ -25,7 +25,7 @@ test('dashboard project detail is API-backed instead of hardcoded prototype arra
 });
 
 test('dashboard exposes public, authenticated, admin, GitHub, deployment, and resource routes', async () => {
-  const [login, controlRoute, requestSecurity, admin, github, githubInstall, githubCallback, guide, deployment, resource, contributors, proxy, shell] = await Promise.all([
+  const [login, controlRoute, requestSecurity, admin, github, githubInstall, githubCallback, guide, deployment, deploymentRecovery, resource, contributors, proxy, shell] = await Promise.all([
     fs.readFile(new URL('../apps/dashboard/app/login/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/api/control/[...path]/route.ts', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/lib/request-security.js', import.meta.url), 'utf8'),
@@ -35,6 +35,7 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
     fs.readFile(new URL('../apps/dashboard/app/github/callback/route.ts', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/guide/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/components/project-hub/deployment-recovery-action.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/app/contributors/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/proxy.ts', import.meta.url), 'utf8'),
@@ -72,13 +73,18 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
     assert.ok(githubCallback.includes(marker), `GitHub callback must recover and clear setup state: ${marker}`);
   }
   assert.ok(guide.includes('사용 안내'));
-  for (const marker of ['/deployments/${encodedDeploymentId}/cancel', '/deployments/${encodedDeploymentId}/rollback', 'imageDigest', 'errorCode', '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소']) {
+  for (const marker of ['imageDigest', 'errorCode', '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트']) {
     assert.ok(deployment.includes(marker), `${marker} missing from deployment screen`);
   }
+  assert.match(deployment, /<DeploymentRecoveryAction action=\{history\.eligibleAction\}/);
+  assert.match(deploymentRecovery, /action=\{`\/api\/control\$\{action\.href\}`\}/);
+  assert.match(deploymentRecovery, /action\.type === 'rollback' \? <input name="confirmed" type="hidden" value="true"/);
   assert.doesNotMatch(deployment, /\/deployments\/\$\{deploymentId\}\/status/, 'tenant dashboard must not expose worker-owned deployment status mutation');
-  assert.match(deployment, /cancellationAllowed[\s\S]*?QUEUED[\s\S]*?BUILDING[\s\S]*?IMAGE_READY/);
-  assert.match(deployment, /실행 중이거나 완료된 배포는 롤백 또는 서비스 삭제를 사용하세요/);
-  for (const marker of ['/console/query', '/console/command', '/provision', '/attach', 'confirmed', '리소스 콘솔', '데이터 구조', '쿼리', '백업', '연결', '공급자 명령 실행', '계획 만들기', '서비스에 연결']) {
+  assert.match(deployment, /history\?\.permissions\.execute && history\.eligibleAction/);
+  const provisioning = await fs.readFile(new URL('../apps/dashboard/components/resource-provision-actions.tsx', import.meta.url), 'utf8');
+  assert.ok(provisioning.includes('계획 미리보기'));
+  assert.ok(provisioning.includes('실제 실행 요청'));
+  for (const marker of ['/console/query', '/console/command', '/provision', '/attach', 'confirmed', '리소스 콘솔', '데이터 구조', '쿼리', '백업', '연결', '공급자 명령 실행', 'ResourceProvisionActions', '서비스에 연결']) {
     assert.ok(resource.includes(marker), `${marker} missing from resource screen`);
   }
   for (const marker of ['2309', '김준서', 'teacher', '최희진']) assert.ok(contributors.includes(marker));

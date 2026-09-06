@@ -20,7 +20,7 @@ test('HTTP API serves health, catalog, and manifest planning', async () => {
     const catalog = await request(port, 'GET', '/catalog');
     assert.equal(catalog.resources.some((resource) => resource.key === 'postgresql'), true);
 
-    const org = await request(port, 'POST', '/organizations', { name: 'GDG Seoul', plan: 'club' });
+    const org = controlPlane.store.createOrganization({ name: 'GDG Seoul', plan: 'club' });
     assert.equal(org.slug, 'gdg-seoul');
 
     const manifest = await request(port, 'POST', '/plan/manifests', {
@@ -43,6 +43,7 @@ test('HTTP API serves health, catalog, and manifest planning', async () => {
     assert.equal(controlPlane.store.snapshot().workflowJobs.length, 1);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -189,7 +190,7 @@ test('HTTP API exposes deployment detail, status transition, cancel, and rollbac
     assert.equal(rollback.body.workflowJob.type, 'rollback-deploy');
     assert.equal(controlPlane.store.listDeploymentEvents(queued.id).some((event) => event.type === 'deployment.rollback.requested'), true);
 
-    controlPlane.store.appendRuntimeLog({ serviceId: service.id, deploymentId: queued.id, line: 'ready' });
+    controlPlane.store.appendRuntimeLog({ serviceId: service.id, deploymentId: queued.id, sourceInstanceId: 'api-store-ready', line: 'ready' });
     const deploymentStream = await requestRaw(port, 'GET', `/deployments/${queued.id}/stream`);
     assert.equal(deploymentStream.statusCode, 200);
     assert.match(deploymentStream.headers['content-type'], /text\/event-stream/);
@@ -198,6 +199,7 @@ test('HTTP API exposes deployment detail, status transition, cancel, and rollbac
     assert.match(runtimeStream.body, /event: service\.logs\.snapshot/);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -235,6 +237,7 @@ test('rollback cannot use unscoped deployments or bypass deployment quotas', asy
     assert.match(denied.body.error, /maxDeploymentsPerDay/);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -255,6 +258,7 @@ test('HTTP deployment queue rejects workloads blocked by security policy', async
     assert.equal(controlPlane.store.snapshot().workflowJobs.length, 0);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });
 
@@ -282,5 +286,6 @@ test('HTTP resource create strips tenant-supplied provider connection fields', a
     assert.equal(response.body.desiredSpec.storageGb, undefined);
   } finally {
     server.close();
+    await once(server, 'close');
   }
 });

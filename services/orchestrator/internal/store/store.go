@@ -36,9 +36,10 @@ const (
 )
 
 var (
-	ErrDeploymentLeaseLost     = errors.New("deployment reconcile lease ownership lost")
-	ErrDeletionLeaseLost       = errors.New("deletion lease ownership lost")
-	ErrParentDeletionRequested = errors.New("deployment parent is being deleted")
+	ErrDeploymentLeaseLost      = errors.New("deployment reconcile lease ownership lost")
+	ErrDeletionLeaseLost        = errors.New("deletion lease ownership lost")
+	ErrParentDeletionRequested  = errors.New("deployment parent is being deleted")
+	ErrRuntimeLogSourceIdentity = errors.New("runtime log immutable source instance ID is required")
 )
 
 type DesiredStateStore interface {
@@ -47,6 +48,8 @@ type DesiredStateStore interface {
 }
 
 type ReconcileStore interface {
+	HealthStore
+	PreviewRouteStore
 	ClaimNextServiceDeletion(ctx context.Context, options ClaimOptions) (*Service, error)
 	ClaimNextProjectDeletion(ctx context.Context, options ClaimOptions) (*Project, error)
 	RenewServiceDeletionLease(ctx context.Context, lease DeletionLease, now time.Time) (DeletionLease, error)
@@ -109,6 +112,10 @@ func (project *Project) DeletionLease() DeletionLease {
 }
 
 type Service struct {
+	HealthCheckPath     string
+	LivenessPath        string
+	ReadinessPath       string
+	PublicHealthPath    string
 	ID                  string
 	ProjectID           string
 	Name                string
@@ -133,23 +140,35 @@ func (service *Service) DeletionLease() DeletionLease {
 }
 
 type Deployment struct {
-	ID                string
-	ServiceID         string
-	ProjectID         string
-	Status            string
-	DeploymentType    string
-	TriggerType       string
-	Branch            string
-	CommitSHA         string
-	ImageURL          string
-	ImageDigest       string
-	PreviewURL        string
-	PreviousImageURL  string
-	PullRequestNumber int
-	ReconcileAction   string
-	ReconcileLockedBy string
-	ReconcileLockedAt time.Time
-	ReconcileAttempts int
+	PublicHealthStatus  string
+	HealthCheckedAt     time.Time
+	HealthFailureCode   string
+	ObservedGeneration  int
+	DesiredSpecSnapshot json.RawMessage
+	SnapshotVersion     int
+	SourceDeploymentID  string
+	RetryOfDeploymentID string
+	ID                  string
+	ServiceID           string
+	ProjectID           string
+	Status              string
+	DeploymentType      string
+	TriggerType         string
+	Branch              string
+	CommitSHA           string
+	ImageURL            string
+	ImageDigest         string
+	PreviewURL          string
+	PreviousImageURL    string
+	PullRequestNumber   int
+	ReconcileAction     string
+	ReconcileLockedBy   string
+	ReconcileLockedAt   time.Time
+	ReconcileAttempts   int
+	PreviewLineageID    string
+	PreviewGeneration   int
+	PreviewRuntimeJSON  json.RawMessage
+	PreviewOwnedJSON    json.RawMessage
 }
 
 func (deployment *Deployment) Lease() DeploymentLease {
@@ -167,12 +186,13 @@ type DeploymentEventInput struct {
 }
 
 type RuntimeLogInput struct {
-	ServiceID     string
-	DeploymentID  string
-	PodName       string
-	ContainerName string
-	Line          string
-	Level         string
+	ServiceID        string
+	DeploymentID     string
+	PodName          string
+	SourceInstanceID string
+	ContainerName    string
+	Line             string
+	Level            string
 }
 
 type FileStore struct {
@@ -361,6 +381,13 @@ func (s *FileStore) FinalizeProjectDeletion(ctx context.Context, lease DeletionL
 	}
 	projects = append(projects[:idx], projects[idx+1:]...)
 	setRecordSlice(state, "projects", projects)
+	for _, job := range recordSlice(state, "workflowJobs") {
+		if stringField(job, "type") == PublicHealthObserve && stringField(mapField(job, "payload"), "projectId") == lease.ID && (stringField(job, "status") == "queued" || stringField(job, "status") == "running") {
+			job["status"] = "cancelled"
+			job["lockedAt"] = nil
+			job["lockedBy"] = nil
+		}
+	}
 	return s.save(state)
 }
 
@@ -608,7 +635,10 @@ func (s *FileStore) AppendRuntimeLog(ctx context.Context, input RuntimeLogInput)
 	if strings.TrimSpace(input.Line) == "" {
 		return nil
 	}
-	return s.appendRecord(ctx, "runtimeLogs", record{"id": stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now()), "serviceId": input.ServiceID, "deploymentId": nullable(input.DeploymentID), "podName": defaultString(input.PodName, "orchestrator"), "containerName": defaultString(input.ContainerName, "app"), "line": Redact(input.Line), "level": defaultString(input.Level, "info"), "timestamp": now()})
+	if !runtimeSourceInstancePattern.MatchString(input.SourceInstanceID) {
+		return ErrRuntimeLogSourceIdentity
+	}
+	return s.appendRecord(ctx, "runtimeLogs", record{"id": stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now()), "serviceId": input.ServiceID, "deploymentId": nullable(input.DeploymentID), "podName": defaultString(input.PodName, "orchestrator"), "podUid": input.SourceInstanceID, "containerName": defaultString(input.ContainerName, "app"), "line": Redact(input.Line), "level": defaultString(input.Level, "info"), "timestamp": now()})
 }
 
 func (s *FileStore) appendRecord(ctx context.Context, key string, row record) error {
@@ -703,6 +733,7 @@ func serviceFromRecord(row record) *Service {
 	desiredSpec := mapField(row, "desiredSpec")
 	desiredState := mapField(row, "desiredState")
 	service := &Service{
+		HealthCheckPath: stringField(row, "healthCheckPath"), LivenessPath: stringField(row, "livenessPath"), ReadinessPath: stringField(row, "readinessPath"), PublicHealthPath: stringField(row, "publicHealthPath"),
 		ID: stringField(row, "id"), ProjectID: stringField(row, "projectId"), Name: stringField(row, "name"), Slug: stringField(row, "slug"), Type: defaultString(stringField(row, "type"), "web"),
 		ImageURL: coalesceString(stringField(row, "imageUrl"), stringField(row, "image"), stringField(desiredState, "imageUrl"), stringField(desiredState, "image")),
 		Port:     intField(row, "port"), Replicas: intField(desiredState, "replicas"), BaseDomain: coalesceString(stringField(row, "baseDomain"), stringField(desiredState, "baseDomain")), DesiredSpec: desiredSpec, DesiredState: desiredState,
@@ -721,7 +752,18 @@ func serviceFromRecord(row record) *Service {
 }
 
 func deploymentFromRecord(row record) *Deployment {
-	return &Deployment{ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts")}
+	return &Deployment{PublicHealthStatus: defaultString(stringField(row, "publicHealthStatus"), "UNKNOWN"), HealthCheckedAt: parseTimestamp(stringField(row, "healthCheckedAt")), HealthFailureCode: stringField(row, "healthFailureCode"), ObservedGeneration: intField(row, "observedGeneration"), ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts"), DesiredSpecSnapshot: snapshotJSONFromRecord(row), SnapshotVersion: snapshotVersionFromRecord(row), SourceDeploymentID: stringField(row, "sourceDeploymentId"), RetryOfDeploymentID: stringField(row, "retryOfDeploymentId"), PreviewLineageID: stringField(row, "previewLineageId"), PreviewGeneration: intField(row, "previewGeneration"), PreviewRuntimeJSON: rawJSONFromRecord(row, "previewRuntime"), PreviewOwnedJSON: rawJSONFromRecord(row, "previewOwnedObjects")}
+}
+
+func rawJSONFromRecord(row record, key string) json.RawMessage {
+	if row == nil || row[key] == nil {
+		return nil
+	}
+	raw, err := json.Marshal(row[key])
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 func deletionClaimClock(options ClaimOptions) (time.Time, time.Duration) {
@@ -823,6 +865,15 @@ func cascadeFileService(state map[string]any, serviceID string) {
 			deploymentIDs[stringField(row, "id")] = struct{}{}
 		}
 	}
+	for _, job := range recordSlice(state, "workflowJobs") {
+		if stringField(job, "type") == PublicHealthObserve {
+			if _, deleted := deploymentIDs[stringField(job, "targetId")]; deleted && (stringField(job, "status") == "queued" || stringField(job, "status") == "running") {
+				job["status"] = "cancelled"
+				job["lockedAt"] = nil
+				job["lockedBy"] = nil
+			}
+		}
+	}
 	setRecordSlice(state, "deployments", filterRecords(recordSlice(state, "deployments"), func(row record) bool {
 		return stringField(row, "serviceId") != serviceID
 	}))
@@ -883,8 +934,12 @@ func recordOwnsDeploymentLease(row record, lease DeploymentLease) bool {
 }
 
 func parseTimestamp(value string) time.Time {
-	parsed, _ := time.Parse(time.RFC3339Nano, value)
-	return parsed
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999", "2006-01-02T15:04:05.999"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 func recordSlice(state map[string]any, key string) []record {
@@ -1017,8 +1072,9 @@ func stableID(parts ...string) string {
 func notFound(kind, id string) error { return fmt.Errorf("%s not found: %s", kind, id) }
 
 var (
-	secretAssignmentPattern = regexp.MustCompile(`(?i)([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)`)
-	knownTokenPattern       = regexp.MustCompile(`(?i)(ghp_|github_pat_|glpat-|sk-[A-Za-z0-9_-]*|xox[baprs]-)[A-Za-z0-9_\-]+`)
+	secretAssignmentPattern      = regexp.MustCompile(`(?i)([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)`)
+	knownTokenPattern            = regexp.MustCompile(`(?i)(ghp_|github_pat_|glpat-|sk-[A-Za-z0-9_-]*|xox[baprs]-)[A-Za-z0-9_\-]+`)
+	runtimeSourceInstancePattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,256}$`)
 )
 
 func Redact(value string) string {

@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { applyManifests, applyProject, commandExists, executeBuildWorkflow, provisionProjectResources, pushImage, runCommand } from '../packages/core/src/execution.ts';
@@ -11,9 +13,18 @@ import { injectResourceEnv } from '../packages/core/src/env-injection.ts';
 import { assertLegacyDevE2EDryRun, parseE2EOptions, resolveE2EPlan } from './e2e-mode.mjs';
 import { serviceHostname } from '../packages/core/src/domain-router.ts';
 import { createDeploymentWorkflowHandlers, reconcileDeploymentRollout } from '../packages/core/src/deployment-workflow.ts';
+import { RESOURCE_CAPABILITIES } from '../packages/core/src/resource-capabilities.ts';
 
 const e2eOptions = parseE2EOptions(process.argv.slice(2), process.env);
 if (e2eOptions.requestedMode === 'live') assertLegacyDevE2EDryRun({ dryRun: false });
+await import('../tests/fixtures/resource-runtime.mjs');
+const invocationCwd = process.cwd();
+const repositoryRoot = fileURLToPath(new URL('../', import.meta.url));
+const outputDir = path.resolve(process.env.RAIBITSERVER_E2E_OUTPUT_DIR || '.raibitserver-work');
+const workDir = path.join(os.tmpdir(), `raibit-dev-e2e-${crypto.randomUUID()}`);
+console.error(`E2E_RESOURCES ${JSON.stringify({ outputDir, workDir })}`);
+await fs.mkdir(workDir);
+process.chdir(workDir);
 const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET || 'local-e2e-secret-at-least-32-chars';
 const githubWebhookSecret = process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || 'local-e2e-github-webhook-secret';
 const emailVerificationCode = process.env.RAIBITSERVER_EMAIL_VERIFICATION_TEST_CODE || '424242';
@@ -33,7 +44,7 @@ app.listen(0, '127.0.0.1');
 await once(app, 'listening');
 const appPort = app.address().port;
 
-const evidence = { apiPort, appPort, checks: [], tools: {}, mode: 'deterministic-dry-run' };
+const evidence = { apiPort, appPort, outputDir, workDir, checks: [], tools: {}, mode: 'deterministic-dry-run' };
 try {
   for (const tool of ['docker', 'kubectl', 'kind', 'k3d', 'git', 'go']) evidence.tools[tool] = await commandExists(tool);
   const e2ePlan = resolveE2EPlan({ ...e2eOptions, tools: evidence.tools });
@@ -82,6 +93,13 @@ try {
   const envUpload = await request('POST', `/projects/${project.body.id}/services/${service.body.id}/env-file`, { filename: '.env', content: 'PUBLIC_URL=http://example.local\n' }, pendingToken);
   assertStatus(envUpload, 200, 'env file upload');
 
+  const githubIntegration = controlPlane.store.createGitHubIntegration({ organizationId: project.body.organizationId, userId: pendingVerified.body.user.id, accountLogin: 'student-org', installationId: '4200' });
+  controlPlane.store.verifyGitHubIntegration({ integrationId: githubIntegration.id, installationId: '4200', accountLogin: 'student-org' });
+  controlPlane.store.registerGitHubRepository({ installationId: '4200', githubRepoId: '42001', fullName: 'student-org/local-e2e', private: false, defaultBranch: 'main' });
+  controlPlane.store.attachGitHubRepositoryToService({ projectId: project.body.id, serviceId: service.body.id, integrationId: githubIntegration.id, repositoryId: '42001', branch: 'main' });
+  const githubRepository = { id: 42001, full_name: 'student-org/local-e2e', default_branch: 'main' };
+  const githubInstallation = { id: 4200 };
+
   const consoleCreate = await request('POST', `/resources/${resource.body.id}/console/query`, { query: 'CREATE TABLE IF NOT EXISTS health (id INTEGER PRIMARY KEY, status TEXT)', confirmed: true }, pendingToken);
   assertStatus(consoleCreate, 200, 'sqlite console create');
   await request('POST', `/resources/${resource.body.id}/console/query`, { query: "INSERT INTO health(status) VALUES ('ok')", confirmed: true }, pendingToken);
@@ -90,7 +108,7 @@ try {
   if (!consoleRows.body.rows.some((row) => row.status === 'ok')) throw new Error('sqlite console did not return inserted row');
 
   const postgresResource = controlPlane.store.createResource({ projectId: project.body.id, name: 'local-postgres', type: 'database', engine: 'postgresql', provider: 'postgresql-direct', databaseName: 'locale2e', username: 'locale2e_app' });
-  const postgresProvision = await controlPlane.store.provisionResourceProvider({ resourceId: postgresResource.id, dryRun: true, actorUserId: pendingVerified.body.user.id, password: 'local-e2e-postgres-secret' });
+  const postgresProvision = await controlPlane.store.provisionResourceProvider({ resourceId: postgresResource.id, intent: 'preview-plan', actorUserId: pendingVerified.body.user.id });
   const postgresEnv = injectResourceEnv({ ...service.body, attachedResources: ['local-postgres'] }, [postgresProvision.resource], 'local-e2e');
   if (!String(postgresEnv.DATABASE_URL || '').startsWith('postgresql://')) throw new Error('PostgreSQL DATABASE_URL was not injected');
 
@@ -121,30 +139,28 @@ try {
 
   const preview = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'preview', triggerType: 'pull_request', pullRequestNumber: 42, branch: 'feature/local-e2e', previewUrl: `http://pr-42--${urlHost.replace(/^express-api--/, '')}` }, pendingToken);
   assertStatus(preview, 202, 'PR preview deployment enqueue');
-  const githubIntegration = controlPlane.store.createGitHubIntegration({ organizationId: project.body.organizationId, userId: pendingVerified.body.user.id, accountLogin: 'student-org', installationId: '4200' });
-  controlPlane.store.verifyGitHubIntegration({ integrationId: githubIntegration.id, installationId: '4200', accountLogin: 'student-org' });
-  controlPlane.store.registerGitHubRepository({ installationId: '4200', githubRepoId: '42001', fullName: 'student-org/local-e2e', private: false, defaultBranch: 'main' });
-  controlPlane.store.attachGitHubRepositoryToService({ projectId: project.body.id, serviceId: service.body.id, integrationId: githubIntegration.id, repositoryId: '42001', branch: 'main' });
-  const githubRepository = { id: 42001, full_name: 'student-org/local-e2e', default_branch: 'main' };
-  const githubInstallation = { id: 4200 };
   const pushPayload = { installation: githubInstallation, repository: githubRepository, ref: 'refs/heads/main', after: 'a'.repeat(40) };
   const githubPush = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('push', 'local-e2e-push-main', pushPayload));
   if (!githubPush.actions.some((action) => action.type === 'production-deployment-enqueued')) throw new Error('GitHub push webhook did not enqueue production deployment');
   const githubPreviewActions = [];
-  for (const [action, sha] of [['opened', 'b'.repeat(40)], ['synchronize', 'c'.repeat(40)], ['reopened', 'd'.repeat(40)]]) {
-    const deliveryId = `local-e2e-pr-${action}`;
-    const payload = { action, number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha } } };
+  for (const [action, sha, before, deliveryId, updatedAt] of [
+    ['opened', 'b'.repeat(40), null, '00000000-0000-4000-8000-000000000001', '2026-09-07T00:00:01Z'],
+    ['synchronize', 'c'.repeat(40), 'b'.repeat(40), '00000000-0000-4000-8000-000000000002', '2026-09-07T00:00:02Z'],
+    ['reopened', 'd'.repeat(40), null, '00000000-0000-4000-8000-000000000003', '2026-09-07T00:00:03Z'],
+  ]) {
+    const payload = { action, ...(before ? { before } : {}), number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, state: 'open', head: { ref: 'feature/local-e2e', sha }, base: { ref: 'main' }, updated_at: updatedAt } };
     const result = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', deliveryId, payload));
     const queued = result.actions.find((item) => item.type === 'preview-deployment-enqueued');
     const queuedJob = controlPlane.store.workflowJobs.find((item) => item.id === queued?.workflowJobId);
-    if (!queued?.previewUrl || !/^pr-42-express-api-[a-f0-9]{12}$/.test(queued.previewWorkloadName || '') || queuedJob?.payload?.kubernetes?.workloadName !== queued.previewWorkloadName) {
+    const runtime = queuedJob?.payload?.runtime;
+    if (!queued?.lineageId || !queued?.deploymentId || queuedJob?.payload?.lineageId !== queued.lineageId || runtime?.deploymentId !== queued.deploymentId || !/^pr-42-[a-z0-9-]+-[a-f0-9]{12}$/.test(runtime?.workloadName || '')) {
       throw new Error(`GitHub PR ${action} did not enqueue deterministic preview workload`);
     }
-    githubPreviewActions.push({ action, deliveryId, previewUrl: queued.previewUrl, previewWorkloadName: queued.previewWorkloadName });
+    githubPreviewActions.push({ action, deliveryId, previewUrl: `https://${runtime.stableHost}`, previewWorkloadName: runtime.workloadName });
   }
-  const cleanupPayload = { action: 'closed', number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: 'e'.repeat(40) } } };
-  const previewCleanup = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', 'local-e2e-pr-closed', cleanupPayload));
-  if (!previewCleanup.actions.some((action) => action.type === 'preview-cleanup-enqueued')) throw new Error('preview cleanup webhook did not enqueue cleanup');
+  const cleanupPayload = { action: 'closed', number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, state: 'closed', head: { ref: 'feature/local-e2e', sha: 'e'.repeat(40) }, base: { ref: 'main' }, updated_at: '2026-09-07T00:00:04Z' } };
+  const previewCleanup = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', '00000000-0000-4000-8000-000000000004', cleanupPayload));
+  if (!previewCleanup.actions.some((action) => action.type === 'preview-cleanup-requested')) throw new Error('preview cleanup webhook did not request cleanup');
 
   const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', name: 'Club User', studentId: '2503', organizationSlug: 'club-org' });
   assertStatus(club, 201, 'club signup');
@@ -191,54 +207,70 @@ try {
   evidence.githubWebhookEvidence = {
     pushAction: githubPush.actions[0]?.type || null,
     previewActions: githubPreviewActions,
-    previewWorkloadPayloads: controlPlane.store.workflowJobs.filter((job) => job.type === 'preview-deploy').map((job) => job.payload.kubernetes?.workloadName).filter(Boolean),
+    previewWorkloadPayloads: controlPlane.store.workflowJobs.filter((job) => job.type === 'preview-deploy').map((job) => job.payload.runtime?.workloadName).filter(Boolean),
   };
   evidence.previewCleanupAction = previewCleanup.actions[0]?.type || null;
-  evidence.checks.push('first-user admin bootstrap works', 'non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'Beta DB/resource consoles and env injection work', 'GitHub push webhook fixture enqueues production deployment', 'GitHub PR opened/synchronize/reopened fixtures enqueue preview workloads', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
-  await fs.mkdir('.raibitserver-work', { recursive: true });
-  await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
-  if (e2ePlan.mode === 'live') await fs.writeFile('.raibitserver-work/live-e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
-  console.log(JSON.stringify({ ok: true, ...evidence }, null, 2));
+  evidence.checks.push('first-user admin bootstrap works', 'non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'Beta DB/resource consoles and env injection work', 'GitHub push webhook fixture enqueues production deployment', 'GitHub PR opened/synchronize/reopened fixtures enqueue preview workloads', 'preview deployment fixture created', 'preview cleanup workflow requested', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
+  evidence.ok = true;
 } catch (error) {
   evidence.ok = false;
   evidence.error = error?.message || String(error);
   if (error?.result) evidence.failedCommand = error.result;
   evidence.failedAt = new Date().toISOString();
-  await fs.mkdir('.raibitserver-work', { recursive: true });
-  await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
-  if (e2eOptions.requestedMode === 'live' || evidence.requestedMode === 'live') {
-    await fs.writeFile('.raibitserver-work/live-e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
-  }
   console.error(error?.stack || error);
   process.exitCode = 1;
 } finally {
-  api.close();
-  app.close();
+  api.closeAllConnections();
+  app.closeAllConnections();
+  await Promise.all([new Promise(resolve => api.close(resolve)), new Promise(resolve => app.close(resolve))]);
+  process.chdir(invocationCwd);
+  try {
+    await fs.rm(workDir, { recursive: true, force: true });
+    evidence.cleanup = { workDirRemoved: true, listenersClosed: !api.listening && !app.listening };
+  } catch (error) {
+    evidence.ok = false;
+    evidence.cleanup = { workDirRemoved: false, error: error.message };
+    console.error(error);
+    process.exitCode = 1;
+  }
+  await fs.mkdir(outputDir, { recursive: true });
+  await fs.writeFile(path.join(outputDir, 'e2e-report.json'), `${JSON.stringify(evidence, null, 2)}\n`);
+  console.error(`E2E_CLEANUP ${JSON.stringify(evidence.cleanup)}`);
 }
+if (evidence.ok) console.log(JSON.stringify(evidence, null, 2));
 
 
 async function createBetaResourceEvidence(projectId, serviceId, token) {
   const specs = [
     { name: 'local-redis', type: 'cache', engine: 'redis', desiredSpec: { keys: ['health:ready'], values: { 'health:ready': 'ok' }, ttl: { 'health:ready': -1 } }, command: 'GET health:ready', envKey: 'REDIS_URL' },
-    { name: 'local-object-storage', type: 'storage', engine: 'object-storage', desiredSpec: { bucket: 'assets', buckets: ['assets'], objects: [{ key: 'hello.txt', size: 5 }] }, command: 'LIST objects', envKey: 'S3_BUCKET' },
+    { name: 'local-valkey', type: 'cache', engine: 'valkey', desiredSpec: { keys: ['health:ready'], values: { 'health:ready': 'ok' } }, command: 'GET health:ready', envKey: 'REDIS_URL' },
     { name: 'local-mysql', type: 'database', engine: 'mysql', desiredSpec: { schemas: ['app'], tables: ['health'] }, command: 'SELECT 1', envKey: 'MYSQL_URL' },
     { name: 'local-mariadb', type: 'database', engine: 'mariadb', desiredSpec: { schemas: ['app'], tables: ['health'] }, command: 'SELECT 1', envKey: 'MARIADB_URL' },
     { name: 'local-mongodb', type: 'database', engine: 'mongodb', desiredSpec: { collections: ['health'], documents: { health: [{ ok: true }] } }, command: 'db.health.find({})', envKey: 'MONGODB_URI' },
-    { name: 'local-qdrant', type: 'vector', engine: 'qdrant', desiredSpec: { collection: 'vectors', collections: ['vectors'] }, command: 'GET /collections', envKey: 'VECTOR_DB_URL' },
-    { name: 'local-nats', type: 'queue', engine: 'nats', desiredSpec: { topic: 'events', subjects: ['events.>'] }, command: 'subjects', envKey: 'QUEUE_URL' },
   ];
   const evidence = [];
-  for (const spec of specs) {
+  for (const capability of RESOURCE_CAPABILITIES.filter(entry => !['postgresql', 'sqlite'].includes(entry.engine))) {
+    const spec = specs.find(spec => spec.engine === capability.engine);
+    if (!capability.local.provision) {
+      const before = controlPlane.store.snapshot().resources.length;
+      const rejected = await request('POST', `/projects/${projectId}/resources`, { name: `unavailable-${capability.engine}`, engine: capability.engine }, token);
+      assertStatus(rejected, 400, `${capability.engine} unsupported resource create`);
+      if (!String(rejected.body.error).includes('RESOURCE_CAPABILITY_UNAVAILABLE') || !String(rejected.body.error).includes(capability.reasonCode)) throw new Error(`${capability.engine} missing typed capability reason`);
+      if (controlPlane.store.snapshot().resources.length !== before) throw new Error(`${capability.engine} unsupported resource was persisted`);
+      evidence.push({ engine: capability.engine, statusCode: rejected.statusCode, reasonCode: capability.reasonCode, persisted: false });
+      continue;
+    }
+    if (!spec) throw new Error(`missing supported resource fixture: ${capability.engine}`);
     const created = await request('POST', `/projects/${projectId}/resources`, spec, token);
     assertStatus(created, 201, `${spec.engine} resource create`);
-    const provisioned = await request('POST', `/resources/${created.body.id}/provision`, { dryRun: true }, token);
+    const provisioned = await request('POST', `/resources/${created.body.id}/provision`, { intent: 'preview-plan' }, token);
     assertStatus(provisioned, 202, `${spec.engine} resource provision`);
     const attached = await request('POST', `/resources/${created.body.id}/attach`, { serviceId }, token);
     assertStatus(attached, 409, `${spec.engine} dry-run resource attach gate`);
     const console = await request('POST', `/resources/${created.body.id}/console/command`, { command: spec.command }, token);
     assertStatus(console, 200, `${spec.engine} console command`);
     if (!/READY/.test(String(attached.body.error || ''))) throw new Error(`${spec.engine} dry-run attachment was not fenced by READY state`);
-    evidence.push({ engine: spec.engine, resourceId: created.body.id, envKey: spec.envKey, attachment: 'blocked-until-ready', consoleRows: console.body.rowCount || console.body.rows?.length || 0 });
+    evidence.push({ engine: spec.engine, statusCode: created.statusCode, resourceId: created.body.id, envKey: spec.envKey, attachment: 'blocked-until-ready', consoleMode: console.body.mode, consoleRows: console.body.rowCount || console.body.rows?.length || 0 });
   }
   return evidence;
 }
@@ -249,7 +281,7 @@ async function runLiveBetaScenario({ e2ePlan, project, projectToken, existingSer
   const projectSlug = project.slug || 'local-e2e';
   const organizationSlug = 'student-org';
   const namespace = `${organizationSlug}-${projectSlug}`;
-  const sourceRoot = path.resolve('.raibitserver-work/live-sources');
+  const sourceRoot = path.join(workDir, 'live-sources');
   const metadataRoot = path.resolve('.raibitserver-work/build-metadata');
   await fs.mkdir(sourceRoot, { recursive: true });
   await fs.mkdir(metadataRoot, { recursive: true });
@@ -389,8 +421,8 @@ async function runLiveBetaScenario({ e2ePlan, project, projectToken, existingSer
   };
 
   const localPostgres = await applyLocalPostgresProvider({ namespace, dryRun: e2ePlan.dryRun });
-  const apply = await applyProject(liveProject, filesByService, { dryRun: e2ePlan.dryRun, outputDir: '.raibitserver-work', keepManifest: e2ePlan.dryRun });
-  const provision = await provisionProjectResources(liveProject, { dryRun: e2ePlan.dryRun, outputDir: '.raibitserver-work', keepManifest: e2ePlan.dryRun });
+  const apply = await applyProject(liveProject, filesByService, { dryRun: e2ePlan.dryRun, outputDir, fileName: 'project-manifests.json', keepManifest: e2ePlan.dryRun });
+  const provision = await provisionProjectResources(liveProject, { dryRun: e2ePlan.dryRun, outputDir, fileName: 'resource-manifests.json', keepManifest: e2ePlan.dryRun });
   const rolloutResults = [];
   const httpResults = [];
   const logResults = [];
@@ -493,9 +525,8 @@ function serviceCreateBody(service, registry, revision) {
 }
 
 async function copyFixture(from, to) {
-  await fs.rm(to, { recursive: true, force: true });
   await fs.mkdir(path.dirname(to), { recursive: true });
-  await fs.cp(from, to, { recursive: true });
+  await fs.cp(path.join(repositoryRoot, from), to, { recursive: true });
   return to;
 }
 
@@ -563,7 +594,7 @@ async function applyLocalPostgresProvider({ namespace, dryRun }) {
       spec: { selector: { 'app.kubernetes.io/name': 'local-postgres' }, ports: [{ name: 'postgres', port: 5432, targetPort: 'postgres' }] },
     },
   ];
-  const apply = await applyManifests(manifests, { dryRun, outputDir: '.raibitserver-work', fileName: 'local-postgres-provider.json', keepManifest: dryRun });
+  const apply = await applyManifests(manifests, { dryRun, outputDir, fileName: 'local-postgres-provider.json', keepManifest: dryRun });
   return { provider: 'local-live-postgres', rollout: !dryRun, apply };
 }
 

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { requireResourceCapability } from './resource-capabilities.ts';
 import { runCommand, commandToString, type CommandSpec } from './command-runner.ts';
 import { connectionEnvForResource } from './env-injection.ts';
 import { normalizeResourceEngine } from './catalog.ts';
@@ -12,6 +13,7 @@ const SQL_IDENTIFIER_RE = /^[a-z_][a-z0-9_]{0,62}$/;
 type AnyRecord = Record<string, any>;
 
 export function buildPostgresProviderPlan(resource: AnyRecord = {}, options: AnyRecord = {}) {
+  const capabilities = requireResourceCapability('postgresql', 'provision');
   const databaseName = safeSqlIdentifier(resource.databaseName || resource.database || tenantResourceName(resource, 'db', uniqueTenantScope(resource, options)));
   const username = safeSqlIdentifier(resource.username || `${databaseName}_app`);
   const password = String(options.password || resource.generatedPassword || resource.password || (options.generatePassword === true ? secureRandomSecret(24) : '<generated-provider-password>'));
@@ -47,6 +49,7 @@ export function buildPostgresProviderPlan(resource: AnyRecord = {}, options: Any
   };
   const plan = {
     engine: 'postgresql',
+    capabilities,
     provider: options.provider || resource.provider || 'postgresql-direct',
     sharedProvider: {
       model: 'shared-postgresql-cluster',
@@ -116,6 +119,7 @@ export async function provisionPostgresProvider(resource: AnyRecord = {}, option
 
 export function buildResourceProviderPlan(resource: AnyRecord = {}, options: AnyRecord = {}) {
   const engine = normalizedEngine(resource.engine || resource.type);
+  const capabilities = requireResourceCapability(engine, 'provision');
   if (engine === 'postgresql') return buildPostgresProviderPlan(resource, { generatePassword: true, ...options });
   const prepared = prepareResourceForEnv(resource, options);
   const env = providerConnectionEnvForResource(prepared, options);
@@ -130,6 +134,7 @@ export function buildResourceProviderPlan(resource: AnyRecord = {}, options: Any
   const commands = providerCommands(engine, { env, name, database, username, keyPrefix, bucket, collection, topic, backupPath, sqlitePath: prepared.sqlitePath });
   const plan = {
     engine,
+    capabilities,
     provider: options.provider || resource.provider || defaultProvider(engine),
     sharedProvider: sharedProviderModelFor(engine, { keyPrefix }),
     resourceName: name,

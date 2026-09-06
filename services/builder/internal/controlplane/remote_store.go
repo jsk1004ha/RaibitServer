@@ -59,6 +59,7 @@ type dispatchRPCRequest struct {
 	BuildLog         *BuildLogInput                     `json:"buildLog,omitempty"`
 	DeploymentEvent  *DeploymentEventInput              `json:"deploymentEvent,omitempty"`
 	GitHubCredential *GitHubRepositoryCredentialRequest `json:"githubCredential,omitempty"`
+	CloneSucceeded   bool                               `json:"cloneSucceeded,omitempty"`
 }
 
 type dispatchRPCResponse struct {
@@ -83,6 +84,7 @@ type dispatchSession struct {
 	DeploymentID      string
 	ClientFingerprint [sha256.Size]byte
 	ExpiresAt         time.Time
+	GitHub            *githubCredentialSession
 }
 
 type GitHubRepositoryCredentialRequest struct {
@@ -242,6 +244,9 @@ func (h *dispatchHandler) ServeHTTP(response http.ResponseWriter, request *http.
 		return
 	}
 	session, ok := h.session(token, time.Now().UTC())
+	if rpcRequest.Operation == "releaseGitHubCredential" {
+		session, ok = h.releaseSession(token)
+	}
 	if !ok {
 		writeDispatchError(response, http.StatusUnauthorized, "unauthorized", "dispatcher session is invalid or expired")
 		return
@@ -344,7 +349,11 @@ func (h *dispatchHandler) resolveSession(ctx context.Context, job *WorkflowJob) 
 		ProjectID:    project.ID,
 		ServiceID:    service.ID,
 		DeploymentID: deployment.ID,
-		ExpiresAt:    time.Now().UTC().Add(h.sessionTTL),
+		GitHub: &githubCredentialSession{private: strings.EqualFold(service.GitHubRepositoryVisibility, "private"), accessAllowed: service.SourceAccess == "github-app-private", binding: githubCredentialBinding{
+			Lease: job.Lease(), OrganizationID: project.OrganizationID, ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID,
+			IntegrationID: service.GitHubIntegrationID, InstallationID: service.GitHubInstallationID, RepositoryID: service.GitHubRepositoryID, Repository: strings.ToLower(service.GitHubRepository),
+		}},
+		ExpiresAt: time.Now().UTC().Add(h.sessionTTL),
 	}, nil
 }
 
@@ -373,30 +382,11 @@ func (h *dispatchHandler) handleScoped(response http.ResponseWriter, request *ht
 		}
 		result.Deployment, err = h.store.GetDeployment(ctx, rpcRequest.DeploymentID)
 	case "issueGitHubCredential":
-		if rpcRequest.GitHubCredential == nil || rpcRequest.GitHubCredential.ServiceID != session.ServiceID {
-			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "GitHub credential request does not match the claimed service")
-			return
-		}
-		if h.githubCredentials == nil {
-			writeDispatchError(response, http.StatusServiceUnavailable, "credential_broker_unavailable", "private GitHub repository credential broker is not configured")
-			return
-		}
-		service, serviceErr := h.store.GetService(ctx, session.ServiceID)
-		if serviceErr != nil {
-			err = serviceErr
-			break
-		}
-		request := rpcRequest.GitHubCredential
-		if !strings.EqualFold(strings.TrimSpace(service.GitHubRepositoryVisibility), "private") ||
-			strings.TrimSpace(service.GitHubInstallationID) == "" || strings.TrimSpace(service.GitHubRepositoryID) == "" ||
-			request.InstallationID != strings.TrimSpace(service.GitHubInstallationID) || request.RepositoryID != strings.TrimSpace(service.GitHubRepositoryID) {
-			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "GitHub credential request does not match the authoritative private repository binding")
-			return
-		}
-		result.GitHubCredential, err = h.githubCredentials.IssueRepositoryCredential(ctx, service.GitHubInstallationID, service.GitHubRepositoryID)
-		if err == nil {
-			err = validateIssuedGitHubCredential(result.GitHubCredential, service.GitHubInstallationID, service.GitHubRepositoryID, time.Now().UTC())
-		}
+		result.GitHubCredential, err = h.issueGitHubCredential(ctx, session, rpcRequest.GitHubCredential)
+	case "releaseGitHubCredential":
+		err = h.releaseGitHubCredential(ctx, session.GitHub, rpcRequest.CloneSucceeded)
+	case "checkGitHubCredential":
+		err = h.checkGitHubCredential(ctx, session.GitHub)
 	case "updateDeployment":
 		if rpcRequest.DeploymentID != session.DeploymentID {
 			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "dispatcher session is not authorized for that deployment")
@@ -446,6 +436,10 @@ func (h *dispatchHandler) handleScoped(response http.ResponseWriter, request *ht
 		buildStart.StartedAt = time.Now().UTC()
 		err = h.store.StartBuild(ctx, buildStart)
 	case "publishImageReady":
+		if !session.GitHub.publicationAllowed() {
+			err = errGitHubCredentialLifecycle
+			break
+		}
 		if rpcRequest.Publication == nil || !session.matchesPublication(*rpcRequest.Publication) {
 			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "image publication does not match the claimed session")
 			return
@@ -486,6 +480,10 @@ func (h *dispatchHandler) handleScoped(response http.ResponseWriter, request *ht
 			h.extendSession(token, time.Now().UTC())
 		}
 	case "complete":
+		if !session.GitHub.publicationAllowed() {
+			err = errGitHubCredentialLifecycle
+			break
+		}
 		if rpcRequest.Lease == nil || *rpcRequest.Lease != session.Lease {
 			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "completion does not match the claimed session")
 			return
@@ -497,28 +495,35 @@ func (h *dispatchHandler) handleScoped(response http.ResponseWriter, request *ht
 			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "failure does not match the claimed session")
 			return
 		}
-		err = h.store.FailWorkflowJob(ctx, session.Lease, errors.New(rpcRequest.Failure))
+		err = errors.Join(h.abortGitHubCredential(ctx, session.GitHub), h.store.FailWorkflowJob(ctx, session.Lease, errors.New(rpcRequest.Failure)))
 		removeSession = err == nil
 	case "cancel":
 		if rpcRequest.Lease == nil || *rpcRequest.Lease != session.Lease {
 			writeDispatchError(response, http.StatusForbidden, "scope_mismatch", "cancellation does not match the claimed session")
 			return
 		}
-		err = h.store.CancelWorkflowJob(ctx, session.Lease, errors.New(rpcRequest.Failure))
+		err = errors.Join(h.abortGitHubCredential(ctx, session.GitHub), h.store.CancelWorkflowJob(ctx, session.Lease, errors.New(rpcRequest.Failure)))
 		removeSession = err == nil
 	default:
 		writeDispatchError(response, http.StatusBadRequest, "unsupported_operation", "unsupported dispatcher RPC operation")
 		return
 	}
 	if err != nil {
+		if errors.Is(err, errGitHubCredentialScope) || errors.Is(err, errGitHubCredentialLifecycle) {
+			writeDispatchError(response, http.StatusForbidden, "github_credential_denied", "GitHub clone credential scope or lifecycle denied")
+			return
+		}
 		if errors.Is(err, ErrWorkflowLeaseLost) {
-			h.deleteSession(token)
+			err = errors.Join(err, h.deleteSession(ctx, token))
 		}
 		writeDispatchStoreError(response, err)
 		return
 	}
 	if removeSession {
-		h.deleteSession(token)
+		if err := h.deleteSession(ctx, token); err != nil {
+			writeDispatchStoreError(response, err)
+			return
+		}
 	}
 	writeDispatchJSON(response, http.StatusOK, result)
 }
@@ -570,7 +575,7 @@ func (h *dispatchHandler) session(token string, now time.Time) (dispatchSession,
 	defer h.mu.Unlock()
 	h.pruneExpiredLocked(now)
 	session, ok := h.sessions[sha256.Sum256([]byte(token))]
-	return session, ok
+	return session, ok && session.ExpiresAt.After(now)
 }
 
 func (h *dispatchHandler) extendSession(token string, now time.Time) {
@@ -585,15 +590,25 @@ func (h *dispatchHandler) extendSession(token string, now time.Time) {
 	h.sessions[key] = session
 }
 
-func (h *dispatchHandler) deleteSession(token string) {
+func (h *dispatchHandler) deleteSession(ctx context.Context, token string) error {
+	session, ok := h.releaseSession(token)
+	var cleanupErr error
+	if ok {
+		cleanupErr = h.abortGitHubCredential(ctx, session.GitHub)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.sessions, sha256.Sum256([]byte(token)))
+	return cleanupErr
 }
 
 func (h *dispatchHandler) pruneExpiredLocked(now time.Time) {
 	for tokenHash, session := range h.sessions {
-		if !session.ExpiresAt.After(now) {
+		retention := session.ExpiresAt
+		if session.GitHub != nil && session.GitHub.private {
+			retention = retention.Add(time.Hour)
+		}
+		if !retention.After(now) {
 			delete(h.sessions, tokenHash)
 		}
 	}
@@ -675,7 +690,8 @@ func (s *RemoteStore) GetDeployment(ctx context.Context, deploymentID string) (*
 	if response.Deployment == nil {
 		return nil, errors.New("dispatcher returned no deployment")
 	}
-	return response.Deployment, nil
+	_, err := response.Deployment.BuildSpec()
+	return response.Deployment, err
 }
 
 func (s *RemoteStore) IssueGitHubRepositoryCredential(ctx context.Context, request GitHubRepositoryCredentialRequest) (*GitHubRepositoryCredential, error) {
@@ -696,7 +712,7 @@ func validateIssuedGitHubCredential(credential *GitHubRepositoryCredential, inst
 	if credential.InstallationID != strings.TrimSpace(installationID) || credential.RepositoryID != strings.TrimSpace(repositoryID) {
 		return errors.New("GitHub credential broker returned a credential for a different repository")
 	}
-	if !credential.ExpiresAt.After(now.Add(time.Minute)) || credential.ExpiresAt.After(now.Add(65*time.Minute)) {
+	if !credential.UseDeadline.After(now) || credential.UseDeadline.After(now.Add(15*time.Minute)) || !credential.UpstreamExpiresAt.After(credential.UseDeadline) {
 		return errors.New("GitHub credential broker returned an expiry outside the allowed short-lived window")
 	}
 	return nil
@@ -710,7 +726,8 @@ func (s *RemoteStore) UpdateDeployment(ctx context.Context, deploymentID string,
 	if response.Deployment == nil {
 		return nil, errors.New("dispatcher returned no updated deployment")
 	}
-	return response.Deployment, nil
+	_, err := response.Deployment.BuildSpec()
+	return response.Deployment, err
 }
 
 func (s *RemoteStore) UpdateDeploymentForLease(ctx context.Context, lease WorkflowLease, deploymentID string, updates map[string]any) (*Deployment, error) {

@@ -76,6 +76,9 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses", "networkpolicies"]
     verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -100,6 +103,12 @@ spec:
   matchConditions:
     - name: orchestrator-service-account
       expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-orchestrator'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+    - name: exclude-custom-domains
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).kind != 'Ingress' ||
+        !has((request.operation == 'DELETE' ? oldObject : object).metadata.labels) ||
+        !('raibitserver.io/custom-domain' in (request.operation == 'DELETE' ? oldObject : object).metadata.labels) ||
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['raibitserver.io/custom-domain'] != 'true'
   variables:
     - name: target
       expression: "request.operation == 'DELETE' ? oldObject : object"
@@ -264,6 +273,10 @@ spec:
       expression: "variables.isPodWorkload && has(variables.podSpec.containers) && variables.podSpec.containers.size() == 1 ? variables.podSpec.containers[0] : variables.target"
     - name: ingressHost
       expression: "variables.target.kind == 'Ingress' && has(variables.target.metadata.annotations) && 'raibitserver.io/hostname' in variables.target.metadata.annotations ? variables.target.metadata.annotations['raibitserver.io/hostname'] : ''"
+    - name: isPreviewRoute
+      expression: "variables.target.kind == 'Ingress' && has(variables.target.metadata.labels) && 'raibitserver.io/preview-route' in variables.target.metadata.labels && variables.target.metadata.labels['raibitserver.io/preview-route'] == 'true'"
+    - name: previewBackendService
+      expression: "variables.isPreviewRoute ? variables.target.metadata.labels['raibitserver.io/preview-backend-service'] : ''"
   validations:
     - expression: >-
         has(namespaceObject.metadata.labels) &&
@@ -287,6 +300,21 @@ spec:
         ['app.kubernetes.io/managed-by', 'raibitserver.io/managed', 'raibitserver.io/project-id', 'raibitserver.io/service-id'].all(key,
           key in oldObject.metadata.labels && object.metadata.labels[key] == oldObject.metadata.labels[key]))
       message: "orchestrator workload ownership labels are immutable"
+    - expression: >-
+        !has(variables.target.metadata.labels) || !('raibitserver.io/preview-route' in variables.target.metadata.labels) ||
+        (variables.target.kind == 'Ingress' && variables.target.metadata.labels['raibitserver.io/preview-route'] == 'true')
+      message: "the preview-route marker is reserved for compiler-owned Ingresses"
+    - expression: >-
+        request.operation != 'UPDATE' || variables.target.kind != 'Ingress' ||
+        (has(oldObject.metadata.labels) && has(object.metadata.labels) &&
+        (('raibitserver.io/preview-route' in oldObject.metadata.labels) == ('raibitserver.io/preview-route' in object.metadata.labels)) &&
+        (!('raibitserver.io/preview-route' in oldObject.metadata.labels) ||
+        (oldObject.metadata.labels['raibitserver.io/preview-route'] == 'true' && object.metadata.labels['raibitserver.io/preview-route'] == 'true' &&
+        ['app.kubernetes.io/name', 'raibitserver.io/project-id', 'raibitserver.io/service-id', 'raibitserver.io/preview-lineage-id'].all(key,
+          key in oldObject.metadata.labels && key in object.metadata.labels && object.metadata.labels[key] == oldObject.metadata.labels[key]) &&
+        (['raibitserver.io/deployment-id', 'raibitserver.io/preview-generation', 'raibitserver.io/preview-backend-service'].all(key, object.metadata.labels[key] == oldObject.metadata.labels[key]) ||
+        ['raibitserver.io/deployment-id', 'raibitserver.io/preview-generation', 'raibitserver.io/preview-backend-service'].all(key, object.metadata.labels[key] != oldObject.metadata.labels[key])))))
+      message: "preview Ingresses preserve route lineage and atomically retarget current candidate provenance"
     - expression: >-
         !variables.isPodWorkload ||
         (variables.podTemplate.metadata.labels == variables.target.metadata.labels &&
@@ -376,6 +404,7 @@ spec:
       message: "orchestrator Services must remain compiler-shaped internal ClusterIP services"
     - expression: >-
         variables.target.kind != 'Ingress' ||
+        ((!variables.isPreviewRoute &&
         (variables.target.metadata.name == variables.appName && variables.target.metadata.annotations.size() == {{ $ingressAnnotationCount }} &&
         {{- if .Values.hostedErrors.enabled }}
         'nginx.ingress.kubernetes.io/custom-http-errors' in variables.target.metadata.annotations &&
@@ -391,8 +420,35 @@ spec:
         variables.target.spec.rules[0].host == variables.ingressHost && variables.target.spec.rules[0].http.paths.size() == 1 &&
         variables.target.spec.rules[0].http.paths[0].path == '/' && variables.target.spec.rules[0].http.paths[0].pathType == 'Prefix' &&
         variables.target.spec.rules[0].http.paths[0].backend.service.name == variables.appName &&
-        variables.target.spec.rules[0].http.paths[0].backend.service.port.number >= 1 && variables.target.spec.rules[0].http.paths[0].backend.service.port.number <= 65535)
-      message: "orchestrator Ingresses require one exact non-wildcard compiler route"
+        variables.target.spec.rules[0].http.paths[0].backend.service.port.number >= 1 && variables.target.spec.rules[0].http.paths[0].backend.service.port.number <= 65535)) ||
+        (variables.isPreviewRoute && variables.target.metadata.labels.size() == 10 &&
+        ['app.kubernetes.io/name', 'app.kubernetes.io/managed-by', 'raibitserver.io/managed', 'raibitserver.io/project-id', 'raibitserver.io/service-id', 'raibitserver.io/deployment-id', 'raibitserver.io/preview-route', 'raibitserver.io/preview-lineage-id', 'raibitserver.io/preview-generation', 'raibitserver.io/preview-backend-service'].all(key, key in variables.target.metadata.labels) &&
+        variables.target.metadata.name == variables.appName &&
+        variables.target.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        variables.target.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        variables.target.metadata.labels['raibitserver.io/project-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/service-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/deployment-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/preview-lineage-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/preview-generation'].matches('^[1-9][0-9]*$') &&
+        variables.previewBackendService.size() <= 63 && variables.previewBackendService.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') &&
+        variables.target.metadata.annotations.size() == {{ $ingressAnnotationCount }} &&
+        {{- if .Values.hostedErrors.enabled }}
+        'nginx.ingress.kubernetes.io/custom-http-errors' in variables.target.metadata.annotations &&
+        variables.target.metadata.annotations['nginx.ingress.kubernetes.io/custom-http-errors'] == {{ join "," .Values.hostedErrors.statuses | squote }} &&
+        {{- end }}
+        {{- if and .Values.hostedErrors.enabled .Values.hostedErrors.traefik.enabled }}
+        'traefik.ingress.kubernetes.io/router.middlewares' in variables.target.metadata.annotations &&
+        variables.target.metadata.annotations['traefik.ingress.kubernetes.io/router.middlewares'] == {{ printf "%s-%s-hosted-errors@kubernetescrd" .Release.Namespace (include "raibitserver.fullname" .) | squote }} &&
+        {{- end }}
+        variables.ingressHost.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$') && !variables.ingressHost.startsWith('*.') &&
+        !has(variables.target.spec.defaultBackend) && variables.target.spec.ingressClassName == {{ $ingressClassName | squote }} &&
+        (!has(variables.target.spec.tls) || variables.target.spec.tls.size() == 0) && variables.target.spec.rules.size() == 1 &&
+        variables.target.spec.rules[0].host == variables.ingressHost && variables.target.spec.rules[0].http.paths.size() == 1 &&
+        variables.target.spec.rules[0].http.paths[0].path == '/' && variables.target.spec.rules[0].http.paths[0].pathType == 'Prefix' &&
+        variables.target.spec.rules[0].http.paths[0].backend.service.name == variables.previewBackendService &&
+        variables.target.spec.rules[0].http.paths[0].backend.service.port.number >= 1 && variables.target.spec.rules[0].http.paths[0].backend.service.port.number <= 65535))
+      message: "orchestrator Ingresses require one exact compiler route or frozen preview route"
     - expression: >-
         variables.target.kind != 'NetworkPolicy' ||
         (variables.target.spec.podSelector.matchLabels.size() == 1 &&
@@ -470,7 +526,19 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["create", "patch", "delete"]
+    verbs: ["get", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/attach"]
+    verbs: ["create"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "watch", "create", "delete"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims", "services"]
     verbs: ["get", "create", "patch", "update", "delete"]
@@ -556,6 +624,20 @@ spec:
     - name: provisioner-service-account
       expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
   validations:
+    - expression: >-
+        has(namespaceObject.metadata.labels) && namespaceObject.metadata.labels.size() == 9 &&
+        ['kubernetes.io/metadata.name', 'app.kubernetes.io/managed-by', 'raibitserver.io/managed',
+         'raibitserver.io/namespace-kind', 'raibitserver.io/project', 'raibitserver.io/project-id',
+         'pod-security.kubernetes.io/enforce', 'pod-security.kubernetes.io/audit', 'pod-security.kubernetes.io/warn'].all(key,
+          key in namespaceObject.metadata.labels) &&
+        namespaceObject.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        namespaceObject.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        namespaceObject.metadata.labels['raibitserver.io/namespace-kind'] == 'application' &&
+        namespaceObject.metadata.labels['raibitserver.io/project-id'] != '' &&
+        namespaceObject.metadata.labels['pod-security.kubernetes.io/enforce'] == 'restricted' &&
+        namespaceObject.metadata.labels['pod-security.kubernetes.io/audit'] == 'restricted' &&
+        namespaceObject.metadata.labels['pod-security.kubernetes.io/warn'] == 'restricted'
+      message: "the provisioner may bind tenant authority only inside an exact managed application namespace"
     - expression: {{ printf "object.roleRef.apiGroup == 'rbac.authorization.k8s.io' && object.roleRef.kind == 'ClusterRole' && object.roleRef.name == '%s-provisioner-tenant'" (include "raibitserver.fullname" .) | quote }}
       message: "the provisioner may only bind the chart-managed tenant ClusterRole"
     - expression: {{ printf "has(object.subjects) && object.subjects.size() == 1 && object.subjects[0].kind == 'ServiceAccount' && object.subjects[0].name == '%s-provisioner' && object.subjects[0].namespace == '%s' && (!has(object.subjects[0].apiGroup) || object.subjects[0].apiGroup == '')" (include "raibitserver.fullname" .) .Release.Namespace | quote }}
@@ -660,7 +742,7 @@ spec:
         variables.target.metadata.labels['raibitserver.io/project-id'] == namespaceObject.metadata.labels['raibitserver.io/project-id'] &&
         variables.target.metadata.labels['raibitserver.io/resource-id'] != '' &&
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         variables.target.metadata.namespace == request.namespace
       message: "the provisioner may delete only exact provider-owned tenant objects"
     - expression: >-
@@ -818,7 +900,7 @@ spec:
         object.metadata.labels['app.kubernetes.io/name'].matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         object.metadata.labels['raibitserver.io/project-id'] != '' &&
         object.metadata.labels['raibitserver.io/resource-id'] != '' &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats']
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }}
       message: "provider StatefulSets require the exact managed identity label contract"
     - expression: >-
         object.metadata.name == variables.providerName && object.metadata.namespace == request.namespace &&
@@ -965,7 +1047,7 @@ spec:
         resources: ["networkpolicies"]
   matchConditions:
     - name: provisioner-service-account
-      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner' && object.metadata.name.endsWith('-provider')" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
   variables:
     - name: providerName
       expression: "object.metadata.labels['app.kubernetes.io/name']"
@@ -988,7 +1070,7 @@ spec:
         object.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' && object.metadata.labels['raibitserver.io/managed'] == 'true' &&
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         object.metadata.labels['raibitserver.io/project-id'] != '' && object.metadata.labels['raibitserver.io/resource-id'] != '' &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         object.metadata.name == variables.providerName + '-provider' && object.metadata.namespace == request.namespace
       message: "provider NetworkPolicies require the exact managed name and identity contract"
     - expression: >-
@@ -1033,8 +1115,8 @@ spec:
     # Reserve the connection suffix from every actor, and also route every
     # provisioner Secret mutation through the exact provider contract. Without
     # the latter, its metadata-patch/create/delete RBAC could target unrelated tenant Secrets.
-    - name: provisioner-service-account-or-connection-reservation
-      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner' || (request.operation == 'CREATE' ? object.metadata.name.endsWith('-connection') : oldObject.metadata.name.endsWith('-connection'))" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+    - name: connection-reservation
+      expression: "request.operation == 'CREATE' ? object.metadata.name.endsWith('-connection') : oldObject.metadata.name.endsWith('-connection')"
   variables:
     - name: target
       expression: "request.operation == 'DELETE' ? oldObject : object"
@@ -1062,7 +1144,7 @@ spec:
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         variables.target.metadata.labels['raibitserver.io/project-id'] != '' && variables.target.metadata.labels['raibitserver.io/resource-id'] != '' &&
         variables.target.metadata.labels['raibitserver.io/project-id'] == namespaceObject.metadata.labels['raibitserver.io/project-id'] &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         variables.target.metadata.name == variables.providerName + '-connection' && variables.target.metadata.namespace == request.namespace
       message: "provider Secrets require the exact connection name and managed identity contract"
     - expression: >-
@@ -1103,6 +1185,254 @@ metadata:
 spec:
   policyName: {{ include "raibitserver.fullname" . }}-provisioner-provider-secrets
   validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-secrets
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["secrets"]
+  matchConditions:
+    - name: recovery-secret-name
+      expression: "request.operation == 'CREATE' ? object.metadata.name.startsWith('recovery-credential-') : oldObject.metadata.name.startsWith('recovery-credential-')"
+  validations:
+    - expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+      message: "recovery credential snapshots are reserved for the provisioner"
+    - expression: >-
+        request.operation == 'DELETE' || (request.operation == 'CREATE' && object.type == 'Opaque' && object.immutable == true &&
+        object.metadata.labels['raibitserver.io/owned-by'] == 'recovery' && object.metadata.labels['raibitserver.io/spec-identity'].startsWith('recovery-job/v1:sha256:') &&
+        has(object.metadata.annotations) && object.metadata.annotations['raibitserver.io/source-secret-uid'] != '' &&
+        object.metadata.annotations['raibitserver.io/source-secret-resource-version'] != '' && object.metadata.annotations['raibitserver.io/source-secret-key'] != '' &&
+        has(object.data) && object.data.size() == 1 && object.metadata.annotations['raibitserver.io/source-secret-key'] in object.data && !has(object.stringData))
+      message: "recovery snapshots must be immutable, single-key, source-bound Secrets"
+    - expression: "request.operation != 'UPDATE'"
+      message: "recovery credential snapshots cannot be updated"
+    - expression: >-
+        request.operation != 'DELETE' || (has(request.options) && has(request.options.preconditions) &&
+        request.options.preconditions.uid == oldObject.metadata.uid)
+      message: "recovery snapshot deletion requires its exact UID"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-secrets
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-provisioner-recovery-secrets
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-jobs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["jobs"]
+  matchConditions:
+    - name: recovery-job-name
+      expression: "request.operation == 'CREATE' ? object.metadata.name.startsWith('recovery-job-') : oldObject.metadata.name.startsWith('recovery-job-')"
+  validations:
+    - expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+      message: "recovery Jobs are reserved for the provisioner"
+    - expression: >-
+        request.operation == 'DELETE' || (request.operation == 'CREATE' && object.metadata.labels['raibitserver.io/owned-by'] == 'recovery' &&
+        object.metadata.labels['raibitserver.io/spec-identity'].startsWith('recovery-job/v1:sha256:') && object.spec.backoffLimit == 0 &&
+        object.spec.activeDeadlineSeconds > 0 && object.spec.activeDeadlineSeconds <= 1800 && object.spec.template.spec.automountServiceAccountToken == false &&
+        object.spec.template.spec.restartPolicy == 'Never' && object.spec.template.spec.containers.all(c,
+        c.image.contains('@sha256:') && c.securityContext.runAsNonRoot == true && c.securityContext.readOnlyRootFilesystem == true &&
+        c.securityContext.allowPrivilegeEscalation == false && c.securityContext.capabilities.drop == ['ALL']))
+      message: "recovery Jobs must retain the bounded restricted execution contract"
+    - expression: "request.operation != 'UPDATE'"
+      message: "recovery Jobs are immutable"
+    - expression: >-
+        request.operation != 'DELETE' || (has(request.options) && has(request.options.preconditions) && request.options.preconditions.uid == oldObject.metadata.uid)
+      message: "recovery Job deletion requires its exact UID"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-jobs
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-provisioner-recovery-jobs
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-provider-pods
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["pods"]
+  matchConditions:
+    - name: provisioner-service-account
+      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+  variables:
+    - name: providerName
+      expression: "oldObject.metadata.labels['app.kubernetes.io/name']"
+    - name: owner
+      expression: "oldObject.metadata.ownerReferences[0]"
+  validations:
+    - expression: >-
+        has(namespaceObject.metadata.labels) && namespaceObject.metadata.labels.size() == 9 &&
+        ['kubernetes.io/metadata.name', 'app.kubernetes.io/managed-by', 'raibitserver.io/managed',
+         'raibitserver.io/namespace-kind', 'raibitserver.io/project', 'raibitserver.io/project-id',
+         'pod-security.kubernetes.io/enforce', 'pod-security.kubernetes.io/audit', 'pod-security.kubernetes.io/warn'].all(key,
+          key in namespaceObject.metadata.labels) &&
+        namespaceObject.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        namespaceObject.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        namespaceObject.metadata.labels['raibitserver.io/namespace-kind'] == 'application' &&
+        namespaceObject.metadata.labels['raibitserver.io/project-id'] != '' &&
+        namespaceObject.metadata.labels['pod-security.kubernetes.io/enforce'] == 'restricted' &&
+        namespaceObject.metadata.labels['pod-security.kubernetes.io/audit'] == 'restricted' &&
+        namespaceObject.metadata.labels['pod-security.kubernetes.io/warn'] == 'restricted' &&
+        has(oldObject.metadata.labels) && has(object.metadata.labels) &&
+        oldObject.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        oldObject.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        oldObject.metadata.labels['raibitserver.io/project-id'] != '' &&
+        oldObject.metadata.labels['raibitserver.io/project-id'] == namespaceObject.metadata.labels['raibitserver.io/project-id'] &&
+        oldObject.metadata.labels['raibitserver.io/resource-id'] != '' &&
+        oldObject.metadata.labels['raibitserver.io/provider'] in {{ include "raibitserver.localProviderEngines" . }} &&
+        variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
+        oldObject.metadata.name == variables.providerName + '-0' &&
+        oldObject.metadata.namespace == request.namespace && object.metadata.namespace == request.namespace &&
+        oldObject.metadata.ownerReferences.size() == 1 &&
+        variables.owner.apiVersion == 'apps/v1' && variables.owner.kind == 'StatefulSet' &&
+        variables.owner.name == variables.providerName && has(variables.owner.controller) && variables.owner.controller == true
+      message: "recovery authority may target only the exact owned provider pod"
+    - expression: >-
+        (((!('raibitserver.io/recovery-authority' in oldObject.metadata.labels)) &&
+          'raibitserver.io/recovery-authority' in object.metadata.labels &&
+          object.metadata.labels['raibitserver.io/recovery-authority'].matches('^[a-f0-9]{32}$')) ||
+         ('raibitserver.io/recovery-authority' in oldObject.metadata.labels &&
+          oldObject.metadata.labels['raibitserver.io/recovery-authority'].matches('^[a-f0-9]{32}$') &&
+          !('raibitserver.io/recovery-authority' in object.metadata.labels))) &&
+        oldObject.metadata.labels.all(key, key == 'raibitserver.io/recovery-authority' ||
+          (key in object.metadata.labels && object.metadata.labels[key] == oldObject.metadata.labels[key])) &&
+        object.metadata.labels.all(key, key == 'raibitserver.io/recovery-authority' ||
+          (key in oldObject.metadata.labels && oldObject.metadata.labels[key] == object.metadata.labels[key])) &&
+        object.metadata.name == oldObject.metadata.name &&
+        object.metadata.uid == oldObject.metadata.uid &&
+        object.metadata.annotations == oldObject.metadata.annotations &&
+        object.metadata.ownerReferences == oldObject.metadata.ownerReferences &&
+        ((!has(oldObject.metadata.finalizers) && !has(object.metadata.finalizers)) ||
+         (has(oldObject.metadata.finalizers) && has(object.metadata.finalizers) && object.metadata.finalizers == oldObject.metadata.finalizers)) &&
+        object.spec == oldObject.spec
+      message: "recovery authority updates may only add an exact authority or remove that same-shaped label"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-provider-pods
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-provisioner-recovery-provider-pods
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-networkpolicies
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["networkpolicies"]
+  matchConditions:
+    - name: recovery-policy-name
+      expression: "request.operation == 'CREATE' ? object.metadata.name.startsWith('recovery-egress-') : oldObject.metadata.name.startsWith('recovery-egress-')"
+  variables:
+    - name: target
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: providerRule
+      expression: "variables.target.spec.egress[0]"
+    - name: providerPeer
+      expression: "variables.providerRule.to[0]"
+    - name: provider
+      expression: "variables.target.metadata.labels['raibitserver.io/provider']"
+    - name: expectedProviderPort
+      expression: >-
+        variables.provider == 'postgresql' ? 5432 :
+        variables.provider in ['mysql', 'mariadb'] ? 3306 :
+        variables.provider == 'mongodb' ? 27017 :
+        variables.provider in ['redis', 'valkey'] ? 6379 : 0
+    - name: dnsRule
+      expression: "variables.target.spec.egress[1]"
+    - name: dnsPeer
+      expression: "variables.dnsRule.to[0]"
+  validations:
+    - expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-provisioner'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+      message: "recovery NetworkPolicies are reserved for the provisioner"
+    - expression: >-
+        request.operation == 'DELETE' || (request.operation == 'CREATE' &&
+        has(object.metadata.labels) && object.metadata.labels.size() == 6 &&
+        ['raibitserver.io/owned-by', 'raibitserver.io/operation', 'raibitserver.io/resource',
+         'raibitserver.io/attempt', 'raibitserver.io/spec-identity', 'raibitserver.io/provider'].all(key, key in object.metadata.labels) &&
+        object.metadata.labels['raibitserver.io/owned-by'] == 'recovery' &&
+        object.spec.policyTypes == ['Ingress', 'Egress'] && object.spec.ingress == [] && object.spec.egress.size() == 2 &&
+        has(object.spec.podSelector.matchLabels) && object.spec.podSelector.matchLabels.size() == 5 &&
+        (!has(object.spec.podSelector.matchExpressions) || object.spec.podSelector.matchExpressions.size() == 0) &&
+        object.spec.podSelector.matchLabels.all(key,
+          key in object.metadata.labels && object.spec.podSelector.matchLabels[key] == object.metadata.labels[key]) &&
+        object.metadata.labels.all(key, key == 'raibitserver.io/provider' ||
+          (key in object.spec.podSelector.matchLabels && object.metadata.labels[key] == object.spec.podSelector.matchLabels[key])))
+      message: "recovery NetworkPolicies must default deny and select only their exact Job"
+    - expression: >-
+        request.operation == 'DELETE' || (request.operation == 'CREATE' &&
+        has(variables.target.metadata.labels) && 'raibitserver.io/provider' in variables.target.metadata.labels &&
+        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey'] &&
+        has(variables.providerRule.to) && variables.providerRule.to.size() == 1 &&
+        has(variables.providerPeer.podSelector) && !has(variables.providerPeer.namespaceSelector) && !has(variables.providerPeer.ipBlock) &&
+        variables.providerPeer.podSelector.matchLabels.size() == 2 &&
+        'raibitserver.io/recovery-authority' in variables.providerPeer.podSelector.matchLabels &&
+        variables.providerPeer.podSelector.matchLabels['raibitserver.io/recovery-authority'].matches('^[a-f0-9]{32}$') &&
+        'raibitserver.io/provider' in variables.providerPeer.podSelector.matchLabels &&
+        variables.providerPeer.podSelector.matchLabels['raibitserver.io/provider'] == variables.provider &&
+        (!has(variables.providerPeer.podSelector.matchExpressions) || variables.providerPeer.podSelector.matchExpressions.size() == 0) &&
+        has(variables.providerRule.ports) && variables.providerRule.ports.size() == 1 && variables.providerRule.ports[0].protocol == 'TCP' &&
+        type(variables.providerRule.ports[0].port) == int && variables.providerRule.ports[0].port == variables.expectedProviderPort &&
+        !has(variables.providerRule.ports[0].endPort) &&
+        has(variables.dnsRule.to) && variables.dnsRule.to.size() == 1 &&
+        has(variables.dnsPeer.namespaceSelector) && has(variables.dnsPeer.podSelector) && !has(variables.dnsPeer.ipBlock) &&
+        variables.dnsPeer.namespaceSelector.matchLabels.size() == 1 &&
+        variables.dnsPeer.namespaceSelector.matchLabels['kubernetes.io/metadata.name'] == 'kube-system' &&
+        (!has(variables.dnsPeer.namespaceSelector.matchExpressions) || variables.dnsPeer.namespaceSelector.matchExpressions.size() == 0) &&
+        variables.dnsPeer.podSelector.matchLabels.size() == 1 && variables.dnsPeer.podSelector.matchLabels['k8s-app'] == 'kube-dns' &&
+        (!has(variables.dnsPeer.podSelector.matchExpressions) || variables.dnsPeer.podSelector.matchExpressions.size() == 0) &&
+        has(variables.dnsRule.ports) && variables.dnsRule.ports.size() == 2 &&
+        variables.dnsRule.ports.all(port, port.port == 53 && port.protocol in ['UDP', 'TCP'] && !has(port.endPort)) &&
+        variables.dnsRule.ports.exists(port, port.port == 53 && port.protocol == 'UDP') &&
+        variables.dnsRule.ports.exists(port, port.port == 53 && port.protocol == 'TCP'))
+      message: "recovery NetworkPolicies may reach only the authority-bound provider and fixed cluster DNS"
+    - expression: "request.operation != 'UPDATE'"
+      message: "recovery NetworkPolicies are immutable"
+    - expression: >-
+        request.operation != 'DELETE' || (has(request.options) && has(request.options.preconditions) && request.options.preconditions.uid == oldObject.metadata.uid)
+      message: "recovery NetworkPolicy deletion requires its exact UID"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-provisioner-recovery-networkpolicies
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-provisioner-recovery-networkpolicies
+  validationActions: ["Deny"]
   matchResources:
     namespaceSelector:
       matchLabels:
@@ -1134,7 +1464,7 @@ spec:
         object.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' && object.metadata.labels['raibitserver.io/managed'] == 'true' &&
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         object.metadata.labels['raibitserver.io/project-id'] != '' && object.metadata.labels['raibitserver.io/resource-id'] != '' &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         object.metadata.name == variables.providerName + '-data' && object.metadata.namespace == request.namespace
       message: "provider PVCs require the exact data name and managed identity contract"
     - expression: >-
@@ -1192,7 +1522,7 @@ spec:
         object.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' && object.metadata.labels['raibitserver.io/managed'] == 'true' &&
         variables.providerName.matches('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') &&
         object.metadata.labels['raibitserver.io/project-id'] != '' && object.metadata.labels['raibitserver.io/resource-id'] != '' &&
-        variables.provider in ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey', 'object-storage', 'qdrant', 'nats'] &&
+        variables.provider in {{ include "raibitserver.localProviderEngines" . }} &&
         object.metadata.name == variables.providerName && object.metadata.namespace == request.namespace
       message: "provider Services require the exact managed name and identity contract"
     - expression: >-

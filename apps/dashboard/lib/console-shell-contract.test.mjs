@@ -6,10 +6,11 @@ const component = (name) => readFile(new URL(`../components/${name}`, import.met
 
 test('authenticated console shell remains server-first and preserves tenant-safe navigation', async () => {
   // Given: the authenticated shell and its two client-only interaction leaves.
-  const [shell, search, mobile] = await Promise.all([
+  const [shell, search, mobile, accountMenu] = await Promise.all([
     component('console-ui.tsx'),
     component('console-search.tsx'),
     component('console-mobile-nav.tsx'),
+    component('account-menu.tsx'),
   ]);
 
   // When: the source boundary is inspected as Next.js will compile it.
@@ -20,11 +21,13 @@ test('authenticated console shell remains server-first and preserves tenant-safe
   assert.match(shell, /getJson\('\/auth\/me'/);
   assert.match(shell, /redirect\('\/login\?error=session_expired'\)/);
   assert.match(shell, /String\(user\?\.role \|\| subject\?\.userRole \|\| ''\)\.toUpperCase\(\) === 'ADMIN'/);
-  assert.match(shell, /requested: orgRouteValue/);
+  assert.match(shell, /const requestedOrganizationId = typeof orgRouteValue === 'string' \? orgRouteValue\.trim\(\) : '';/);
+  assert.match(shell, /organizationMemberships\.find\(\(membership\) => membership\.organizationId === requestedOrganizationId\)\?\.organizationId/);
   assert.match(shell, /memberships: me\.body\?\.memberships/);
   assert.match(shell, /<Suspense fallback=\{null\}><FlashBanner \/><\/Suspense>/);
-  assert.match(shell, /method="post" action=\{apiAction\('\/auth\/logout'\)\}/);
-  assert.match(shell, /name="_returnTo" value="\/login"/);
+  assert.match(shell, /const logoutAction = apiAction\('\/auth\/logout'\);/);
+  assert.match(shell, /<AccountMenu[\s\S]*?logoutAction=\{logoutAction\}/);
+  assert.match(accountMenu, /<form action=\{logoutAction\} method="post"><input name="_returnTo" type="hidden" value="\/login" \/>/);
   for (const leaf of clientLeaves) assert.match(leaf, /^['"]use client['"]/);
 });
 
@@ -72,6 +75,29 @@ test('console shell has a single bounded main scroll owner across the 768px brea
   assert.match(shell, /<div className="hidden min-w-0 lg:block">\s*<p[^>]+>\{eyebrow\}<\/p>\s*<p[^>]+>\{projectValue\}<\/p>\s*<\/div>/);
   assert.match(mobile, /md:hidden/);
   assert.doesNotMatch(combined, /h-screen|overflow-x-auto/);
+});
+
+test('console chrome places synchronized theme menus only in its responsive tool groups', async () => {
+  // Given: the server shell owns the responsive desktop and mobile chrome.
+  const [shell, mobile, themeMenu] = await Promise.all([
+    component('console-ui.tsx'),
+    component('console-mobile-nav.tsx'),
+    component('theme-menu.tsx'),
+  ]);
+
+  // When: the theme-control placement is inspected.
+  const menuInstances = shell.match(/<ThemeMenu \/>/g) ?? [];
+
+  // Then: each breakpoint has one visible client leaf while the sheet stays navigation-only.
+  assert.match(shell, /import \{ ThemeMenu \} from '\.\/theme-menu';/);
+  assert.equal(menuInstances.length, 2);
+  assert.match(shell, /<header className="[^"\n]*flex-wrap[^"\n]*md:hidden">[\s\S]*?<div className="flex shrink-0 items-center gap-2[^"\n]*max-\[12rem\]:w-full[^"\n]*" aria-label="모바일 콘솔 도구">[\s\S]*?<ConsoleSearch compact items=\{searchItems\} \/>[\s\S]*?<ThemeMenu \/>[\s\S]*?<\/div>[\s\S]*?<\/header>/);
+  assert.match(mobile, /max-\[12rem\]:w-full[^"\n]*max-\[12rem\]:basis-full/);
+  assert.match(shell, /<header className="sticky top-0 z-10 hidden[^"\n]*md:flex">[\s\S]*?<div className="flex items-center gap-2" aria-label="콘솔 도구">[\s\S]*?<ConsoleSearch items=\{searchItems\} \/>[\s\S]*?사용 설명서[\s\S]*?<ThemeMenu \/>[\s\S]*?<\/div>/);
+  assert.doesNotMatch(mobile, /ThemeMenu|theme-menu/);
+  assert.match(themeMenu, /^['"]use client['"]/);
+  assert.match(themeMenu, /window\.addEventListener\('storage'/);
+  assert.match(themeMenu, /window\.addEventListener\(THEME_CHANGE_EVENT/);
 });
 
 test('shared load errors use a valid atomic alert without changing sanitized issue copy', async () => {

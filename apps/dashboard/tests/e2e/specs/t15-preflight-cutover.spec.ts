@@ -120,8 +120,9 @@ test.describe('@t15-preflight', () => {
     await userPage.getByRole('button', { name: '콘솔 메뉴 열기' }).click();
     const sheet = userPage.getByRole('dialog', { name: 'RAIBIT SERVER 콘솔' });
     await expect(sheet).toBeVisible();
+    await expect(sheet).toHaveCSS('opacity', '1');
     expect(await sheet.evaluate((element) => element.getBoundingClientRect().width)).toBeLessThanOrEqual(375);
-    await expectAccessible(userPage);
+    await expectAccessible(userPage, '[data-slot="sheet-content"]');
     await expectNoDocumentOverflow(userPage);
     assertNoErrors();
   });

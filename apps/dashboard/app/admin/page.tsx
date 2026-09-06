@@ -8,12 +8,14 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { apiAction, loadAdminConsole } from '../../lib/api';
 import { ConsoleShell, LoadErrorSummary } from '../../components/console-ui';
+import { UserAvatar } from '../../components/user-avatar';
 
 const roleLabels: Record<string, string> = { ADMIN: '관리자', USER: '사용자' };
 const accountTypeLabels: Record<string, string> = { CLUB_MEMBER: '클럽 회원', NON_CLUB: '일반 사용자' };
 const destructiveActionClassName = 'w-full bg-destructive text-destructive-foreground hover:bg-destructive/90';
 
 type ManagedUser = {
+  readonly avatarUrl?: string;
   readonly id: string;
   readonly name?: string;
   readonly studentId?: string;
@@ -41,20 +43,20 @@ export default async function AdminPage() {
         </header>
         <LoadErrorSummary issues={state.loadErrors} />
 
-        <Card>
+        <Card className="admin-table-card">
           <CardHeader className="border-b border-border"><div className="flex items-start justify-between gap-4"><div><CardTitle><h2>승인 대기 신청</h2></CardTitle><CardDescription className="mt-1">신청 정보와 현재 계정 유형을 함께 검토합니다.</CardDescription></div><Badge variant="secondary">{state.pendingUsers.length}명</Badge></div></CardHeader>
           <CardContent className="p-0">
             {state.pendingUsers.length ? (
-              <Table>
-                <TableHeader><TableRow><TableHead>사용자</TableHead><TableHead>신청 / 현재 계정</TableHead><TableHead>상태</TableHead><TableHead className="min-w-64">작업</TableHead></TableRow></TableHeader>
+              <Table className="admin-responsive-table">
+                <TableHeader><TableRow><TableHead>사용자</TableHead><TableHead>신청 / 현재 계정</TableHead><TableHead>상태</TableHead><TableHead>작업</TableHead></TableRow></TableHeader>
                 <TableBody>{state.pendingUsers.map((user: ManagedUser) => <TableRow key={user.id}>
-                  <TableCell className="align-top"><strong>{user.name || '이름 미입력'}</strong><p className="mt-1 text-sm">{user.studentId ? `학번 ${user.studentId}` : '학번 미입력'}</p><p className="mt-1 max-w-52 truncate text-sm text-muted-foreground" title={user.email}>{user.email}</p></TableCell>
-                  <TableCell className="align-top"><strong>{user.clubMemberClaim ? '신청: 라이빗 동아리원' : '신청: 비동아리원'}</strong><p className="mt-1 text-sm text-muted-foreground">현재 {roleLabels[user.role || 'USER'] || '사용자'} / {accountTypeLabels[user.accountType] || '일반 사용자'}</p></TableCell>
-                  <TableCell className="align-top"><Badge className="border-primary/25 bg-primary-soft text-primary" variant="outline" data-status={user.approvalStatus}>승인 대기</Badge></TableCell>
-                  <TableCell className="align-top"><div className="flex min-w-60 flex-col gap-2">
+                  <TableCell className="align-top" data-label="사용자"><div className="flex min-w-0 items-start gap-raibit-sm"><UserAvatar avatarUrl={user.avatarUrl} email={user.email} name={user.name} /><span className="min-w-0"><strong>{user.name || '이름 미입력'}</strong><span className="mt-1 block text-sm">{user.studentId ? `학번 ${user.studentId}` : '학번 미입력'}</span><span className="mt-1 block max-w-52 truncate text-sm text-muted-foreground" title={user.email}>{user.email}</span></span></div></TableCell>
+                  <TableCell className="align-top" data-label="신청 / 현재 계정"><strong>{user.clubMemberClaim ? '신청: 라이빗 동아리원' : '신청: 비동아리원'}</strong><p className="mt-1 text-sm text-muted-foreground">현재 {roleLabels[user.role || 'USER'] || '사용자'} / <span className="inline-block whitespace-nowrap" data-admin-account-type>{accountTypeLabels[user.accountType] || '일반 사용자'}</span></p></TableCell>
+                  <TableCell className="align-top" data-label="상태"><Badge className="border-primary/25 bg-primary-soft text-primary" variant="outline" data-status={user.approvalStatus}>승인 대기</Badge></TableCell>
+                  <TableCell className="align-top" data-admin-actions data-label="작업"><div className="flex min-w-0 flex-col gap-2">
                     <form method="post" action={apiAction(`/admin/users/${user.id}/approve`, state.context)}><input type="hidden" name="accountType" value="CLUB_MEMBER" /><Button className="w-full" type="submit">클럽 회원 승인</Button></form>
                     <form method="post" action={apiAction(`/admin/users/${user.id}/approve`, state.context)}><input type="hidden" name="accountType" value="NON_CLUB" /><Button className="w-full" variant="outline" type="submit">일반 사용자 승인</Button></form>
-                    <form method="post" action={apiAction(`/admin/users/${user.id}/reject`, state.context)} className="space-y-2 rounded-md border border-destructive/25 bg-destructive/5 p-3"><label className="flex min-h-9 cursor-pointer items-center gap-2 text-sm text-foreground"><input className="size-4 accent-primary" type="checkbox" name="confirmed" value="true" required /><span>거절 확인</span></label><Button className={destructiveActionClassName} variant="destructive" type="submit">거절</Button></form>
+                    <form method="post" action={apiAction(`/admin/users/${user.id}/reject`, state.context)} className="flex flex-col gap-2 rounded-md border border-destructive/25 bg-destructive/5 p-3"><label className="flex min-h-9 cursor-pointer items-center gap-2 text-sm text-foreground"><input className="size-4 accent-primary" type="checkbox" name="confirmed" value="true" required /><span>거절 확인</span></label><Button className={destructiveActionClassName} variant="destructive" type="submit">거절</Button></form>
                   </div></TableCell>
                 </TableRow>)}</TableBody>
               </Table>
@@ -62,17 +64,17 @@ export default async function AdminPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="admin-table-card">
           <CardHeader className="border-b border-border"><div className="flex items-start justify-between gap-4"><div><CardTitle><h2>사용자 이용 제한</h2></CardTitle><CardDescription className="mt-1 max-w-3xl text-pretty">사유를 기록해 영구 또는 지정 시각까지 이용을 제한합니다. 밴 즉시 기존 로그인 세션이 모두 만료됩니다.</CardDescription></div><Badge variant={state.bannedUsers.length ? 'destructive' : 'secondary'}>밴 {state.bannedUsers.length}명</Badge></div></CardHeader>
           <CardContent className="p-0">
             {managedUsers.length ? (
-              <Table>
-                <TableHeader><TableRow><TableHead>사용자</TableHead><TableHead>계정</TableHead><TableHead>제한 상태</TableHead><TableHead className="min-w-72">작업</TableHead></TableRow></TableHeader>
+              <Table className="admin-responsive-table">
+                <TableHeader><TableRow><TableHead>사용자</TableHead><TableHead>계정</TableHead><TableHead>제한 상태</TableHead><TableHead>작업</TableHead></TableRow></TableHeader>
                 <TableBody>{managedUsers.map((user: ManagedUser) => <TableRow key={user.id}>
-                  <TableCell className="align-top"><strong>{user.name || '이름 미입력'}</strong><p className="mt-1 max-w-52 truncate text-sm text-muted-foreground" title={user.email}>{user.email}</p></TableCell>
-                  <TableCell className="align-top">{roleLabels[user.role || 'USER'] || '사용자'} / {accountTypeLabels[user.accountType] || '일반 사용자'}</TableCell>
-                  <TableCell className="align-top">{user.isBanned ? <div className="flex flex-col items-start gap-1"><Badge variant="destructive">밴</Badge><p className="max-w-56 break-words text-sm">{user.banReason || '사유 없음'}</p><p className="text-sm text-muted-foreground">{user.banExpiresAt ? `${new Date(user.banExpiresAt).toLocaleString('ko-KR')}까지` : '영구 제한'}</p></div> : <Badge variant="secondary">정상</Badge>}</TableCell>
-                  <TableCell className="align-top">{user.isBanned ? (
+                  <TableCell className="align-top" data-label="사용자"><div className="flex min-w-0 items-start gap-raibit-sm"><UserAvatar avatarUrl={user.avatarUrl} email={user.email} name={user.name} /><span className="min-w-0"><strong>{user.name || '이름 미입력'}</strong><span className="mt-1 block max-w-52 truncate text-sm text-muted-foreground" title={user.email}>{user.email}</span></span></div></TableCell>
+                  <TableCell className="align-top" data-label="계정">{roleLabels[user.role || 'USER'] || '사용자'} / <span className="inline-block whitespace-nowrap" data-admin-account-type>{accountTypeLabels[user.accountType] || '일반 사용자'}</span></TableCell>
+                  <TableCell className="align-top" data-label="제한 상태">{user.isBanned ? <div className="flex flex-col items-start gap-1"><Badge variant="destructive">밴</Badge><p className="max-w-56 break-words text-sm">{user.banReason || '사유 없음'}</p><p className="text-sm text-muted-foreground">{user.banExpiresAt ? `${new Date(user.banExpiresAt).toLocaleString('ko-KR')}까지` : '영구 제한'}</p></div> : <Badge variant="secondary">정상</Badge>}</TableCell>
+                  <TableCell className="align-top" data-admin-actions data-label="작업">{user.isBanned ? (
                     <form method="post" action={apiAction(`/admin/users/${user.id}/unban`, state.context)}><Button className="w-full" variant="outline" type="submit">밴 해제</Button></form>
                   ) : (
                     <form method="post" action={apiAction(`/admin/users/${user.id}/ban`, state.context)} className="rounded-md border border-destructive/25 bg-destructive/5 p-3"><FieldGroup className="gap-3"><Field><FieldLabel htmlFor={`ban-reason-${user.id}`}>사유</FieldLabel><Input id={`ban-reason-${user.id}`} name="reason" required maxLength={500} placeholder="이용 제한 사유" /></Field><Field><FieldLabel htmlFor={`ban-expiry-${user.id}`}>해제 시각</FieldLabel><Input id={`ban-expiry-${user.id}`} name="expiresAt" type="datetime-local" /><FieldDescription>비우면 영구 제한됩니다.</FieldDescription></Field><Button className={destructiveActionClassName} variant="destructive" type="submit">밴</Button></FieldGroup></form>

@@ -1,0 +1,1131 @@
+{
+  "schema": "raibitserver.platform-completion-catalog/v1",
+  "claim": "capability-references-only",
+  "approvedInputSha256": "0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2",
+  "components": [
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "C6"
+  ],
+  "prSlices": [
+    "A0",
+    "A1",
+    "A2",
+    "A3",
+    "B1",
+    "B2",
+    "B3"
+  ],
+  "truth": {
+    "generatedRouteTenant": "organizationSlug",
+    "grantableRoles": [
+      "OWNER",
+      "ADMIN",
+      "MAINTAINER",
+      "DEVELOPER",
+      "DB_ADMIN",
+      "VIEWER"
+    ],
+    "tenantEngines": [
+      "postgresql",
+      "mysql",
+      "mariadb",
+      "mongodb",
+      "sqlite",
+      "redis",
+      "valkey"
+    ],
+    "resourceCapabilityDigest": "67e1a642e5fdba12651ec3b6eada70034df63bd9c3a6a9b30544dd50d3159021",
+    "localLevel": "L1",
+    "clusterLevel": "L2",
+    "releaseLevel": "L3"
+  },
+  "tasks": [
+    {
+      "id": 1,
+      "capability": "Execution boundary and PR ownership",
+      "components": [
+        "C1"
+      ],
+      "prSlice": null,
+      "code": [],
+      "tests": [],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 2,
+      "capability": "Canonical cross-language lifecycle",
+      "components": [
+        "C1"
+      ],
+      "prSlice": "A0",
+      "code": [
+        "packages/schemas/src/lifecycle.ts",
+        "test-fixtures/contracts/lifecycle-v1.json"
+      ],
+      "tests": [
+        "tests/lifecycle-contract.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 3,
+      "capability": "Organization roles and generated-route tenancy",
+      "components": [
+        "C1"
+      ],
+      "prSlice": "A0",
+      "code": [
+        "packages/schemas/src/organization-role.ts",
+        "packages/core/src/domain-router.ts"
+      ],
+      "tests": [
+        "tests/route-role-contract.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 4,
+      "capability": "Semantic API and client parity",
+      "components": [
+        "C1"
+      ],
+      "prSlice": "A0",
+      "code": [
+        "openapi/raibitserver.yaml",
+        "packages/api-client/src/index.ts"
+      ],
+      "tests": [
+        "tests/api-semantic-parity.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 5,
+      "capability": "Additive migration and CRD contracts",
+      "components": [
+        "C1"
+      ],
+      "prSlice": "A0",
+      "code": [
+        "scripts/check-migration-contract.mjs",
+        "infra/k8s/appservice-crd.yaml"
+      ],
+      "tests": [
+        "tests/migration-compatibility.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 6,
+      "capability": "Managed-resource capability truth",
+      "components": [
+        "C1"
+      ],
+      "prSlice": "A0",
+      "code": [
+        "packages/schemas/src/resource-capabilities-v1.json",
+        "packages/core/src/catalog.ts"
+      ],
+      "tests": [
+        "tests/resource-capability-parity.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 7,
+      "capability": "Three-level evidence contract",
+      "components": [
+        "C1"
+      ],
+      "prSlice": "A0",
+      "code": [
+        "packages/schemas/src/production-evidence.ts",
+        "scripts/verify-production-evidence.mjs"
+      ],
+      "tests": [
+        "tests/production-evidence-contract.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 8,
+      "capability": "Durable one-use OAuth transactions",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "A1",
+      "code": [
+        "packages/core/src/oauth-transaction.ts",
+        "packages/core/src/prisma-oauth-transaction.ts"
+      ],
+      "tests": [
+        "tests/oauth-transaction.test.js",
+        "tests/postgres-oauth-transaction.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 9,
+      "capability": "Bound GitHub OAuth flow",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "A1",
+      "code": [
+        "packages/core/src/github-oauth-flow.ts",
+        "apps/api/src/modules/auth/auth.controller.ts"
+      ],
+      "tests": [
+        "tests/github-oauth.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 10,
+      "capability": "OAuth abuse limits and redaction",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "A1",
+      "code": [
+        "packages/core/src/oauth-security.ts"
+      ],
+      "tests": [
+        "tests/oauth-abuse.test.js",
+        "tests/oauth-redaction.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 11,
+      "capability": "Exact-repository clone credentials",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "A1",
+      "code": [
+        "services/builder/internal/controlplane/github_credentials.go",
+        "services/builder/internal/worker/github_credential_helper.go"
+      ],
+      "tests": [
+        "services/builder/internal/controlplane/github_credentials_test.go",
+        "services/builder/internal/worker/github_credential_helper_test.go"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 12,
+      "capability": "Desired-state and Dockerfile boundaries",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "A1",
+      "code": [
+        "packages/core/src/desired-state-mutations.ts",
+        "packages/core/src/build-strategy.ts"
+      ],
+      "tests": [
+        "tests/desired-state-mutation-contract.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 13,
+      "capability": "Supported-resource admission",
+      "components": [
+        "C5"
+      ],
+      "prSlice": "A1",
+      "code": [
+        "packages/core/src/resource-providers.ts"
+      ],
+      "tests": [
+        "tests/resource-capability-boundary.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 14,
+      "capability": "Authenticated supported-engine lifecycle",
+      "components": [
+        "C5"
+      ],
+      "prSlice": "A1",
+      "code": [
+        "scripts/production-evidence/resources.sh",
+        "scripts/production-evidence/lib/resource-lifecycle.mjs"
+      ],
+      "tests": [
+        "tests/supported-engine-lifecycle.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "gate-a"
+      ],
+      "pending": []
+    },
+    {
+      "id": 15,
+      "capability": "Immutable retry lineage",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "A2",
+      "code": [
+        "packages/schemas/src/deployment-operation.ts",
+        "packages/core/src/deployments.ts"
+      ],
+      "tests": [
+        "tests/deployment-retry.test.js",
+        "tests/postgres-deployment-retry.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 16,
+      "capability": "Signed source-to-image builder",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "A2",
+      "code": [
+        "services/builder/internal/worker/builder.go",
+        "scripts/production-evidence/supply-chain.sh"
+      ],
+      "tests": [
+        "tests/production-builder-contract.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "gate-a"
+      ],
+      "pending": []
+    },
+    {
+      "id": 17,
+      "capability": "Rollout and application health",
+      "components": [
+        "C4"
+      ],
+      "prSlice": "A2",
+      "code": [
+        "packages/core/src/deployment-health.ts",
+        "packages/schemas/src/deployment-health.ts"
+      ],
+      "tests": [
+        "tests/deployment-health.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "gate-a"
+      ],
+      "pending": []
+    },
+    {
+      "id": 18,
+      "capability": "Lease-fenced preview lifecycle",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "A2",
+      "code": [
+        "packages/core/src/github-integration.ts",
+        "scripts/production-evidence/preview.sh"
+      ],
+      "tests": [
+        "tests/preview-lifecycle.test.js",
+        "tests/postgres-preview-lifecycle.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "gate-a"
+      ],
+      "pending": []
+    },
+    {
+      "id": 19,
+      "capability": "Correlated runtime observability",
+      "components": [
+        "C4"
+      ],
+      "prSlice": "A2",
+      "code": [
+        "packages/core/src/observability.ts",
+        "services/log-ingester/internal/ingester/ingester.go",
+        "services/metrics-ingester/internal/ingester/ingester.go"
+      ],
+      "tests": [
+        "tests/observability-ingestion.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "gate-a"
+      ],
+      "pending": []
+    },
+    {
+      "id": 20,
+      "capability": "Resumable service log streams",
+      "components": [
+        "C4"
+      ],
+      "prSlice": "A2",
+      "code": [
+        "apps/dashboard/components/project-hub/runtime-log-stream.tsx"
+      ],
+      "tests": [
+        "apps/dashboard/tests/e2e/specs/task-20-runtime-logs.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 21,
+      "capability": "Deployment streams and recovery feedback",
+      "components": [
+        "C3",
+        "C4"
+      ],
+      "prSlice": "A2",
+      "code": [
+        "apps/dashboard/components/project-hub/deployment-stream.tsx"
+      ],
+      "tests": [
+        "tests/api-store.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 22,
+      "capability": "Tenant-owned recovery state",
+      "components": [
+        "C5"
+      ],
+      "prSlice": "A3",
+      "code": [
+        "packages/core/src/resource-recovery.ts",
+        "packages/schemas/src/resource-recovery.ts"
+      ],
+      "tests": [
+        "tests/resource-recovery-state.test.js",
+        "tests/postgres-resource-recovery.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 23,
+      "capability": "Encrypted operator backup artifacts",
+      "components": [
+        "C5"
+      ],
+      "prSlice": "A3",
+      "code": [
+        "services/provisioner/internal/backup/envelope.go",
+        "services/provisioner/internal/backup/upload.go"
+      ],
+      "tests": [
+        "tests/backup-artifact-contract.test.js",
+        "services/provisioner/internal/backup/artifact_test.go"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 24,
+      "capability": "SQL backup and isolated restore",
+      "components": [
+        "C5"
+      ],
+      "prSlice": "A3",
+      "code": [
+        "services/provisioner/internal/backup/sql_adapter.go",
+        "scripts/production-evidence/backup-sql.sh"
+      ],
+      "tests": [
+        "services/provisioner/internal/backup/sql_adapter_test.go"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "gate-a"
+      ],
+      "pending": []
+    },
+    {
+      "id": 25,
+      "capability": "Document cache and SQLite recovery",
+      "components": [
+        "C5"
+      ],
+      "prSlice": "A3",
+      "code": [
+        "services/provisioner/internal/backup/mongodb_adapter.go",
+        "services/provisioner/internal/backup/cache_adapter.go",
+        "packages/core/src/sqlite-backup.ts"
+      ],
+      "tests": [
+        "services/provisioner/internal/backup/mongodb_adapter_test.go",
+        "services/provisioner/internal/backup/cache_adapter_test.go",
+        "tests/sqlite-backup.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "gate-a"
+      ],
+      "pending": []
+    },
+    {
+      "id": 26,
+      "capability": "Resource recovery product operations",
+      "components": [
+        "C5"
+      ],
+      "prSlice": "A3",
+      "code": [
+        "packages/core/src/resource-recovery.ts",
+        "apps/dashboard/components/resource-backup-actions.tsx"
+      ],
+      "tests": [
+        "tests/resource-recovery-api-core.test.js",
+        "apps/dashboard/tests/e2e/specs/task-26-resource-recovery.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 27,
+      "capability": "Same-run production lifecycle",
+      "components": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C6"
+      ],
+      "prSlice": "A3",
+      "code": [
+        "scripts/production-evidence-e2e.sh",
+        "scripts/production-evidence/lib/orchestrator.mjs"
+      ],
+      "tests": [
+        "tests/production-evidence-composed.test.js",
+        "tests/production-evidence-orchestrator.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "gate-a"
+      ],
+      "pending": []
+    },
+    {
+      "id": 28,
+      "capability": "Protected Gate A release transition",
+      "components": [
+        "C6"
+      ],
+      "prSlice": "A3",
+      "code": [
+        "scripts/run-gate-a.mjs",
+        ".github/workflows/production-evidence.yml",
+        "scripts/production-evidence/preflight.mjs",
+        "scripts/production-evidence/lib/ci-invocation.mjs"
+      ],
+      "tests": [
+        "tests/gate-a-launcher.test.js",
+        "tests/production-evidence-contract.test.js",
+        "test-fixtures/production-evidence/gate-a-run-identity.json",
+        "test-fixtures/production-evidence/gate-a-missing-secret.json"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "gate-a"
+      ],
+      "pending": []
+    },
+    {
+      "id": 29,
+      "capability": "Atomic password recovery",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "B1",
+      "code": [
+        "packages/core/src/password-recovery.ts"
+      ],
+      "tests": [
+        "tests/password-recovery.test.js",
+        "tests/postgres-password-recovery.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 30,
+      "capability": "Accessible password recovery UI",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "B1",
+      "code": [
+        "apps/dashboard/components/password-recovery-form.tsx"
+      ],
+      "tests": [
+        "apps/dashboard/lib/password-recovery-contract.test.mjs"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 31,
+      "capability": "Verified organization invitations",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "B1",
+      "code": [
+        "packages/core/src/organization-invite.ts",
+        "apps/api/src/modules/organizations/organizations.controller.ts"
+      ],
+      "tests": [
+        "tests/organization-invite.test.js",
+        "tests/postgres-organization-invite.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 32,
+      "capability": "Serialized membership transitions",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "B1",
+      "code": [
+        "packages/core/src/membership-transition.ts",
+        "packages/core/src/membership-transition-postgres.ts"
+      ],
+      "tests": [
+        "tests/membership-transitions.test.js",
+        "tests/postgres-membership-race.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 33,
+      "capability": "Organization switching and member UI",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "B1",
+      "code": [
+        "apps/dashboard/components/organization-switcher.tsx",
+        "apps/dashboard/components/organization-members.tsx"
+      ],
+      "tests": [
+        "apps/dashboard/lib/organization-members-contract.test.mjs"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 34,
+      "capability": "Account and permission feedback",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "B1",
+      "code": [
+        "apps/dashboard/components/account-security.tsx",
+        "apps/dashboard/lib/control-plane-errors.js"
+      ],
+      "tests": [
+        "apps/dashboard/lib/control-plane-errors.test.mjs"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 35,
+      "capability": "Identity organization integration coverage",
+      "components": [
+        "C2"
+      ],
+      "prSlice": "B1",
+      "code": [
+        "packages/core/src/membership-transition.ts",
+        "packages/core/src/oauth-transaction.ts"
+      ],
+      "tests": [
+        "tests/identity-organization-matrix.test.js",
+        "apps/dashboard/tests/e2e/identity-organization-matrix.ts",
+        "apps/dashboard/tests/e2e/specs/identity-organization-matrix.spec.ts",
+        "tests/oauth-abuse.test.js",
+        "tests/membership-transitions.test.js",
+        "tests/organization-invite.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 36,
+      "capability": "Conditional project settings",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "B2",
+      "code": [
+        "packages/core/src/project-settings.ts",
+        "apps/dashboard/components/project-hub/settings.tsx"
+      ],
+      "tests": [
+        "tests/project-settings.test.js",
+        "apps/dashboard/tests/e2e/specs/project-settings.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 37,
+      "capability": "Service health and source settings",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "B2",
+      "code": [
+        "packages/core/src/service-settings.ts",
+        "apps/dashboard/components/project-hub/services.tsx"
+      ],
+      "tests": [
+        "tests/service-settings.test.js",
+        "apps/dashboard/tests/e2e/specs/service-settings.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 38,
+      "capability": "Deployment history and recovery",
+      "components": [
+        "C3",
+        "C4"
+      ],
+      "prSlice": "B2",
+      "code": [
+        "apps/dashboard/components/project-hub/deployment-history.tsx"
+      ],
+      "tests": [
+        "apps/dashboard/tests/e2e/specs/deployment-history.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 39,
+      "capability": "GitHub disconnect lifecycle",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "B2",
+      "code": [
+        "packages/core/src/github-lifecycle.ts",
+        "apps/dashboard/components/github-lifecycle-controls.tsx"
+      ],
+      "tests": [
+        "tests/github-disconnect.test.js",
+        "apps/dashboard/tests/e2e/specs/github-lifecycle.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 40,
+      "capability": "Opaque repository pagination",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "B2",
+      "code": [
+        "packages/core/src/github-catalog.ts",
+        "apps/dashboard/components/github-catalog-refresh.tsx"
+      ],
+      "tests": [
+        "tests/github-catalog-pagination.test.js",
+        "apps/dashboard/tests/e2e/specs/github-catalog-pagination.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 41,
+      "capability": "Typed GitHub conflict recovery",
+      "components": [
+        "C3"
+      ],
+      "prSlice": "B2",
+      "code": [
+        "packages/core/src/github-integration.ts",
+        "packages/core/src/github-conflict.ts",
+        "packages/schemas/src/github-conflict.ts",
+        "apps/dashboard/app/github/page.tsx",
+        "apps/dashboard/lib/github-source-mutation-contract.mjs",
+        "apps/dashboard/lib/github-project-link-contract.mjs"
+      ],
+      "tests": [
+        "tests/github-conflicts.test.js",
+        "apps/dashboard/lib/github-conflict-recovery.test.mjs",
+        "apps/dashboard/lib/github-source-mutation-contract.test.mjs",
+        "apps/dashboard/lib/github-project-link-contract.test.mjs",
+        "apps/dashboard/tests/e2e/specs/github-conflicts.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 42,
+      "capability": "Scenario-driven lifecycle CLI",
+      "components": [
+        "C3",
+        "C5"
+      ],
+      "prSlice": "B2",
+      "code": [
+        "apps/cli/src/index.ts"
+      ],
+      "tests": [
+        "tests/cli-lifecycle.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 43,
+      "capability": "Custom-domain desired state",
+      "components": [
+        "C6"
+      ],
+      "prSlice": "B3",
+      "code": [
+        "packages/core/src/domain.ts",
+        "packages/schemas/src/domain.ts"
+      ],
+      "tests": [
+        "tests/domain-api.test.js",
+        "tests/postgres-domain.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 44,
+      "capability": "TXT ownership verification",
+      "components": [
+        "C6"
+      ],
+      "prSlice": "B3",
+      "code": [
+        "services/orchestrator/internal/domain/verifier.go",
+        "services/orchestrator/internal/domain/resolver.go"
+      ],
+      "tests": [
+        "services/orchestrator/internal/domain/verifier_test.go",
+        "services/orchestrator/internal/store/domain_store_test.go"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 45,
+      "capability": "Ownership-gated TLS and ingress",
+      "components": [
+        "C6"
+      ],
+      "prSlice": "B3",
+      "code": [
+        "services/orchestrator/internal/domain/reconciler.go",
+        "services/orchestrator/internal/kube/domain.go"
+      ],
+      "tests": [
+        "services/orchestrator/internal/domain/reconciler_test.go",
+        "services/orchestrator/internal/kube/domain_test.go"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 46,
+      "capability": "Custom-domain dashboard journey",
+      "components": [
+        "C6"
+      ],
+      "prSlice": "B3",
+      "code": [
+        "apps/dashboard/components/project-hub/domains.tsx"
+      ],
+      "tests": [
+        "apps/dashboard/tests/e2e/specs/project-domains.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 47,
+      "capability": "Live custom-domain evidence",
+      "components": [
+        "C6"
+      ],
+      "prSlice": "B3",
+      "code": [
+        "scripts/production-evidence/domains.sh",
+        "scripts/production-evidence/lib/cloudflare-domain-evidence.mjs",
+        "scripts/production-evidence/lib/domain-runner.mjs",
+        "scripts/production-evidence/runners/domains.mjs",
+        "scripts/production-evidence/steps/domains.mjs"
+      ],
+      "tests": [
+        "tests/domain-security.test.js",
+        "tests/production-domain-evidence.test.js",
+        "test-fixtures/contracts/domain-evidence-inputs-v1.json",
+        "test-fixtures/production-evidence/domain-fault-matrix-v1.json"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts",
+        "domain-evidence"
+      ],
+      "pending": []
+    },
+    {
+      "id": 48,
+      "capability": "Cross-version compatibility matrix",
+      "components": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C6"
+      ],
+      "prSlice": "B3",
+      "code": [
+        "scripts/check-migration-contract.mjs"
+      ],
+      "tests": [
+        "tests/migration-compatibility.test.js",
+        "tests/domain-migration-compatibility.test.js",
+        "tests/cross-version-rollout.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 49,
+      "capability": "Browser outcome matrix",
+      "components": [
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C6"
+      ],
+      "prSlice": "B3",
+      "code": [
+        "apps/dashboard/playwright.config.ts",
+        "apps/dashboard/tests/e2e/feature-expansion-matrix.ts",
+        "apps/dashboard/tests/e2e/platform-expansion-report.js",
+        "apps/dashboard/tests/e2e/platform-expansion-report.d.ts"
+      ],
+      "tests": [
+        "apps/dashboard/tests/e2e/feature-expansion-matrix.contract.test.mjs",
+        "apps/dashboard/tests/e2e/specs/platform-expansion.spec.ts",
+        "apps/dashboard/tests/e2e/specs/identity-organization-matrix.spec.ts",
+        "apps/dashboard/tests/e2e/specs/github-conflicts.spec.ts"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    },
+    {
+      "id": 50,
+      "capability": "Completion truth and fixed baseline",
+      "components": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C6"
+      ],
+      "prSlice": "B3",
+      "code": [
+        "scripts/verify-completion-matrix.mjs",
+        "scripts/completion-matrix-contract.mjs",
+        "scripts/verify-platform-expansion-baseline.sh",
+        "scripts/platform-expansion-baseline.mjs",
+        "scripts/verify-production-evidence.mjs",
+        "scripts/production-evidence/lib/durable-receipt-authority.mjs",
+        "scripts/production-evidence/lib/durable-evidence-files.mjs",
+        "docs/handbook/operator-guide.md",
+        "docs/handbook/user-guide.md",
+        "docs/production-evidence.md",
+        "docs/runbooks/beta-release.md"
+      ],
+      "tests": [
+        "tests/platform-truth-sync.test.js",
+        "tests/platform-expansion-baseline.test.js",
+        "tests/production-durable-evidence.test.js",
+        "tests/production-final-evidence.test.js"
+      ],
+      "evidence": [
+        "command-receipts",
+        "cleanup-artifacts"
+      ],
+      "pending": []
+    }
+  ]
+}

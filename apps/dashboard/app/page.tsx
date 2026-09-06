@@ -64,10 +64,10 @@ export default async function HomePage() {
             <p className="text-micro font-medium tracking-[0.16em] text-primary">
               RAIBIT HOSTING SERVICE
             </p>
-            <h1 className="max-w-[9ch] text-display-xl font-medium text-balance text-foreground sm:text-display-xxl">
+            <h1 className="max-w-[15ch] break-keep text-display-xl font-medium text-balance text-foreground sm:text-display-xxl">
               만들고, 올리고, 운영하세요.
             </h1>
-            <p className="max-w-2xl text-body-lg text-pretty text-muted-foreground">
+            <p className="max-w-2xl text-body-lg text-pretty break-keep [overflow-wrap:anywhere] text-muted-foreground">
               인천과학고등학교의 최고 정보 동아리 라이빗의 호스팅 서비스입니다.
             </p>
             <div className="flex flex-wrap gap-raibit-sm">

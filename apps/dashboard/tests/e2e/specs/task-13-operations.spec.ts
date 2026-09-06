@@ -25,8 +25,6 @@ const deploymentViews = [
   ['overview', '이미지 정보'],
   ['logs', '빌드 로그'],
   ['events', '배포 이벤트'],
-  ['rollback', '롤백 확인'],
-  ['cancel', '배포 취소'],
 ] as const;
 
 const resourceViews = [
@@ -87,44 +85,15 @@ test.describe('@t13-operations', () => {
     });
   }
 
-  test('rollback and cancel preserve exact payloads, return paths, confirmation, and status gating', async ({ userPage }) => {
-    const readyPath = deploymentBase(readyDeploymentId);
-    await userPage.goto(`${readyPath}?view=rollback`);
-    expect(await nativeFormData(userPage, '#rollback-deployment')).toEqual([
-      ['_returnTo', `${readyPath}?view=overview`],
-      ['imageUrl', ''],
-    ]);
-    await userPage.getByRole('button', { name: '롤백', exact: true }).click();
-    await expectRoute(userPage, readyPath, { view: 'rollback' });
-    expect(await userPage.locator('#rollback-deployment input[name="confirmed"]').evaluate((input) => input instanceof HTMLInputElement && input.validity.valueMissing)).toBe(true);
-    await userPage.getByLabel('롤백 확인').check();
-    expect(await nativeFormData(userPage, '#rollback-deployment')).toEqual([
-      ['_returnTo', `${readyPath}?view=overview`],
-      ['imageUrl', ''],
-      ['confirmed', 'true'],
-    ]);
-    await userPage.getByRole('button', { name: '롤백', exact: true }).click();
-    await expectRoute(userPage, readyPath, { view: 'overview', notice: 'saved' });
-
-    for (const deploymentId of [queuedDeploymentId, buildingDeploymentId, imageReadyDeploymentId]) {
-      const path = deploymentBase(deploymentId);
-      await userPage.goto(`${path}?view=cancel`);
-      await expect(userPage.locator(`form[action*="/deployments/${deploymentId}/cancel"]`)).toBeVisible();
-    }
-    const buildingPath = deploymentBase(buildingDeploymentId);
-    await userPage.goto(`${buildingPath}?view=cancel`);
-    await userPage.getByLabel('취소 사유').fill('중복 배포');
-    expect(await nativeFormData(userPage, 'form[action*="/cancel"]')).toEqual([
-      ['_returnTo', `${buildingPath}?view=overview`],
-      ['reason', '중복 배포'],
-    ]);
-    await userPage.getByRole('button', { name: '배포 취소' }).click();
-    await expectRoute(userPage, buildingPath, { view: 'overview', notice: 'saved' });
-
-    await userPage.goto(`${readyPath}?view=cancel`);
-    await expect(userPage.locator('form[action*="/cancel"]')).toHaveCount(0);
-    await expect(userPage.getByText('현재 상태에서는 취소할 수 없습니다.')).toBeVisible();
-    await expect(userPage.getByText(/QUEUED, BUILDING, IMAGE_READY 상태에서만/)).toBeVisible();
+  test('deployment detail shows only the server-provided recovery action without a manual image rollback input', async ({ adminPage }) => {
+    const failedPath = deploymentBase(failedDeploymentId);
+    await adminPage.goto(`${failedPath}?view=overview`);
+    await expect(adminPage.getByRole('button', { name: '재시도', exact: true })).toBeVisible();
+    await expect(adminPage.locator('input[name="imageUrl"]')).toHaveCount(0);
+    await adminPage.goto(`${deploymentBase(buildingDeploymentId)}?view=overview`);
+    await expect(adminPage.getByRole('button', { name: '취소', exact: true })).toBeVisible();
+    await adminPage.goto(`${deploymentBase(readyDeploymentId)}?view=overview`);
+    await expect(adminPage.getByRole('button', { name: '롤백', exact: true })).toBeVisible();
   });
 
   test('resource query, provider, provision, and attach forms preserve exact native payloads', async ({ userPage }) => {
@@ -134,7 +103,8 @@ test.describe('@t13-operations', () => {
       ['query', 'SELECT 1'],
     ]);
     await userPage.getByRole('button', { name: '쿼리 실행' }).click();
-    await expectRoute(userPage, resourceBase, { view: 'query', notice: 'saved' });
+    await expect(userPage.getByRole('region', { name: '쿼리 결과' })).toContainText('READY');
+    await expectRoute(userPage, resourceBase, { view: 'query' });
     await userPage.getByLabel('변경 쿼리 확인').check();
     expect(await nativeFormData(userPage, 'form[action*="/console/query"]')).toEqual([
       ['_returnTo', `${resourceBase}?view=query`],

@@ -102,7 +102,7 @@ test('Prisma rejects new or mutating work beneath deletion tombstones', async ()
   fake.state.resources[0].status = 'DELETE_REQUESTED';
   await assert.rejects(() => repository.updateResource('resource-1', { plan: 'larger' }), conflict);
   await assert.rejects(() => repository.attachResource({ resourceId: 'resource-1', serviceId: 'service-1' }), conflict);
-  await assert.rejects(() => repository.provisionResourceProvider({ resourceId: 'resource-1' }), conflict);
+  await assert.rejects(() => repository.provisionResourceProvider({ resourceId: 'resource-1', intent: 'live-provision' }), conflict);
 });
 
 test('desired-project upserts cannot resurrect a deleting project', async () => {
@@ -136,13 +136,13 @@ test('desired-project upserts cannot resurrect deleting child services or resour
   const prismaRepositoryStart = source.indexOf('export class PrismaControlPlaneRepository');
   const writerStart = source.indexOf('async writeDesiredProject', prismaRepositoryStart);
   const writer = source.slice(writerStart, source.indexOf('async snapshot', writerStart));
-  assert.match(writer, /select:\s*\{\s*connectionSecretName:\s*true,\s*status:\s*true,\s*deletionRequestedAt:\s*true\s*\}/);
+  assert.match(writer, /select:\s*\{[^}]*connectionSecretName:\s*true[^}]*status:\s*true[^}]*deletionRequestedAt:\s*true[^}]*\}/);
 });
 
 test('Nest delete responses distinguish durable tombstones from local hard deletes', async () => {
   const source = await readFile(new URL('../apps/api/src/raibitserver.service.ts', import.meta.url), 'utf8');
   for (const method of ['deleteProject', 'deleteService', 'deleteResource']) {
-    const start = source.indexOf(`async ${method}`);
+    const start = source.indexOf(`async ${method}(`);
     const block = source.slice(start, source.indexOf('\n  }', start) + 4);
     assert.match(block, /deletionRequested:\s*true/);
     assert.match(block, /status:/);
@@ -279,6 +279,21 @@ function deletionPrisma() {
     organization: {
       findUnique: async ({ where }) => where.id === 'org-1' ? { id: 'org-1', slug: 'org-1', name: 'Org' } : null,
     },
+  };
+  prisma.$queryRawUnsafe = async (query, ...values) => {
+    if (query.includes('FROM "ResourceRecoveryPin"')) return [];
+    if (query.includes('SELECT p."organizationId"')) {
+      const [projectId, resourceId] = values;
+      const project = projectId
+        ? find(state.projects, projectId)
+        : state.projects.find((row) => row.id === find(state.resources, resourceId)?.projectId);
+      return project ? [{ organizationId: project.organizationId, projectId: project.id }] : [];
+    }
+    if (query.includes('FROM "Resource" WHERE "projectId"')) {
+      const [projectId, resourceId] = values;
+      return state.resources.filter((row) => row.projectId === projectId && (!resourceId || row.id === resourceId)).map(({ id }) => ({ id }));
+    }
+    return [];
   };
   prisma.$transaction = async (operation) => operation(prisma);
   return { prisma, state, hardDeletes };

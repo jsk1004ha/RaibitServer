@@ -8,11 +8,16 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 
 ## 주요 기능
 
+리소스 화면은 **계획 미리보기**(저장·실행 없음)와 **실제 실행 요청**(Go가 처리할 PROVISIONING 희망 상태)을 구분합니다. API/worker의 `RAIBITSERVER_RESOURCE_ENVIRONMENT`와 digest-pinned 이미지가 지원 범위를 결정하며, production Helm은 현재 미검증인 `release` 모드에서 생성을 거부합니다. [설정과 명시적 intent 계약](docs/provisioning.md#계획-미리보기와-실제-실행-요청)을 확인하세요.
+
 - **멀티 서비스 프로젝트**: `web`, `private`, `worker`, `cron`, `job` 서비스를 한 프로젝트에서 관리합니다.
 - **컨테이너 우선 빌드**: 사용자 Dockerfile을 최우선으로 사용하고, 없을 때만 프레임워크 감지/생성 Dockerfile fallback을 사용합니다.
 - **BuildKit 캐시 경로**: builder는 inline cache와 선택적 registry cache(`cache-from/cache-to`) 및 패키지 매니저 cache mount를 계획해 반복 배포 시간을 줄입니다.
-- **관리형 리소스**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, SQLite, Object Storage, Qdrant/vector, NATS/queue를 카탈로그 리소스로 다룹니다.
-- **서브도메인 라우팅**: 서비스 실행 URL은 `apps--<user>--<project>.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 flat single-label 규칙을 따릅니다.
+- **관리형 리소스**: PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey는 dedicated-local, SQLite는 로컬 파일 전용입니다. 객체 저장소·Qdrant·NATS 및 나머지 카탈로그 항목은 사유가 표시되는 비활성 `준비 중` 상태입니다. [단일 기능 매트릭스](test-fixtures/contracts/resource-capabilities-v1.json)가 API·UI·컴파일러·Helm을 제어하며, 운영 릴리스와 관리형 백업·복구 지원을 의미하지 않습니다.
+- **서브도메인 라우팅**: 서비스 실행 URL은 조직 slug를 tenant segment로 쓰는 `apps--<org>--<project>.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 flat single-label 규칙을 따릅니다.
+- **계정과 조직 운영**: 비밀번호 재설정은 계정 존재 여부를 숨기는 동일한 202 응답과 일회성 코드로 처리하고, 완료 시 기존 세션을 모두 무효화합니다. 승인된 사용자는 새 조직을 만들 때 그 조직의 `OWNER` 멤버십만 받고 세션을 다시 발급받아야 하며, 초대·역할 변경·제거·탈퇴는 last-owner 및 tenant 경계를 지킵니다.
+- **조건부 설정과 이력 복구**: 프로젝트·서비스 설정은 화면에 렌더된 `updatedAt`을 조건으로 저장하여 stale 변경을 병합하지 않습니다. 배포 이력은 immutable commit/image/snapshot/lineage, public health, actor와 현재 가능한 retry/redeploy/cancel/rollback 한 가지를 서버가 계산해 제공합니다.
+- **사용자 지정 도메인**: generated URL은 항상 유지하면서 사용자 지정 hostname의 일회성 TXT 증명, 세대가 고정된 DNS 확인, 비동기 Ingress/인증서 적용과 정리를 별도 상태로 추적합니다. API의 202 응답이나 DB 상태만으로 DNS·TLS·HTTPS 성공을 주장하지 않습니다.
 - **공통 오류 화면**: 활성 표준 4xx·5xx 38종을 미리보기·오류 backend에서 제공하고, 호스팅 라우팅 404·upstream 500/502/503/504를 같은 RAIBIT 상태 화면으로 안내하되 사용자 앱의 자체 오류 응답은 유지합니다.
 - **검증 가능한 배포 버전**: 공개 `/status`는 현재 실행 중인 Dashboard 이미지에 기록된 GitHub 커밋 SHA를 표시하고 정확한 커밋 페이지로 연결합니다.
 - **승인·쿼터·감사**: 비동아리 사용자는 관리자 승인 후 쿼터 안에서 사용하고, 주요 작업은 감사 로그와 사용량에 반영됩니다.
@@ -36,6 +41,14 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 | Runtime target | Container image + Kubernetes | 사용자 워크로드 실행 상태 |
 
 자세한 구성은 [아키텍처 문서](docs/architecture.md)를 참고하세요.
+
+## Desired-state 수정 경계
+
+프로젝트 PATCH는 이름·설명만 받습니다. 서비스 PATCH는 branch, 소스 내부 경로(rootDirectory/buildContext/dockerfilePath/outputDirectory), install/build/start 명령, port(1–65535), healthCheck.path, CPU·메모리 requests/limits를 받으며 이름·유형은 첫 배포 전만 바꿀 수 있습니다. CPU는 core 또는 millicore, 메모리는 Mi/Gi 양수로 지정하고 request는 limit 이하여야 합니다. 새 값·증가는 인증된 작업자의 숫자 쿼터를 따르며, 쿼터가 없으면 보수적 설정 기본 한도 500m/512Mi를 씁니다. 이는 전역 플랫폼 최대값이 아니며 기존 큰 값의 유지·축소는 허용됩니다. 다른 멤버의 쿼터는 사용하지 않습니다.
+
+조직·slug·ID·소스 바인딩·상태·삭제 필드나 숨겨진 desiredState/desiredSpec을 일반 PATCH로 보내면 요청 전체가 400/409로 거부됩니다. 소스 연결은 검증된 attach/import, 배포된 서비스 교체는 새 서비스 생성으로 분리합니다. READY 리소스의 제자리 수정과 RECONCILING 리소스 수정은 차단합니다. 저장소 Dockerfile은 buildMode 지정으로 우회할 수 없습니다. 이 경계의 로컬 HTTP/manifest 검증은 실환경 배포 성공을 뜻하지 않습니다.
+
+프로젝트 설정 조회는 서비스·리소스·preview 삭제 영향 수를 함께 돌려주며, 삭제는 `{ confirmed: true }`로 별도 요청한 뒤 기존 reconciler가 처리하도록 예약합니다. 서비스 설정은 적용 전 diff/build-plan 미리보기를 제공하고, 이미 배포된 서비스의 불변 이름·유형·소스를 바꿔야 하면 기존 서비스를 보존한 새 replacement 서비스를 명시적으로 만듭니다. 설정 요청 자체는 실행 중인 workload나 과거 deployment snapshot을 수정하지 않습니다.
 
 ## 사전 요구사항
 
@@ -84,7 +97,7 @@ pnpm prisma:validate
 Go가 설치되어 있다면 인프라 서비스도 확인합니다.
 
 ```sh
-for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester; do
+for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester services/registry-broker; do
   (cd "$dir" && go test ./... && go build ./...)
 done
 ```
@@ -101,12 +114,23 @@ raibitserver projects list
 raibitserver projects create --name demo --organization-id org_id
 raibitserver services create --project-id prj_id --name web --source-type image --image registry.example/demo/web@sha256:DIGEST
 raibitserver deploy --service-id svc_id
-raibitserver deployments logs --deployment-id dep_id
-# API: GET /api/deployments/dep_id/stream 또는 /api/services/svc_id/logs/stream (SSE)
+raibitserver deploy retry --organization-id org_id --project-id prj_id --service-id svc_id --deployment-id dep_id --idempotency-key retry-1 --json
+raibitserver services redeploy --organization-id org_id --project-id prj_id --service-id svc_id --idempotency-key redeploy-1 --json
+raibitserver deployments logs --organization-id org_id --project-id prj_id --service-id svc_id --deployment-id dep_id --follow --cursor CURSOR
+raibitserver deployments events --organization-id org_id --project-id prj_id --service-id svc_id --deployment-id dep_id --follow --cursor CURSOR
+raibitserver services logs --organization-id org_id --project-id prj_id --service-id svc_id --follow --cursor CURSOR
 raibitserver resources create --project-id prj_id --engine sqlite --name data
+raibitserver resources attach --organization-id org_id --project-id prj_id --resource-id res_id --service-id svc_id
+raibitserver resources backup create --organization-id org_id --project-id prj_id --resource-id res_id --idempotency-key backup-1
+raibitserver resources backup list --organization-id org_id --project-id prj_id --resource-id res_id --cursor CURSOR
+raibitserver resources backup delete --organization-id org_id --project-id prj_id --resource-id res_id --backup-id backup_id --confirm
+raibitserver resources restore create --organization-id org_id --project-id prj_id --resource-id res_id --backup-id backup_id --name restored-db --idempotency-key restore-1
+raibitserver resources restore get --organization-id org_id --project-id prj_id --resource-id res_id --backup-id backup_id --restore-id restore_id
 raibitserver db query --resource-id res_id --query "SELECT 1"
 raibitserver admin approve --user-id usr_id
 ```
+
+수명주기 명령은 기본적으로 secret 필드를 제외한 표를 출력하고 `--json`에서 안정적인 JSON을 출력합니다. `--follow`는 `--cursor`를 `Last-Event-ID`로 보내며 Ctrl-C 시 연결을 닫습니다. 종료 코드는 성공 0, 일반 실패 1, 사용 오류 2, 인증·권한 오류 3, 충돌 4, unavailable·`NOT_RUN` 5입니다.
 
 CI smoke와 manifest 생성에는 루트 CLI도 사용할 수 있습니다.
 
@@ -150,7 +174,7 @@ node src/cli.js compose examples/docker-compose.yml
 | Build/Runtime | `REGISTRY_URL`, `RAIBITSERVER_REGISTRY`, `RAIBITSERVER_REGISTRY_USERNAME`, `RAIBITSERVER_REGISTRY_PASSWORD`, `RAIBITSERVER_BUILDKIT_CACHE`, `RAIBITSERVER_BUILDKIT_CACHE_REF`, `KUBECONFIG`, `RAIBITSERVER_KUBE_CONTEXT`, `BASE_DOMAIN`, `RAIBITSERVER_BASE_DOMAIN`, `RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE`, `RAIBITSERVER_EXECUTE`, `RAIBITSERVER_PUSH` |
 | Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
 | Provider | `RAIBITSERVER_POSTGRES_PROVIDER_URL`, `POSTGRES_PROVIDER_URL`, `RAIBITSERVER_PROVIDER_POSTGRESQL_IMAGE`, `RAIBITSERVER_PROVIDER_MYSQL_IMAGE`, `RAIBITSERVER_PROVIDER_MARIADB_IMAGE`, `RAIBITSERVER_PROVIDER_MONGODB_IMAGE`, `RAIBITSERVER_PROVIDER_REDIS_IMAGE`, `RAIBITSERVER_PROVIDER_VALKEY_IMAGE`, `RAIBITSERVER_PROVIDER_MINIO_IMAGE`, `RAIBITSERVER_PROVIDER_QDRANT_IMAGE`, `RAIBITSERVER_PROVIDER_NATS_IMAGE` |
-| GitHub App/OAuth | `RAIBITSERVER_GITHUB_APP_SLUG`, `RAIBITSERVER_GITHUB_CLIENT_ID`, `RAIBITSERVER_GITHUB_CLIENT_SECRET`, `RAIBITSERVER_GITHUB_CALLBACK_URL`, `RAIBITSERVER_GITHUB_STATE_SECRET`, `RAIBITSERVER_GITHUB_WEBHOOK_SECRET` |
+| GitHub App/OAuth | `RAIBITSERVER_GITHUB_APP_SLUG`, `RAIBITSERVER_GITHUB_CLIENT_ID`, `RAIBITSERVER_GITHUB_CLIENT_SECRET`, `RAIBITSERVER_GITHUB_CALLBACK_URL`, `RAIBITSERVER_GITHUB_REDIRECT_URI`, `RAIBITSERVER_GITHUB_STATE_SECRET`, `RAIBITSERVER_GITHUB_WEBHOOK_SECRET` |
 | AI 배포 조언(선택) | `RAIBITSERVER_AI_AGENT_URL`, `RAIBITSERVER_AI_AGENT_TOKEN`, `RAIBITSERVER_AI_AGENT_MODEL` |
 
 Production 실행 전 필수 설정은 [production 배포 문서](deploy/production/README.md)를 확인하세요.
@@ -211,7 +235,7 @@ GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드
 | 서비스 관리 화면 | `console--<org>--<project>-<service>.raibitserver.app` |
 | 리소스 관리 화면 | `resources--<org>--<project>-<resource>.raibitserver.app` |
 
-서비스 실행 host는 slug 경계 충돌을 막기 위해 `apps--<user>--<project>.<BASE_DOMAIN>` 패턴으로 생성됩니다. PR preview는 `preview--pr-<number>--<user>--<project>.<BASE_DOMAIN>`, service/resource 관리 화면은 `console--...` 및 `resources--...` 단일 label을 사용합니다. 따라서 `*.<BASE_DOMAIN>` wildcard 인증서 하나로 generated route를 처리할 수 있습니다.
+서비스 실행 host는 조직 slug 경계 충돌을 막기 위해 `apps--<org>--<project>.<BASE_DOMAIN>` 패턴으로 생성됩니다. PR preview는 `preview--pr-<number>--<org>--<project>.<BASE_DOMAIN>`, service/resource 관리 화면은 `console--...` 및 `resources--...` 단일 label을 사용합니다. 따라서 `*.<BASE_DOMAIN>` wildcard 인증서 하나로 generated route를 처리할 수 있습니다.
 
 Cloudflare Tunnel을 쓰는 경우 각 tenant hostname을 직접 매핑하지 마세요. 공개 apex와 `api.<BASE_DOMAIN>`, `console.<BASE_DOMAIN>`, `*.<BASE_DOMAIN>`을 **내부 Kubernetes Ingress Controller 하나**로 보내고, 최종 Host 기반 라우팅은 Kubernetes Ingress가 담당해야 합니다. Cloudflare Tunnel hostname wildcard는 `*.example.com` 형태만 쓰고 `test.*.example.com` 같은 중간 wildcard에 의존하지 않습니다. 자세한 예시는 [Cloudflare Tunnel 운영 가이드](docs/cloudflare-tunnel.md)와 [production tunnel 예시](deploy/production/cloudflare-tunnel.example.yml)를 참고하세요.
 
@@ -287,6 +311,7 @@ RAIBITSERVER_GITHUB_APP_SLUG=<github-app-slug>
 RAIBITSERVER_GITHUB_CLIENT_ID=<github-oauth-client-id>
 RAIBITSERVER_GITHUB_CLIENT_SECRET=<github-oauth-client-secret>
 RAIBITSERVER_GITHUB_CALLBACK_URL=https://console.raibitserver.app/github/callback
+RAIBITSERVER_GITHUB_REDIRECT_URI=https://console.raibitserver.app/api/control/auth/github/callback
 RAIBITSERVER_GITHUB_STATE_SECRET=<32-plus-character-state-secret>
 RAIBITSERVER_GITHUB_WEBHOOK_SECRET=<webhook-secret>
 ```
@@ -308,7 +333,8 @@ private 저장소 빌드용 App ID와 RSA private key는 API 환경변수에 넣
 - `RAIBITSERVER_DRY_RUN=1` 또는 `RAIBITSERVER_EXECUTE` 미설정 상태에서는 worker가 실제 apply/push/provision을 수행하지 않습니다.
 - builder는 `localPath`, `buildContext`, `dockerfilePath`를 workspace/source 경계 안으로만 해석합니다. 상위 디렉터리(`..`) 또는 절대 경로로 경계를 벗어나는 빌드 입력은 거부됩니다.
 - production의 익명 Git clone은 기본 차단됩니다. 공개 GitHub 저장소가 꼭 필요할 때만 Helm `builder.anonymousGit.enabled=true`를 명시하며, shared token이나 ambient Git credential은 사용하지 않습니다.
-- private GitHub source build는 verified installation/repository binding까지는 구현됐지만, Git clone용 exact-repository short-lived token broker가 연결되기 전까지 의도적으로 실패합니다. DB 연결 dispatcher와 tenant BuildKit executor의 Pod/NetworkPolicy 분리는 구현되어 있습니다.
+- private GitHub clone은 mTLS dispatcher가 PostgreSQL의 조직·프로젝트·서비스·배포·현재 WorkflowLease와 verified installation/repository catalog를 다시 확인한 뒤 해당 attempt에 한 번만 `contents:read` 토큰을 발급합니다. 토큰은 환경변수·명령 인자·파일에 넣지 않고 메모리 기반 Unix socket credential helper로 Git에 전달하며, helper 정리와 GitHub 취소 응답을 확인한 뒤에만 빌드를 진행합니다. 취소·실패·사용 기한 만료·lease 회수 시에도 토큰을 취소하고, 취소 확인 실패는 재발급과 게시를 차단합니다.
+- GitHub 설치 토큰의 실제 만료(`upstreamExpiresAt`)는 약 1시간입니다. dispatcher의 별도 clone 사용 기한(`useDeadline`)은 서버가 300초로 정하며 정책 범위는 60–900초입니다. 사용 기한을 upstream 만료로 바꾸어 표시하지 않습니다. dispatcher 중단이나 네트워크 단절로 취소할 수 없으면 upstream 토큰이 900초 이내에 무효화된다는 보장은 없으며, 이를 credentialed release gate의 명시적 제한으로 검토해야 합니다. DB 연결 dispatcher와 tenant BuildKit executor의 Pod/NetworkPolicy 분리는 유지합니다.
 
 ### 5. 처음 서버 올리는 순서
 
@@ -320,15 +346,19 @@ private 저장소 빌드용 App ID와 RSA private key는 API 환경변수에 넣
    pnpm install --frozen-lockfile
    pnpm prisma:validate
    pnpm prisma:generate
+   node scripts/check-migration-contract.mjs
    pnpm exec prisma migrate deploy --schema prisma/schema.prisma
    ```
+   - `prisma/migration-contract.json`은 순서가 있는 migration ID와 LF 정규화 SHA-256, 애플리케이션 호환성 하한(`000008`), `forward-fix` 복구 방식을 기록합니다. 기존 migration은 수정하지 않고 새 항목을 추가합니다. migration을 먼저 적용한 뒤 reader, writer를 배포하며 애플리케이션 롤백 시 확장된 스키마를 유지합니다. 새 migration은 nullable 컬럼·테이블·인덱스만 허용하며 down migration, DROP, rename, 필수 컬럼 전환은 거부합니다.
+   - 인덱스 허용 문법은 `CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON table (column, ...) [WHERE column IS NOT NULL [AND ...]]`입니다. 이름은 schema 접두사 없는 일반 식별자 또는 큰따옴표 식별자이며, 함수·표현식·추가 옵션·알 수 없는 접미사는 거부합니다. 기존 테이블에는 non-unique 인덱스만 허용합니다. UNIQUE 인덱스는 같은 migration에서 앞서 `CREATE TABLE`로 만든 테이블에만 허용해 N−1 writer가 허용하던 중복 쓰기를 제한하지 않습니다. 새 테이블 정의의 PK·UNIQUE·NOT NULL·DEFAULT는 기존 writer를 제한하지 않으므로 유지합니다. 이 게이트는 전체 PostgreSQL 문법 검증기가 아니며, 실제 migration 적용 검증도 필요합니다.
+   - `node --test tests/migration-compatibility.test.js tests/postgres-integration.test.js`는 `RAIBITSERVER_TEST_DATABASE_URL`을 지정하면 별도 임시 schema에서 fresh install, `000008` 업그레이드, 실제 N−1 Prisma client 읽기·쓰기 및 forward-fix를 검증합니다. URL이 없으면 DB 시나리오는 건너뛰며 오프라인 계약 검증만 수행합니다. CRD 게이트는 `test-fixtures/contracts/crd-schema-v1.json` 대비 기존 served/storage 버전과 필드를 보존하고 새 optional 필드만 허용합니다. CRD 적용 전에는 별도 로컬 클러스터에서 `kubectl apply --dry-run=server`로 CRD와 구형·확장 객체를 검증해야 합니다.
 3. **Secret 준비**
    - `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, GitHub/registry/provider secret을 secret manager에 저장합니다.
    - 회원가입 요청은 이메일 코드만 발송하고, 코드 인증이 성공해야 user/organization을 생성하고 세션 토큰을 발급합니다. 로컬 첫 verified auth 사용자는 `ADMIN / NON_CLUB / APPROVED`가 되고, 운영 첫 admin은 `ADMIN_EMAILS` + bootstrap token으로 제한됩니다. 인증 완료된 신규 회원가입은 먼저 `NON_CLUB`으로 시작하며, 운영자는 어드민 화면에서 `CLUB_MEMBER`/`NON_CLUB`을 전환합니다.
 4. **이미지 빌드/배포**
    - 저장소 루트를 build context로 사용해 API, Dashboard, CLI와 Go service Dockerfile을 빌드하고 registry에 push합니다. 예: `docker build -f apps/api/Dockerfile -t <registry>/api:<tag> .`
    - 배포 전 각 push 결과의 manifest-list digest를 확인하고 Helm의 `image.digests.api`, `dashboard`, `orchestrator`, `builder`, `provisioner`, `logIngester`, `metricsIngester`에 활성화할 component의 `sha256:...` 값을 넣습니다. production 모드는 tag-only 이미지를 허용하지 않습니다.
-   - live 관리형 PostgreSQL/MySQL/MariaDB/MongoDB/Redis/Valkey workload 이미지는 `provisioner.providerImages.*`에 `repository@sha256:<digest>` 형식으로 모두 지정합니다. production chart는 이 6개 이미지가 누락되거나 tag-only이면 거부합니다. MinIO/Qdrant/NATS 이미지는 plan-only adapter가 live bootstrap을 구현할 때까지 비워 둘 수 있으며, 값을 넣는 경우에도 digest pin은 필수입니다.
+   - 로컬 관리형 PostgreSQL/MySQL/MariaDB/MongoDB/Redis/Valkey workload 이미지는 `provisioner.providerImages.*`에 `repository@sha256:<digest>` 형식으로 모두 지정합니다. production chart는 이 6개 이미지가 누락되거나 tag-only이면 거부합니다. MinIO/Qdrant/NATS 이미지는 비워 두며, 값을 넣어도 비활성 엔진을 활성화하지 않습니다. 이미지 설정은 운영 릴리스 검증을 대신하지 않습니다.
    - certified provider 이미지는 restricted Pod Security의 엔진별 non-root UID/GID 계약(PostgreSQL `70`, MySQL/MariaDB/MongoDB/Redis/Valkey `999`)으로 실행되고 데이터 경로에 쓸 수 있어야 합니다. 또한 `/bin/sh`와 인증 확인 CLI(`psql`, `mysql`/`mariadb`, `mongosh`, `redis-cli`/`valkey-cli`)를 포함해야 합니다. provisioner는 생성한 자격 증명으로 실제 인증 명령이 성공한 뒤에만 READY로 전환합니다.
    - `runtimeSecrets.existingSecret`, `database.existingSecret`, `ingress.tls.existingSecret`과 builder의 registry/signing/dispatch mTLS secret ref를 미리 생성합니다. hosted error 전용 Secret이 필요하면 `hostedErrors.fallbackIngress.tls.existingSecret`을 별도로 지정하고, 비우면 ingress TLS Secret을 재사용합니다. 선택된 Secret은 `*.<BASE_DOMAIN>`을 포함해야 합니다. `builder.dispatch.existingSecret`에는 release 전용 CA, dispatcher server keypair, executor client keypair가 필요하며 server certificate SAN은 `<release>-builder-dispatcher` Service DNS를 포함해야 합니다. private GitHub build를 켜면 App ID와 private key를 `builder.githubAppCredentials.existingSecret`에 별도로 두며 이 Secret은 dispatcher에만 mount합니다. chart는 application credential Secret을 생성하지 않습니다.
    - `infra/helm/raibitserver/ci-production-values.yaml`의 platform digest는 정적 chart 검증용 가짜 값이므로 실제 배포에 사용하지 않습니다. production 값은 `sh scripts/verify-helm.sh`로 fail-closed 조건을 먼저 검증합니다.
@@ -340,6 +370,13 @@ private 저장소 빌드용 App ID와 RSA private key는 API 환경변수에 넣
    - builder dispatcher/orchestrator/provisioner/log-ingester/metrics-ingester에 PostgreSQL control-plane URL을 주입합니다. disposable builder executor에는 DB URL을 절대 주입하지 않습니다. 기본 chart는 겹치지 않는 CronJob batch마다 executor 4개를 병렬 실행하며 `builder.isolation.parallelism`/`completions`로 경계 내 처리량을 조정합니다.
    - 실제 적용 환경에서는 `RAIBITSERVER_EXECUTE=1`, build push가 필요하면 `RAIBITSERVER_PUSH=1`을 설정합니다.
 7. **GitHub App/OAuth 연결**
+   - OAuth 트랜잭션 저장소는 `000011_oauth_transactions` 적용 후 사용할 수 있습니다. 상태는 SHA-256, 소스는 서버 전용 `sourceSecret`(32자 이상)의 HMAC-SHA-256으로 저장하고 S256 challenge·정확한 redirect URI·최대 10분 TTL을 묶습니다. redirect에는 query/fragment/사용자 정보가 없어야 하며 HTTPS 또는 로컬 loopback HTTP만 허용합니다. 메모리/Prisma의 `createOAuthTransaction`, `consumeOAuthTransaction`, `deleteExpiredOAuthTransactions`는 일회 소비와 최대 256행 만료 정리를 제공합니다. 마이그레이션을 먼저 적용하고 readers/writers를 배포하며, 앱 롤백 시 테이블은 유지하고 수정은 forward-fix로 진행합니다. 공개 시작·콜백/BFF 바인딩과 남용 방지는 아래 절차를 사용합니다. 실제 PostgreSQL 검증은 `RAIBITSERVER_TEST_DATABASE_URL`을 지정해 `node --test tests/oauth-transaction.test.js tests/postgres-oauth-transaction.test.js`로 실행합니다. 기본 로컬 테스트에서 URL이 없으면 PostgreSQL 시나리오는 `NOT_RUN`으로 건너뜁니다. 필수 검증에는 `RAIBITSERVER_REQUIRE_POSTGRES_TESTS=1`도 설정해야 하며, 이때 URL 누락은 실패입니다. CI의 전용 PostgreSQL job은 이 필수 모드로 순차 실행합니다.
+   - 공개 OAuth 시작·콜백은 위 저장소를 사용합니다. 직접 API 클라이언트는 43~128자 verifier의 SHA-256 base64url challenge를 `GET /auth/github/login?codeChallenge=...`에 보내고, 서버가 반환한 state와 원래 verifier를 `GET /auth/github/callback?code=...&state=...&codeVerifier=...`에 보내야 합니다. caller state, challenge 누락, 재사용·만료·다른 소스·다른 redirect는 거부되며 GitHub 호출 전에 원자적으로 소비됩니다. provider 실패나 계정 정책 거부 이후에도 다시 사용할 수 없습니다. 거절 콜백은 code 대신 `error=access_denied`를 같은 state/verifier와 함께 보내며 트랜잭션을 소비한 뒤 400을 반환합니다. code와 error를 함께 보내면 소비 없이 400, 이미 소비한 콜백은 409입니다.
+   - OAuth 시작·콜백은 각각 source/action 30회, 전체 인증 flow/source 60회, global 5000회/분의 기존 durable bucket을 한 번 차감합니다. 공급자 검증 이메일이 알려진 콜백은 이메일/action 10회/분도 차감합니다. 기존 `RAIBITSERVER_AUTH_SOURCE_RATE_LIMIT`, `RAIBITSERVER_AUTH_FLOW_SOURCE_RATE_LIMIT`, `RAIBITSERVER_AUTH_GLOBAL_RATE_LIMIT`, `RAIBITSERVER_AUTH_EMAIL_RATE_LIMIT`, `RAIBITSERVER_AUTH_RATE_WINDOW_MS`의 범위 제한을 그대로 사용하며 429의 `Retry-After`는 1~3600초입니다. OAuth는 일반 proxy 신뢰 플래그와 무관하게 실제 소켓 피어를 사용하므로 BFF/프록시 뒤 사용자는 같은 소스 한도를 공유합니다. 검증된 피어 허용 정책 없이 전달 헤더를 클라이언트 주소로 신뢰하지 않습니다. 기존 signup/login/email의 proxy 정책은 바꾸지 않습니다.
+   - OAuth 결과를 분류한 뒤 최대 256개의 만료 트랜잭션을 정리하고 고정 결과·오류 코드·정리 상태만 감사 저장합니다. 성공 응답은 정리와 감사 저장까지 성공해야 전달됩니다. 감사 장애는 안전한 503, 정리 장애는 기존 인증 실패를 유지하거나 성공 예정 응답을 503으로 차단합니다. 사용 가능한 서버 키·저장소가 없으면 인증을 차단하며 감사 저장소 자체가 없을 때는 이벤트 저장을 보장하지 않습니다. state/code/verifier/token/email/원문 소스와 credential은 감사·로그에 넣지 않습니다. 잘못된 브라우저 쿠키·미지원 거절은 BFF에서 차단되므로 API 감사 범위 밖입니다. `node --test tests/oauth-abuse.test.js tests/oauth-redaction.test.js tests/security-hardening.test.js`가 내구성 한도·정리·오류 비식별화를 검증합니다.
+   - `RAIBITSERVER_GITHUB_REDIRECT_URI`는 OAuth callback URL 한 개로 고정합니다. Dashboard는 `https://console.<BASE_DOMAIN>/api/control/auth/github/callback`을 사용하며 요청에 다른 redirect를 지정하면 거부합니다. 소스 HMAC 키는 명시된 `RAIBITSERVER_AUTH_RATE_LIMIT_KEY_SECRET`, 없으면 실제 JWT secret을 사용합니다. 둘 다 32~512자여야 하고 명시된 잘못된 키는 fallback하지 않습니다.
+   - BFF의 state/verifier 쿠키는 Secure·HttpOnly·SameSite=Lax·host-only이며 callback 경로에만 전송됩니다. 로컬 브라우저 검증에도 HTTPS가 필요합니다. 모든 callback 결과에서 두 쿠키를 지우며, 브라우저 쿠키 확인 후에만 API 소비를 요청합니다. API 소스는 실제 socket peer를 사용합니다. BFF 경유 요청의 peer는 BFF이므로 브라우저 구분은 별도 쿠키/verifier가 맡습니다. 검증된 peer allowlist 기반 forwarded IP 신뢰 정책은 별도 단계이며 여기서 proxy trust를 활성화하지 않습니다.
+   - 새 OAuth 검증: `node --test tests/github-oauth.test.js tests/github-oauth-avatar.test.js tests/auth-env-github.test.js`. 전용 `apps/dashboard/playwright.oauth.config.ts`는 외부 evidence 디렉터리와 로컬 HTTPS fixture manifest, 명시한 Chromium 실행 파일을 요구합니다. 실제 Nest/core/BFF와 세션을 사용하고 GitHub provider만 로컬 fixture로 대체합니다. OAuth 구간 tracing은 끄고 로그인·쿠키 정리 이후 trace도 비밀 필드를 제거해 보관합니다.
    - App callback과 setup URL: `https://console.<BASE_DOMAIN>/github/callback`
    - GitHub App의 **Request user authorization during installation**은 끄고 **Redirect on update**는 켭니다. 이미 설치된 App의 저장소 설정을 변경해도 Setup URL로 돌아와야 연결이 완료됩니다.
    - Webhook URL: `https://api.<BASE_DOMAIN>/api/github/webhooks`
@@ -424,11 +461,11 @@ RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로
 | MongoDB | dry-run + dedicated-local 구현; release live evidence 대기 | immutable credential, authenticated ping |
 | Redis/Valkey | dry-run + dedicated-local 구현; release live evidence 대기 | immutable credential, authenticated `PING` |
 | SQLite | 실행 가능한 로컬 console | Go live managed-resource adapter 대상 아님 |
-| Object Storage | MinIO/S3 env plan | bucket bootstrap/HeadBucket 전까지 live fail-closed |
-| Qdrant/vector | collection/search-test plan | collection bootstrap/auth check 전까지 live fail-closed |
-| NATS/queue | subject/connection plan | stream/subject bootstrap/auth smoke 전까지 live fail-closed |
+| Object Storage | 비활성 카탈로그 | API/TS/Go에서 ENGINE_NOT_IMPLEMENTED로 생성 거부 |
+| Qdrant/vector | 비활성 카탈로그 | API/TS/Go에서 ENGINE_NOT_IMPLEMENTED로 생성 거부 |
+| NATS/queue | 비활성 카탈로그 | API/TS/Go에서 ENGINE_NOT_IMPLEMENTED로 생성 거부 |
 
-공유 provider의 noisy-neighbor 제어, PgBouncer, tenant별 role/ACL/quota, primitive 단위 백업·복구는 목표 계약이며 현재 Go live adapter의 완료 기능이 아닙니다. Closed Beta에서는 위 6개 dedicated-local 엔진만 digest-pinned certified image와 인증 probe를 통과한 경우 활성화하고, 나머지는 계획만 제공하거나 실패하도록 운영해야 합니다.
+공유 provider의 noisy-neighbor 제어, PgBouncer, tenant별 role/ACL/quota, primitive 단위 백업·복구는 목표 계약이며 현재 Go live adapter의 완료 기능이 아닙니다. 위 6개 dedicated-local 엔진은 digest-pinned 이미지와 인증 probe를 요구하고, SQLite는 로컬 파일 전용입니다. 나머지 카탈로그 엔진은 생성할 수 없습니다. 운영 릴리스 검증은 별도로 필요합니다.
 
 자세한 내용은 [리소스 프로비저닝](docs/provisioning.md)과 [DB console](docs/db-console.md)을 참고하세요.
 

@@ -1,17 +1,40 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
+import { emptyRecoveryState, assertRecoveryPins, assertRecoveryTargetPublished, retireMemoryRecovery } from './resource-recovery-memory.ts';
+import { INITIAL_DEPLOYMENT_HEALTH, parseHealthPaths, serviceHealthInput, publicDeploymentHealth } from './deployment-health.ts';
+import { captureDeploymentSnapshot } from './deployment-operations.ts';
+import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
+import { createMemoryOAuthTransaction, consumeMemoryOAuthTransaction, deleteMemoryOAuthTransactions } from './oauth-transaction.ts';
+import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput, OAuthTransactionRecord } from './oauth-transaction.ts';
+import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
+import { assertExpectedServiceVersion, parseServiceReplacement, parseServiceSettingsInput, previewServiceSettings, serviceSettingsSnapshot, ServiceSettingsError } from './service-settings.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecord } from './security.ts';
 import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts';
 import { githubIntegrationSummary, githubWebhookActionPlan, githubWebhookOutboundPlan, parseGitHubRepository, verifyGitHubWebhookSignature } from './github-integration.ts';
+import { GITHUB_INTEGRATION_STATUS, githubIntegrationStatus, githubServiceSourceState, githubSourceAccess, publicGitHubIntegration } from './github-lifecycle.ts';
+import { GITHUB_CATALOG_STATUS, catalogError, fetchCompleteGitHubCatalog, pageGitHubCatalog, type GitHubCatalogPageFetcher } from './github-catalog.ts';
+import { githubMutationHash, githubSourceConflict } from './github-conflict.ts';
 import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 import { buildResourceProviderPlan, publicResourceProviderPlan } from './resource-providers.ts';
-import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
+import { canonicalizeProviderDesiredSpec, providerOwnedSqlitePath, resourceNameFallback, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
+import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
+import { canonicalPreviewWebhook, parsePreviewWebhook, PreviewError, previewWebhookLineage, previewWebhookPayloadMatches } from './preview-contract.ts';
+import { createPreviewRuntime, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
+import { nextProjectUpdatedAt, ProjectSettingsError, projectSettingsView, scheduledProjectDeletion, type ProjectDeletionRequest, type ProjectSettingsMutation } from './project-settings.ts';
+import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
+import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
+import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug, type OrganizationMembershipRole } from './rbac.ts';
+import { acceptMemoryOrganizationInvite, listMemoryOrganizationInvites, replaceMemoryOrganizationInvite, revokeMemoryOrganizationInviteAfterDeliveryFailure } from './organization-invite-memory.ts';
+import type { OrganizationInviteRecord, ReplaceOrganizationInviteInput } from './organization-invite.ts';
+import { assertOrganizationCreatorEligible, OrganizationCreationError, parseAuthenticatedOrganizationCreateInput, type AuthenticatedOrganizationCreateInput } from './organization-creation.ts';
+import { DomainLifecycleError, issueCustomDomain, normalizeCustomHostname, publicCustomDomain, requestCustomDomainCheck, requestCustomDomainDelete, rotateCustomDomain, type CustomDomainRecord } from './domain.ts';
+import { changeMemoryOrganizationMembershipRole, leaveMemoryOrganization, listMemoryOrganizationMembers, removeMemoryOrganizationMember, revokeMemoryOrganizationInvite } from './membership-transition-memory.ts';
 import {
   boundedActivityRows,
   dateMs,
@@ -33,6 +56,7 @@ import {
 export const AUTH_RETENTION_PRUNE_BATCH_SIZE = 256;
 
 export class ControlPlaneStore {
+  readonly recoveryState = emptyRecoveryState();
   organizations: Map<string, any>;
   users: Map<string, any>;
   members: any[];
@@ -48,6 +72,7 @@ export class ControlPlaneStore {
   environmentVariables: Map<string, any>;
   githubIntegrations: Map<string, any>;
   githubRepositories: Map<string, any>;
+  githubSourceMutations: Map<string, any>;
   webhookEvents: Map<string, any>;
   buildLogs: any[];
   runtimeLogs: any[];
@@ -56,7 +81,11 @@ export class ControlPlaneStore {
   resourceAttachments: any[];
   emailVerificationCodes: any[];
   emailDeliveries: any[];
+  organizationInvites: OrganizationInviteRecord[];
   authRateLimits: Map<string, any>;
+  oauthTransactions = new Map<string, OAuthTransactionRecord>();
+  previewLineages = new Map<string, any>();
+  private githubCatalogPageFetcher: GitHubCatalogPageFetcher | null = null;
 
   constructor() {
     this.organizations = new Map();
@@ -74,6 +103,7 @@ export class ControlPlaneStore {
     this.environmentVariables = new Map();
     this.githubIntegrations = new Map();
     this.githubRepositories = new Map();
+    this.githubSourceMutations = new Map();
     this.webhookEvents = new Map();
     this.buildLogs = [];
     this.runtimeLogs = [];
@@ -82,14 +112,51 @@ export class ControlPlaneStore {
     this.resourceAttachments = [];
     this.emailVerificationCodes = [];
     this.emailDeliveries = [];
+    this.organizationInvites = [];
     this.authRateLimits = new Map();
   }
 
-  createOrganization({ name, slug, plan = 'free' }: Record<string, any>) {
-    const org = { id: stableId('org', slug || name), name, slug: slugify(slug || name), plan, createdAt: nowIso() };
+  setGitHubCatalogPageFetcher(fetcher: GitHubCatalogPageFetcher | null) { this.githubCatalogPageFetcher = fetcher; }
+
+  createOrganization(input: Record<string, any>) {
+    const { name, plan = 'free' } = input;
+    const slug = organizationSlugForCreate(input);
+    const org = { id: stableId('org', slug || name), name, slug, plan, createdAt: nowIso() };
+    const existing = this.organizations.get(org.id);
+    if (existing && existing.slug !== slug) throw conflict('organization_identity_collision');
     this.organizations.set(org.id, org);
     this.audit('system', 'organization:create', 'organization', org.id, { slug: org.slug, plan });
     return deepClone(org);
+  }
+
+  createOrganizationForUser(input: AuthenticatedOrganizationCreateInput) {
+    const parsed = parseAuthenticatedOrganizationCreateInput(input);
+    const user = this.users.get(parsed.actorUserId);
+    assertOrganizationCreatorEligible(user);
+    if ([...this.organizations.values()].some((organization) => organization.slug === parsed.slug)) {
+      throw new OrganizationCreationError('organization_slug_already_exists', 409);
+    }
+    const organizations = new Map(this.organizations);
+    const members = deepClone(this.members);
+    const auditLogs = deepClone(this.auditLogs);
+    const previousUser = deepClone(user);
+    try {
+      const createdAt = nowIso();
+      const organization = { id: stableId('org', parsed.slug), name: parsed.name, slug: parsed.slug, plan: 'free', createdAt };
+      const membership = { organizationId: organization.id, userId: parsed.actorUserId, role: 'OWNER', createdAt };
+      this.organizations.set(organization.id, organization);
+      this.members.push(membership);
+      user.sessionVersion = Number(user.sessionVersion || 0) + 1;
+      user.updatedAt = createdAt;
+      this.audit(parsed.actorUserId, 'organization:create', 'organization', organization.id, { slug: parsed.slug });
+      return deepClone({ organization, membership, reauthenticationRequired: true as const });
+    } catch (error) {
+      this.organizations = organizations;
+      this.members = members;
+      this.auditLogs = auditLogs;
+      this.users.set(parsed.actorUserId, previousUser);
+      throw error;
+    }
   }
 
   findOrganizationBySlug(slug: string) {
@@ -102,6 +169,7 @@ export class ControlPlaneStore {
     const timestamp = nowIso();
     const id = stableId('usr', email || name);
     const existing = this.users.get(id);
+    if (existing && existing.email !== String(email || '').toLowerCase()) throw conflict('user_identity_collision');
     const passwordChanged = Boolean(existing && passwordHash && passwordHash !== existing.passwordHash);
     const user = {
       id,
@@ -151,6 +219,14 @@ export class ControlPlaneStore {
     user.sessionVersion = Number(user.sessionVersion || 0) + 1;
     user.updatedAt = nowIso();
     return deepClone(redactUser(user));
+  }
+
+  createOAuthTransaction(input: CreateOAuthTransactionInput) { return createMemoryOAuthTransaction(this.oauthTransactions, input); }
+  consumeOAuthTransaction(input: ConsumeOAuthTransactionInput) { return consumeMemoryOAuthTransaction(this.oauthTransactions, input); }
+  deleteExpiredOAuthTransactions(input: OAuthCleanupInput = {}) { return deleteMemoryOAuthTransactions(this.oauthTransactions, input); }
+  recordOAuthAudit(event: OAuthAuditEvent) {
+    const row = oauthAuditData(event);
+    return this.audit(row.actorUserId, row.action, row.targetType, row.targetId, row.metadata);
   }
 
   consumeAuthRateLimit({ key, limit = 10, windowMs = 60_000, now = Date.now() }: Record<string, any>) {
@@ -329,28 +405,45 @@ export class ControlPlaneStore {
     return redactUser(deepClone(user));
   }
 
-  addMember({ organizationId, userId, role = 'developer' }: Record<string, any>) {
+  addMember({ organizationId, userId, role = 'DEVELOPER', actorRole }: Record<string, any>) {
+    const roleResult = parseOrganizationMembershipRoleForMutation(role);
+    if (roleResult.ok === false) throw badRequest(roleResult.code);
+    const storedRole = typeof role === 'string' && role === role.toLowerCase() ? role : roleResult.role;
     const existing = this.members.find((member) => member.organizationId === organizationId && member.userId === userId);
+    const currentCanonicalRole = normalizeOrganizationRoleForRead(existing?.role);
+    const protectCanonicalOwner = currentCanonicalRole === 'OWNER' && roleResult.role !== 'OWNER';
+    const ownerCount = protectCanonicalOwner || actorRole !== undefined
+      ? this.members.filter((member) => member.organizationId === organizationId && normalizeOrganizationRoleForRead(member.role) === 'OWNER').length
+      : 0;
+    if (actorRole !== undefined) {
+      const transition = membershipRoleTransition({ actorRole, targetRole: roleResult.role, currentRole: existing?.role || 'VIEWER', ownerCount });
+      if (transition.statusCode === 400) throw badRequest(transition.code);
+      if (transition.statusCode === 403) throw forbidden(transition.code);
+      if (transition.statusCode === 409) throw conflict(transition.code);
+    }
     if (existing) {
-      const nextRole = role || existing.role;
-      if (existing.role !== nextRole) {
-        existing.role = nextRole;
+      if (protectCanonicalOwner && ownerCount <= 1) throw conflict('membership_last_owner');
+      if (existing.role !== storedRole) {
+        existing.role = storedRole;
         existing.updatedAt = nowIso();
         if (this.users.has(userId)) this.incrementSessionVersion(userId);
-        this.audit(userId, 'organization.member:role-change', 'organization', organizationId, { role: nextRole });
+        this.audit(userId, 'organization.member:role-change', 'organization', organizationId, { role: storedRole });
       }
       return deepClone(existing);
     }
-    const member = { organizationId, userId, role, createdAt: nowIso() };
+    const member = { organizationId, userId, role: storedRole, createdAt: nowIso() };
     this.members.push(member);
-    this.audit(userId, 'organization.member:add', 'organization', organizationId, { role });
+    this.audit(userId, 'organization.member:add', 'organization', organizationId, { role: storedRole });
     return deepClone(member);
   }
 
   removeMember({ organizationId, userId }: Record<string, any>) {
     const index = this.members.findIndex((member) => member.organizationId === organizationId && member.userId === userId);
     if (index < 0) return null;
-    const [member] = this.members.splice(index, 1);
+    const member = this.members[index];
+    const ownerCount = this.members.filter((candidate) => candidate.organizationId === organizationId && normalizeOrganizationRoleForRead(candidate.role) === 'OWNER').length;
+    if (normalizeOrganizationRoleForRead(member.role) === 'OWNER' && ownerCount <= 1) throw conflict('membership_last_owner');
+    this.members.splice(index, 1);
     if (this.users.has(userId)) this.incrementSessionVersion(userId);
     this.audit(userId, 'organization.member:remove', 'organization', organizationId, { role: member.role });
     return deepClone(member);
@@ -360,8 +453,46 @@ export class ControlPlaneStore {
     return deepClone(this.members.filter((member) => String(member.userId) === String(userId)));
   }
 
+  replaceOrganizationInvite(input: ReplaceOrganizationInviteInput) {
+    return replaceMemoryOrganizationInvite(this, input);
+  }
+
+  revokeOrganizationInviteAfterDeliveryFailure(id: string, revokedAt: string) {
+    return revokeMemoryOrganizationInviteAfterDeliveryFailure(this, id, revokedAt);
+  }
+
+  acceptOrganizationInvite(input: { readonly tokenHash: string; readonly userId: string; readonly now: string }) {
+    return acceptMemoryOrganizationInvite(this, input);
+  }
+
+  listOrganizationInvites(input: { readonly organizationId: string; readonly actorUserId: string }) {
+    return listMemoryOrganizationInvites(this, input);
+  }
+
+  listOrganizationMembers(input: { readonly organizationId: string; readonly actorUserId: string }) {
+    return listMemoryOrganizationMembers(this, input);
+  }
+
+  changeOrganizationMembershipRole(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly role: OrganizationMembershipRole; readonly expectedVersion: number }) {
+    return changeMemoryOrganizationMembershipRole(this, input);
+  }
+
+  removeOrganizationMember(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly expectedVersion: number }) {
+    return removeMemoryOrganizationMember(this, input);
+  }
+
+  leaveOrganization(input: { readonly organizationId: string; readonly actorUserId: string; readonly expectedVersion: number }) {
+    return leaveMemoryOrganization(this, input);
+  }
+
+  revokeOrganizationInvite(input: { readonly organizationId: string; readonly inviteId: string; readonly actorUserId: string; readonly now: string }) {
+    return revokeMemoryOrganizationInvite(this, input);
+  }
+
   createProject({ organizationId, name, slug, description = '', status = 'active' }: Record<string, any>) {
     const project = { id: stableId('prj', organizationId, slug || name), organizationId, name, slug: slugify(slug || name), description, status, createdAt: nowIso(), updatedAt: nowIso() };
+    const existing = this.projects.get(project.id);
+    if (existing && (existing.organizationId !== organizationId || existing.slug !== project.slug)) throw conflict('project_identity_collision');
     this.projects.set(project.id, project);
     this.audit('system', 'project:create', 'project', project.id, { organizationId, slug: project.slug });
     return deepClone(project);
@@ -381,10 +512,10 @@ export class ControlPlaneStore {
   updateProject(projectId: string, updates: Record<string, any> = {}) {
     const current = this.projects.get(projectId);
     if (!current) return null;
-    if (updates.slug !== undefined && slugify(updates.slug) !== current.slug) throw conflict('project slug is immutable after creation');
+    const parsed = parseProjectMutation(updates);
     const mutableUpdates: Record<string, any> = {};
-    if (updates.name !== undefined) mutableUpdates.name = updates.name;
-    if (updates.description !== undefined) mutableUpdates.description = updates.description;
+    if (parsed.name !== undefined) mutableUpdates.name = parsed.name;
+    if (parsed.description !== undefined) mutableUpdates.description = parsed.description;
     const next = {
       ...current,
       ...maskSecrets(mutableUpdates),
@@ -395,7 +526,43 @@ export class ControlPlaneStore {
     return deepClone(next);
   }
 
+  getProjectSettings(projectId: string, organizationId: string) {
+    const project = this.projects.get(projectId);
+    if (!project || String(project.organizationId) !== organizationId) return null;
+    const services = [...this.services.values()].filter((row) => String(row.projectId) === projectId);
+    const resources = [...this.resources.values()].filter((row) => String(row.projectId) === projectId);
+    const previews = [...this.deployments.values()].filter((row) => String(row.projectId) === projectId && String(row.deploymentType).toLowerCase() === 'preview');
+    return deepClone(projectSettingsView(project, { services: services.length, resources: resources.length, previews: previews.length }));
+  }
+
+  updateProjectSettings(input: ProjectSettingsMutation) {
+    const current = this.projects.get(input.projectId);
+    if (!current || String(current.organizationId) !== input.organizationId) return null;
+    if (String(current.updatedAt) !== input.expectedUpdatedAt) throw new ProjectSettingsError();
+    const parsed = parseProjectMutation({ ...(input.name === undefined ? {} : { name: input.name }), ...(input.description === undefined ? {} : { description: input.description }) });
+    const mutableUpdates = Object.fromEntries(Object.entries(parsed).filter(([, value]) => value !== undefined));
+    const next = { ...current, ...mutableUpdates, updatedAt: nextProjectUpdatedAt(String(current.updatedAt)) };
+    this.projects.set(input.projectId, next);
+    this.audit(input.actorUserId || 'system', 'project:settings-update', 'project', input.projectId, maskSecrets(mutableUpdates));
+    return this.getProjectSettings(input.projectId, input.organizationId);
+  }
+
+  scheduleProjectDeletion(input: ProjectDeletionRequest) {
+    const current = this.projects.get(input.projectId);
+    if (!current || String(current.organizationId) !== input.organizationId) return null;
+    assertRecoveryPins(this.recoveryState, [...this.resources.values()].filter((row) => row.projectId === input.projectId).map((row) => row.id));
+    if (['DELETE_REQUESTED', 'DELETING'].includes(String(current.status).toUpperCase())) return scheduledProjectDeletion(current);
+    const requestedAt = nowIso();
+    const tombstone = (row: Record<string, unknown>) => ({ ...row, status: 'DELETE_REQUESTED', deletionRequestedAt: requestedAt, updatedAt: nextProjectUpdatedAt(String(row.updatedAt || requestedAt)) });
+    this.projects.set(input.projectId, tombstone(current));
+    for (const row of this.services.values()) if (String(row.projectId) === input.projectId) this.services.set(row.id, tombstone(row));
+    for (const row of this.resources.values()) if (String(row.projectId) === input.projectId) this.resources.set(row.id, tombstone(row));
+    this.audit(input.actorUserId || 'system', 'project:delete-requested', 'project', input.projectId, { organizationId: input.organizationId });
+    return scheduledProjectDeletion(this.projects.get(input.projectId));
+  }
+
   deleteProject(projectId: string) {
+    assertRecoveryPins(this.recoveryState, [...this.resources.values()].filter(row => row.projectId === projectId).map(row => row.id));
     const current = this.projects.get(projectId);
     if (!current) return null;
     for (const service of [...this.services.values()].filter((service) => String(service.projectId) === String(projectId))) this.deleteService(service.id);
@@ -406,11 +573,13 @@ export class ControlPlaneStore {
   }
 
   createService({ projectId, name, type = 'web', runtimeType = 'container', sourceType = 'github', image = null, imageUrl = null, ...rest }: Record<string, any>, options: Record<string, any> = {}) {
+    Object.assign(rest, serviceHealthInput({ ...rest, type }));
     if (options.allowGitHubBinding !== true) assertNoTenantGitHubBinding(rest);
     delete rest.id;
     delete rest.projectId;
     delete rest.desiredState;
     const resolvedImageUrl = imageUrl || image || undefined;
+    const timestamp = nowIso();
     const service = {
       id: stableId('svc', projectId, name),
       projectId,
@@ -422,9 +591,11 @@ export class ControlPlaneStore {
       image: image || imageUrl || undefined,
       imageUrl: resolvedImageUrl,
       status: 'created',
-      createdAt: nowIso(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
       ...rest,
     };
+    assertServiceReplacement(this.services.has(service.id) && [...this.deployments.values()].some((deployment) => deployment.serviceId === service.id));
     this.services.set(service.id, service);
     this.audit('system', 'service:create', 'service', service.id, { projectId, type });
     return deepClone(service);
@@ -439,17 +610,56 @@ export class ControlPlaneStore {
     if (!current) return null;
     if (options.allowGitHubBinding !== true) assertNoTenantGitHubBinding(updates);
     assertImmutableGitHubRepositoryBinding(current, updates);
-    const normalized = maskSecrets({ ...updates });
+    const trusted = options.mutation === INTERNAL_SERVICE_MUTATION || options.allowGitHubBinding === true;
+    const normalized = maskSecrets(trusted ? { ...updates } : serviceMutationState(current, parseServiceMutation(updates), {
+      deployed: [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId),
+      quota: [...this.quotas.values()].find((quota) => quota.userId === options.actorUserId),
+    }));
     delete normalized.id;
     delete normalized.projectId;
     if (options.allowDesiredState !== true) delete normalized.desiredState;
     if (normalized.slug) normalized.slug = slugify(normalized.slug);
     if (normalized.image && !normalized.imageUrl) normalized.imageUrl = normalized.image;
     if (normalized.imageUrl && !normalized.image) normalized.image = normalized.imageUrl;
-    const next = { ...current, ...normalized, updatedAt: nowIso() };
+    const health = parseHealthPaths(normalized);
+    const updatedAt = new Date(Math.max(Date.now(), Date.parse(current.updatedAt || current.createdAt) + 1)).toISOString();
+    const next = { ...current, ...normalized, ...(Object.keys(health).length ? { desiredSpec: { ...current.desiredSpec, ...health }, desiredState: { ...current.desiredState, ...health } } : {}), updatedAt };
     this.services.set(serviceId, next);
     this.audit('system', 'service:update', 'service', serviceId, maskSecrets(updates));
     return deepClone(next);
+  }
+
+  getServiceSettings(serviceId: string) {
+    const service = this.services.get(serviceId);
+    return service ? serviceSettingsSnapshot(service, [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId)) : null;
+  }
+
+  previewServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const service = this.services.get(serviceId);
+    if (!service) return null;
+    return previewServiceSettings(service, parseServiceSettingsInput(input), {
+      deployed: [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId),
+      quota: [...this.quotas.values()].find((quota) => quota.userId === options.actorUserId),
+    });
+  }
+
+  updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const parsed = parseServiceSettingsInput(input);
+    const preview = this.previewServiceSettings(serviceId, parsed, options);
+    if (!preview) return null;
+    this.updateService(serviceId, parsed.changes, options);
+    return this.getServiceSettings(serviceId);
+  }
+
+  createServiceReplacement(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const service = this.services.get(serviceId);
+    if (!service) return null;
+    const replacementInput = parseServiceReplacement(input);
+    assertExpectedServiceVersion(service, replacementInput.expectedUpdatedAt);
+    if (![...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId)) throw new ServiceSettingsError('REPLACEMENT_REQUIRES_DEPLOYMENT', 409);
+    if ([...this.services.values()].some((candidate) => candidate.projectId === service.projectId && candidate.slug === slugify(replacementInput.name))) throw new ServiceSettingsError('REPLACEMENT_NAME_CONFLICT', 409);
+    const replacement = this.createService({ projectId: service.projectId, name: replacementInput.name, ...replacementInput.source });
+    return { impact: 'old_service_preserved', oldServiceId: serviceId, service: replacement };
   }
 
   deleteService(serviceId: string) {
@@ -472,19 +682,20 @@ export class ControlPlaneStore {
   createResource({ projectId, name, type = 'database', engine, provider = 'shared-provider', plan = 'shared-small', region = 'local', status = 'provisioning', ...rest }: Record<string, any>) {
     const safe = sanitizeTenantResourceInput({ projectId, name, type, engine, provider, plan, region, status, ...rest });
     const normalizedEngine = normalizeResourceEngine(safe.engine || safe.type);
-    const id = stableId('res', safe.projectId, safe.name);
-      const existing = this.resources.get(id);
+    const resourceExecution = requireResourceExecution(normalizedEngine);
+    const existing = [...this.resources.values()].find(resource => resource.projectId === safe.projectId && resource.name === safe.name);
+    const id = existing?.id || stableId('res', safe.projectId, resourceNameFallback(safe.name) || safe.name);
       if (String(existing?.status || '').toUpperCase() === 'READY') return deepClone(existing);
-    const sqlitePath = normalizedEngine === 'sqlite' ? providerOwnedSqlitePath(id) : null;
+    const sqlitePath = normalizedEngine === 'sqlite' ? existing?.sqlitePath || existing?.desiredSpec?.sqlitePath || providerOwnedSqlitePath(id) : null;
   const canonicalSpec = canonicalizeProviderDesiredSpec(safe, { rejectUnknown: false });
   const desiredSpec = sqlitePath ? { ...canonicalSpec, sqlitePath } : canonicalSpec;
-    const desiredState = { ...safe, engine: normalizedEngine, desiredSpec, sqlitePath: sqlitePath || undefined };
+    const desiredState = { ...safe, engine: normalizedEngine, desiredSpec, sqlitePath: sqlitePath || undefined, resourceExecution };
     const resource = {
       id,
       projectId: safe.projectId,
       type: safe.type || resourceTypeForEngine(normalizedEngine),
       name: safe.name,
-      slug: slugify(safe.slug || safe.name),
+      slug: safe.slug || existing?.slug || resourceNameFallback(safe.name) || slugify(safe.name),
       engine: normalizedEngine,
       provider: safe.provider || provider,
       status: safe.status || status,
@@ -509,10 +720,12 @@ export class ControlPlaneStore {
   updateResource(resourceId: string, updates: Record<string, any> = {}) {
     const current = this.resources.get(resourceId);
     if (!current) return null;
+    parseResourceMutation(updates);
       if (String(current.status || '').toUpperCase() === 'READY') throw conflict('READY managed resources cannot be updated in place; delete and recreate the resource');
   if (String(current.status || '').toUpperCase() === 'RECONCILING' && Object.keys(updates).length > 0) throw conflict('RECONCILING managed resources cannot be updated while the provisioner claim is active');
     const safe = sanitizeTenantResourceInput({ ...updates, projectId: current.projectId, name: updates.name || current.name, engine: updates.engine || current.engine, type: updates.type || current.type });
     const engine = normalizeResourceEngine(safe.engine || current.engine);
+    const resourceExecution = requireResourceExecution(engine);
     const sqlitePath = engine === 'sqlite' ? (current.sqlitePath || providerOwnedSqlitePath(resourceId)) : undefined;
   const canonicalSpec = canonicalizeProviderDesiredSpec(safe, { baseSpec: current.desiredSpec || {}, rejectUnknown: false });
   const desiredSpec = sqlitePath ? { ...canonicalSpec, sqlitePath } : canonicalSpec;
@@ -522,7 +735,7 @@ export class ControlPlaneStore {
       engine,
       slug: safe.slug ? slugify(safe.slug) : (safe.name ? slugify(safe.name) : current.slug),
       desiredSpec,
-      desiredState: { ...(current.desiredState || {}), ...safe, desiredSpec, sqlitePath },
+      desiredState: { ...(current.desiredState || {}), ...safe, desiredSpec, sqlitePath, resourceExecution },
       sqlitePath,
       updatedAt: nowIso(),
     };
@@ -532,6 +745,8 @@ export class ControlPlaneStore {
   }
 
   deleteResource(resourceId: string) {
+    assertRecoveryPins(this.recoveryState, [resourceId]);
+    retireMemoryRecovery(this.recoveryState, resourceId);
     const current = this.resources.get(resourceId);
     if (!current) return null;
     const attachments = this.resourceAttachments.filter((row) => String(row.resourceId) === String(resourceId));
@@ -546,6 +761,7 @@ export class ControlPlaneStore {
   }
 
   attachResource({ resourceId, serviceId, envPrefix = null, actorUserId = 'system' }: Record<string, any>) {
+    assertRecoveryTargetPublished(this.recoveryState, resourceId);
     const resource = this.resources.get(resourceId);
     const service = this.services.get(serviceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
@@ -598,6 +814,9 @@ export class ControlPlaneStore {
       updatedAt: nowIso(),
       finishedAt: null,
       ...maskSecrets(rest),
+      ...INITIAL_DEPLOYMENT_HEALTH,
+      desiredSpecSnapshot: rest.desiredSpecSnapshot ? deepClone(rest.desiredSpecSnapshot) : captureDeploymentSnapshot(service || {}),
+      snapshotVersion: rest.snapshotVersion ?? 1,
     };
     this.deployments.set(deployment.id, deployment);
     this.audit('system', 'deployment:create', 'deployment', deployment.id, { serviceId, status });
@@ -606,7 +825,8 @@ export class ControlPlaneStore {
   }
 
   getDeployment(deploymentId: string) {
-    return deepClone(this.deployments.get(deploymentId) || null);
+    const row = this.deployments.get(deploymentId);
+    return row ? publicDeploymentHealth(deepClone(row)) : null;
   }
 
 
@@ -614,6 +834,7 @@ export class ControlPlaneStore {
   updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
     const current = this.deployments.get(deploymentId);
     if (!current) return null;
+    if (['desiredSpecSnapshot', 'snapshotVersion', 'sourceDeploymentId', 'retryOfDeploymentId', 'requestIdempotencyKey', 'requestedByUserId', ...Object.keys(INITIAL_DEPLOYMENT_HEALTH)].some(key => Object.hasOwn(updates, key))) throw conflict('deployment lineage and observations are immutable');
     const safeUpdates = maskSecrets(updates || {});
     const nextUpdates = normalizeDeploymentUpdates(safeUpdates, current);
     if (Object.prototype.hasOwnProperty.call(nextUpdates, 'status')) {
@@ -714,20 +935,44 @@ export class ControlPlaneStore {
     return { deployment: rollback, rollbackOfDeploymentId: current.id, previousDeployment: previous ? deepClone(previous) : null, workflowJob };
   }
 
+  requestPreviewCleanup(deploymentId: string, input: Record<string, any> = {}) {
+    const deployment = this.deployments.get(deploymentId);
+    if (!deployment) throw notFound(`deployment not found: ${deploymentId}`);
+    if (String(deployment.deploymentType).toLowerCase() !== 'preview' || !deployment.previewLineageId) throw conflict('PREVIEW_CLEANUP_UNAVAILABLE');
+    const lineage = this.previewLineages.get(deployment.previewLineageId);
+    if (!lineage || lineage.projectId !== deployment.projectId || lineage.serviceId !== deployment.serviceId) throw conflict('PREVIEW_CLEANUP_UNAVAILABLE');
+    const operationId = `preview-cleanup:${lineage.id}`;
+    const attempts = [...this.deployments.values()].filter((candidate) => candidate.previewLineageId === lineage.id);
+    const deploymentIds = attempts.map((candidate) => candidate.id);
+    const status = attempts.every((candidate) => normalizeDeploymentStatus(candidate.status) === 'CLEANED_UP') ? 'CLEANED_UP' : 'PREVIEW_CLEANUP_REQUESTED';
+    if (lineage.state !== 'CLOSED') {
+      const closed = { ...lineage, state: 'CLOSED', version: lineage.version + 1, candidateDeploymentId: null, candidateGeneration: null, currentDeploymentId: null, currentGeneration: null };
+      this.previewLineages.set(lineage.id, { ...closed, routeIntent: previewCloseIntent(closed) });
+      for (const attempt of attempts) if (normalizeDeploymentStatus(attempt.status) !== 'CLEANED_UP') {
+        this.deployments.set(attempt.id, { ...attempt, status: 'PREVIEW_CLEANUP_REQUESTED', updatedAt: nowIso() });
+        this.appendDeploymentEvent({ deploymentId: attempt.id, type: 'preview.cleanup.requested', message: 'Preview cleanup requested', metadata: { operationId, lineageId: lineage.id } });
+      }
+      for (let index = 0; index < this.workflowJobs.length; index += 1) if ((this.workflowJobs[index].targetId === lineage.id || deploymentIds.includes(this.workflowJobs[index].targetId)) && ['queued', 'running'].includes(this.workflowJobs[index].status)) this.workflowJobs[index] = { ...this.workflowJobs[index], status: 'cancelled', lockedBy: null, lockedAt: null };
+      this.audit(input.actorUserId || 'system', 'preview:cleanup-requested', 'preview-lineage', lineage.id, { operationId, deploymentIds });
+    }
+    return { operationId, status, streamHref: `/deployments/${deploymentId}/stream`, lineageId: lineage.id, deploymentIds };
+  }
+
   appendBuildLog({ deploymentId, step = 'build', line, level = 'info' }: Record<string, any>) {
     const row = { id: stableId('blog', deploymentId, this.buildLogs.length), deploymentId, step, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
     this.buildLogs.push(row);
     return deepClone(row);
   }
 
-  appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', containerName = 'app', line, level = 'info' }: Record<string, any>) {
-    const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, containerName, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
+  appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', podUid, sourceInstanceId, containerName = 'app', line, level = 'info' }: Record<string, any>) {
+    const resolvedPodUid = persistedRuntimePodUid({ podUid, sourceInstanceId });
+    const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, podUid: resolvedPodUid, containerName, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
     this.runtimeLogs.push(row);
     return deepClone(row);
   }
 
   appendDeploymentEvent({ deploymentId, type, message, metadata = {} }: Record<string, any>) {
-    const row = { id: stableId('devevt', deploymentId, this.deploymentEvents.length), deploymentId, type, message: sanitizeLogRecord(String(message ?? '')), metadata: maskSecrets(metadata), timestamp: nowIso() };
+    const row = { id: stableId('devevt', deploymentId, this.deploymentEvents.length), deploymentId, type, message: sanitizeLogRecord(String(message ?? '')), metadata: sanitizeLogRecord(metadata), timestamp: nowIso() };
     this.deploymentEvents.push(row);
     return deepClone(row);
   }
@@ -738,6 +983,25 @@ export class ControlPlaneStore {
 
   listRuntimeLogs(serviceId: string, options: Record<string, any> = {}) {
     return deepClone(boundedActivityRows(this.runtimeLogs.filter((row) => row.serviceId === serviceId), options));
+  }
+
+  logPemContext(rows: readonly Record<string, unknown>[]): ObservationLogContext[] {
+    const first = new Map<string, Record<string, unknown>>();
+    for (const row of rows.slice(0, 16)) {
+      const source = observationLogSource(row);
+      if (source && !first.has(source)) first.set(source, row);
+    }
+    const scanLimit = 256;
+    const scanComplete = this.buildLogs.length <= scanLimit && this.runtimeLogs.length <= scanLimit;
+    const candidates = [...this.buildLogs.slice(-scanLimit), ...this.runtimeLogs.slice(-scanLimit)];
+    return [...first.entries()].map(([source, row]) => {
+      const history = candidates
+        .filter((candidate) => observationLogSource(candidate) === source && activityBefore(candidate, row))
+        .sort((left, right) => dateMs(right.timestamp) - dateMs(left.timestamp) || String(right.id).localeCompare(String(left.id)))
+        .slice(0, 5);
+      const complete = scanComplete && history.length <= 4 && history.every((candidate) => String(candidate.line || '').length <= 256);
+      return { source, rows: complete ? deepClone(history.reverse().map((candidate) => ({ line: candidate.line }))) : [], complete };
+    });
   }
 
   listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) {
@@ -797,14 +1061,16 @@ export class ControlPlaneStore {
   async provisionResourceProvider({ resourceId, actorUserId = 'provider', ...options }: Record<string, any>) {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
-      if (options.execute === true || options.dryRun === false) throw conflict('live provider execution is handled exclusively by the authoritative Go provisioner');
-      if (String(resource.status || '').toUpperCase() === 'READY') throw conflict('READY managed resources cannot be reprovisioned or rotate credentials through the planning endpoint');
+      const intent = parseResourceIntent(options);
       const plan = buildResourceProviderPlan(resource, providerPlanPlaceholders());
       const publicPlan = publicResourceProviderPlan(plan);
-      const result = { engine: plan.engine, provider: plan.provider, status: 'provisioning', dryRun: true, connectionSecret: plan.connectionSecret, plan: publicPlan };
-      const planned = { ...resource, status: 'provisioning', connectionSecretName: resource.connectionSecretName, desiredState: { ...(resource.desiredState || {}), providerPlan: publicPlan }, updatedAt: nowIso() };
+      if (intent === 'preview-plan') return { resource: deepClone(resource), result: { intent, engine: plan.engine, provider: plan.provider, status: 'PLAN_ONLY', dryRun: true, plan: publicPlan } };
+      const resourceExecution = requireResourceExecution(resource.engine);
+      if (['READY', 'RECONCILING', 'DELETE_REQUESTED', 'DELETING', 'DELETED'].includes(String(resource.status).toUpperCase())) throw conflict('Active or deleting managed resources cannot be reprovisioned');
+      const result = { intent, engine: plan.engine, provider: plan.provider, status: 'PROVISIONING', dryRun: false };
+      const planned = { ...resource, status: 'PROVISIONING', desiredState: { ...(resource.desiredState || {}), resourceExecution }, updatedAt: nowIso() };
       this.resources.set(resourceId, planned);
-      this.audit(actorUserId, 'resource.provider:plan', 'resource', resourceId, { engine: result.engine, provider: result.provider, dryRun: true, executor: 'go-provisioner' });
+      this.audit(actorUserId, 'resource.provider:requested', 'resource', resourceId, { engine: result.engine, provider: result.provider, executor: 'go-provisioner' });
       return { resource: deepClone(planned), result: maskSecrets(result) };
   }
 
@@ -873,14 +1139,14 @@ export class ControlPlaneStore {
       const secret = this.createSecret({ scopeType: 'github-integration', scopeId: id, key: 'GITHUB_TOKEN', value: token, actorUserId: userId || 'system' });
       tokenSecretId = secret.id;
     }
-    const row = { id, organizationId, userId, ...summary, tokenSecretId, defaultBranch, verifiedAt: null, createdAt: nowIso(), updatedAt: nowIso() };
+    const row = { id, organizationId, userId, ...summary, tokenSecretId, defaultBranch, status: GITHUB_INTEGRATION_STATUS.DISCONNECTED, version: 1, verifiedAt: null, disconnectedAt: nowIso(), createdAt: nowIso(), updatedAt: nowIso() };
     this.githubIntegrations.set(id, row);
     this.audit(userId || 'system', 'github:connect', 'organization', organizationId, { integrationId: id, accountLogin: summary.accountLogin, installationId });
-    return deepClone(row);
+    return deepClone(publicGitHubIntegration(row));
   }
 
   listGitHubIntegrations({ organizationId }: Record<string, any>) {
-    return deepClone([...this.githubIntegrations.values()].filter((row) => String(row.organizationId) === String(organizationId)));
+    return deepClone([...this.githubIntegrations.values()].filter((row) => String(row.organizationId) === String(organizationId)).map(publicGitHubIntegration));
   }
 
   verifyGitHubIntegration({ integrationId, installationId, accountLogin = null, verifiedBy = 'github-app' }: Record<string, any>) {
@@ -889,9 +1155,10 @@ export class ControlPlaneStore {
     const authoritativeInstallationId = String(installationId || '').trim();
     if (!authoritativeInstallationId) throw conflict('verified GitHub integration requires an installationId');
     if (integration.verifiedAt && String(integration.installationId) !== authoritativeInstallationId) throw conflict('verified GitHub installation binding is immutable');
-    const conflictRow = [...this.githubIntegrations.values()].find((candidate) => candidate.id !== integration.id && candidate.verifiedAt && String(candidate.installationId) === authoritativeInstallationId);
+    const conflictRow = [...this.githubIntegrations.values()].find((candidate) => candidate.id !== integration.id && String(candidate.installationId) === authoritativeInstallationId);
     if (conflictRow) throw conflict(String(conflictRow.organizationId) === String(integration.organizationId) ? 'GitHub installation is already verified by another integration' : 'GitHub installation is already verified for another organization');
-    const next = { ...integration, installationId: authoritativeInstallationId, accountLogin: accountLogin || integration.accountLogin, verifiedAt: nowIso(), updatedAt: nowIso() };
+    const reactivated = githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE;
+    const next = { ...integration, installationId: authoritativeInstallationId, accountLogin: accountLogin || integration.accountLogin, status: GITHUB_INTEGRATION_STATUS.ACTIVE, version: Number(integration.version || 1) + (reactivated ? 1 : 0), verifiedAt: integration.verifiedAt || nowIso(), disconnectedAt: null, updatedAt: nowIso() };
     this.githubIntegrations.set(integrationId, next);
     this.audit(verifiedBy, 'github:verify-installation', 'github-integration', integrationId, { organizationId: integration.organizationId, installationId: authoritativeInstallationId });
     return deepClone(next);
@@ -903,10 +1170,11 @@ export class ControlPlaneStore {
     if (!/^\d+$/.test(authoritativeInstallationId)) throw badRequest('GitHub installationId must be numeric');
     const login = String(accountLogin || '').trim();
     if (!login) throw badRequest('GitHub installation accountLogin is required');
-    const existing = [...this.githubIntegrations.values()].find((candidate) => candidate.verifiedAt && String(candidate.installationId) === authoritativeInstallationId);
+    const existing = [...this.githubIntegrations.values()].find((candidate) => String(candidate.installationId) === authoritativeInstallationId);
     if (existing && String(existing.organizationId) !== String(organizationId)) throw forbidden('GitHub installation is already verified for another organization');
     const timestamp = nowIso();
     const id = existing?.id || stableId('ghi', organizationId, authoritativeInstallationId);
+    const reactivated = existing ? githubIntegrationStatus(existing) !== GITHUB_INTEGRATION_STATUS.ACTIVE : false;
     const row = {
       ...(existing || {}),
       id,
@@ -920,7 +1188,14 @@ export class ControlPlaneStore {
       tokenSecretId: null,
       scopes: existing?.scopes || ['repo:read'],
       defaultBranch: existing?.defaultBranch || 'main',
+      status: GITHUB_INTEGRATION_STATUS.ACTIVE,
+      version: Number(existing?.version || 1) + (reactivated ? 1 : 0),
       verifiedAt: existing?.verifiedAt || timestamp,
+      disconnectedAt: null,
+      catalogGeneration: Number(existing?.catalogGeneration || 0),
+      refreshStatus: existing?.refreshStatus || GITHUB_CATALOG_STATUS.IDLE,
+      lastSuccessfulSyncAt: existing?.lastSuccessfulSyncAt || null,
+      staleAt: existing?.staleAt || null,
       createdAt: existing?.createdAt || timestamp,
       updatedAt: timestamp,
     };
@@ -931,15 +1206,61 @@ export class ControlPlaneStore {
       accountLogin: login,
       accountType: String(accountType || 'Organization'),
     });
-    return deepClone(row);
+    return deepClone(publicGitHubIntegration(row));
+  }
+
+  disconnectGitHubIntegration({ organizationId, integrationId, expectedVersion, actorUserId = 'system' }: Record<string, any>) {
+    const integration = this.githubIntegrations.get(String(integrationId));
+    if (!integration || String(integration.organizationId) !== String(organizationId)) throw notFound('GitHub integration not found');
+    const version = Number(expectedVersion);
+    if (!Number.isInteger(version) || version < 1) throw badRequest('expectedVersion must be a positive integer');
+    if (Number(integration.version || 1) !== version) throw conflict('GitHub integration version conflict');
+    const next = { ...integration, status: GITHUB_INTEGRATION_STATUS.DISCONNECTED, version: version + 1, verifiedAt: null, disconnectedAt: nowIso(), updatedAt: nowIso() };
+    this.githubIntegrations.set(integration.id, next);
+    const affectedServiceCount = this.setGitHubServiceAccess(next, 'GITHUB_SOURCE_DISCONNECTED');
+    this.audit(actorUserId, 'github:disconnect', 'github-integration', integration.id, { organizationId, installationId: integration.installationId, previousStatus: githubIntegrationStatus(integration), version: next.version, affectedServiceCount });
+    return { integration: publicGitHubIntegration(next), affectedServiceCount, credentialIssuance: 'denied', githubAppUninstalled: false };
+  }
+
+  setGitHubServiceAccess(integration: Record<string, any>, sourceAccess: string, repositoryIds: ReadonlySet<string> | null = null) {
+    let affected = 0;
+    for (const [id, service] of this.services.entries()) {
+      const project = this.projects.get(service.projectId);
+      const desired = service.desiredState || {};
+      const github = desired.github || {};
+      if (String(project?.organizationId) !== String(integration.organizationId)
+        || String(service.githubInstallationId || desired.githubInstallationId || github.installationId || '') !== String(integration.installationId)
+        || String(service.githubIntegrationId || desired.githubIntegrationId || github.integrationId || '') !== String(integration.id)
+        || (repositoryIds && !repositoryIds.has(String(service.githubRepositoryId || desired.githubRepositoryId || github.repositoryId || '')))) continue;
+      this.services.set(id, githubServiceSourceState(service, sourceAccess));
+      affected += 1;
+    }
+    return affected;
+  }
+
+  restoreGitHubServiceAccess(integration: Record<string, any>, repositoryIds: ReadonlySet<string> | null = null) {
+    let affected = 0;
+    for (const [id, service] of this.services.entries()) {
+      const project = this.projects.get(service.projectId);
+      const desired = service.desiredState || {};
+      const github = desired.github || {};
+      if (String(project?.organizationId) !== String(integration.organizationId)
+        || String(service.githubInstallationId || desired.githubInstallationId || github.installationId || '') !== String(integration.installationId)
+        || String(service.githubIntegrationId || desired.githubIntegrationId || github.integrationId || '') !== String(integration.id)
+        || (repositoryIds && !repositoryIds.has(String(service.githubRepositoryId || desired.githubRepositoryId || github.repositoryId || '')))) continue;
+      this.services.set(id, githubServiceSourceState(service, githubSourceAccess(service)));
+      affected += 1;
+    }
+    return affected;
   }
 
   registerGitHubRepository({ installationId, githubRepoId, repositoryId = null, fullName = null, owner = null, name = null, defaultBranch = 'main', private: privateRepository = false }: Record<string, any>) {
     const normalizedInstallationId = String(installationId || '').trim();
-    if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && String(integration.installationId) === normalizedInstallationId)) {
+    if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && githubIntegrationStatus(integration) === GITHUB_INTEGRATION_STATUS.ACTIVE && String(integration.installationId) === normalizedInstallationId)) {
       throw forbidden('repository catalog updates require a verified GitHub installation');
     }
-    const repository = canonicalGitHubRepositoryRecord({ installationId: normalizedInstallationId, githubRepoId: githubRepoId || repositoryId, fullName, owner, name, defaultBranch, private: privateRepository });
+    const integration = [...this.githubIntegrations.values()].find((candidate) => String(candidate.installationId) === normalizedInstallationId);
+    const repository = { ...canonicalGitHubRepositoryRecord({ installationId: normalizedInstallationId, githubRepoId: githubRepoId || repositoryId, fullName, owner, name, defaultBranch, private: privateRepository }), normalizedIdentity: String(fullName || `${owner}/${name}`).toLowerCase(), accessState: 'ACCESSIBLE', generation: Number(integration?.catalogGeneration || 0) };
     const existing = [...this.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === repository.githubRepoId);
     if (existing && String(existing.installationId) !== normalizedInstallationId) throw conflict('GitHub repository is already bound to another installation');
     const row = { id: existing?.id || stableId('ghr', repository.githubRepoId), ...repository, createdAt: existing?.createdAt || nowIso(), updatedAt: nowIso() };
@@ -949,11 +1270,16 @@ export class ControlPlaneStore {
 
   replaceGitHubInstallationRepositories({ installationId, repositories = [], actorUserId = 'github-app-callback' }: Record<string, any>) {
     const normalizedInstallationId = String(installationId || '').trim();
-    if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && String(integration.installationId) === normalizedInstallationId)) {
+    if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && githubIntegrationStatus(integration) === GITHUB_INTEGRATION_STATUS.ACTIVE && String(integration.installationId) === normalizedInstallationId)) {
       throw forbidden('repository catalog updates require a verified GitHub installation');
     }
     if (!Array.isArray(repositories)) throw badRequest('GitHub repositories must be an array');
-    const records = repositories.map((repository) => canonicalGitHubRepositoryRecord({ ...repository, installationId: normalizedInstallationId }));
+    const integration = [...this.githubIntegrations.values()].find((candidate) => String(candidate.installationId) === normalizedInstallationId && githubIntegrationStatus(candidate) === GITHUB_INTEGRATION_STATUS.ACTIVE);
+    const generation = Number(integration?.catalogGeneration || 0) + 1;
+    const records = repositories.map((repository) => {
+      const record = canonicalGitHubRepositoryRecord({ ...repository, installationId: normalizedInstallationId });
+      return { ...record, normalizedIdentity: record.fullName.toLowerCase(), accessState: 'ACCESSIBLE', generation };
+    });
     const ids = new Set<string>();
     for (const record of records) {
       if (ids.has(record.githubRepoId)) throw conflict('GitHub repository catalog contains duplicate repository IDs');
@@ -961,6 +1287,8 @@ export class ControlPlaneStore {
       const crossInstallation = [...this.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === record.githubRepoId && String(candidate.installationId) !== normalizedInstallationId);
       if (crossInstallation) throw conflict('GitHub repository is already bound to another installation');
     }
+    const removedIds = new Set([...this.githubRepositories.values()].filter((repository) => String(repository.installationId) === normalizedInstallationId && !ids.has(String(repository.githubRepoId))).map((repository) => String(repository.githubRepoId)));
+    if (integration) this.setGitHubServiceAccess(integration, 'SOURCE_ACCESS_REVOKED', removedIds);
     for (const [id, repository] of this.githubRepositories.entries()) {
       if (String(repository.installationId) === normalizedInstallationId && !ids.has(String(repository.githubRepoId))) this.githubRepositories.delete(id);
     }
@@ -970,6 +1298,9 @@ export class ControlPlaneStore {
       this.githubRepositories.set(row.id, row);
       return row;
     });
+    if (integration) this.restoreGitHubServiceAccess(integration, ids);
+    const timestamp = nowIso();
+    if (integration) this.githubIntegrations.set(integration.id, { ...integration, catalogGeneration: generation, refreshStatus: GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: timestamp, staleAt: null, updatedAt: timestamp });
     this.audit(actorUserId, 'github:sync-installation-repositories', 'github-installation', normalizedInstallationId, { repositoryCount: rows.length });
     return { installationId: normalizedInstallationId, repositories: deepClone(rows), repositoryCount: rows.length };
   }
@@ -992,8 +1323,10 @@ export class ControlPlaneStore {
     }
     const payload = row.payload || {};
     if (payload.kind !== 'signup') return { status: 'invalid' };
+    const organizationSlug = organizationSlugForCreate({ slug: payload.organizationSlug });
     if (this.findUserByEmail(email)) throw conflict('user_already_exists');
-    if (this.findOrganizationBySlug(payload.organizationSlug)) throw conflict('organization_slug_already_exists');
+    if (this.findOrganizationBySlug(organizationSlug)) throw conflict('organization_slug_already_exists');
+    if (this.users.has(stableId('usr', email))) throw conflict('user_identity_collision');
     const firstUser = this.users.size === 0;
     const policy = typeof input.resolvePolicy === 'function'
       ? input.resolvePolicy(payload, { firstUser })
@@ -1028,14 +1361,69 @@ export class ControlPlaneStore {
     };
   }
 
-  attachGitHubRepositoryToService({ projectId, serviceId, integrationId, repositoryId = null, repoUrl = null, repository = null, branch = null, actorUserId = 'system' }: Record<string, any>) {
+  completePasswordRecovery(input: PasswordRecoveryCompletionInput) {
+    const email = String(input.email || '').trim().toLowerCase();
+    const purpose = String(input.purpose || 'password-reset');
+    const now = Number(input.now === undefined ? Date.now() : input.now);
+    const maxAttempts = Math.max(1, Number(input.maxAttempts || 5));
+    const record = [...this.emailVerificationCodes]
+      .filter((candidate) => candidate.email === email && candidate.purpose === purpose && !candidate.consumedAt)
+      .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))[0];
+    if (!record || Date.parse(record.expiresAt || '') <= now || Number(record.attempts || 0) >= maxAttempts) {
+      return { status: 'invalid' };
+    }
+    if (typeof input.verifyCode !== 'function' || input.verifyCode(deepClone(record)) !== true) {
+      record.attempts = Math.min(maxAttempts, Number(record.attempts || 0) + 1);
+      record.updatedAt = new Date(now).toISOString();
+      return { status: 'invalid' };
+    }
+    const payload = record.payload || {};
+    const user = this.users.get(String(payload.userId || ''));
+    if (payload.kind !== purpose || !user || user.email !== email || !passwordRecoveryUserEligible(user, now)) {
+      record.consumedAt = new Date(now).toISOString();
+      record.updatedAt = record.consumedAt;
+      return { status: 'invalid' };
+    }
+    const consumedAt = new Date(now).toISOString();
+    for (const candidate of this.emailVerificationCodes) {
+      if (candidate.email === email && candidate.purpose === purpose && !candidate.consumedAt) {
+        candidate.consumedAt = consumedAt;
+        candidate.updatedAt = consumedAt;
+      }
+    }
+    user.passwordHash = input.passwordHash;
+    user.sessionVersion = Number(user.sessionVersion || 0) + 1;
+    user.updatedAt = consumedAt;
+    this.audit(user.id, 'user.password:reset', 'user', user.id, {});
+    return { status: 'reset', user: redactUser(deepClone(user)), resetAt: consumedAt };
+  }
+
+  failPasswordRecoveryDelivery(input: PasswordRecoveryDeliveryFailureInput) {
+    const record = this.emailVerificationCodes.find((candidate) => candidate.id === String(input.challengeId || ''));
+    if (record && !record.consumedAt) {
+      record.consumedAt = input.failedAt || nowIso();
+      record.updatedAt = record.consumedAt;
+    }
+    return this.audit('system', 'user.password-reset:delivery-failed', 'email-verification-code', String(input.challengeId || 'unknown'), {
+      reasonCode: 'password_reset_delivery_failed',
+    });
+  }
+
+  attachGitHubRepositoryToService(input: Record<string, any>) {
+    const { projectId, serviceId, integrationId, repositoryId = null, repoUrl = null, repository = null, branch = null, expectedDefaultBranch = null, expectedCatalogGeneration = null, idempotencyKey = null, actorUserId = 'system' } = input;
     const service = this.services.get(serviceId);
     if (!service) throw notFound(`service not found: ${serviceId}`);
     if (String(service.projectId) !== String(projectId)) throw forbidden('service does not belong to project');
+    const hasDeployment = [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId);
     const project = this.projects.get(projectId);
     if (!project) throw notFound(`project not found: ${projectId}`);
     const integration = requireVerifiedGitHubIntegration(this.githubIntegrations, integrationId, project.organizationId);
     const repo = resolveGitHubRepositoryRecord([...this.githubRepositories.values()], integration.installationId, { repositoryId, repoUrl: repoUrl || repository });
+    assertGitHubSourceReady(integration, repo, { branch, expectedDefaultBranch, expectedCatalogGeneration });
+    const operation = () => {
+    const currentRepositoryId = String(service.githubRepositoryId || service.desiredState?.githubRepositoryId || service.desiredState?.github?.repositoryId || '');
+    if (currentRepositoryId) githubSourceConflict('GITHUB_SERVICE_ALREADY_BOUND', { action: 'OPEN_EXISTING_SERVICE', projectId, serviceId });
+    assertServiceReplacement(hasDeployment);
     const resolvedBranch = branch || repo.defaultBranch || integration.defaultBranch || 'main';
     const binding = gitHubServiceBinding(integration, repo);
     const updated = this.updateService(serviceId, {
@@ -1052,38 +1440,83 @@ export class ControlPlaneStore {
     }, { allowDesiredState: true, allowGitHubBinding: true });
     this.audit(actorUserId, 'github:attach-repository', 'service', serviceId, { integrationId: integration.id, installationId: integration.installationId, repositoryId: repo.githubRepoId, repository: repo.fullName, branch: resolvedBranch });
     return { service: updated, github: { ...binding.github, branch: resolvedBranch } };
+    };
+    return this.runGitHubSourceMutation({ organizationId: project.organizationId, operation: 'attach', idempotencyKey, payload: { projectId, serviceId, integrationId, repositoryId, repoUrl, repository, branch, expectedDefaultBranch, expectedCatalogGeneration }, execute: operation });
   }
 
   listGitHubInstallations({ organizationId }: Record<string, any>) {
     const integrations = this.listGitHubIntegrations({ organizationId });
     const installations = integrations
-      .filter((integration: Record<string, any>) => integration.verifiedAt && integration.installationId)
+      .filter((integration: Record<string, any>) => integration.installationId)
       .map((integration: Record<string, any>) => {
-        const repositories = this.githubRepositoriesForIntegration(integration.id);
-        return { id: String(integration.installationId), installationId: String(integration.installationId), integrationId: integration.id, accountLogin: integration.accountLogin, organizationId: integration.organizationId, repositoryCount: repositories.length };
+        const repositories = [...this.githubRepositories.values()].filter((repository) => String(repository.installationId) === String(integration.installationId));
+        return { ...integration, id: String(integration.installationId), integrationId: integration.id, repositoryCount: repositories.length };
       });
     return { installations };
   }
 
-  listGitHubInstallationRepositories({ installationId, organizationId = null, organizationIds = null }: Record<string, any>) {
+  listGitHubInstallationRepositories({ installationId, organizationId = null, organizationIds = null, cursor = null, q = '' }: Record<string, any>) {
     const allowedOrganizationIds = organizationScopeSet({ organizationId, organizationIds });
     const integrations = [...this.githubIntegrations.values()]
       .filter((integration) => String(integration.installationId) === String(installationId))
       .filter((integration) => allowedOrganizationIds.size === 0 || allowedOrganizationIds.has(String(integration.organizationId)));
-    const repositories = uniqueRepositories(integrations.flatMap((integration) => this.githubRepositoriesForIntegration(integration.id)));
-    return { installationId: String(installationId), repositories };
+    if (!integrations.length) return { installationId: String(installationId), generation: 0, refreshStatus: GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: null, staleAt: null, repositories: [], nextCursor: null };
+    const integration = integrations[0];
+    const generation = Number(integration.catalogGeneration || 0);
+    const page = pageGitHubCatalog(uniqueRepositories(integrations.flatMap((candidate) => this.githubRepositoriesForIntegration(candidate.id))), { organizationId: integration.organizationId, installationId, generation, cursor, q });
+    return { installationId: String(installationId), generation, refreshStatus: integration.refreshStatus || GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: integration.lastSuccessfulSyncAt || null, staleAt: integration.staleAt || null, repositories: page.repositories, nextCursor: page.nextCursor };
   }
 
-  importGitHubRepository({ projectId, integrationId = null, repositoryId = null, repository, repoUrl, branch = null, serviceName = null, actorUserId = 'system' }: Record<string, any>) {
+  async refreshGitHubInstallationRepositories(input: Record<string, any>) {
+    const installationId = String(input.installationId || '');
+    const integration = [...this.githubIntegrations.values()].find(candidate => String(candidate.installationId) === installationId && String(candidate.organizationId) === String(input.organizationId));
+    if (!integration) throw notFound('GitHub installation not found');
+    const expectedVersion = Number(input.expectedIntegrationVersion);
+    const expectedGeneration = Number(input.expectedGeneration);
+    if (githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || Number(integration.version || 1) !== expectedVersion) throw conflict('GitHub integration version conflict');
+    if (Number(integration.catalogGeneration || 0) !== expectedGeneration) throw conflict('GitHub catalog generation conflict');
+    const fetchPage = input.fetchPage || this.githubCatalogPageFetcher;
+    if (typeof fetchPage !== 'function') throw catalogError('GITHUB_CATALOG_REFRESH_UNAVAILABLE', 503, true);
+    this.githubIntegrations.set(integration.id, { ...integration, refreshStatus: GITHUB_CATALOG_STATUS.REFRESHING, updatedAt: nowIso() });
+    let repositories;
+    try { repositories = await fetchCompleteGitHubCatalog(installationId, fetchPage); }
+    catch (error) {
+      const current = this.githubIntegrations.get(integration.id);
+      if (Number(current?.version || 0) === expectedVersion && Number(current?.catalogGeneration || 0) === expectedGeneration) this.githubIntegrations.set(integration.id, { ...current, refreshStatus: GITHUB_CATALOG_STATUS.STALE, staleAt: nowIso(), updatedAt: nowIso() });
+      this.audit(input.actorUserId || 'system', 'github:refresh-installation-repositories-failed', 'github-installation', installationId, { generation: expectedGeneration, reason: 'GITHUB_CATALOG_REFRESH_FAILED' });
+      throw error;
+    }
+    const current = this.githubIntegrations.get(integration.id);
+    if (githubIntegrationStatus(current || {}) !== GITHUB_INTEGRATION_STATUS.ACTIVE || Number(current?.version || 0) !== expectedVersion) {
+      if (Number(current?.catalogGeneration || 0) === expectedGeneration) this.githubIntegrations.set(integration.id, { ...current, refreshStatus: GITHUB_CATALOG_STATUS.STALE, staleAt: nowIso(), updatedAt: nowIso() });
+      throw conflict('GitHub integration version conflict');
+    }
+    if (Number(current?.catalogGeneration || 0) !== expectedGeneration) throw conflict('GitHub catalog generation conflict');
+    const result = this.replaceGitHubInstallationRepositories({ installationId, repositories, actorUserId: input.actorUserId });
+    const next = this.githubIntegrations.get(integration.id);
+    return { refreshed: true, repositoryCount: result.repositoryCount, generation: next.catalogGeneration, refreshStatus: next.refreshStatus, lastSuccessfulSyncAt: next.lastSuccessfulSyncAt, staleAt: next.staleAt };
+  }
+
+  importGitHubRepository(input: Record<string, any>) {
+    const { projectId, integrationId = null, repositoryId = null, repository, repoUrl, branch = null, serviceName = null, serviceSlug = null, expectedDefaultBranch = null, expectedCatalogGeneration = null, idempotencyKey = null, actorUserId = 'system' } = input;
     const project = this.projects.get(projectId);
     if (!project) throw notFound(`project not found: ${projectId}`);
     const integration = requireVerifiedGitHubIntegration(this.githubIntegrations, integrationId, project.organizationId);
     const repo = resolveGitHubRepositoryRecord([...this.githubRepositories.values()], integration.installationId, { repositoryId, repoUrl: repoUrl || repository });
+    assertGitHubSourceReady(integration, repo, { branch, expectedDefaultBranch, expectedCatalogGeneration });
+    const operation = () => {
+    const duplicate = [...this.services.values()].find(candidate => String(candidate.githubRepositoryId || candidate.desiredState?.githubRepositoryId || candidate.desiredState?.github?.repositoryId || '') === String(repo.githubRepoId) && String(this.projects.get(candidate.projectId)?.organizationId || '') === String(project.organizationId));
+    if (duplicate) githubSourceConflict('GITHUB_DUPLICATE_IMPORT', { action: duplicate.projectId === projectId ? 'OPEN_EXISTING_SERVICE' : 'OPEN_EXISTING_PROJECT', projectId: duplicate.projectId, ...(duplicate.projectId === projectId ? { serviceId: duplicate.id } : {}) });
     const resolvedBranch = branch || repo.defaultBranch || integration.defaultBranch || 'main';
     const binding = gitHubServiceBinding(integration, repo);
+    const name = serviceName || repo.repo;
+    const slug = String(serviceSlug || slugify(name));
+    const collision = [...this.services.values()].find(candidate => String(candidate.projectId) === String(projectId) && String(candidate.slug) === slug);
+    if (collision) githubSourceConflict('GITHUB_PROJECT_SLUG_COLLISION', { action: 'CHOOSE_NEW_SLUG', projectId, suggestedSlug: `${slug}-2` });
     const created = this.createService({
       projectId,
-      name: serviceName || repo.repo,
+      name,
+      slug,
       type: 'web',
       runtimeType: 'container',
       sourceType: 'github',
@@ -1099,18 +1532,51 @@ export class ControlPlaneStore {
     const service = this.updateService(created.id, { desiredState: { ...binding, github: { ...binding.github, imported: true } } }, { allowDesiredState: true, allowGitHubBinding: true });
     this.audit(actorUserId, 'github:import-repository', 'project', projectId, { repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId });
     return { service, github: { ...binding.github, branch: resolvedBranch } };
+    };
+    return this.runGitHubSourceMutation({ organizationId: project.organizationId, operation: 'import', idempotencyKey, payload: { projectId, integrationId, repositoryId, repository, repoUrl, branch, serviceName, serviceSlug, expectedDefaultBranch, expectedCatalogGeneration }, execute: operation });
   }
 
-  syncGitHubRepository({ repositoryId, repository, actorUserId = 'system', organizationId = null, organizationIds = null, serviceIds = null }: Record<string, any>) {
+  syncGitHubRepository(input: Record<string, any>) {
+    const { repositoryId, repository, idempotencyKey = null, actorUserId = 'system', organizationId = null, organizationIds = null, serviceIds = null } = input;
     const normalized = normalizeRepositoryId(repositoryId || repository);
     const matchedServices = this.servicesForGitHubRepository(normalized, { organizationId, organizationIds });
     const authorizedServiceIds = Array.isArray(serviceIds) ? new Set(serviceIds.map(String)) : null;
     const services = authorizedServiceIds
       ? matchedServices.filter((service) => authorizedServiceIds.has(String(service.id)))
       : matchedServices;
+    if (!services.length) githubSourceConflict('GITHUB_INSTALLATION_MISMATCH', { action: 'CANCEL' });
+    const scopedOrganizationId = String(this.projects.get(services[0].projectId)?.organizationId || organizationId || 'system');
+    const operation = () => {
+    const sourceAccess = services.map(service => String(service.desiredState?.sourceAccess || service.desiredState?.github?.sourceAccess || ''));
+    if (sourceAccess.includes('GITHUB_SOURCE_DISCONNECTED')) githubSourceConflict('GITHUB_SOURCE_DISCONNECTED', { action: 'REATTACH_INSTALLATION' });
+    if (sourceAccess.includes('SOURCE_ACCESS_REVOKED')) githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG' });
+    for (const service of services) {
+      const integrationId = service.githubIntegrationId || service.desiredState?.githubIntegrationId || service.desiredState?.github?.integrationId;
+      const integration = requireVerifiedGitHubIntegration(this.githubIntegrations, integrationId, this.projects.get(service.projectId)?.organizationId);
+      const repositoryRecord = resolveGitHubRepositoryRecord([...this.githubRepositories.values()], integration.installationId, { repositoryId: service.githubRepositoryId || service.desiredState?.githubRepositoryId || service.desiredState?.github?.repositoryId });
+      assertGitHubSourceReady(integration, repositoryRecord, { branch: input.branch || service.branch, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration });
+    }
     const workflowJob = this.enqueueWorkflowJob({ type: 'github-repository-sync', targetType: 'github-repository', targetId: normalized, payload: { repository: normalized, serviceIds: services.map((service) => service.id) } });
     this.audit(actorUserId, 'github:repository-sync', 'github-repository', normalized, { serviceIds: services.map((service) => service.id) });
     return { repository: normalized, services: deepClone(services), workflowJob };
+    };
+    return this.runGitHubSourceMutation({ organizationId: scopedOrganizationId, operation: 'sync', idempotencyKey, payload: { repositoryId, repository, branch: input.branch, integrationId: input.integrationId, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration, serviceIds: services.map(service => service.id).sort() }, execute: operation });
+  }
+
+  runGitHubSourceMutation(input: Record<string, any>) {
+    const key = String(input.idempotencyKey || '');
+    if (!key) return input.execute();
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(key)) throw badRequest('invalid GitHub idempotency key');
+    const identity = `${input.organizationId}:${input.operation}:${key}`;
+    const requestHash = githubMutationHash(input.payload);
+    const existing = this.githubSourceMutations.get(identity);
+    if (existing) {
+      if (existing.requestHash !== requestHash) githubSourceConflict('GITHUB_IDEMPOTENCY_CONFLICT', { action: 'CANCEL' });
+      return deepClone(existing.response);
+    }
+    const response = input.execute();
+    this.githubSourceMutations.set(identity, { requestHash, response: deepClone(maskSecrets(response)) });
+    return response;
   }
 
   applyGitHubCatalogWebhook(event: any, payload: Record<string, any> = {}) {
@@ -1148,34 +1614,54 @@ export class ControlPlaneStore {
       actions.push({ type: 'github-installation-catalog-verified', integrationId: integration.id, installationId });
       return actions;
     }
-    if (eventName === 'installation' && ['deleted', 'suspend'].includes(action) && /^\d+$/.test(installationId)) {
-      let removed = 0;
-      for (const [id, repository] of this.githubRepositories.entries()) {
-        if (String(repository.installationId) === installationId) {
-          this.githubRepositories.delete(id);
-          removed += 1;
-        }
-      }
+    if (eventName === 'installation' && ['deleted', 'suspend', 'suspended'].includes(action) && /^\d+$/.test(installationId)) {
+      const status = action === 'deleted' ? GITHUB_INTEGRATION_STATUS.DELETED : GITHUB_INTEGRATION_STATUS.SUSPENDED;
+      let affectedServiceCount = 0;
       for (const [id, integration] of this.githubIntegrations.entries()) {
-        if (String(integration.installationId) === installationId) {
-          this.githubIntegrations.set(id, { ...integration, verifiedAt: null, updatedAt: nowIso() });
-        }
+        const currentStatus = githubIntegrationStatus(integration);
+        const eligible = action === 'deleted'
+          ? currentStatus !== GITHUB_INTEGRATION_STATUS.DELETED
+          : currentStatus === GITHUB_INTEGRATION_STATUS.ACTIVE;
+        if (String(integration.installationId) !== installationId || !eligible) continue;
+        const next = { ...integration, status, version: Number(integration.version || 1) + 1, verifiedAt: null, updatedAt: nowIso() };
+        this.githubIntegrations.set(id, next);
+        affectedServiceCount += this.setGitHubServiceAccess(next, 'SOURCE_ACCESS_REVOKED');
       }
-      actions.push({ type: 'github-installation-catalog-invalidated', installationId, repositoryCount: removed });
+      actions.push({ type: 'github-installation-access-revoked', installationId, status, affectedServiceCount });
+      return actions;
+    }
+    if (eventName === 'installation' && action === 'unsuspended' && /^\d+$/.test(installationId)) {
+      let affectedServiceCount = 0;
+      for (const [id, integration] of this.githubIntegrations.entries()) {
+        if (String(integration.installationId) !== installationId || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.SUSPENDED) continue;
+        const next = { ...integration, status: GITHUB_INTEGRATION_STATUS.ACTIVE, version: Number(integration.version || 1) + 1, verifiedAt: nowIso(), updatedAt: nowIso() };
+        this.githubIntegrations.set(id, next);
+        affectedServiceCount += this.restoreGitHubServiceAccess(next);
+      }
+      actions.push({ type: 'github-installation-access-restored', installationId, affectedServiceCount });
       return actions;
     }
     if (eventName === 'installation_repositories' && /^\d+$/.test(installationId)) {
-      const verified = [...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && String(integration.installationId) === installationId);
-      if (!verified) return actions;
+      const integration = [...this.githubIntegrations.values()].find((candidate) => candidate.verifiedAt && githubIntegrationStatus(candidate) === GITHUB_INTEGRATION_STATUS.ACTIVE && String(candidate.installationId) === installationId);
+      if (!integration) return actions;
+      const generation = Number(integration.catalogGeneration || 0);
+      if (payload.catalog_generation !== undefined && Number(payload.catalog_generation) !== generation) return actions;
+      const addedIds = new Set<string>();
       for (const repository of Array.isArray(payload.repositories_added) ? payload.repositories_added : []) {
         if (!/^\d+$/.test(String(repository?.id || '')) || !repository?.full_name) continue;
         this.registerGitHubRepository({ installationId, githubRepoId: String(repository.id), fullName: repository.full_name, defaultBranch: repository.default_branch || 'main', private: repository.private === true });
+        addedIds.add(String(repository.id));
       }
       const removedIds = new Set((Array.isArray(payload.repositories_removed) ? payload.repositories_removed : []).map((repository: any) => String(repository?.id || '')).filter((id: string) => /^\d+$/.test(id)));
+      let affectedServiceCount = 0;
+      affectedServiceCount += this.setGitHubServiceAccess(integration, 'SOURCE_ACCESS_REVOKED', removedIds);
+      affectedServiceCount += this.restoreGitHubServiceAccess(integration, addedIds);
       for (const [id, repository] of this.githubRepositories.entries()) {
         if (String(repository.installationId) === installationId && removedIds.has(String(repository.githubRepoId))) this.githubRepositories.delete(id);
+        else if (String(repository.installationId) === installationId) this.githubRepositories.set(id, { ...repository, generation: generation + 1 });
       }
-      actions.push({ type: 'github-installation-repositories-catalog-updated', installationId });
+      this.githubIntegrations.set(integration.id, { ...integration, catalogGeneration: generation + 1, refreshStatus: integration.refreshStatus === GITHUB_CATALOG_STATUS.REFRESHING ? GITHUB_CATALOG_STATUS.IDLE : integration.refreshStatus, updatedAt: nowIso() });
+      actions.push({ type: 'github-installation-repositories-catalog-updated', installationId, generation: generation + 1, affectedServiceCount });
       return actions;
     }
     if (eventName === 'repository' && ['transferred', 'deleted', 'archived'].includes(action)) {
@@ -1202,6 +1688,7 @@ export class ControlPlaneStore {
       throw error;
     }
     if (!verifyGitHubWebhookSignature(rawBody, signature, secret)) throw unauthorized('invalid GitHub webhook signature');
+    if (String(event || '').toLowerCase() === 'pull_request') return this.handlePreviewWebhook({ body: rawBody, signature, secret, deliveryId });
     const id = String(deliveryId || stableId('ghdel', event, rawBody));
     if (this.webhookEvents.get(id)?.handled) return { accepted: true, duplicate: true, deliveryId: id, actions: [] };
     const before = this.githubWebhookTransactionSnapshot();
@@ -1249,11 +1736,66 @@ export class ControlPlaneStore {
     }
   }
 
+  handlePreviewWebhook(input: Record<string, any>) {
+    const event = parsePreviewWebhook({ body: input.body, signature: input.signature, secret: input.secret, deliveryId: input.deliveryId });
+    const existingDelivery = this.webhookEvents.get(event.deliveryId);
+    if (existingDelivery && !previewWebhookPayloadMatches(existingDelivery.payload, event)) throw new PreviewError('preview_delivery_conflict', 409);
+    if (existingDelivery?.handled) return { accepted: true, duplicate: true, deliveryId: event.deliveryId, actions: [] };
+    const before = this.githubWebhookTransactionSnapshot();
+    try {
+      const delivery = existingDelivery || {
+        id: stableId('whe', 'github', event.deliveryId), provider: 'github', eventType: 'pull_request', deliveryId: event.deliveryId,
+        payload: canonicalPreviewWebhook(event), handled: false, errorMessage: null, createdAt: nowIso(),
+      };
+      this.webhookEvents.set(event.deliveryId, delivery);
+      const actionPlan = { kind: event.action === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: event.repositoryId, installationId: event.installationId, repository: event.repository, baseBranch: event.baseRef };
+      const services = this.servicesForGitHubWebhook(actionPlan);
+      const actions: any[] = [];
+      const blocked = event.action === 'closed' ? new Set<string>() : this.githubWebhookQuotaBlocks(services, actionPlan, actions);
+      for (const service of services.filter((candidate) => !blocked.has(String(candidate.id)))) {
+        const project = this.projects.get(service.projectId);
+        const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+        const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
+        const integrationId = String(service.githubIntegrationId || desired.githubIntegrationId || github.integrationId || '');
+        const lineageId = stableId('preview-lineage', project.organizationId, project.id, service.id, event.installationId, event.repositoryId, event.pullRequestNumber);
+        const transition = transitionPreviewLineage(this.previewLineages.get(lineageId) || null, event, { organizationId: project.organizationId, projectId: project.id, serviceId: service.id, integrationId }, lineageId);
+        if (transition.decision === 'stale' || transition.decision === 'duplicate') { actions.push({ type: `preview-${transition.decision}`, serviceId: service.id, lineageId }); continue; }
+        this.previewLineages.set(lineageId, transition.lineage);
+        if (transition.decision === 'ambiguous') {
+          const job = this.enqueueWorkflowJob({ id: resolverJobId(transition.lineage), type: PREVIEW_RESOLVER_JOB, targetType: 'preview-lineage', targetId: lineageId, payload: resolverPayload(transition.lineage), maxAttempts: 3 });
+          actions.push({ type: 'preview-resolution-enqueued', serviceId: service.id, lineageId, workflowJobId: job.id });
+          continue;
+        }
+        const attempts = [...this.deployments.values()].filter((deployment) => deployment.previewLineageId === lineageId);
+        if (transition.decision === 'close') {
+          this.previewLineages.set(lineageId, { ...transition.lineage, routeIntent: previewCloseIntent(transition.lineage) });
+          const deploymentIds: string[] = [];
+          for (const attempt of attempts) if (String(attempt.status).toUpperCase() !== 'CLEANED_UP') { this.deployments.set(attempt.id, { ...attempt, status: 'PREVIEW_CLEANUP_REQUESTED', updatedAt: nowIso() }); deploymentIds.push(attempt.id); }
+          for (let index = 0; index < this.workflowJobs.length; index += 1) if ((this.workflowJobs[index].targetId === lineageId || deploymentIds.includes(this.workflowJobs[index].targetId)) && ['queued', 'running'].includes(this.workflowJobs[index].status)) this.workflowJobs[index] = { ...this.workflowJobs[index], status: 'cancelled', lockedBy: null, lockedAt: null };
+          actions.push({ type: 'preview-cleanup-requested', serviceId: service.id, lineageId, deploymentIds });
+          continue;
+        }
+        const deploymentId = stableId('dep', 'github-preview', event.deliveryId, service.id, transition.lineage.generation);
+        const runtime = createPreviewRuntime(transition.lineage, deploymentId);
+        const deployment = this.createDeployment({ id: deploymentId, serviceId: service.id, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime });
+        const job = this.enqueueWorkflowJob({ id: stableId('job', 'github-preview', event.deliveryId, service.id), type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, runtime } });
+        this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.workload.queued', message: `Preview Kubernetes workload queued for PR #${event.pullRequestNumber}`, metadata: previewWebhookLineage(delivery.id, lineageId, event) });
+        this.previewLineages.set(lineageId, { ...transition.lineage, candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation });
+        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, lineageId, deploymentId: deployment.id, workflowJobId: job.id });
+      }
+      this.audit('github-webhook', 'github:preview-webhook', 'github-delivery', event.deliveryId, { action: event.action, actions: actions.map(action => action.type) });
+      const handledDelivery = { ...delivery, handled: true, errorMessage: null };
+      this.webhookEvents.set(event.deliveryId, handledDelivery);
+      return { accepted: true, duplicate: false, deliveryId: event.deliveryId, matchedServiceCount: services.length, actions, webhookEvent: handledDelivery };
+    } catch (error) { this.restoreGitHubWebhookTransaction(before); throw error; }
+  }
+
   githubWebhookTransactionSnapshot() {
     const cloneMap = (source: Map<string, any>) => new Map([...source.entries()].map(([key, value]) => [key, deepClone(value)]));
     return {
       githubIntegrations: cloneMap(this.githubIntegrations),
       githubRepositories: cloneMap(this.githubRepositories),
+      previewLineages: cloneMap(this.previewLineages),
       deployments: cloneMap(this.deployments),
       webhookEvents: cloneMap(this.webhookEvents),
       quotas: cloneMap(this.quotas),
@@ -1266,6 +1808,7 @@ export class ControlPlaneStore {
   restoreGitHubWebhookTransaction(snapshot: Record<string, any>) {
     this.githubIntegrations = snapshot.githubIntegrations;
     this.githubRepositories = snapshot.githubRepositories;
+    this.previewLineages = snapshot.previewLineages;
     this.deployments = snapshot.deployments;
     this.webhookEvents = snapshot.webhookEvents;
     this.quotas = snapshot.quotas;
@@ -1315,11 +1858,12 @@ export class ControlPlaneStore {
 
   githubRepositoriesForIntegration(integrationId: string) {
     const integration = this.githubIntegrations.get(integrationId);
-    if (!integration?.verifiedAt || !integration.installationId) return [];
+    if (!integration?.verifiedAt || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || !integration.installationId) return [];
     return [...this.githubRepositories.values()]
       .filter((repository) => String(repository.installationId) === String(integration.installationId))
       .map((repository) => ({
         id: repository.githubRepoId,
+        installationId: String(repository.installationId),
         githubRepoId: repository.githubRepoId,
         fullName: repository.fullName,
         owner: repository.owner,
@@ -1327,6 +1871,9 @@ export class ControlPlaneStore {
         repoUrl: repository.repoUrl,
         defaultBranch: repository.defaultBranch,
         private: Boolean(repository.private),
+        normalizedIdentity: repository.normalizedIdentity || String(repository.fullName).toLowerCase(),
+        accessState: repository.accessState || 'ACCESSIBLE',
+        generation: Number(repository.generation || 0),
       }));
   }
 
@@ -1346,6 +1893,57 @@ export class ControlPlaneStore {
     const row = { id: stableId('dom', domain), projectId, serviceId, domain, verified, tlsStatus, createdAt: nowIso() };
     this.domains.set(row.id, row);
     return deepClone(row);
+  }
+
+  createCustomDomain(input: Record<string, any>) {
+    const project = this.projects.get(String(input.projectId));
+    const service = this.services.get(String(input.serviceId));
+    if (!project || !service || String(project.organizationId) !== String(input.organizationId) || String(service.projectId) !== String(project.id)) {
+      throw new DomainLifecycleError('DOMAIN_SCOPE_NOT_FOUND', 404);
+    }
+    if (String(service.type).toLowerCase() !== 'web') throw new DomainLifecycleError('DOMAIN_SERVICE_NOT_PUBLIC_WEB', 400);
+    const hostname = normalizeCustomHostname(input.hostname, input.platformZones);
+    if ([...this.domains.values()].some((domain) => String(domain.hostname || domain.domain).toLowerCase() === hostname)) {
+      throw new DomainLifecycleError('DOMAIN_HOSTNAME_CONFLICT', 409);
+    }
+    const issued = issueCustomDomain({
+      id: stableId('dom', hostname), organizationId: project.organizationId, projectId: project.id,
+      serviceId: service.id, hostname, actorUserId: String(input.actorUserId), now: input.now,
+    });
+    this.domains.set(issued.domain.id, issued.domain);
+    this.audit(input.actorUserId, 'domain:create', 'domain', issued.domain.id, publicCustomDomain(issued.domain));
+    return { domain: publicCustomDomain(issued.domain), challengeToken: issued.challengeToken };
+  }
+
+  listCustomDomainsForProject(projectId: string) {
+    return deepClone([...this.domains.values()].filter((domain) => domain.hostname && String(domain.projectId) === String(projectId)).map((domain) => publicCustomDomain(domain)));
+  }
+
+  getCustomDomain(domainId: string) {
+    const domain = this.domains.get(String(domainId));
+    return domain?.hostname ? deepClone(publicCustomDomain(domain)) : null;
+  }
+
+  rotateCustomDomainChallenge(domainId: string, input: Record<string, any>) {
+    const current = this.requireCustomDomain(domainId);
+    const rotated = rotateCustomDomain(current, input.expectedVersion, String(input.actorUserId), input.now);
+    this.domains.set(domainId, rotated.domain);
+    this.audit(input.actorUserId, 'domain:rotate', 'domain', domainId, publicCustomDomain(rotated.domain));
+    return { domain: publicCustomDomain(rotated.domain), challengeToken: rotated.challengeToken };
+  }
+
+  requestCustomDomainVerification(domainId: string, input: Record<string, any>) {
+    const domain = requestCustomDomainCheck(this.requireCustomDomain(domainId), input.expectedVersion, String(input.actorUserId), input.now);
+    this.domains.set(domainId, domain);
+    this.audit(input.actorUserId, 'domain:verify-requested', 'domain', domainId, publicCustomDomain(domain));
+    return publicCustomDomain(domain);
+  }
+
+  requestCustomDomainDeletion(domainId: string, input: Record<string, any>) {
+    const domain = requestCustomDomainDelete(this.requireCustomDomain(domainId), input.expectedVersion, String(input.actorUserId), input.now);
+    this.domains.set(domainId, domain);
+    this.audit(input.actorUserId, 'domain:delete-requested', 'domain', domainId, publicCustomDomain(domain));
+    return publicCustomDomain(domain);
   }
 
   recordUsage(record: Record<string, any>) {
@@ -1518,10 +2116,17 @@ export class ControlPlaneStore {
 
   servicesForGitHubWebhook(actionPlan: Record<string, any>) {
     if (actionPlan.kind === 'ignored' || !actionPlan.repositoryId || !actionPlan.installationId || !actionPlan.repository) return [];
-    return [...this.services.values()].filter((service) => serviceMatchesGitHubWebhook(service, actionPlan, this.githubRepositories));
+    const inactive = new Set(['DELETE_REQUESTED', 'DELETING', 'DELETED']);
+    return [...this.services.values()].filter((service) => {
+      const project = this.projects.get(String(service.projectId));
+      return !inactive.has(String(service.status).toUpperCase())
+        && !inactive.has(String(project?.status).toUpperCase())
+        && serviceMatchesGitHubWebhook(service, actionPlan, this.githubRepositories);
+    });
   }
 
   resourceForConsole(resource: Record<string, any>) {
+    assertRecoveryTargetPublished(this.recoveryState, resource.id);
     const env: Record<string, string> = {};
     let live = false;
     for (const secret of this.secrets.values()) {
@@ -1571,6 +2176,20 @@ export class ControlPlaneStore {
     this.workflowJobs[index] = next;
     return next;
   }
+
+  private requireCustomDomain(domainId: string): CustomDomainRecord {
+    const domain = this.domains.get(String(domainId));
+    if (!domain?.hostname) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
+    return domain;
+  }
+}
+
+function passwordRecoveryUserEligible(user: Readonly<Record<string, unknown>>, now: number) {
+  if (!user.passwordHash || !user.emailVerifiedAt || String(user.approvalStatus || 'PENDING').toUpperCase() !== 'APPROVED') return false;
+  if (!user.bannedAt) return true;
+  if (!user.banExpiresAt) return false;
+  const banExpiresAt = new Date(String(user.banExpiresAt)).getTime();
+  return Number.isFinite(banExpiresAt) && banExpiresAt <= now;
 }
 
 function validateRollbackSource(current: Record<string, any>, previous: Record<string, any> | undefined, explicitPreviousDeploymentId: any) {
@@ -1684,6 +2303,13 @@ function badRequest(message: string) {
   return error;
 }
 
+function organizationSlugForCreate(input: Record<string, any>) {
+  if (!Object.hasOwn(input, 'slug')) return slugify(input.name);
+  const parsed = parseOrganizationRouteSlug(input.slug);
+  if (parsed.ok === false) throw badRequest(parsed.code);
+  return parsed.slug;
+}
+
 function forbidden(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 403;
@@ -1757,7 +2383,7 @@ function requireVerifiedGitHubIntegration(integrations: Map<string, any>, integr
   const integration = id ? integrations.get(id) : null;
   if (!integration) throw notFound(`GitHub integration not found: ${id || '<missing>'}`);
   if (String(integration.organizationId) !== String(organizationId)) throw forbidden('GitHub integration does not belong to project organization');
-  if (!integration.verifiedAt || !integration.installationId) throw forbidden('repository attachment requires a verified GitHub App installation');
+  if (githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || !integration.verifiedAt || !integration.installationId) githubSourceConflict('GITHUB_SOURCE_DISCONNECTED', { action: 'REATTACH_INSTALLATION' });
   return integration;
 }
 
@@ -1772,8 +2398,20 @@ function resolveGitHubRepositoryRecord(repositories: any[], installationId: any,
     const nameMatches = !requestedFullName || requestedFullName === String(repository.fullName).toLowerCase();
     return idMatches && nameMatches;
   });
-  if (!record) throw forbidden('repository is not available to the selected GitHub installation');
+  if (!record) {
+    if (repositoryId && repositories.some(repository => String(repository.githubRepoId) === repositoryId || String(repository.id) === repositoryId)) githubSourceConflict('GITHUB_INSTALLATION_MISMATCH', { action: 'CANCEL' });
+    githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG', installationId: String(installationId) });
+  }
   return record;
+}
+
+function assertGitHubSourceReady(integration: Record<string, any>, repository: Record<string, any>, selector: Record<string, any>) {
+  if (integration.refreshStatus === GITHUB_CATALOG_STATUS.STALE) githubSourceConflict('GITHUB_CATALOG_STALE', { action: 'REFRESH_CATALOG', installationId: String(integration.installationId) });
+  if (selector.expectedCatalogGeneration !== null && selector.expectedCatalogGeneration !== undefined && Number(selector.expectedCatalogGeneration) !== Number(integration.catalogGeneration || 0)) githubSourceConflict('GITHUB_CATALOG_STALE', { action: 'REFRESH_CATALOG', installationId: String(integration.installationId) });
+  if (repository.accessState === 'REVOKED' || Number(repository.generation || 0) !== Number(integration.catalogGeneration || 0)) githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG', installationId: String(integration.installationId), repositoryId: String(repository.githubRepoId) });
+  const defaultBranch = String(repository.defaultBranch || '');
+  if (!selector.branch && !defaultBranch) githubSourceConflict('GITHUB_DEFAULT_BRANCH_MISSING', { action: 'SELECT_BRANCH', repositoryId: String(repository.githubRepoId) });
+  if (selector.expectedDefaultBranch && String(selector.expectedDefaultBranch) !== defaultBranch) githubSourceConflict('GITHUB_DEFAULT_BRANCH_CHANGED', { action: 'SELECT_BRANCH', repositoryId: String(repository.githubRepoId), currentDefaultBranch: defaultBranch, requestedBranch: String(selector.expectedDefaultBranch) });
 }
 
 function gitHubServiceBinding(integration: Record<string, any>, repository: Record<string, any>) {
@@ -1855,6 +2493,11 @@ function uniqueRepositories(repositories: Array<Record<string, any> | null>) {
     byName.set(key, existing ? { ...existing, serviceIds: [...new Set([...(existing.serviceIds || []), ...(repository.serviceIds || [])])] } : repository);
   }
   return [...byName.values()];
+}
+
+function activityBefore(candidate: Record<string, unknown>, row: Record<string, unknown>) {
+  const timestampDifference = dateMs(candidate.timestamp) - dateMs(row.timestamp);
+  return timestampDifference < 0 || (timestampDifference === 0 && String(candidate.id).localeCompare(String(row.id)) < 0);
 }
 
 function cancelActiveBuildWorkflowJobs(jobs: Record<string, any>[], deploymentId: string, reason: string) {

@@ -5,39 +5,43 @@ import test from 'node:test';
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('log ingester polls Kubernetes with stable workload identity and bounded persistence', async () => {
-  const [main, worker, kube, store] = await Promise.all([
+  const [main, worker, types, kube, logReader, store, inserter] = await Promise.all([
     read('../services/log-ingester/cmd/log-ingester/main.go'),
     read('../services/log-ingester/internal/ingester/ingester.go'),
+    read('../services/log-ingester/internal/ingester/types.go'),
     read('../services/log-ingester/internal/kube/client.go'),
+    read('../services/log-ingester/internal/kube/logs.go'),
     read('../services/log-ingester/internal/store/postgres.go'),
+    read('../services/log-ingester/internal/store/insert.go'),
   ]);
   assert.doesNotMatch(main, /action=stream-build-runtime-db-audit-logs/);
   assert.match(main, /RAIBITSERVER_INGEST_MAX_PODS/);
 	assert.match(main, /RAIBITSERVER_INGEST_MAX_RECORDS/);
 	assert.match(main, /RAIBITSERVER_INGEST_MAX_DURATION/);
   assert.match(main, /RAIBITSERVER_LOG_RETENTION/);
-  assert.match(worker, /raibitserver\.io\/service-id/);
+  assert.match(types, /raibitserver\.io\/service-id/);
   assert.match(worker, /MaxLinesPerContainer/);
-  assert.match(worker, /MaxLineBytes/);
+  assert.match(types, /MaxLineBytes/);
   assert.match(worker, /DeleteOlderThan/);
   assert.match(kube, /\/api\/v1\/pods/);
-  assert.match(kube, /limitBytes/);
-  assert.match(kube, /sinceTime/);
+  assert.match(logReader, /limitBytes/);
+  assert.match(logReader, /sinceTime/);
 	assert.match(kube, /tokenFile/);
 	assert.match(kube, /SkipContainer/);
-	assert.match(store, /ON CONFLICT \("sourceKey"\) DO NOTHING/);
-	assert.match(store, /const batchSize = 100/);
+	assert.match(inserter, /ON CONFLICT\s*\("sourceKey"\)\s*DO NOTHING/);
+	assert.match(store, /LIMIT 10000/);
 	assert.match(store, /ORDER BY timestamp LIMIT/);
   assert.match(store, /SetMaxOpenConns/);
-  assert.match(store, /cursor::timestamptz/);
+  assert.match(store, /time\.Parse\(time\.RFC3339Nano, raw\)/);
 });
 
 test('metrics ingester stores only Kubernetes CPU and memory observations with bounded cardinality', async () => {
-  const [main, worker, kube, store] = await Promise.all([
+  const [main, worker, kube, store, inserter] = await Promise.all([
     read('../services/metrics-ingester/cmd/metrics-ingester/main.go'),
     read('../services/metrics-ingester/internal/ingester/ingester.go'),
     read('../services/metrics-ingester/internal/kube/client.go'),
     read('../services/metrics-ingester/internal/store/postgres.go'),
+    read('../services/metrics-ingester/internal/store/insert.go'),
   ]);
   assert.doesNotMatch(main, /action=collect-cpu-memory-network-request-db-metrics/);
   assert.match(main, /RAIBITSERVER_INGEST_MAX_PODS/);
@@ -49,9 +53,9 @@ test('metrics ingester stores only Kubernetes CPU and memory observations with b
   assert.doesNotMatch(worker, /network|request_count|response_time/);
   assert.match(kube, /\/apis\/metrics\.k8s\.io\/v1beta1\/pods/);
 	assert.match(kube, /tokenFile/);
-	assert.match(store, /ON CONFLICT \("sourceKey"\) DO NOTHING/);
-	assert.match(store, /const batchSize = 100/);
-	assert.match(store, /ORDER BY timestamp LIMIT/);
+	assert.match(inserter, /ON CONFLICT\s*\("sourceKey"\)\s*DO NOTHING/);
+	assert.match(store, /const batchSize = 10000/);
+	assert.match(store, /ORDER BY timestamp,id LIMIT/);
   assert.match(store, /SetMaxOpenConns/);
 });
 

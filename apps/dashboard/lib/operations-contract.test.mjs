@@ -5,12 +5,12 @@ import { decodeDeploymentRouteSegment, encodeDeploymentRouteSegment } from './de
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-test('deployment operations keep all five URL-addressed views and bounded semantic output', async () => {
+test('deployment operations keep their URL-addressed data views and bounded semantic output', async () => {
   // Given: the deployment detail route is the server-owned operations surface.
   const source = await read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx');
 
   // When: its route and presentation contracts are inspected.
-  const viewUrls = ['overview', 'logs', 'events', 'rollback', 'cancel'];
+  const viewUrls = ['overview', 'logs', 'events'];
 
   // Then: every view is addressable and operational output stays semantic and bounded.
   for (const view of viewUrls) assert.ok(source.includes(`view=${view}`), `missing deployment view=${view}`);
@@ -21,20 +21,24 @@ test('deployment operations keep all five URL-addressed views and bounded semant
   assert.match(source, /focus-visible:ring-ring\/50/);
   assert.doesNotMatch(source, /<LogViewer/);
   assert.match(source, /break-all/);
-  assert.match(source, /QUEUED[\s\S]*BUILDING[\s\S]*IMAGE_READY/);
+  assert.match(source, /history\?\.permissions\.execute && history\.eligibleAction/);
 });
 
-test('deployment mutations preserve exact endpoints, fields, return paths, and confirmation rules', async () => {
-  // Given: rollback and cancellation are native server-posted forms.
-  const source = await read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx');
+test('deployment mutations preserve server-selected endpoints, fields, return paths, and confirmation rules', async () => {
+  const [source, operationSubmit, recovery] = await Promise.all([
+    read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
+    read('../components/operation-submit.tsx'),
+    read('../components/project-hub/deployment-recovery-action.tsx'),
+  ]);
 
   // When: their machine-consumed contracts are inspected.
-  // Then: rollback is confirmed, cancellation is status-gated, and no status mutation is exposed.
-  assert.match(source, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/rollback`, context\)/);
-  assert.match(source, /id="rollback-deployment"[\s\S]*name="imageUrl"[\s\S]*name="confirmed"[\s\S]*required/);
-  assert.match(source, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/cancel`, context\)/);
-  assert.match(source, /name="reason"/);
-  assert.match(source, /name="_returnTo" value=\{`\$\{base\}\?view=overview`\}/);
+  // Then: only a server-eligible action is rendered; rollback remains confirmed and no status mutation is exposed.
+  assert.match(source, /history\?\.permissions\.execute && history\.eligibleAction/);
+  assert.match(source, /<DeploymentRecoveryAction action=\{history\.eligibleAction\}[\s\S]*returnTo=\{`\$\{base\}\?view=overview`\}/);
+  assert.match(recovery, /action=\{`\/api\/control\$\{action\.href\}`\}/);
+  assert.match(recovery, /action\.type === 'rollback' \? <input name="confirmed" type="hidden" value="true"/);
+  assert.match(operationSubmit, /<form[\s\S]*action=\{action\}[\s\S]*method="post"/);
+  assert.match(operationSubmit, /name="_returnTo"/);
   assert.doesNotMatch(source, /\/deployments\/\$\{(?:deploymentId|encodedDeploymentId)\}\/status/);
 });
 
@@ -61,8 +65,8 @@ test('deployment route IDs decode at most once and use one canonical encoded pat
     assert.match(source, /const decodedDeploymentId = decodeDeploymentRouteSegment\(deploymentId\)/);
     assert.match(source, /const encodedDeploymentId = encodeDeploymentRouteSegment\(deploymentId\)/);
     assert.match(source, /getJson\(`\/deployments\/\$\{encodedDeploymentId\}`/);
-    assert.match(source, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/rollback`/);
-    assert.match(source, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/cancel`/);
+    assert.match(source, /DeploymentRecoveryAction/);
+    assert.match(source, /history\.eligibleAction/);
     assert.match(source, /deployments\/\$\{encodedDeploymentId\}`/);
     assert.match(source, />\{decodedDeploymentId\}<\/span>/);
     assert.doesNotMatch(source, /deployments\/\$\{deploymentId\}/);
@@ -70,8 +74,13 @@ test('deployment route IDs decode at most once and use one canonical encoded pat
 });
 
 test('resource operations keep seven views, engine defaults, and exact mutation contracts', async () => {
-  // Given: the resource console is a server-owned operations surface.
-  const source = await read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx');
+  // Given: the resource console keeps server-owned loading and a bounded client query leaf.
+  const [source, queryConsole, operationSubmit] = await Promise.all([
+    read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../components/resource-query-console.tsx'),
+    read('../components/operation-submit.tsx'),
+  ]);
+  const mutationSource = `${source}\n${queryConsole}\n${operationSubmit}`;
 
   // When: its URL, engine, and native form contracts are inspected.
   // Then: all seven views and all four mutation endpoints remain present.
@@ -79,29 +88,42 @@ test('resource operations keep seven views, engine defaults, and exact mutation 
     assert.ok(source.includes(`view=${view}`), `missing resource view=${view}`);
   }
   for (const endpoint of ['/console/query', '/console/command', '/provision', '/attach']) {
-    assert.ok(source.includes(endpoint), `missing resource endpoint ${endpoint}`);
+    assert.ok(mutationSource.includes(endpoint), `missing resource endpoint ${endpoint}`);
   }
-  for (const field of ['query', 'command', 'confirmed', 'dryRun', 'serviceId', 'envPrefix', '_returnTo']) {
-    assert.ok(source.includes(`name="${field}"`), `missing resource field ${field}`);
+  for (const field of ['query', 'command', 'confirmed', 'serviceId', 'envPrefix', '_returnTo']) {
+    assert.ok(mutationSource.includes(`name="${field}"`), `missing resource field ${field}`);
   }
-  assert.equal(source.match(/name="confirmed"/g)?.length, 2);
+  assert.equal(mutationSource.match(/name="confirmed"/g)?.length, 2);
+  const provisioning = await read('../components/resource-provision-actions.tsx');
+  for (const marker of ['preview-plan', 'live-provision', 'OperationSubmit', 'returnTo']) assert.ok(provisioning.includes(marker), marker);
+  for (const marker of ['running.current', 'aria-busy', 'aria-live="polite"', 'name="_returnTo"']) assert.ok(operationSubmit.includes(marker), marker);
+  assert.doesNotMatch(source, /name="dryRun"/);
   assert.match(source, /id="provider-command"[\s\S]*name="confirmed"[\s\S]*required/);
-  assert.match(source, /name="query"[\s\S]*name="confirmed" value="true"(?! required)/);
+  assert.match(queryConsole, /name="query"[\s\S]*name="confirmed"[\s\S]*value="true"(?![\s\S]*required)/);
+  assert.match(queryConsole, /fetch\(action,[\s\S]*'content-type': 'application\/json'/);
+  assert.match(queryConsole, /if \(!response\.ok\)/);
   assert.match(source, /postgresql:[\s\S]*mongodb:[\s\S]*redis:[\s\S]*'object-storage':[\s\S]*nats:/);
   assert.match(source, /provider-owned-secret/);
   assert.match(source, /filter\(\(\[key\]\) => key !== 'connectionInfo'\)/);
 });
 
-test('resource schema and operations surfaces use semantic bounded regions without client data state', async () => {
+test('resource schema stays server-owned while query results use one bounded client leaf', async () => {
   // Given: partial, empty, and long provider data can reach the server-rendered page.
-  const source = await read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx');
+  const [source, queryConsole] = await Promise.all([
+    read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../components/resource-query-console.tsx'),
+  ]);
 
   // When: its presentation boundary is inspected.
-  // Then: data tables and code regions preserve data with bounded overflow and no client ownership.
+  // Then: server data stays server-rendered and only the interactive query owns client state.
   assert.match(source, /<Table[\s\S]*?<TableHeader[\s\S]*?<TableHead/);
   assert.match(source, /overflow-x-auto/);
-  assert.match(source, /overflow-auto/);
+  assert.match(source, /code-panel/);
   assert.match(source, /break-all/);
   assert.doesNotMatch(source, /['"]use client['"]/);
   assert.doesNotMatch(source, /use(?:State|Effect|Reducer|Query)\s*\(/);
+  assert.match(queryConsole, /^['"]use client['"]/);
+  assert.match(queryConsole, /aria-label="쿼리 결과"/);
+  assert.match(queryConsole, /overflow-x-auto/);
+  assert.doesNotMatch(queryConsole, /dangerouslySetInnerHTML/);
 });

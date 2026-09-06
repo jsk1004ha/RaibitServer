@@ -1,10 +1,10 @@
 import { apiAction } from '@/lib/api';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSet, FieldLegend } from '@/components/ui/field';
+import { Field, FieldGroup, FieldLabel, FieldSet, FieldLegend } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { EnvFileImport } from './env-file-import';
 import { HubEmpty } from './shared';
 import type { ProjectHubData } from './types';
 
@@ -36,7 +36,7 @@ export function EnvironmentView({ data }: Readonly<{ data: ProjectHubData }>) {
           </Card>
           <Card>
             <CardHeader><CardTitle><h2>.env 텍스트 가져오기</h2></CardTitle><CardDescription>한 줄에 KEY=value 형식으로 붙여 넣으세요. 비밀로 보이는 키는 자동 분류됩니다.</CardDescription></CardHeader>
-            <form action={apiAction(`/projects/${data.projectId}/services/${service.id}/env-file`)} method="post"><input name="_returnTo" type="hidden" value={returnTo} /><CardContent><Field><FieldLabel htmlFor="environment-content">.env 내용</FieldLabel><Textarea autoComplete="off" id="environment-content" name="content" placeholder={'NODE_ENV=production\nAPI_TOKEN=your-secret'} required rows={8} /><FieldDescription>내용은 서버에 직접 전송되며 URL에 포함되지 않습니다.</FieldDescription></Field></CardContent><CardFooter className="mt-raibit-xl justify-end"><button className={buttonVariants({ variant: 'outline' })} type="submit">.env 가져오기</button></CardFooter></form>
+            <EnvFileImport action={apiAction(`/projects/${data.projectId}/services/${service.id}/env-file`)} returnTo={returnTo} />
           </Card>
         </div>
       </div>

@@ -18,7 +18,9 @@ test('control-plane provider endpoint is plan-only and never makes a dry-run res
   assert.equal(resource.connectionSecretName ?? null, null);
   assert.equal(store.snapshot().secrets.some((secret) => secret.scopeType === 'resource-provider-connection'), false);
 
-  const planned = await store.provisionResourceProvider({ resourceId: resource.id, dryRun: true, password: 'must-never-persist' });
+  const before = store.snapshot();
+  const planned = await store.provisionResourceProvider({ resourceId: resource.id, intent: 'preview-plan' });
+  assert.deepEqual(store.snapshot(), before);
   assert.equal(planned.resource.status.toUpperCase(), 'PROVISIONING');
   assert.equal(planned.resource.connectionSecretName ?? null, null);
   assert.equal(JSON.stringify(planned).includes('must-never-persist'), false);
@@ -26,7 +28,7 @@ test('control-plane provider endpoint is plan-only and never makes a dry-run res
 
   await assert.rejects(
     () => store.provisionResourceProvider({ resourceId: resource.id, execute: true, dryRun: false }),
-    /Go provisioner|authoritative|live provider/i,
+    (error) => error.code === 'RESOURCE_INTENT_INVALID',
   );
 });
 
@@ -45,8 +47,11 @@ test('provider planning cannot requeue a READY resource and rotate live credenti
     },
   });
 
+  const before = store.snapshot();
+  await store.provisionResourceProvider({ resourceId: resource.id, intent: 'preview-plan' });
+  assert.deepEqual(store.snapshot(), before);
   await assert.rejects(
-    () => store.provisionResourceProvider({ resourceId: resource.id, dryRun: true }),
+    () => store.provisionResourceProvider({ resourceId: resource.id, intent: 'live-provision' }),
     (error) => error?.statusCode === 409 && /READY|rotation|reprovision/i.test(error.message),
   );
   const duplicateCreate = store.createResource({ projectId: resource.projectId, name: resource.name, engine: resource.engine });

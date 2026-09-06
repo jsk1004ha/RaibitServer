@@ -21,6 +21,12 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if len(os.Args) > 1 && os.Args[1] == "github-credential-helper" {
+		if err := worker.RunGitCredentialHelper(ctx, os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	env := environment()
 	if err := validateRoleEnvironment(env); err != nil {
 		fmt.Fprintf(os.Stderr, "builder role configuration failed: %v\n", err)
@@ -126,6 +132,23 @@ func runDispatcher(ctx context.Context, env map[string]string) error {
 	if err != nil {
 		return err
 	}
+	resolverDone := make(chan struct{})
+	if prIssuer, ok := githubCredentials.(controlplane.GitHubPullRequestCredentialIssuer); ok {
+		githubClient, clientErr := controlplane.NewGitHubPullRequestClient(env["RAIBITSERVER_GITHUB_API_URL"], nil)
+		if clientErr != nil {
+			return clientErr
+		}
+		resolver, resolverErr := controlplane.NewPreviewResolver(store, prIssuer, githubClient, nil)
+		if resolverErr != nil {
+			return resolverErr
+		}
+		go func() {
+			defer close(resolverDone)
+			runPreviewResolverLoop(ctx, resolver, mapValueOr(env, "RAIBITSERVER_PREVIEW_RESOLVER_WORKER_ID", "raibitserver-preview-resolver"), durationSecondsMap(env, "RAIBITSERVER_PREVIEW_RESOLVER_INTERVAL_SECONDS", 5*time.Second))
+		}()
+	} else {
+		close(resolverDone)
+	}
 	server := &http.Server{
 		Addr:              mapValueOr(env, "RAIBITSERVER_DISPATCH_ADDR", ":8443"),
 		Handler:           controlplane.NewDispatchHandlerWithGitHubCredentials(store, sessionTTL, githubCredentials),
@@ -147,6 +170,7 @@ func runDispatcher(ctx context.Context, env map[string]string) error {
 	err = server.ListenAndServeTLS("", "")
 	if errors.Is(err, http.ErrServerClosed) {
 		<-shutdownDone
+		<-resolverDone
 		return nil
 	}
 	return err
