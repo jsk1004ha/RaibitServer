@@ -33,6 +33,7 @@ export const EvidenceIdentitySchema = z.strictObject({
   approvedInputSha256: z.literal(APPROVED_INPUT_SHA256),
   operatorContractDigest: Sha256Schema,
   operatorInputFingerprint: Sha256Schema,
+  domainInputDigest: Sha256Schema.optional(),
 }).readonly();
 const RepositorySchema = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/).max(256);
 const BranchSchema = z.string().min(1).max(256).regex(/^[^\u0000-\u001f\u007f]+$/);
@@ -73,6 +74,40 @@ export const EvidenceArtifactSchema = z.strictObject({
   path: EvidenceArtifactPathSchema,
   sha256: Sha256Schema,
   redacted: z.literal(true),
+}).readonly();
+const DomainEvidenceHostnameSchema = z.string().min(3).max(253).regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/);
+const DomainEvidenceAddressSchema = z.string().regex(/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$|^[0-9a-f:]+$/i);
+export const DomainEvidenceProofSchema = z.strictObject({
+  schema: z.literal('raibitserver.production-domain-proof/v1'),
+  domainInputDigest: Sha256Schema.optional(),
+  fixtureZone: DomainEvidenceHostnameSchema,
+  hostname: DomainEvidenceHostnameSchema,
+  domainId: IdentifierSchema, organizationId: IdentifierSchema, projectId: IdentifierSchema,
+  serviceId: IdentifierSchema, deploymentId: IdentifierSchema,
+  verificationVersion: z.number().int().positive(), desiredGeneration: z.number().int().positive(),
+  controllerLeaseGeneration: z.number().int().positive(),
+  ownership: z.strictObject({ externalRecursive: z.literal(true), authoritative: z.literal(true), version: z.number().int().positive() }).readonly(),
+  resolution: z.strictObject({ addresses: z.array(DomainEvidenceAddressSchema).min(1).readonly(),
+    reboundAddresses: z.array(DomainEvidenceAddressSchema).min(1).readonly(), stable: z.literal(true) }).readonly(),
+  certificate: z.strictObject({ chainVerified: z.literal(true), configuredIssuer: IdentifierSchema, issuer: IdentifierSchema,
+    dnsNames: z.array(DomainEvidenceHostnameSchema).length(1).readonly() }).readonly(),
+  https: z.strictObject({ host: DomainEvidenceHostnameSchema, servername: DomainEvidenceHostnameSchema,
+    statusCode: z.number().int().min(200).max(299), responseMarkerSha256: Sha256Schema,
+    serviceId: IdentifierSchema, deploymentId: IdentifierSchema }).readonly(),
+  revalidation: z.strictObject({ dailySimulationObserved: z.literal(true), failuresObserved: z.literal(3),
+    disabledAfterFailures: z.literal(true), ownershipRecovered: z.literal(true) }).readonly(),
+  cleanup: z.strictObject({ txtAbsent: z.literal(true), dnsAbsent: z.literal(true), certificateAbsent: z.literal(true),
+    routeAbsent: z.literal(true), generatedFallbackStatusCode: z.number().int().min(200).max(299),
+    generatedFallbackMarkerSha256: Sha256Schema }).readonly(),
+}).superRefine((value, context) => {
+  const exactHost = value.hostname.endsWith(`.${value.fixtureZone}`) && value.hostname !== value.fixtureZone;
+  const sameAddresses = JSON.stringify([...value.resolution.addresses].sort()) === JSON.stringify([...value.resolution.reboundAddresses].sort());
+  if (!exactHost || value.ownership.version !== value.verificationVersion || !sameAddresses
+    || value.certificate.dnsNames[0] !== value.hostname || value.certificate.issuer !== value.certificate.configuredIssuer
+    || value.https.host !== value.hostname || value.https.servername !== value.hostname
+    || value.https.serviceId !== value.serviceId || value.https.deploymentId !== value.deploymentId) {
+    context.addIssue({ code: 'custom', message: 'domain proof bindings do not match' });
+  }
 }).readonly();
 export const BindingJournalSnapshotSchema = z.strictObject({
   schema: z.literal('raibitserver.production-evidence-binding-journal-snapshot/v1'),
@@ -136,6 +171,7 @@ export const EvidenceFragmentSchema = z.strictObject({
   cleanup: EvidenceCleanupSchema,
   resourceScope: ResourceEvidenceScopeSchema.optional(),
   bindingsDigest: Sha256Schema.optional(),
+  domainProof: DomainEvidenceProofSchema.optional(),
 }).readonly();
 export const ProductionEvidenceSchema = z.strictObject({
   schema: z.literal('raibitserver.production-evidence/v1'),

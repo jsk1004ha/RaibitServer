@@ -139,6 +139,10 @@ export function verifyManifest(value, options = {}) {
     if (selected && !['resources', 'domains'].includes(selected)) return fail('invalid_component');
     for (const fragment of manifest.fragments) {
       if (fragment.resourceScope && fragment.component !== 'resources') return fail('resource_scope_mismatch');
+      if (fragment.identity.domainInputDigest
+        && (fragment.component === 'domains' && fragment.status === 'PASS') !== Boolean(fragment.domainProof)) return fail('invalid_domain_proof');
+      if (fragment.domainProof && fragment.component !== 'domains') return fail('invalid_domain_proof');
+      if (fragment.domainProof && fragment.domainProof.domainInputDigest !== fragment.identity.domainInputDigest) return fail('invalid_domain_proof');
       switch (fragment.resourceScope?.kind) {
         case undefined: case 'full': break;
         case 'lifecycle-only': {
@@ -186,6 +190,7 @@ export function verifyManifest(value, options = {}) {
     if (!componentMode && manifest.fixture) return fail('fixture_not_release_evidence');
     if (!manifest.fixture && manifest.preflight.status !== 'PASS') return fail('missing_credentials');
     if (!componentMode) verifyReleaseCapabilities(manifest.capabilitySnapshot);
+    if (!componentMode && manifest.fragments.some((fragment) => fragment.component === 'domains' && fragment.status === 'PASS' && !fragment.domainProof)) return fail('invalid_domain_proof');
     return { valid: true, releaseEligible: !componentMode, reason: componentMode ? 'component_only' : 'eligible', manifestDigest: digest(manifest) };
   } catch (error) {
     if (error instanceof EvidenceError) return fail(error.reason);

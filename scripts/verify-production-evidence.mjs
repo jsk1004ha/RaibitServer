@@ -17,15 +17,17 @@ export async function verifyEvidenceFile(file, options = {}) {
     const snapshot = await authority.snapshot();
     if (snapshot.runIdentitySha256 !== digest(manifest.identity)) throw new EvidenceError('identity_mismatch');
     if (options.verifiedBindingJournal) verifyReceiptProvenance(await authority.loadProgression({ journalAuthority: options.journalAuthority }), options.verifiedBindingJournal);
-  } else if (!manifest.fixture && ['train-a', 'final'].includes(manifest.profile)) throw new EvidenceError('receipt_authority_unavailable');
+  } else if (!options.fragment && !manifest.fixture && ['train-a', 'final'].includes(manifest.profile)) throw new EvidenceError('receipt_authority_unavailable');
   const result = verifyManifest(manifest, options);
   if (!result.valid) throw new EvidenceError(result.reason);
   if (!manifest.fixture) await checkRun(path.dirname(resolved), manifest);
   await verifyArtifacts(path.dirname(resolved), manifest);
   await verifyResourceLifecycle(path.dirname(resolved), manifest);
-  if (manifest.profile === 'train-a' || manifest.profile === 'final') {
+  if ((manifest.profile === 'train-a' || manifest.profile === 'final') && !options.fragment) {
     await verifyFragmentFiles(path.dirname(resolved), manifest);
     await verifyRunReceipts(path.dirname(resolved), manifest);
+  } else if (options.fragment) {
+    await verifyFragmentFiles(path.dirname(resolved), manifest);
   }
   return result;
 }
