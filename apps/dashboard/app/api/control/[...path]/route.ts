@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { dashboardApiContext } from '../../../../lib/api';
+import { githubConflictRecovery } from '../../../../lib/control-plane-errors.js';
 import {
   GITHUB_OAUTH_STATE_COOKIE_NAME,
   GITHUB_OAUTH_VERIFIER_COOKIE_NAME,
@@ -193,7 +194,8 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
       if (upstream.status === 401) clearSessionCookie(response);
       return response;
     }
-    const response = NextResponse.json({ error: code }, { status: upstream.status });
+    const conflict = githubConflictRecovery(payload, upstream.status);
+    const response = NextResponse.json(conflict || { error: code }, { status: upstream.status });
     if (upstream.status === 401) clearSessionCookie(response);
     copyRetryAfterHeader(response, upstream.headers.get('retry-after'));
     return response;

@@ -71,6 +71,7 @@ const githubRepositories = Object.freeze(Array.from({ length: 125 }, (_, index) 
     accessState: index === 74 || index === 124 ? 'REVOKED' : 'ACCESSIBLE', generation: 12,
   });
 }));
+const githubMutationResults = new Map();
 const deployment = {
   id: 'dep_fixture_ready', serviceId: service.id, deploymentType: 'production', status: 'READY',
   imageUrl: 'registry.fixture.invalid/raibit/web:fixed', imageDigest: 'sha256:fixture0001', commitSha: '0123456789abcdef0123456789abcdef01234567', createdAt: FIXED_TIME,
@@ -171,6 +172,10 @@ export function resetCustomDomainFixture() {
   customDomains = initialDomains;
 }
 
+export function resetGitHubMutationFixture() {
+  githubMutationResults.clear();
+}
+
 export function responseFor({ token, method, pathname, searchParams, publicSiteScenario = DEFAULT_PUBLIC_SITE_SCENARIO, body = {} }) {
   if (pathname === '/health') return json(200, { status: 'ok', checkedAt: FIXED_TIME });
   if (pathname === '/public/sites') return publicSitesResponse(publicSiteScenario, searchParams);
@@ -207,13 +212,13 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   if (domainRoute) return customDomainResponse({ actor, body, method, domainId: decodeURIComponent(domainRoute[1]), action: domainRoute[2] || 'status' });
   if (pathname === `/projects/${project.id}/settings/deletion`) return projectDeletionResponse({ actor, body, method });
   if (pathname === `/projects/${project.id}/settings`) return projectSettingsResponse({ actor, body, method });
-  if (method === 'POST' && pathname === '/github/repositories/import') return json(201, {
+  if (method === 'POST' && pathname === '/github/repositories/import') return githubMutationResponse('import', body, importConflict(body), 201, {
     projectId: project.id, serviceId: service.id, integrationId: githubIntegration.id, repositoryId: githubRepository.id,
   });
-  if (method === 'POST' && pathname === `/projects/${project.id}/services/${service.id}/github`) return json(200, {
+  if (method === 'POST' && pathname === `/projects/${project.id}/services/${service.id}/github`) return githubMutationResponse('attach', body, attachConflict(body), 200, {
     projectId: project.id, serviceId: service.id, integrationId: githubIntegration.id, repositoryId: githubRepository.id, branch: service.branch,
   });
-  if (method === 'POST' && pathname === '/github/repositories/raibit%2Ffixture-app/sync') return json(200, {
+  if (method === 'POST' && pathname === '/github/repositories/raibit%2Ffixture-app/sync') return githubMutationResponse('sync', body, syncConflict(body), 200, {
     installationId: githubInstallation.installationId, repositoryId: githubRepository.id,
     fullName: githubRepository.fullName, defaultBranch: githubRepository.defaultBranch, synced: true,
   });
@@ -269,6 +274,45 @@ function githubCatalogResponse(searchParams) {
 
 function normalizeRepositoryQuery(value) {
   return value.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 200);
+}
+
+function githubMutationResponse(operation, body, conflict, status, success) {
+  if (conflict) return json(409, conflict);
+  const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey : '';
+  if (!idempotencyKey) return json(status, success);
+  const fingerprint = JSON.stringify(Object.entries(body).filter(([key]) => key !== 'idempotencyKey').sort(([left], [right]) => left.localeCompare(right)));
+  const existing = githubMutationResults.get(`${operation}:${idempotencyKey}`);
+  if (existing && existing.fingerprint !== fingerprint) return json(409, githubConflict('GITHUB_IDEMPOTENCY_CONFLICT', { action: 'CANCEL' }));
+  if (existing) return existing.response;
+  const response = json(status, success);
+  githubMutationResults.set(`${operation}:${idempotencyKey}`, { fingerprint, response });
+  return response;
+}
+
+function importConflict(body) {
+  if (body.repositoryId === 'repo_fixture_duplicate') return githubConflict('GITHUB_DUPLICATE_IMPORT', { action: 'OPEN_EXISTING_PROJECT', projectId: project.id });
+  if (body.serviceSlug === 'foreign') return githubConflict('GITHUB_DUPLICATE_IMPORT', { action: 'CANCEL' });
+  if (body.serviceSlug === 'taken') return githubConflict('GITHUB_PROJECT_SLUG_COLLISION', { action: 'CHOOSE_NEW_SLUG', suggestedSlug: 'fixture-app-2' });
+  if (body.expectedCatalogGeneration === 11) return githubConflict('GITHUB_CATALOG_STALE', { action: 'REFRESH_CATALOG', installationId: githubInstallation.installationId });
+  return null;
+}
+
+function attachConflict(body) {
+  if (body.branch === 'changed') return githubConflict('GITHUB_DEFAULT_BRANCH_CHANGED', { action: 'SELECT_BRANCH', repositoryId: githubRepository.id, currentDefaultBranch: 'trunk', requestedBranch: 'main' });
+  if (body.branch === 'missing') return githubConflict('GITHUB_DEFAULT_BRANCH_MISSING', { action: 'SELECT_BRANCH', repositoryId: githubRepository.id });
+  if (body.repositoryId === 'repo_fixture_bound') return githubConflict('GITHUB_SERVICE_ALREADY_BOUND', { action: 'OPEN_EXISTING_SERVICE', projectId: project.id, serviceId: service.id });
+  if (body.integrationId === 'ghi_fixture_mismatch') return githubConflict('GITHUB_INSTALLATION_MISMATCH', { action: 'REATTACH_INSTALLATION', installationId: githubInstallation.installationId });
+  return null;
+}
+
+function syncConflict(body) {
+  if (body.idempotencyKey === 'fixture-revoked') return githubConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG', installationId: githubInstallation.installationId });
+  if (body.idempotencyKey === 'fixture-disconnected') return githubConflict('GITHUB_SOURCE_DISCONNECTED', { action: 'REATTACH_INSTALLATION', installationId: githubInstallation.installationId });
+  return null;
+}
+
+function githubConflict(code, recovery) {
+  return { statusCode: 409, message: code, error: code, code, retryable: false, terminal: true, permission: false, recovery };
 }
 
 function json(status, body) { return { status, body }; }
