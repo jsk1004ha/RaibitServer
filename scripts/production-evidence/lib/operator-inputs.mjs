@@ -70,9 +70,13 @@ export function parseOperatorInputs(value, contract) {
   if (!parsed.success) throw new EvidenceError('missing_credentials');
   const inputs = parsed.data;
   if (Object.keys(inputs.selectors).length !== contract.selectors.length || contract.selectors.some(({ name, type }) => !validSelector(type, inputs.selectors[name] ?? ''))) throw new EvidenceError('missing_credentials');
-  if (inputs.secretRefs.length !== contract.secretBindings.length) throw new EvidenceError('missing_credentials');
+  let missingSigning = false;
   for (const binding of contract.secretBindings) {
     const refs = inputs.secretRefs.filter((item) => item.role === binding.role && item.binding === binding.binding && item.kind === binding.kind);
+    if (binding.role === 'signing' && refs.length === 0) {
+      missingSigning = true;
+      continue;
+    }
     if (refs.length !== 1) throw new EvidenceError('missing_credentials');
     switch (refs[0].kind) {
       case 'helm-existingSecret':
@@ -82,6 +86,8 @@ export function parseOperatorInputs(value, contract) {
       default: throw new EvidenceError('missing_credentials');
     }
   }
+  if (inputs.secretRefs.length !== contract.secretBindings.length - (missingSigning ? 1 : 0)) throw new EvidenceError('missing_credentials');
+  if (missingSigning) throw new EvidenceError('missing_secret_ref');
   return Object.freeze(inputs);
 }
 export function inputsFromEnvironment(environment, secretRefs, contract) {

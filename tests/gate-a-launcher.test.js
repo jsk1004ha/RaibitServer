@@ -8,7 +8,7 @@ import test from 'node:test';
 import { parseCiExecutionContext, parseCiInvocation, parseReleaseTag } from '../scripts/production-evidence/lib/ci-invocation.mjs';
 import { runMissingSigningFixture } from '../scripts/production-evidence/preflight.mjs';
 import { runGateA, validateReleasePolicy } from '../scripts/run-gate-a.mjs';
-import { digest } from '../scripts/production-evidence/lib/operator-inputs.mjs';
+import { digest, inputsFromEnvironment, loadOperatorContract, parseOperatorInputs } from '../scripts/production-evidence/lib/operator-inputs.mjs';
 
 const sha = 'a'.repeat(40), blobSha = 'b'.repeat(40), nonce = '123e4567-e89b-42d3-a456-426614174000';
 const tag = `raibit-gate-a-${sha}-missing-secret-${nonce}`;
@@ -78,6 +78,22 @@ test('Given split creation and immutable tag rules, When release policy is parse
   // When policy binds the authenticated user, Then the split policy is accepted and extra access is rejected.
   assert.doesNotThrow(() => validateReleasePolicy({ environment, policies, rulesets, actor: { id: 7, type: 'User' } }));
   assert.throws(() => validateReleasePolicy({ environment, policies: [...policies, { type: 'branch', name: '*' }], rulesets, actor: { id: 7, type: 'User' } }), /environment_policy_mismatch/);
+  const excluded = structuredClone(rulesets);
+  excluded[1].conditions.ref_name.exclude = ['~ALL'];
+  assert.throws(() => validateReleasePolicy({ environment, policies, rulesets: excluded, actor: { id: 7, type: 'User' } }), /tag_ruleset_mismatch/);
+});
+
+test('Given canonical operator inputs, When only signing is absent, Then every loader reports the precise failure', async () => {
+  // Given an otherwise-valid committed value with only its signing reference absent.
+  const contract = await loadOperatorContract();
+  const missing = JSON.parse(await readFile(new URL('../test-fixtures/production-evidence/gate-a-missing-secret.json', import.meta.url), 'utf8'));
+  // When both the value parser and environment loader receive that original value, Then they classify the same missing binding.
+  assert.throws(() => parseOperatorInputs(missing, contract), (error) => error.reason === 'missing_secret_ref');
+  assert.throws(() => inputsFromEnvironment(missing.selectors, missing.secretRefs, contract), (error) => error.reason === 'missing_secret_ref');
+  // Then a structurally different invalid input remains a generic credential failure.
+  const invalid = structuredClone(missing);
+  delete invalid.selectors[contract.selectors[0].name];
+  assert.throws(() => parseOperatorInputs(invalid, contract), (error) => error.reason === 'missing_credentials');
 });
 
 test('Given an otherwise-valid fixture, When signing reference is absent, Then output is ineligible and cleaned', async (t) => {
@@ -131,7 +147,7 @@ test('Given a negative run, When watch fails, Then metadata and evidence still d
     if (joined.includes('/pulls ')) return { stdout: JSON.stringify([[{ number: 3, head: { sha }, base: { ref: 'main', sha: 'c'.repeat(40) } }]]), exitCode: 0 };
     if (joined.includes('/deployment-branch-policies')) return { stdout: JSON.stringify([{ branch_policies: [{ type: 'tag', name: 'raibit-gate-a-*' }] }]), exitCode: 0 };
     if (joined.includes('/environments/raibit-production-evidence')) return { stdout: JSON.stringify({ deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }), exitCode: 0 };
-    if (joined.includes('/rulesets?')) return { stdout: JSON.stringify([{ id: 9 }, { id: 10 }]), exitCode: 0 };
+    if (joined.includes('/rulesets ') && joined.includes('--paginate --slurp')) return { stdout: JSON.stringify([[{ id: 9 }, { id: 10 }]]), exitCode: 0 };
     if (joined.includes('/rulesets/9')) return { stdout: JSON.stringify({ target: 'tag', enforcement: 'active', conditions: { ref_name: { include: ['refs/tags/raibit-gate-a-*'], exclude: [] } }, rules: [{ type: 'creation' }], bypass_actors: [{ actor_id: 7, actor_type: 'User', bypass_mode: 'always' }] }), exitCode: 0 };
     if (joined.includes('/rulesets/10')) return { stdout: JSON.stringify({ target: 'tag', enforcement: 'active', conditions: { ref_name: { include: ['refs/tags/raibit-gate-a-*'], exclude: [] } }, rules: [{ type: 'update' }, { type: 'deletion' }], bypass_actors: [] }), exitCode: 0 };
     if (joined.includes('/contents/')) return { stdout: JSON.stringify({ sha: blobSha }), exitCode: 0 };
@@ -161,5 +177,7 @@ test('Given a negative run, When watch fails, Then metadata and evidence still d
   assert.equal(result.releaseEligible, false);
   assert.ok(calls.some((call) => call.join(' ').includes('/actions/runs/42')));
   assert.ok(calls.some((call) => call.slice(0, 3).join(' ') === 'gh run download'));
+  assert.ok(calls.some((call) => call.some((argument) => argument.endsWith('/rulesets'))
+    && call.includes('--paginate') && call.includes('--slurp')));
   assert.ok(calls.filter(([file, command]) => file === 'gh' && command === 'api').every((call) => call.includes('--method') && call.includes('GET')));
 });

@@ -32,7 +32,8 @@ export function validateReleasePolicy({ environment, policies, rulesets, actor }
     || policies.length !== 1 || policies[0].type !== 'tag' || policies[0].name !== 'raibit-gate-a-*') fail('environment_policy_mismatch');
   const applicable = rulesets.filter((item) => item.target === 'tag' && item.enforcement === 'active'
     && item.conditions?.ref_name?.include?.some((pattern) => ['~ALL', 'refs/tags/*', 'refs/tags/raibit-gate-a-*'].includes(pattern))
-    && !item.conditions.ref_name.exclude?.includes('refs/tags/raibit-gate-a-*'));
+    && (item.conditions.ref_name.exclude === undefined
+      || (Array.isArray(item.conditions.ref_name.exclude) && item.conditions.ref_name.exclude.length === 0)));
   const actorBypass = (item) => item.bypass_actors?.filter((entry) => entry.actor_type === 'User'
     && entry.actor_id === actor.id && entry.bypass_mode === 'always') ?? [];
   const creation = applicable.filter((item) => item.rules?.some(({ type }) => type === 'creation'));
@@ -86,8 +87,9 @@ export async function runGateA(args, dependencies = {}) {
   if (matches.length !== 1) fail('candidate_pull_request_mismatch');
   const pull = matches[0], environment = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/environments/raibit-production-evidence`], 'environment_policy_unavailable');
   const policyPages = await ghJson(run, ['api', '--method', 'GET', '--paginate', '--slurp', `repos/${input.repo}/environments/raibit-production-evidence/deployment-branch-policies`, '-f', 'per_page=100'], 'environment_policy_unavailable');
-  const rulesetList = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/rulesets?includes_parents=true`], 'tag_ruleset_unavailable');
-  const rulesets = await Promise.all(rulesetList.map((item) => ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/rulesets/${item.id}`], 'tag_ruleset_unavailable')));
+  const rulesetPages = await ghJson(run, ['api', '--method', 'GET', '--paginate', '--slurp', `repos/${input.repo}/rulesets`,
+    '-f', 'includes_parents=true', '-f', 'per_page=100'], 'tag_ruleset_unavailable');
+  const rulesets = await Promise.all(rulesetPages.flat().map((item) => ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/rulesets/${item.id}`], 'tag_ruleset_unavailable')));
   validateReleasePolicy({ environment, policies: policyPages.flatMap((page) => page.branch_policies ?? page), rulesets, actor });
   const workflow = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/contents/${WORKFLOW}?ref=${candidateSha}`], 'workflow_unavailable');
   if (!/^[a-f0-9]{40}$/.test(workflow.sha)) fail('workflow_unavailable');
