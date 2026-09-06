@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import typescript from 'typescript';
 import { apiOperations } from '../../../../../packages/schemas/src/api-contract.ts';
+import { ResourceAvailabilitySchema } from '../../../../../packages/schemas/src/resource-execution.ts';
 import {
   DEFAULT_PUBLIC_SITE_SCENARIO,
   FIXTURE_IDS,
@@ -40,6 +41,17 @@ async function parseFixtureHistory(value) {
     await rm(directory, { force: true, recursive: true });
   }
 }
+
+test('Given the local PostgreSQL fixture, when ADMIN and USER read its availability, then only ADMIN can preview a plan', () => {
+  const admin = request('GET', `/resources/${FIXTURE_IDS.resource}`, TOKENS.admin);
+  const user = request('GET', `/resources/${FIXTURE_IDS.resource}`, TOKENS.user);
+  const expected = { environment: 'local', live: false, preview: true, reasonCode: 'PROVIDER_IMAGE_UNAVAILABLE' };
+
+  assert.equal(admin.status, 200);
+  assert.deepEqual(ResourceAvailabilitySchema.parse(admin.body.availability), { ...expected, permitted: true });
+  assert.equal(user.status, 200);
+  assert.deepEqual(ResourceAvailabilitySchema.parse(user.body.availability), { ...expected, permitted: false });
+});
 
 test('Given OWNER and ADMIN fixture sessions, when a member role is changed, then the changed membership is returned by the next list read', () => {
   resetOrganizationFixture();

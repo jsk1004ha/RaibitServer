@@ -1,3 +1,6 @@
+import { can } from '../../../../../packages/core/src/rbac.ts';
+import { resourceAvailability } from '../../../../../packages/core/src/resource-execution.ts';
+
 export const FIXED_TIME = '2026-08-31T03:00:00.000Z';
 export const SESSION_COOKIE = 'raibitserver_session';
 export const PUBLIC_SITE_SCENARIOS = Object.freeze(['populated', 'empty', 'partial', 'long']);
@@ -107,6 +110,7 @@ const deploymentFixtures = [
 const resource = {
   id: 'res_fixture_pg', projectId: project.id, name: 'primary-postgres', type: 'database', engine: 'postgresql', status: 'READY', provider: 'fixture', plan: 'shared-small', region: 'local',
 };
+const fixtureResourceEnvironment = Object.freeze({ RAIBITSERVER_RESOURCE_ENVIRONMENT: 'local' });
 const resourceConsole = {
   schema: { engine: 'postgresql', tables: 2, connectionInfo: { databaseUrl: 'postgresql://provider-managed@fixture.invalid/primary' } },
   tables: [{ name: 'deployments', type: 'table' }, { name: 'events_<img src=x onerror=fixture-hostile-table>', type: 'table' }],
@@ -266,7 +270,7 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   if (pathname === `/services/${service.id}/replacements`) return serviceReplacementResponse({ body, method });
   const deploymentFixture = deploymentFixtureForPath(pathname);
   if (deploymentFixture) return deploymentResponse({ actor, body, deploymentFixture, method, pathname, state });
-  if (pathname === `/resources/${resource.id}`) return json(200, resource);
+  if (pathname === `/resources/${resource.id}`) return json(200, { ...resource, availability: { ...resourceAvailability(resource.engine, fixtureResourceEnvironment), permitted: can(actor.role, 'db:create') } });
   if (pathname === `/resources/${resource.id}/backups`) return resourceBackupResponse({ body, method, pathname, state });
   if (pathname.startsWith('/backups/')) return resourceBackupResponse({ body, method, pathname, state });
   if (pathname.startsWith(`/resources/${resource.id}/console/`)) return resourceConsoleResponse({ body, method, pathname, state });
