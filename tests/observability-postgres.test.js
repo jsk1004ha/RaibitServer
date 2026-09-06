@@ -39,8 +39,9 @@ test('real PostgreSQL writes and Nest HTTP JSON/SSE use the same masked bounded 
     assert.equal(JSON.stringify(stored).includes('FORBIDDEN_'),false);
     assert.equal(JSON.stringify(stored).includes('Rk9SQklEREVO'),false);
     const deployment = await repository.prisma.deployment.create({data:{serviceId:service.id,projectId:project.id}});
-    const runtimeSource = {deploymentId:deployment.id,podName:'postgres-bound-pod',sourceInstanceId:'postgres-bound-source',containerName:'app'};
-    for (let i=0;i<80;i++) await repository.appendRuntimeLog({serviceId:service.id,...runtimeSource,line:'x'.repeat(16000)});
+    const runtimeSource = {deploymentId:deployment.id,podName:'postgres-bound-pod',podUid:'postgres-bound-source',containerName:'app'};
+    const startedAt = Date.now();
+    for (let i=0;i<80;i++) await repository.prisma.runtimeLog.create({data:{serviceId:service.id,...runtimeSource,line:'x'.repeat(16000),timestamp:new Date(startedAt+i)}});
     // When authenticated clients query the production routes and read the first complete SSE frame.
     const response = await fetch(runtime.baseUrl+'/services/'+service.id+'/logs?limit=1000',{headers});
     assert.equal(response.status,200);
