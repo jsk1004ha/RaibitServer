@@ -73,6 +73,8 @@ orchestrator:
   replicas: 1
   execute: false
   reconcileIntervalSeconds: 5
+  domainClusterIssuer: ""
+  domainRetrySeconds: 300
 builder:
   # Local/default installs keep external build infrastructure disabled. A
   # production release must set this to exactly 1; dispatcher sessions are

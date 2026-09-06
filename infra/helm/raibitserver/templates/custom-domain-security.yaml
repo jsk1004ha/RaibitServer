@@ -1,0 +1,90 @@
+{{- $issuer := .Values.orchestrator.domainClusterIssuer | trim -}}
+{{- $ingressClassName := .Values.ingress.className | trim -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-orchestrator-custom-domains
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["ingresses"]
+      - apiGroups: ["cert-manager.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["certificates"]
+  matchConditions:
+    - name: orchestrator-service-account
+      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-orchestrator'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+    - name: custom-domain-object
+      expression: >-
+        has((request.operation == 'DELETE' ? oldObject : object).metadata.labels) &&
+        'raibitserver.io/custom-domain' in (request.operation == 'DELETE' ? oldObject : object).metadata.labels &&
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['raibitserver.io/custom-domain'] == 'true'
+  variables:
+    - name: target
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: labels
+      expression: "variables.target.metadata.labels"
+    - name: hostname
+      expression: "variables.target.kind == 'Certificate' ? variables.target.spec.dnsNames[0] : variables.target.spec.rules[0].host"
+  validations:
+    - expression: >-
+        has(namespaceObject.metadata.labels) &&
+        namespaceObject.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        namespaceObject.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        namespaceObject.metadata.labels['raibitserver.io/namespace-kind'] == 'application' &&
+        namespaceObject.metadata.labels['raibitserver.io/project-id'] == variables.labels['raibitserver.io/project-id']
+      message: "custom domain objects are restricted to their managed application namespace"
+    - expression: >-
+        variables.labels.size() == 7 &&
+        ['app.kubernetes.io/managed-by', 'raibitserver.io/custom-domain', 'raibitserver.io/domain-id',
+         'raibitserver.io/organization-id', 'raibitserver.io/project-id', 'raibitserver.io/service-id',
+         'raibitserver.io/domain-generation'].all(key, key in variables.labels) &&
+        variables.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        variables.labels['raibitserver.io/custom-domain'] == 'true' &&
+        variables.labels['raibitserver.io/domain-id'] != '' && variables.labels['raibitserver.io/organization-id'] != '' &&
+        variables.labels['raibitserver.io/project-id'] != '' && variables.labels['raibitserver.io/service-id'] != '' &&
+        variables.labels['raibitserver.io/domain-generation'].matches('^[1-9][0-9]*$')
+      message: "custom domain objects require exact tenant and generation ownership labels"
+    - expression: >-
+        request.operation != 'UPDATE' ||
+        ['raibitserver.io/custom-domain', 'raibitserver.io/domain-id', 'raibitserver.io/organization-id',
+         'raibitserver.io/project-id', 'raibitserver.io/service-id'].all(key, object.metadata.labels[key] == oldObject.metadata.labels[key])
+      message: "custom domain ownership labels are immutable"
+    - expression: >-
+        variables.target.metadata.name.startsWith('custom-domain-') &&
+        variables.hostname.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$') &&
+        !variables.hostname.startsWith('*.')
+      message: "custom domain objects require one exact non-wildcard hostname"
+    - expression: >-
+        variables.target.kind != 'Certificate' ||
+        (variables.target.spec.dnsNames.size() == 1 &&
+        variables.target.spec.secretName == variables.target.metadata.name + '-tls' &&
+        variables.target.spec.issuerRef.kind == 'ClusterIssuer' && variables.target.spec.issuerRef.group == 'cert-manager.io' &&
+        variables.target.spec.issuerRef.name == {{ $issuer | squote }})
+      message: "custom domain Certificates require the configured ClusterIssuer and exact SAN"
+    - expression: >-
+        variables.target.kind != 'Ingress' ||
+        (variables.target.metadata.annotations.size() == 1 &&
+        variables.target.metadata.annotations['raibitserver.io/hostname'] == variables.hostname &&
+        variables.target.spec.ingressClassName == {{ $ingressClassName | squote }} &&
+        variables.target.spec.tls.size() == 1 && variables.target.spec.tls[0].hosts == [variables.hostname] &&
+        variables.target.spec.tls[0].secretName == variables.target.metadata.name + '-tls' &&
+        variables.target.spec.rules.size() == 1 && variables.target.spec.rules[0].http.paths.size() == 1 &&
+        variables.target.spec.rules[0].http.paths[0].path == '/' && variables.target.spec.rules[0].http.paths[0].pathType == 'Prefix' &&
+        variables.target.spec.rules[0].http.paths[0].backend.service.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') &&
+        variables.target.spec.rules[0].http.paths[0].backend.service.port.number >= 1 &&
+        variables.target.spec.rules[0].http.paths[0].backend.service.port.number <= 65535)
+      message: "custom domain Ingresses require exact TLS and one tenant service backend"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-orchestrator-custom-domains
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-orchestrator-custom-domains
+  validationActions: ["Deny"]

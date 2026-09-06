@@ -76,6 +76,9 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses", "networkpolicies"]
     verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -100,6 +103,12 @@ spec:
   matchConditions:
     - name: orchestrator-service-account
       expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-orchestrator'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+    - name: exclude-custom-domains
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).kind != 'Ingress' ||
+        !has((request.operation == 'DELETE' ? oldObject : object).metadata.labels) ||
+        !('raibitserver.io/custom-domain' in (request.operation == 'DELETE' ? oldObject : object).metadata.labels) ||
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['raibitserver.io/custom-domain'] != 'true'
   variables:
     - name: target
       expression: "request.operation == 'DELETE' ? oldObject : object"
