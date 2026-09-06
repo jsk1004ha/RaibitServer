@@ -4,9 +4,13 @@ import { DnsLabelSchema, EvidenceIdentitySchema, EvidenceStatusSchema, Sha256Sch
 export const RESOURCE_LIFECYCLE_ENGINES = ['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey'] as const;
 export const RESOURCE_LIFECYCLE_ASSERTIONS = ['provision', 'authenticated_health', 'attach_query', 'detach', 'resource_delete'] as const;
 const ObjectIdentitySchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+const ResourceLifecycleIdentitySchema = EvidenceIdentitySchema.unwrap().extend({
+  organizationId: ObjectIdentitySchema, projectId: ObjectIdentitySchema, serviceId: ObjectIdentitySchema,
+  deploymentId: ObjectIdentitySchema, resourceId: ObjectIdentitySchema,
+}).readonly();
 export const ResourceLifecycleReceiptSchema = z.strictObject({
   schema: z.literal('raibitserver.resource-lifecycle/v1'), engine: z.enum(RESOURCE_LIFECYCLE_ENGINES),
-  level: z.literal('L3'), provenance: z.enum(['credentialed', 'fixture']), identity: EvidenceIdentitySchema,
+  level: z.literal('L3'), provenance: z.enum(['credentialed', 'fixture']), identity: ResourceLifecycleIdentitySchema,
   providerImage: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/), namespace: DnsLabelSchema,
   objects: z.strictObject({
     workloadUid: ObjectIdentitySchema, podUid: ObjectIdentitySchema, pvcUid: ObjectIdentitySchema, secretUid: ObjectIdentitySchema,

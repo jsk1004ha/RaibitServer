@@ -25,9 +25,10 @@ async function specimen(t) {
   const base = Date.now() - 2000;
   const { manifest } = componentSample('resources', new Date(base).toISOString());
   const fragment = manifest.fragments[0];
+  const resourceContext = { organizationId: 'organization-fixture', projectId: 'project-fixture', serviceId: 'service-fixture', deploymentId: 'deployment-fixture' };
   fragment.resourceScope = { kind: 'lifecycle-only', engineReceiptPaths: engines.map(engine => `${engine}.json`), sqliteReceiptPath: 'sqlite.json' };
   const receipts = engines.map((engine, index) => {
-    const identity = { ...manifest.identity, resourceId: `resource-${engine}` };
+    const identity = { ...manifest.identity, ...resourceContext, resourceId: `resource-${engine}` };
     const nonce = randomUUID();
     const checksum = digest({ runId: identity.runId, engine, resourceId: identity.resourceId, nonce });
     return {
@@ -78,6 +79,8 @@ async function persist(sample) {
   }
   const file = path.join(sample.directory, 'manifest.json');
   await writeFile(file, JSON.stringify(sample.manifest));
+  const fragment = sample.manifest.fragments[0];
+  await writeFile(path.join(sample.directory, `${fragment.component}.json`), JSON.stringify(fragment));
   return file;
 }
 test('Given six fixture engines and real isolated SQLite, When public lifecycle component verification runs, Then only component validity succeeds', async t => {
@@ -184,6 +187,10 @@ test('Given a modified physical receipt, When its old digest is retained, Then c
 test('Given a symlinked receipt, When physical evidence is verified, Then the path boundary fails', async t => {
   const sample = await specimen(t), file = await persist(sample);
   await rm(path.join(sample.directory, 'mysql.json'));
-  await symlink(path.join(sample.directory, 'postgresql.json'), path.join(sample.directory, 'mysql.json'));
+  try { await symlink(path.join(sample.directory, 'postgresql.json'), path.join(sample.directory, 'mysql.json')); }
+  catch (error) {
+    if (process.platform === 'win32' && error?.code === 'EPERM') { t.skip('Windows symlink privilege unavailable'); return; }
+    throw error;
+  }
   const result = cli(file); assert.equal(result.status, 1); assert.equal(result.stderr.trim(), 'invalid_artifact');
 });

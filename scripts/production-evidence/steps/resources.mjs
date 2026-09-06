@@ -62,12 +62,14 @@ export async function emitVerifiedLifecycleReceipts(request, context, lifecycleR
   if (new Set(managed.map(({ engine }) => engine)).size !== ENGINES.length || ENGINES.some((engine) => !managed.some((value) => value.engine === engine))) throw new StepFault('engine_identity_conflated');
   const artifacts = [];
   for (const candidate of managed) {
-    const parsed = ResourceLifecycleReceiptSchema.safeParse(candidate);
+    const resourceId = resourceIds[candidate.engine];
+    if (!graph || typeof resourceId !== 'string' || !resourceId || resourceId !== graph.resources?.[candidate.engine]) throw new StepFault('lifecycle_descriptor_invalid');
+    const observedIdentity = { organizationId: graph.organizationId, projectId: graph.projectId, serviceId: graph.serviceId, deploymentId: graph.deploymentId, resourceId };
+    if (Object.entries(observedIdentity).some(([key, value]) => Object.hasOwn(candidate.identity ?? {}, key) && candidate.identity[key] !== value)) throw new StepFault('lifecycle_descriptor_invalid');
+    const parsed = ResourceLifecycleReceiptSchema.safeParse({ ...candidate, identity: { ...candidate.identity, ...observedIdentity } });
     if (!parsed.success || !sameRunIdentity(parsed.data.identity, request.identity)
-      || (graph && (parsed.data.attachment.serviceId !== graph.serviceId || parsed.data.attachment.deploymentId !== graph.deploymentId))) throw new StepFault('lifecycle_descriptor_invalid');
+      || parsed.data.attachment.serviceId !== graph.serviceId || parsed.data.attachment.deploymentId !== graph.deploymentId) throw new StepFault('lifecycle_descriptor_invalid');
     const receipt = parsed.data;
-    const resourceId = resourceIds[receipt.engine];
-    if (typeof resourceId !== 'string' || !resourceId) throw new StepFault('lifecycle_descriptor_invalid');
     const descriptor = descriptorFor(receipt, resourceId);
     const health = await context.resourceProbe({ descriptor, engine: receipt.engine, phase: 'provider-health', nonce: receipt.native.nonce, timeoutMs: 60_000 });
     const sentinel = await context.resourceProbe({ descriptor, engine: receipt.engine, phase: 'sentinel', nonce: receipt.native.nonce, timeoutMs: 60_000 });

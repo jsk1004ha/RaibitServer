@@ -76,10 +76,11 @@ test('trusted probe emits six managed lifecycle receipts and one SQLite receipt 
   const request = await makeRequest('resources', t);
   const receipts = [...engines.map((engine) => managedReceipt(request.identity, engine)), sqliteReceipt(request.identity)];
   const resourceIds = Object.fromEntries(engines.map((engine) => [engine, `resource-${engine}`]));
+  const graph = { organizationId: 'organization-a', projectId: 'project-a', serviceId: 'service-a', deploymentId: 'deployment-a', resources: resourceIds };
   const written = [];
   const adapter = { resourceProbe: async ({ descriptor, engine, phase, nonce }) => { const receipt = receipts.find((value) => value.engine === engine); return { ...descriptor, engine, phase, nonce, authenticated: true, healthExitCode: 0, writeExitCode: 0, readExitCode: 0, inputSha256: receipt.native.inputSha256, readSha256: receipt.native.readSha256 }; },
     writeArtifact: async (component, name, value) => { written.push(value); return { path: `${component}/${name}`, sha256: hex('e'), redacted: true }; } };
-  const artifacts = await emitVerifiedLifecycleReceipts(request, adapter, receipts, resourceIds);
+  const artifacts = await emitVerifiedLifecycleReceipts(request, adapter, receipts, resourceIds, graph);
   assert.equal(artifacts.length, 7);
   assert.equal(written.filter((value) => ResourceLifecycleReceiptSchema.safeParse(value).success).length, 6);
   assert.equal(written.filter((value) => SqliteLifecycleReceiptSchema.safeParse(value).success).length, 1);
@@ -92,7 +93,11 @@ test('missing probe and descriptor splice cannot produce lifecycle evidence', as
   const receipt = managedReceipt(request.identity, 'postgresql');
   const receipts = [receipt, ...engines.slice(1).map((engine) => managedReceipt(request.identity, engine)), sqliteReceipt(request.identity)];
   const resourceIds = Object.fromEntries(engines.map((engine) => [engine, `resource-${engine}`]));
-  await assert.rejects(() => emitVerifiedLifecycleReceipts(request, { resourceProbe: async ({ descriptor, engine, phase, nonce }) => ({ ...descriptor, secretUid: 'spliced', engine, phase, nonce, authenticated: true, healthExitCode: 0 }), writeArtifact() {} }, receipts, resourceIds), /descriptor_splice/);
+  const graph = { organizationId: 'organization-a', projectId: 'project-a', serviceId: 'service-a', deploymentId: 'deployment-a', resources: resourceIds };
+  const probes = { resourceProbe: async () => { throw new Error('must not run'); }, writeArtifact() {} };
+  await assert.rejects(() => emitVerifiedLifecycleReceipts(request, probes, receipts, resourceIds), /lifecycle_descriptor_invalid/);
+  await assert.rejects(() => emitVerifiedLifecycleReceipts(request, probes, receipts, resourceIds, { ...graph, resources: { ...resourceIds, postgresql: 'foreign' } }), /lifecycle_descriptor_invalid/);
+  await assert.rejects(() => emitVerifiedLifecycleReceipts(request, { resourceProbe: async ({ descriptor, engine, phase, nonce }) => ({ ...descriptor, secretUid: 'spliced', engine, phase, nonce, authenticated: true, healthExitCode: 0 }), writeArtifact() {} }, receipts, resourceIds, graph), /descriptor_splice/);
 });
 
 test('recovery descriptors reject same target and cache proof binds TTL/type/count/value', () => {
