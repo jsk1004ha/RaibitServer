@@ -76,3 +76,10 @@ export const PLATFORM_EXPANSION_EXECUTABLE_ROWS = PLATFORM_EXPANSION_MATRIX.filt
 export const PLATFORM_EXPANSION_NEGATIVE_ROWS = PLATFORM_EXPANSION_EXECUTABLE_ROWS.filter((row) => ['conflict', 'retryable', 'terminal', 'permission', 'degraded'].includes(row.state));
 export const PLATFORM_EXPANSION_DELEGATED_TASK35_ROWS = PLATFORM_EXPANSION_MATRIX.filter((row) => row.execution === 'delegated-task35');
 export const PLATFORM_EXPANSION_DELEGATED_TASK41_ROWS = PLATFORM_EXPANSION_MATRIX.filter((row) => row.execution === 'delegated-task41');
+
+export const PLATFORM_EXPANSION_DELEGATED_PLAYWRIGHT_SCENARIOS = [
+  { id: 'task35-invite-acceptance', kind: 'positive', title: 'identity-owner-membership trusted invite link completes with keyboard, announcement, redaction, motion, and reflow outcomes' },
+  { id: 'task35-account-logout', kind: 'positive', title: 'identity-pending-relogin account identity and logout remain synchronized across desktop and mobile shells' },
+  { id: 'task41-import-conflict-recovery', kind: 'negative', title: 'github-conflict-recovery-contract import preserves an idempotency key across retry and asks for an explicit new slug' },
+  { id: 'task41-attach-conflict-recovery', kind: 'negative', title: 'github-conflict-recovery-contract-attach attach and opaque collisions offer only their typed recovery action' },
+] as const;

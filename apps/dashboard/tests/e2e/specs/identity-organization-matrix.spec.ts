@@ -10,11 +10,11 @@ async function expectReflow(page: Page): Promise<void> {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && document.body.scrollWidth <= window.innerWidth)).toBe(true);
 }
 
-test.describe('@identity-organization-matrix', () => {
+test.describe('@platform-expansion @identity-organization-matrix', () => {
   test.skip(!fixtureEnabled, 'requires RAIBITSERVER_E2E_FIXTURES=1');
   test.setTimeout(60_000);
 
-  test('trusted invite link completes with keyboard, announcement, redaction, motion, and reflow outcomes', async ({ userPage }) => {
+  test('identity-owner-membership trusted invite link completes with keyboard, announcement, redaction, motion, and reflow outcomes', async ({ userPage }) => {
     // Given: an authenticated exact-email recipient and the trusted acceptance-link surface.
     const assertNoErrors = observeBrowserErrors(userPage);
     let submittedToken = '';
@@ -50,7 +50,7 @@ test.describe('@identity-organization-matrix', () => {
     assertNoErrors();
   });
 
-  test('account identity and logout remain synchronized across desktop and mobile shells', async ({ userPage }) => {
+  test('identity-pending-relogin account identity and logout remain synchronized across desktop and mobile shells', async ({ userPage }) => {
     // Given: the Task34 account surface and every required accessibility mode declared by the matrix.
     const assertNoErrors = observeBrowserErrors(userPage, [404]);
     expect(IDENTITY_ORGANIZATION_ACCESSIBILITY).toEqual(['keyboard', 'screen-reader-announcement', 'reduced-motion', 'zoom-200']);
