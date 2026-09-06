@@ -136,7 +136,7 @@ test('Given canonical binding kinds, When journaled, Then exact provenance round
   const deleteIntentId = 'full-ledger-project-delete';
   const deleteName = deriveRunResourceName(ctx.identity, deleteIntentId);
   await appendCleanupIntentFixtureUnsafe({ ...ctx, intentId: deleteIntentId, mutationKind: 'control-plane-delete-project',
-    bindingRefs: [ref(appended[0]), ref(appended[4])], resourceName: deleteName, method: 'DELETE',
+    bindingRefs: [ref(appended[0]), ref(appended[6])], resourceName: deleteName, method: 'DELETE',
     routeTemplate: '/api/projects/:projectId', relativeRoute: '/api/projects/project-1', approvedRuntimeSelector: null,
     recoverySelector: { kind: 'Project', organizationId: 'org-1', projectId: 'project-1', name: deleteName,
       runIdentitySha256: digest(ctx.identity) }, createdAt: '2026-09-04T00:00:40.000Z', deadlineAt: '2026-09-04T00:01:00.000Z' });
@@ -149,30 +149,34 @@ test('Given canonical binding kinds, When journaled, Then exact provenance round
       createdAt: '2026-09-04T00:00:59.000Z' }), { reason: 'invalid_journal' });
   }
   const entries = await loadBindingsFixtureUnsafe(ctx);
-  const malformedProject = { ...entries[4], payload: { ...entries[4].payload, unexpected: 'rejected' } };
+  const projectIndex = entries.findIndex(({ payload }) => payload.kind === 'project');
+  const malformedProject = { ...entries[projectIndex], payload: { ...entries[projectIndex].payload, unexpected: 'rejected' } };
   malformedProject.payloadSha256 = digest(malformedProject.payload);
   const { entrySha256: oldProjectSha, ...projectUnsigned } = malformedProject;
   malformedProject.entrySha256 = digest(projectUnsigned);
-  assert.throws(() => resolveBindingGraph([...entries.slice(0, 4), malformedProject],
-    [...entries.slice(0, 4), malformedProject].map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))),
+  const malformedEntries = entries.with(projectIndex, malformedProject);
+  assert.throws(() => resolveBindingGraph(malformedEntries,
+    malformedEntries.map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))),
   { reason: 'invalid_journal' });
   let payloadReads = 0;
   const mutableMembership = { ...entries[0] };
   Object.defineProperty(mutableMembership, 'payload', { enumerable: true,
     get: () => (++payloadReads <= 4 ? entries[0].payload : { ...entries[0].payload, organizationId: 'org-b' }) });
-  const crossTenantProject = { ...entries[4], payload: { ...entries[4].payload, organizationId: 'org-b' } };
+  const crossTenantProject = { ...entries[projectIndex], payload: { ...entries[projectIndex].payload, organizationId: 'org-b' } };
   crossTenantProject.payloadSha256 = digest(crossTenantProject.payload);
   const { entrySha256: oldCrossTenantSha, ...crossTenantUnsigned } = crossTenantProject;
   crossTenantProject.entrySha256 = digest(crossTenantUnsigned);
-  const hostileEntries = [mutableMembership, ...entries.slice(1, 4), crossTenantProject];
+  const hostileEntries = entries.with(0, mutableMembership).with(projectIndex, crossTenantProject);
   assert.throws(() => resolveBindingGraph(hostileEntries,
     hostileEntries.map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))), { reason: 'invalid_journal' });
-  const badDeployment = { ...entries[6], payload: { ...entries[6].payload, tenantCommitSha: '3'.repeat(40) } };
+  const deploymentIndex = entries.findIndex(({ payload }) => payload.kind === 'deployment' && payload.role === 'candidate');
+  const badDeployment = { ...entries[deploymentIndex], payload: { ...entries[deploymentIndex].payload, tenantCommitSha: '3'.repeat(40) } };
   badDeployment.payloadSha256 = digest(badDeployment.payload);
   const { entrySha256: ignored, ...unsigned } = badDeployment;
   badDeployment.entrySha256 = digest(unsigned);
-  assert.throws(() => resolveBindingGraph([...entries.slice(0, 6), badDeployment],
-    [...entries.slice(0, 6), badDeployment].map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))),
+  const badDeploymentEntries = entries.with(deploymentIndex, badDeployment);
+  assert.throws(() => resolveBindingGraph(badDeploymentEntries,
+    badDeploymentEntries.map(({ role, bindingId, entrySha256 }) => ({ role, bindingId, entrySha256 }))),
   { reason: 'invalid_binding_graph' });
 });
 
@@ -210,7 +214,7 @@ test('Given a cross-tenant project binding, When an intent resolves its graph, T
 test('Given a foreign production Pod selector, When its name is not run-derived, Then intent persistence is rejected', async (t) => {
   const ctx = await sandbox(t);
   const member = await membership(ctx);
-  const name = `raibit-evidence-client-${ctx.identity.runId}`;
+  const name = `evidence-client-${ctx.identity.runId}`;
   await assert.rejects(appendCleanupIntentFixtureUnsafe({ ...projectIntent(ctx, member), intentId: 'client-pod', mutationKind: 'kubernetes-apply-pod',
     resourceName: name, method: 'APPLY', routeTemplate: '/api/v1/namespaces/:namespace/pods',
     relativeRoute: '/api/v1/namespaces/runtime/pods', approvedRuntimeSelector: runtimeSelector,
@@ -218,17 +222,18 @@ test('Given a foreign production Pod selector, When its name is not run-derived,
       runIdentitySha256: digest(ctx.identity), runtimeSelectorSha256: digest(runtimeSelector) } }), { reason: 'invalid_recovery_selector' });
 });
 
-test('Given a client Pod and NetworkPolicy, When intents are stored, Then exact run and runtime scope is bound', async (t) => {
+test('Given bootstrap before membership, When client Pod and NetworkPolicy intents are stored, Then exact run and runtime scope is bound', async (t) => {
   const ctx = await sandbox(t);
-  const member = await membership(ctx);
+  const authority = await createJournalAuthorityFixtureUnsafe({ runDirectory: ctx.runDirectory, identity: ctx.identity, genuineSafeWriter: ctx.writer });
   for (const [intentId, mutationKind, kind, suffix, relativeRoute] of [
     ['client-pod', 'kubernetes-apply-pod', 'Pod', '', '/api/v1/namespaces/runtime/pods'],
     ['client-policy', 'kubernetes-apply-network-policy', 'NetworkPolicy', '-egress', '/apis/networking.k8s.io/v1/namespaces/runtime/networkpolicies'],
   ]) {
-    const name = `raibit-evidence-client-${ctx.identity.runId}${suffix}`;
-    await appendCleanupIntentFixtureUnsafe({ ...projectIntent(ctx, member), intentId, mutationKind, resourceName: name, relativeRoute,
+    const name = `evidence-client-${ctx.identity.runId}${suffix}`;
+    await authority.appendCleanupIntent({ intentId, mutationKind, bindingRefs: [], resourceName: name, relativeRoute,
       method: 'APPLY', routeTemplate: kind === 'Pod' ? '/api/v1/namespaces/:namespace/pods' : '/apis/networking.k8s.io/v1/namespaces/:namespace/networkpolicies',
       approvedRuntimeSelector: runtimeSelector, createdAt: intentId === 'client-pod' ? '2026-09-04T00:00:02.000Z' : '2026-09-04T00:00:03.000Z',
+      deadlineAt: '2026-09-04T00:01:00.000Z',
       recoverySelector: { kind, namespace: runtimeSelector.namespace, name, runLabel: ctx.identity.runId,
         runIdentitySha256: digest(ctx.identity), runtimeSelectorSha256: digest(runtimeSelector) } });
   }

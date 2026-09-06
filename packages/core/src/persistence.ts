@@ -22,7 +22,7 @@ import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecor
 import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
-import { parsePreviewObservation, parsePreviewWebhook, PreviewError } from './preview-contract.ts';
+import { canonicalPreviewWebhook, parsePreviewObservation, parsePreviewWebhook, PreviewError, previewWebhookLineage, previewWebhookPayloadMatches } from './preview-contract.ts';
 import { applyPreviewObservation, assertPreviewRetry, createPreviewRuntime, PREVIEW_APPLY_JOB, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage, type PreviewLineageRecord } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
@@ -1644,7 +1644,11 @@ export class PrismaControlPlaneRepository {
     const actionPlan = { kind: event.action === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: event.repositoryId, installationId: event.installationId, repository: event.repository, baseBranch: event.baseRef };
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const existingDelivery = await tx.webhookEvent.findUnique({ where: { deliveryId: event.deliveryId } });
+      if (existingDelivery && !previewWebhookPayloadMatches(existingDelivery.payload, event)) throw new PreviewError('preview_delivery_conflict', 409);
       if (existingDelivery?.handled) return { accepted: true, duplicate: true, deliveryId: event.deliveryId, actions: [] };
+      const delivery = existingDelivery || await tx.webhookEvent.create({
+        data: { provider: 'github', eventType: 'pull_request', deliveryId: event.deliveryId, payload: sanitizeJson(canonicalPreviewWebhook(event)), handled: false, errorMessage: null },
+      });
       const services = await servicesForPrismaGitHubWebhook(tx, actionPlan);
       const actions: Record<string, unknown>[] = [];
       const blocked = event.action === 'closed' ? new Set<string>() : await prismaGitHubWebhookQuotaBlocks(tx, services, actionPlan, actions);
@@ -1685,14 +1689,13 @@ export class PrismaControlPlaneRepository {
         const deployment = await tx.deployment.create({ data: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
         const jobId = stableId('job', 'github-preview', event.deliveryId, service.id);
         await tx.workflowJob.create({ data: { id: jobId, ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: 1, runtime } }) } });
+        await tx.deploymentEvent.create({ data: { deploymentId: deployment.id, type: 'preview.workload.queued', message: sanitizeLogRecord(`Preview Kubernetes workload queued for PR #${event.pullRequestNumber}`), metadata: sanitizeJson(previewWebhookLineage(delivery.id, lineageId, event)) } });
         await tx.previewLineage.update({ where: { id: lineageId }, data: { candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation } });
         actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, lineageId, deploymentId: deployment.id, workflowJobId: jobId, generation: transition.lineage.generation });
       }
-      const delivery = existingDelivery
-        ? await tx.webhookEvent.update({ where: { id: existingDelivery.id }, data: { handled: true, errorMessage: null } })
-        : await tx.webhookEvent.create({ data: { provider: 'github', eventType: 'pull_request', deliveryId: event.deliveryId, payload: sanitizeJson(maskSecrets({ action: event.action, repositoryId: event.repositoryId, pullRequestNumber: event.pullRequestNumber })), handled: true } });
       await tx.auditLog.upsert({ where: { id: stableId('aud', 'github:preview-webhook', event.deliveryId) }, update: {}, create: { id: stableId('aud', 'github:preview-webhook', event.deliveryId), actorUserId: null, action: 'github:preview-webhook', targetType: 'github-delivery', targetId: event.deliveryId, metadata: sanitizeJson({ action: event.action, actions: actions.map(action => action.type) }) } });
-      return { accepted: true, duplicate: false, deliveryId: event.deliveryId, matchedServiceCount: services.length, actions, webhookEvent: delivery };
+      const handledDelivery = await tx.webhookEvent.update({ where: { id: delivery.id }, data: { handled: true, errorMessage: null } });
+      return { accepted: true, duplicate: false, deliveryId: event.deliveryId, matchedServiceCount: services.length, actions, webhookEvent: handledDelivery };
     });
   }
 

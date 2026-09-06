@@ -1,7 +1,9 @@
-import { ProductionEvidenceSchema, VerifiedBindingJournalSchema } from '../../../packages/schemas/src/production-evidence.ts';
+import { ProductionEvidenceSchema } from '../../../packages/schemas/src/production-evidence.ts';
 import { RESOURCE_LIFECYCLE_ASSERTIONS } from '../../../packages/schemas/src/resource-lifecycle-evidence.ts';
 import resourceCapabilities from '../../../packages/schemas/src/resource-capabilities-v1.json' with { type: 'json' };
 import { APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST, EvidenceError, assertRedacted, digest } from './operator-inputs.mjs';
+import { readVerifiedBindingJournal } from './verified-binding-journal.mjs';
+import { assertVerifiedStepReceipt } from './receipt-authority.mjs';
 
 export const MAX_RUN_AGE_MS = 4 * 60 * 60 * 1000;
 export const REQUIRED_ASSERTIONS = Object.freeze({
@@ -32,69 +34,63 @@ function checkAssertions(assertions, required, artifacts) {
 const RELEASE_FEATURES = Object.freeze(['provision', 'authenticatedHealth', 'attach', 'query', 'schema', 'backup', 'restore']);
 function bindingKey(binding) {
   switch (binding.kind) {
-    case 'organization-membership': return `${binding.kind}:${binding.membershipId}`;
-    case 'github-repository': return `${binding.kind}:${binding.repositoryId}`;
-    case 'tenant-revision': return `${binding.kind}:${binding.tenantRevisionId}`;
-    case 'project': return `${binding.kind}:${binding.projectId}`;
-    case 'service': return `${binding.kind}:${binding.serviceId}`;
-    case 'deployment': return `${binding.kind}:${binding.role}`;
-    case 'resource': return `${binding.kind}:${binding.engine}:${binding.role}`;
-    case 'backup': return `${binding.kind}:${binding.engine}`;
-    case 'restore': return `${binding.kind}:${binding.engine}`;
+    case 'organization-membership': return `${binding.kind}:${binding.membershipId}`; case 'github-repository': return `${binding.kind}:${binding.repositoryId}`;
+    case 'github-webhook-event': return `${binding.kind}:${binding.webhookEventId}`; case 'tenant-revision': return `${binding.kind}:${binding.tenantRevisionId}`;
+    case 'project': return `${binding.kind}:${binding.projectId}`; case 'service': return `${binding.kind}:${binding.serviceId}`;
+    case 'deployment': return `${binding.kind}:${binding.role}`; case 'resource': return `${binding.kind}:${binding.engine}:${binding.role}`;
+    case 'backup': return `${binding.kind}:${binding.engine}`; case 'restore': return `${binding.kind}:${binding.engine}`;
     default: throw new EvidenceError('invalid_schema');
   }
 }
 function oneBinding(bindings, kind, predicate = () => true) {
   const matches = bindings.filter((binding) => binding.kind === kind && predicate(binding));
-  if (matches.length !== 1) throw new EvidenceError('missing_bindings');
-  return matches[0];
-}
-function readVerifiedBindingJournal(manifest, options) {
-  if (!manifest.bindingJournal || !manifest.bindingsDigest || !manifest.capabilitySnapshot || typeof options.verifyBindingJournal !== 'function') throw new EvidenceError('missing_binding_journal');
-  const request = Object.freeze({ identityDigest: digest(manifest.identity), journal: manifest.bindingJournal }), parsed = VerifiedBindingJournalSchema.safeParse(options.verifyBindingJournal(request)); if (!parsed.success) throw new EvidenceError('invalid_binding_journal');
-  const journal = parsed.data;
-  if (digest(journal.journal) !== digest(manifest.bindingJournal) || journal.identityDigest !== digest(manifest.identity)
-    || journal.bindingsDigest !== manifest.bindingsDigest || digest(journal.entries) !== journal.bindingsDigest
-    || journal.journal.entriesDigest !== journal.bindingsDigest || journal.entries.length !== journal.journal.entryCount
-    || manifest.fragments.some((fragment) => fragment.bindingsDigest !== manifest.bindingsDigest)) throw new EvidenceError('binding_journal_mismatch');
-  return journal;
+  if (matches.length !== 1) throw new EvidenceError('missing_bindings'); return matches[0];
 }
 function verifyBindingGraph(manifest, options, journal) {
   const bindings = journal.entries;
   const assigned = new Map();
   for (const binding of bindings) {
-    const key = bindingKey(binding);
-    if (assigned.has(key)) throw new EvidenceError(assigned.get(key) === digest(binding) ? 'duplicate_binding' : 'binding_reassigned');
-    assigned.set(key, digest(binding));
+    const key = bindingKey(binding); if (assigned.has(key)) throw new EvidenceError(assigned.get(key) === digest(binding) ? 'duplicate_binding' : 'binding_reassigned'); assigned.set(key, digest(binding));
   }
-  const membership = oneBinding(bindings, 'organization-membership');
-  const repository = oneBinding(bindings, 'github-repository');
-  const candidateRevision = oneBinding(bindings, 'tenant-revision', (binding) => binding.purpose === 'candidate');
-  const failureRevision = oneBinding(bindings, 'tenant-revision', (binding) => binding.purpose === 'failure');
-  const project = oneBinding(bindings, 'project');
-  const service = oneBinding(bindings, 'service');
+  const webhookDeliveries = bindings.filter(({ kind }) => kind === 'github-webhook-event').map(({ deliveryId }) => deliveryId); if (new Set(webhookDeliveries).size !== webhookDeliveries.length) throw new EvidenceError('webhook_delivery_replayed');
+  const membership = oneBinding(bindings, 'organization-membership'), repository = oneBinding(bindings, 'github-repository');
+  const candidateRevision = oneBinding(bindings, 'tenant-revision', (binding) => binding.purpose === 'candidate'), previewRevision = oneBinding(bindings, 'tenant-revision', (binding) => binding.purpose === 'preview'), failureRevision = oneBinding(bindings, 'tenant-revision', (binding) => binding.purpose === 'failure');
+  const project = oneBinding(bindings, 'project'), service = oneBinding(bindings, 'service');
   if (options.repository && repository.repository !== options.repository) throw new EvidenceError('binding_graph_mismatch');
-  if ([candidateRevision, failureRevision].some(({ tenantCommitSha }) => tenantCommitSha === manifest.identity.sourceCommitSha)
-    || candidateRevision.tenantCommitSha === failureRevision.tenantCommitSha) throw new EvidenceError('tenant_revision_mismatch');
-  if (candidateRevision.repositoryId !== repository.repositoryId || candidateRevision.repository !== repository.repository
-    || candidateRevision.branch !== repository.branch || failureRevision.repositoryId !== repository.repositoryId
-    || failureRevision.repository !== repository.repository
+  const revisions = [candidateRevision, previewRevision, failureRevision];
+  if (revisions.some(({ tenantCommitSha }) => tenantCommitSha === manifest.identity.sourceCommitSha)
+    || previewRevision.tenantCommitSha === candidateRevision.tenantCommitSha) throw new EvidenceError('tenant_revision_mismatch');
+  if (revisions.some((revision) => revision.repositoryId !== repository.repositoryId || revision.repository !== repository.repository)
+    || candidateRevision.branch !== repository.branch || candidateRevision.pullRequestNumber !== undefined || failureRevision.pullRequestNumber !== undefined
+    || !previewRevision.pullRequestNumber
     || project.organizationId !== membership.organizationId || service.projectId !== project.projectId) throw new EvidenceError('binding_graph_mismatch');
   const observations = new Map(journal.observations.map((observation) => [observation.observationId, observation])); if (observations.size !== journal.observations.length) throw new EvidenceError('binding_provenance_mismatch');
-  for (const revision of [candidateRevision, failureRevision]) {
+  const observedDeliveries = journal.observations.filter(({ kind }) => kind === 'github-pull-request-observation').map(({ event }) => event.deliveryId); if (new Set(observedDeliveries).size !== observedDeliveries.length) throw new EvidenceError('webhook_delivery_replayed');
+  if (journal.observations.filter(({ kind }) => kind === 'builder-deployment-observation').length !== 1) throw new EvidenceError('binding_provenance_mismatch');
+  for (const revision of revisions) {
     const observation = observations.get(revision.observationId);
-    const expectedKind = revision.purpose === 'candidate' ? 'builder-deployment-observation' : 'github-webhook-observation';
+    const expectedKind = revision.purpose === 'candidate' ? 'builder-deployment-observation' : revision.purpose === 'preview' ? 'github-pull-request-observation' : 'controlled-fixture-observation';
     if (!observation) throw new EvidenceError('missing_binding_provenance');
     if (observation.kind !== expectedKind || observation.identityDigest !== digest(manifest.identity)
       || observation.repositoryId !== revision.repositoryId || observation.repository !== revision.repository
       || observation.branch !== revision.branch || observation.tenantCommitSha !== revision.tenantCommitSha) throw new EvidenceError('binding_provenance_mismatch');
+    if (revision.purpose === 'failure' && (observation.deploymentId !== oneBinding(bindings, 'deployment', (binding) => binding.role === 'failed').deploymentId
+      || observation.controlledFault.rolloutEventId !== revision.observationId)) throw new EvidenceError('binding_provenance_mismatch');
+    if (revision.purpose === 'preview') {
+      const event = observation.event, persisted = oneBinding(bindings, 'github-webhook-event', (binding) => binding.webhookEventId === observation.webhookEventId);
+      const previewDeployment = oneBinding(bindings, 'deployment', (binding) => binding.role === 'preview');
+      if (digest(persisted.event) !== digest(event) || observation.deploymentId !== previewDeployment.deploymentId
+        || typeof observation.lineageId !== 'string' || persisted.deliveryId !== event.deliveryId || event.action === 'closed' || event.installationId !== repository.installationId
+        || event.repositoryId !== revision.repositoryId || event.repository !== revision.repository || event.pullRequestNumber !== revision.pullRequestNumber
+        || event.headSha !== revision.tenantCommitSha || event.headRef !== revision.branch || event.baseRef !== repository.branch) throw new EvidenceError('binding_provenance_mismatch');
+    }
   }
   if (new Set(journal.observations.flatMap(({ receiptPath, artifactPath }) => [receiptPath, artifactPath])).size !== journal.observations.length * 2) throw new EvidenceError('binding_provenance_mismatch');
   const deployments = ['candidate', 'preview', 'failed', 'rollback'].map((role) => oneBinding(bindings, 'deployment', (binding) => binding.role === role));
   if (new Set(deployments.map(({ deploymentId }) => deploymentId)).size !== deployments.length
     || deployments.some((deployment) => deployment.serviceId !== service.serviceId)) throw new EvidenceError('binding_graph_mismatch');
   for (const deployment of deployments) {
-    const revision = deployment.role === 'failed' ? failureRevision : candidateRevision;
+    const revision = deployment.role === 'failed' ? failureRevision : deployment.role === 'preview' ? previewRevision : candidateRevision;
     if (deployment.tenantRevisionId !== revision.tenantRevisionId || deployment.tenantCommitSha !== revision.tenantCommitSha
       || deployment.repositoryId !== revision.repositoryId || deployment.repository !== revision.repository
       || deployment.branch !== revision.branch) throw new EvidenceError('binding_graph_mismatch');
@@ -214,6 +210,7 @@ function uniqueArtifacts(artifacts) {
 }
 
 export function assembleManifest(input) {
+  for (const step of input.steps) assertVerifiedStepReceipt(step);
   const components = ['local', 'cluster', 'lifecycle', 'resources', 'operations'];
   const fragments = components.map((component) => {
     const foundation = input.foundations[component];

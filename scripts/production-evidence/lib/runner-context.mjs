@@ -5,10 +5,60 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
 import { resolvePublicHttpsTarget } from './public-endpoint.mjs';
+import { AUTH_BOOTSTRAP } from './authenticated-client.mjs';
+import { KUBE_PROJECTIONS } from './authenticated-client-kubernetes.mjs';
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_STDIN_BYTES = 256 * 1024;
+
+function commandStdin(file, args, input) {
+  if (input === undefined) {
+    if (args.some((arg, index) => arg === '-f' && args[index + 1] === '-')) throw new EvidenceError('invalid_command');
+    return undefined;
+  }
+  const create = args.length === 3 || (args.length === 5 && args[3] === '-o' && args[4] === KUBE_PROJECTIONS.identity);
+  const creating = create && args[0] === 'create' && args[1] === '-f' && args[2] === '-';
+  const resourceUri = /^\/(?:api\/v1\/namespaces\/[^/]+\/(?:pods|services|configmaps|secrets|serviceaccounts|persistentvolumeclaims)|apis\/apps\/v1\/namespaces\/[^/]+\/(?:deployments|daemonsets|replicasets|statefulsets)|apis\/batch\/v1\/namespaces\/[^/]+\/(?:jobs|cronjobs)|apis\/networking\.k8s\.io\/v1\/namespaces\/[^/]+\/networkpolicies|apis\/rbac\.authorization\.k8s\.io\/v1\/namespaces\/[^/]+\/(?:roles|rolebindings))\/[^/]+$/;
+  const deleting = args.length === 5 && args[0] === 'delete' && args[1] === '--raw' && args[3] === '-f' && args[4] === '-'
+    && resourceUri.test(args[2]) && args[2].split('/').slice(-3).filter((_, index) => index !== 1)
+      .every((segment) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(segment));
+  if (file !== 'kubectl' || (!creating && !deleting) || (typeof input !== 'string' && !Buffer.isBuffer(input))
+    || Buffer.byteLength(input) === 0 || Buffer.byteLength(input) > MAX_STDIN_BYTES) throw new EvidenceError('invalid_command');
+  const bytes = Buffer.from(input);
+  const text = bytes.toString('utf8');
+  let value;
+  try { value = JSON.parse(text); } catch { throw new EvidenceError('invalid_command'); }
+  const json = JSON.stringify(value);
+  if (!Buffer.from(text).equals(bytes) || (text !== json && text !== `${json}\n`) || !value || Array.isArray(value)
+    || typeof value !== 'object') throw new EvidenceError('invalid_command');
+  if (deleting) {
+    if (Object.keys(value).length !== 3 || value.apiVersion !== 'v1' || value.kind !== 'DeleteOptions'
+      || !value.preconditions || Object.keys(value.preconditions).length !== 2
+      || !['uid', 'resourceVersion'].every((key) => typeof value.preconditions[key] === 'string'
+        && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(value.preconditions[key]))) throw new EvidenceError('invalid_command');
+  } else if (!((value.kind === 'Pod' && value.apiVersion === 'v1')
+    || (value.kind === 'NetworkPolicy' && value.apiVersion === 'networking.k8s.io/v1'))) throw new EvidenceError('invalid_command');
+  const pending = [value];
+  while (pending.length) {
+    const current = pending.pop();
+    if (typeof current === 'string') { if (current !== AUTH_BOOTSTRAP) assertRedacted(current); continue; }
+    if (!current || typeof current !== 'object') continue;
+    for (const [key, child] of Object.entries(current)) {
+      if (/^(?:data|stringData|environment)$/i.test(key) || (key === 'kind' && child === 'Secret')) throw new EvidenceError('redaction');
+      if (/password|token|secret|credential|authorization|cookie|api.?key|private.?key/i.test(key)
+        && key !== 'secretKeyRef' && !(key === 'automountServiceAccountToken' && child === false)) throw new EvidenceError('redaction');
+      if (key === 'env' && (!Array.isArray(child) || child.some((entry) => !entry || Object.keys(entry).length !== 2
+        || typeof entry.name !== 'string' || !entry.valueFrom || Object.keys(entry.valueFrom).length !== 1
+        || !entry.valueFrom.secretKeyRef || Object.keys(entry.valueFrom.secretKeyRef).some((name) => !['name', 'key', 'optional'].includes(name))
+        || typeof entry.valueFrom.secretKeyRef.name !== 'string' || typeof entry.valueFrom.secretKeyRef.key !== 'string'
+        || (entry.valueFrom.secretKeyRef.optional !== undefined && typeof entry.valueFrom.secretKeyRef.optional !== 'boolean')))) throw new EvidenceError('redaction');
+      pending.push(child);
+    }
+  }
+  return bytes;
+}
 
 function boundedTimeout(deadlineAt, requested, now) {
   const remaining = Date.parse(deadlineAt) - Date.parse(now());
@@ -56,8 +106,10 @@ function assertPublicResponseSafe(value) {
 
 export function createRunnerContext(runDirectory, deadlineAt, clock = { now: () => new Date() }, adapters = {}) {
   if ((adapters.lookup !== undefined && typeof adapters.lookup !== 'function')
-    || (adapters.request !== undefined && typeof adapters.request !== 'function')) throw new EvidenceError('invalid_request');
+    || (adapters.request !== undefined && typeof adapters.request !== 'function')
+    || (adapters.spawn !== undefined && typeof adapters.spawn !== 'function')) throw new EvidenceError('invalid_request');
   const requestAdapter = adapters.request ?? https.request;
+  const spawnAdapter = adapters.spawn ?? spawn;
   const inheritedNames = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LANG', 'LC_ALL'];
   const inherited = Object.fromEntries(inheritedNames.filter((name) => typeof process.env[name] === 'string').map((name) => [name, process.env[name]]));
   const now = () => {
@@ -68,14 +120,21 @@ export function createRunnerContext(runDirectory, deadlineAt, clock = { now: () 
     now,
     async executeFile(file, args, options = {}) {
       if (typeof file !== 'string' || !file || !Array.isArray(args) || args.some((arg) => typeof arg !== 'string')) throw new EvidenceError('invalid_command');
+      if (!options || typeof options !== 'object' || Array.isArray(options)
+        || Object.keys(options).some((key) => !['cwd', 'env', 'timeoutMs', 'stdin'].includes(key))
+        || (options.cwd !== undefined && typeof options.cwd !== 'string')
+        || (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1))) throw new EvidenceError('invalid_command');
       assertRedacted(args);
+      const stdin = commandStdin(file, args, options.stdin);
       if (options.env !== undefined) {
+        if (!options.env || typeof options.env !== 'object' || Array.isArray(options.env)
+          || Object.values(options.env).some((value) => typeof value !== 'string')) throw new EvidenceError('invalid_command');
         if (Object.keys(options.env).some((name) => /password|token|secret|credential|authorization|api[_-]?key|private[_-]?key/i.test(name))) throw new EvidenceError('redaction');
         assertRedacted(options.env);
       }
       const timeoutMs = boundedTimeout(deadlineAt, options.timeoutMs, now);
       const startedAt = now();
-      const child = spawn(file, args, { cwd: options.cwd, env: { ...inherited, ...(options.env ?? {}) }, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawnAdapter(file, args, { cwd: options.cwd, env: { ...inherited, ...(options.env ?? {}) }, shell: false, windowsHide: true, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
       let stdout = '', stderr = '';
       let outputExceeded = false;
       child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
@@ -86,11 +145,17 @@ export function createRunnerContext(runDirectory, deadlineAt, clock = { now: () 
       };
       child.stdout.on('data', (chunk) => { stdout = append(stdout, chunk); });
       child.stderr.on('data', (chunk) => { stderr = append(stderr, chunk); });
-      const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
       const exitCode = await new Promise((resolve, reject) => {
         child.once('error', reject);
         child.once('close', (code) => resolve(code ?? 1));
+        if (stdin !== undefined) {
+          child.stdin.on('error', (error) => { if (error.code !== 'EPIPE') { child.kill('SIGKILL'); reject(error); } });
+          child.stdin.end(stdin);
+        }
       }).finally(() => clearTimeout(timer));
+      if (timedOut) throw new EvidenceError('command_timeout');
       if (outputExceeded) throw new EvidenceError('command_output_limit');
       assertRedacted(stdout); assertRedacted(stderr);
       return Object.freeze({ exitCode, stdout, stderr, startedAt, observedAt: now() });

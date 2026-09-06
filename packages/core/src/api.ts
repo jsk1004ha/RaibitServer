@@ -506,11 +506,13 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
           if ((deployment.deploymentType || body.deploymentType || body.type) === 'preview') controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
         }
         if (action === 'preview-cleanup') return send(res, 202, controlPlane.store.requestPreviewCleanup(deploymentId, { actorUserId: subject.id }));
-        const result = action === 'cancel'
-          ? controlPlane.store.cancelDeployment(deploymentId, { ...body, actorUserId: subject.id })
-          : controlPlane.store.rollbackDeployment(deploymentId, { ...body, actorUserId: subject.id });
-        const operationId = action === 'cancel' ? `deployment-cancel:${deploymentId}` : result.workflowJob?.id || `deployment-rollback:${deploymentId}`;
-        return send(res, action === 'cancel' ? 200 : 202, { ...result, operationId, status: result.deployment?.status, streamHref: `/deployments/${result.deployment?.id || deploymentId}/stream` });
+        if (action === 'cancel') {
+          const result = controlPlane.store.cancelDeployment(deploymentId, { ...body, actorUserId: subject.id });
+          return send(res, 200, { ...result, operationId: `deployment-cancel:${deploymentId}`, status: result.deployment?.status, streamHref: `/deployments/${result.deployment?.id || deploymentId}/stream` });
+        }
+        const result = controlPlane.store.rollbackDeployment(deploymentId, { ...body, actorUserId: subject.id });
+        const operationId = result.workflowJob?.id || `deployment-rollback:${deploymentId}`;
+        return send(res, 202, { ...result, operationId, status: result.deployment?.status, streamHref: `/deployments/${result.deployment?.id || deploymentId}/stream` });
       }
       const deploymentLogsMatch = url.pathname.match(/^\/deployments\/([^/]+)\/(logs|events)$/);
       if (deploymentLogsMatch && method === 'GET') {

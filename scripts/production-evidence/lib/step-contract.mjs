@@ -7,6 +7,7 @@ import {
   OperatorInputValuesSchema,
 } from '../../../packages/schemas/src/production-evidence.ts';
 import { EvidenceError } from './operator-inputs.mjs';
+import { assertVerifiedBindingSnapshot } from './journal-authority.mjs';
 
 export const STEP_NAMES = Object.freeze([
   'auth-source', 'supply-chain', 'runtime', 'observability', 'resources',
@@ -25,6 +26,11 @@ export const STEP_ASSERTIONS = Object.freeze({
   rollback: ['rollback'],
   cleanup: ['component_cleanup', 'run_cleanup'],
 });
+export const STEP_SECRET_ROLES = Object.freeze({
+  'auth-source': ['github'], 'supply-chain': ['registry', 'scanner', 'signing', 'trust-root'], runtime: ['runtime', 'database'],
+  observability: ['runtime'], resources: [], 'backup-sql': [], 'backup-nosql': [], preview: ['github', 'runtime'], rollback: ['runtime'], cleanup: [],
+});
+const requestSnapshots = new WeakMap();
 
 function invalidSchema() {
   throw new EvidenceError('invalid_step_contract');
@@ -37,6 +43,15 @@ function hasExactKeys(value, keys) {
 function isStatus(value) { return ['PASS', 'FAIL', 'NOT_RUN'].includes(value); }
 function validIso(value) { return typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value; }
 function validStrings(value) { return isRecord(value) && Object.values(value).every((item) => typeof item === 'string' && item.length > 0 && item.length <= 512); }
+const KUBE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
+function validAuthenticatedClient(value) {
+  const keys = ['schema', 'namespace', 'podName', 'podUid', 'podResourceVersion', 'networkPolicyUid', 'networkPolicyResourceVersion',
+    'apiServiceName', 'apiServiceUid', 'port', 'expiresAt'];
+  return hasExactKeys(value, keys) && value.schema === 'raibitserver.production-evidence-client/v1'
+    && [value.namespace, value.podName, value.apiServiceName].every((item) => typeof item === 'string' && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(item))
+    && [value.podUid, value.podResourceVersion, value.networkPolicyUid, value.networkPolicyResourceVersion, value.apiServiceUid].every((item) => typeof item === 'string' && KUBE_ID.test(item))
+    && value.port === 3000 && validIso(value.expiresAt);
+}
 function validAssertion(value) {
   return hasExactKeys(value, ['id', 'status', 'artifactPaths'])
     && typeof value.id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(value.id)
@@ -47,12 +62,13 @@ function validInventory(value) {
   if (!isRecord(value) || typeof value.type !== 'string') return false;
   switch (value.type) {
     case 'kubernetes':
-      return hasExactKeys(value, ['type', 'apiVersion', 'kind', 'namespace', 'name', 'uid', 'labels'])
-        && [value.apiVersion, value.kind, value.namespace, value.name, value.uid].every((item) => typeof item === 'string' && item.length > 0)
+      return hasExactKeys(value, ['type', 'apiVersion', 'kind', 'namespace', 'name', 'uid', 'resourceVersion', 'labels'])
+        && [value.apiVersion, value.kind, value.namespace, value.name].every((item) => typeof item === 'string' && item.length > 0)
+        && [value.uid, value.resourceVersion].every((item) => typeof item === 'string' && KUBE_ID.test(item))
         && hasExactKeys(value.labels, ['raibitserver.io/run-id']) && typeof value.labels['raibitserver.io/run-id'] === 'string';
     case 'control-plane':
       return hasExactKeys(value, ['type', 'resourceType', 'id', 'organizationId', 'projectId'])
-        && ['project', 'preview', 'resource', 'restore-target', 'attachment'].includes(value.resourceType)
+        && ['project', 'preview', 'resource', 'restore-target', 'backup'].includes(value.resourceType)
         && [value.id, value.organizationId, value.projectId].every((item) => typeof item === 'string' && item.length > 0);
     case 'process':
       return hasExactKeys(value, ['type', 'pid', 'startedAt', 'commandSha256'])
@@ -64,20 +80,54 @@ function validInventory(value) {
   }
 }
 
-function validateInventoryScope(inventory, request) {
+function exactlyOne(values, predicate) {
+  return values.filter(predicate).length === 1;
+}
+
+function controlPlaneItemIsBound(item, bindings) {
+  if (!exactlyOne(bindings, (binding) => binding.kind === 'organization-membership' && binding.organizationId === item.organizationId)
+    || !exactlyOne(bindings, (binding) => binding.kind === 'project' && binding.projectId === item.projectId
+      && binding.organizationId === item.organizationId)) return false;
+  switch (item.resourceType) {
+    case 'project': return item.id === item.projectId;
+    case 'preview': {
+      const deployments = bindings.filter((binding) => binding.kind === 'deployment' && binding.role === 'preview' && binding.deploymentId === item.id);
+      return deployments.length === 1 && exactlyOne(bindings, (binding) => binding.kind === 'service'
+        && binding.serviceId === deployments[0].serviceId && binding.projectId === item.projectId);
+    }
+    case 'resource': return exactlyOne(bindings, (binding) => binding.kind === 'resource' && binding.role === 'source'
+      && binding.resourceId === item.id && binding.projectId === item.projectId);
+    case 'restore-target': return exactlyOne(bindings, (binding) => binding.kind === 'resource' && binding.role === 'restore-target'
+      && binding.resourceId === item.id && binding.projectId === item.projectId);
+    case 'backup': return exactlyOne(bindings, (binding) => binding.kind === 'backup' && binding.backupId === item.id)
+      && exactlyOne(bindings, (binding) => binding.kind === 'resource' && binding.role === 'source'
+        && binding.projectId === item.projectId && bindings.some((candidate) => candidate.kind === 'backup'
+          && candidate.backupId === item.id && candidate.sourceResourceId === binding.resourceId));
+    default: return false;
+  }
+}
+
+function validateInventoryScope(inventory, request, verifiedBindingSnapshot) {
   const workRoot = path.resolve(request.runDirectory, 'work');
+  const controlPlane = inventory.filter((item) => item.type === 'control-plane');
+  let bindings = [];
+  if (controlPlane.length > 0) {
+    try { bindings = assertVerifiedBindingSnapshot(verifiedBindingSnapshot, request.identity).bindings; }
+    catch (error) { if (error instanceof EvidenceError) invalidSchema(); throw error; }
+  }
   for (const item of inventory) {
     if (item.type === 'kubernetes') {
       if (item.labels['raibitserver.io/run-id'] !== request.identity.runId) invalidSchema();
       if (request.state.cleanupNamespace && item.namespace !== request.state.cleanupNamespace) {
         const client = request.state.authenticatedClient;
-        const isClientPod = item.kind === 'Pod' && item.namespace === client?.namespace && item.name === client?.podName && item.uid === client?.podUid;
-        const isClientPolicy = item.kind === 'NetworkPolicy' && item.namespace === client?.namespace && item.name === `${client?.podName}-egress`;
+        const isClientPod = item.kind === 'Pod' && item.namespace === client?.namespace && item.name === client?.podName
+          && item.uid === client?.podUid && item.resourceVersion === client?.podResourceVersion;
+        const isClientPolicy = item.kind === 'NetworkPolicy' && item.namespace === client?.namespace && item.name === `${client?.podName}-egress`
+          && item.uid === client?.networkPolicyUid && item.resourceVersion === client?.networkPolicyResourceVersion;
         if (!isClientPod && !isClientPolicy) invalidSchema();
       }
     }
-    if (item.type === 'control-plane' && (item.organizationId !== request.identity.organizationId || item.projectId !== request.identity.projectId
-      || (item.resourceType === 'project' && item.id !== item.projectId))) invalidSchema();
+    if (item.type === 'control-plane' && !controlPlaneItemIsBound(item, bindings)) invalidSchema();
     if (item.type === 'file') {
       const relative = path.relative(workRoot, path.resolve(item.path));
       if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) invalidSchema();
@@ -99,7 +149,8 @@ function assertAssertions(step, assertions) {
   if (new Set(ids).size !== ids.length || ids.some((id) => !allowed.includes(id))) invalidSchema();
 }
 
-export function parseStepRequest(value, expectedStep) {
+export function parseStepRequest(value, expectedStep, verifiedBindingSnapshot = undefined) {
+  verifiedBindingSnapshot ??= requestSnapshots.get(value);
   const keys = ['schema', 'step', 'identity', 'startedAt', 'deadlineAt', 'runDirectory', 'selectors', 'secretRefs', 'state'];
   if (!hasExactKeys(value, keys) || value.schema !== 'raibitserver.production-evidence-step-request/v1'
     || !STEP_NAMES.includes(value.step) || !EvidenceIdentitySchema.safeParse(value.identity).success
@@ -117,14 +168,23 @@ export function parseStepRequest(value, expectedStep) {
   if (!operator.success) invalidSchema();
   if (Object.hasOwn(value.state, 'cleanupNamespace')
     && (typeof value.state.cleanupNamespace !== 'string' || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value.state.cleanupNamespace))) invalidSchema();
+  if (Object.hasOwn(value.state, 'authenticatedClient') && !validAuthenticatedClient(value.state.authenticatedClient)) invalidSchema();
   if (Object.hasOwn(value.state, 'cleanupInventory')) {
     if (!Array.isArray(value.state.cleanupInventory) || !value.state.cleanupInventory.every(validInventory)) invalidSchema();
-    validateInventoryScope(value.state.cleanupInventory, value);
+    validateInventoryScope(value.state.cleanupInventory, value, verifiedBindingSnapshot);
   }
+  if (verifiedBindingSnapshot) requestSnapshots.set(value, assertVerifiedBindingSnapshot(verifiedBindingSnapshot, value.identity));
   return Object.freeze(value);
 }
 
-export function parseStepResult(value, step, request) {
+export function projectStepRequest(value, verifiedBindingSnapshot) {
+  const roles = STEP_SECRET_ROLES[value.step];
+  if (!roles) invalidSchema();
+  return parseStepRequest({ ...value, secretRefs: value.secretRefs.filter(({ role }) => roles.includes(role)) }, value.step, verifiedBindingSnapshot);
+}
+
+export function parseStepResult(value, step, request, verifiedBindingSnapshot = undefined) {
+  verifiedBindingSnapshot ??= requestSnapshots.get(request);
   if (!hasExactKeys(value, ['status', 'reason', 'assertions', 'artifacts', 'cleanupInventory']) || !isStatus(value.status)
     || !(value.reason === null || (typeof value.reason === 'string' && value.reason.length > 0 && value.reason.length <= 256))
     || !Array.isArray(value.assertions) || value.assertions.length === 0 || !value.assertions.every(validAssertion)
@@ -134,20 +194,26 @@ export function parseStepResult(value, step, request) {
   const referencedPaths = value.assertions.flatMap(({ artifactPaths: paths }) => paths);
   if (new Set(artifactPaths).size !== artifactPaths.length || artifactPaths.some((artifactPath) => !referencedPaths.includes(artifactPath))
     || referencedPaths.some((artifactPath) => !artifactPaths.includes(artifactPath))) invalidSchema();
-  if (request !== undefined) validateInventoryScope(value.cleanupInventory, request);
+  if (request !== undefined) validateInventoryScope(value.cleanupInventory, request, verifiedBindingSnapshot);
   assertAssertions(step, value.assertions);
   if ((value.status === 'PASS') !== value.assertions.every(({ status }) => status === 'PASS')) invalidSchema();
   if ((value.status === 'PASS') !== (value.reason === null)) invalidSchema();
   return Object.freeze(value);
 }
 
-export function parseStepReceipt(value) {
+export function parseStepReceipt(value, request = undefined, verifiedBindingSnapshot = undefined) {
   const keys = ['schema', 'step', 'identity', 'startedAt', 'observedAt', 'status', 'reason', 'assertions', 'artifacts', 'cleanupInventory', 'redacted', 'fixture'];
-  if (!hasExactKeys(value, keys) || value.schema !== 'raibitserver.production-evidence-step-receipt/v1'
+  const version2 = value?.schema === 'raibitserver.production-evidence-step-receipt/v2';
+  if (!hasExactKeys(value, version2 ? [...keys, 'requestSha256'] : keys) || (!version2 && value.schema !== 'raibitserver.production-evidence-step-receipt/v1')
+    || (version2 && !/^[a-f0-9]{64}$/.test(value.requestSha256))
     || !STEP_NAMES.includes(value.step) || !EvidenceIdentitySchema.safeParse(value.identity).success
     || !validIso(value.startedAt) || !validIso(value.observedAt) || value.redacted !== true || typeof value.fixture !== 'boolean') invalidSchema();
   parseStepResult({ status: value.status, reason: value.reason, assertions: value.assertions,
-    artifacts: value.artifacts, cleanupInventory: value.cleanupInventory }, value.step);
+    artifacts: value.artifacts, cleanupInventory: value.cleanupInventory }, value.step, request, verifiedBindingSnapshot);
+  if (request) {
+    if (value.step !== request.step || value.startedAt !== request.startedAt || JSON.stringify(value.identity) !== JSON.stringify(request.identity)) invalidSchema();
+    assertTimeBounds(value.startedAt, value.observedAt, request.deadlineAt);
+  }
   return Object.freeze(value);
 }
 

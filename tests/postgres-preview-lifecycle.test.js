@@ -32,9 +32,41 @@ test('signed preview admission dedupes twenty clients and fences close resolver 
   const opened = signed('opened', '2026-09-03T00:00:00Z');
   const results = await Promise.all(repositories.map(repository => repository.handleGitHubWebhook(opened)));
   assert.equal(results.filter(result => result.duplicate === false).length, 1);
+  assert.equal(results.filter(result => result.duplicate === true).length, 19);
   assert.equal(await db.previewLineage.count(), 1);
   assert.equal(await db.deployment.count({ where: { previewLineageId: { not: null } } }), 1);
   assert.equal(await db.workflowJob.count({ where: { type: 'preview-deploy' } }), 1);
+  const accepted = results.find(result => result.duplicate === false);
+  const persistedWebhook = await db.webhookEvent.findUnique({ where: { deliveryId: opened.deliveryId } });
+  const expectedWebhook = {
+    deliveryId: opened.deliveryId,
+    installationId: '900',
+    repositoryId: '101',
+    repository: 'club/repo',
+    pullRequestNumber: 7,
+    action: 'opened',
+    headSha: 'a'.repeat(40),
+    headRef: 'topic',
+    baseRef: 'main',
+    beforeSha: null,
+    updatedAt: '2026-09-03T00:00:00Z',
+  };
+  assert.deepEqual(persistedWebhook.payload, expectedWebhook);
+  assert.equal(accepted.webhookEvent.id, persistedWebhook.id);
+  const firstPreviewDeployment = await db.deployment.findFirst({ where: { previewLineageId: { not: null } } });
+  const previewAdmissionEvent = await db.deploymentEvent.findFirst({ where: { deploymentId: firstPreviewDeployment.id, type: 'preview.workload.queued' } });
+  assert.deepEqual(previewAdmissionEvent.metadata, { source: 'github-webhook', webhookEventId: persistedWebhook.id, lineageId: firstPreviewDeployment.previewLineageId, ...expectedWebhook });
+  assert.equal(JSON.stringify(persistedWebhook.payload).includes('signature'), false);
+  assert.equal(JSON.stringify(persistedWebhook.payload).includes('secret'), false);
+  const beforeReplayRejection = [await db.webhookEvent.count(), await db.previewLineage.count(), await db.deployment.count(), await db.workflowJob.count(), await db.deploymentEvent.count(), await db.auditLog.count()];
+  await assert.rejects(
+    repositories[0].handleGitHubWebhook(signed('reopened', '2026-09-03T00:00:01Z', opened.deliveryId, 'b'.repeat(40))),
+    error => error?.code === 'preview_delivery_conflict' && error?.statusCode === 409,
+  );
+  assert.deepEqual([await db.webhookEvent.count(), await db.previewLineage.count(), await db.deployment.count(), await db.workflowJob.count(), await db.deploymentEvent.count(), await db.auditLog.count()], beforeReplayRejection);
+  const invalidSignature = { ...signed('opened', '2026-09-03T00:00:01Z'), signature: `sha256=${'0'.repeat(64)}` };
+  await assert.rejects(repositories[0].handleGitHubWebhook(invalidSignature), error => error?.statusCode === 401);
+  assert.deepEqual([await db.webhookEvent.count(), await db.previewLineage.count(), await db.deployment.count(), await db.workflowJob.count(), await db.deploymentEvent.count(), await db.auditLog.count()], beforeReplayRejection);
   const lineage = await db.previewLineage.findFirst();
   assert.equal(lineage.state, 'OPEN');
 

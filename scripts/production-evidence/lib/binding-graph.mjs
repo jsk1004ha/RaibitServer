@@ -1,5 +1,5 @@
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
-import { EvidenceBindingSchema } from '../../../packages/schemas/src/production-evidence.ts';
+import { EvidenceJournalPayloadSchema } from '../../../packages/schemas/src/production-evidence.ts';
 import { snapshotJournalData } from './journal-data-snapshot.mjs';
 
 const SAFE_PART = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/;
@@ -10,6 +10,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const ROUTE = /^\/apis?\/[A-Za-z0-9._~:/-]+$/;
 export const MUTATION_CONTRACT = Object.freeze({
   'control-plane-create-project': Object.freeze(['POST', '/api/projects']),
+  'control-plane-update-service-health': Object.freeze(['PATCH', '/api/services/:serviceId']),
   'control-plane-import-repository': Object.freeze(['POST', '/api/github/repositories/import']),
   'control-plane-create-deployment': Object.freeze(['POST', '/api/projects/:projectId/services/:serviceId/deployments']),
   'control-plane-create-resource': Object.freeze(['POST', '/api/projects/:projectId/resources']),
@@ -47,10 +48,10 @@ export function parseCleanupIntentRecord(record, expectedIdentityDigest) {
   if (!exactKeys(record, keys) || record.schema !== 'raibitserver.production-evidence-cleanup-journal/v1' || record.entryType !== 'intent'
     || !Number.isSafeInteger(record.sequence) || record.sequence < 1 || record.runIdentitySha256 !== expectedIdentityDigest
     || !SAFE_NAME.test(record.intentId) || !Object.hasOwn(MUTATION_CONTRACT, record.mutationKind)
-    || !Number.isSafeInteger(record.bindingEntryCount) || record.bindingEntryCount < 1 || !SHA256.test(record.bindingsDigest)
-    || !Array.isArray(record.bindingRefs) || record.bindingRefs.length === 0
+    || !Number.isSafeInteger(record.bindingEntryCount) || record.bindingEntryCount < 0 || !SHA256.test(record.bindingsDigest)
+    || !Array.isArray(record.bindingRefs) || (record.bindingRefs.length === 0 && !record.mutationKind?.startsWith('kubernetes-'))
     || !(record.approvedRuntimeSelectorSha256 === null || SHA256.test(record.approvedRuntimeSelectorSha256))
-    || !SAFE_NAME.test(record.resourceName) || !['POST', 'DELETE', 'APPLY'].includes(record.method)
+    || !SAFE_NAME.test(record.resourceName) || !['POST', 'DELETE', 'PATCH', 'APPLY'].includes(record.method)
     || !validRoute(record.routeTemplate) || !validRoute(record.relativeRoute) || !validSelector(record.recoverySelector)
     || !isIso(record.createdAt) || !isIso(record.deadlineAt) || Date.parse(record.deadlineAt) <= Date.parse(record.createdAt)
     || !SHA256.test(record.selectorSha256) || record.selectorSha256 !== digest(record.recoverySelector) || !SHA256.test(record.entrySha256)) fail('invalid_journal');
@@ -80,6 +81,7 @@ function primaryId(binding) {
   switch (binding.kind) {
     case 'organization-membership': return binding.membershipId;
     case 'github-repository': return binding.repositoryId;
+    case 'github-webhook-event': return binding.webhookEventId;
     case 'tenant-revision': return binding.tenantRevisionId;
     case 'project': return binding.projectId;
     case 'service': return binding.serviceId;
@@ -87,12 +89,16 @@ function primaryId(binding) {
     case 'resource': return binding.resourceId;
     case 'backup': return binding.backupId;
     case 'restore': return binding.restoreId;
+    case 'builder-deployment-observation':
+    case 'github-webhook-observation':
+    case 'controlled-fixture-observation':
+    case 'github-pull-request-observation': return binding.observationId;
     default: fail();
   }
 }
 
 export function parseEvidenceBindingPayload(value) {
-  const parsed = EvidenceBindingSchema.safeParse(snapshotJournalData(value));
+  const parsed = EvidenceJournalPayloadSchema.safeParse(snapshotJournalData(value));
   if (!parsed.success) fail('invalid_journal');
   return immutable(parsed.data);
 }
@@ -123,7 +129,9 @@ export function resolveBindingGraph(entries, references) {
   }
   for (const { payload: binding } of normalizedEntries) {
     switch (binding.kind) {
-      case 'organization-membership': case 'github-repository': break;
+      case 'organization-membership': case 'github-repository': case 'github-webhook-event':
+      case 'builder-deployment-observation': case 'github-webhook-observation':
+      case 'controlled-fixture-observation': case 'github-pull-request-observation': break;
       case 'tenant-revision': {
         const repository = domain.get(`github-repository:${binding.repositoryId}`);
         if (!repository || repository.repository !== binding.repository
@@ -173,8 +181,15 @@ function tenant(graph) {
 
 function expectedSelector(options, graph) {
   const runIdentitySha256 = digest(options.identity);
-  const membership = one(graph.referenced, 'organization-membership');
+  const membership = options.mutationKind.startsWith('kubernetes-') ? null : one(graph.referenced, 'organization-membership');
   switch (options.mutationKind) {
+    case 'control-plane-update-service-health': {
+      const { project } = tenant(graph); const service = one(graph.referenced, 'service', (item) => item.projectId === project.projectId);
+      const { readinessPathSha256, previousReadinessPathSha256 } = options.recoverySelector;
+      if (!SHA256.test(readinessPathSha256) || !SHA256.test(previousReadinessPathSha256)) fail('invalid_recovery_selector');
+      return { kind: 'ServiceHealth', projectId: project.projectId, serviceId: service.serviceId, name: options.resourceName,
+        runIdentitySha256, readinessPathSha256, previousReadinessPathSha256 };
+    }
     case 'control-plane-create-project': return { kind: 'Project', organizationId: membership.organizationId, slug: options.resourceName, runIdentitySha256 };
     case 'control-plane-import-repository': {
       const { project } = tenant(graph); const repository = one(graph.referenced, 'github-repository');
@@ -219,7 +234,7 @@ function expectedSelector(options, graph) {
       const runtime = options.approvedRuntimeSelector;
       if (!exactKeys(runtime, ['context', 'namespace']) || !SAFE_CONTEXT.test(runtime.context) || !SAFE_NAME.test(runtime.namespace)) fail('invalid_runtime_selector');
       const pod = options.mutationKind === 'kubernetes-apply-pod';
-      const name = `raibit-evidence-client-${options.identity.runId}${pod ? '' : '-egress'}`;
+      const name = `evidence-client-${options.identity.runId}${pod ? '' : '-egress'}`;
       if (options.resourceName !== name) fail('invalid_recovery_selector');
       return { kind: pod ? 'Pod' : 'NetworkPolicy', namespace: runtime.namespace, name, runLabel: options.identity.runId,
         runIdentitySha256, runtimeSelectorSha256: digest(runtime) };
@@ -231,7 +246,8 @@ function expectedSelector(options, graph) {
 export function validateIntentScope(options, entries) {
   if (!Object.hasOwn(MUTATION_CONTRACT, options.mutationKind)) fail('invalid_mutation_contract');
   if (!options.mutationKind.startsWith('kubernetes-') && options.resourceName !== deriveRunResourceName(options.identity, options.intentId)) fail('invalid_recovery_selector');
-  const graph = resolveBindingGraph(entries, options.bindingRefs);
+  const bootstrap = options.mutationKind.startsWith('kubernetes-') && entries.length === 0 && options.bindingRefs.length === 0;
+  const graph = bootstrap ? { bindingEntryCount: 0, bindingsDigest: digest([]), referenced: [] } : resolveBindingGraph(entries, options.bindingRefs);
   const selector = expectedSelector(options, graph);
   const runtimeDigest = options.mutationKind.startsWith('kubernetes-') ? digest(options.approvedRuntimeSelector) : null;
   const [method, routeTemplate] = MUTATION_CONTRACT[options.mutationKind];

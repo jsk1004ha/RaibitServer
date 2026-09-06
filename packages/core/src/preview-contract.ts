@@ -18,6 +18,7 @@ export type PreviewWebhook = Readonly<{
   pullRequestNumber: number; action: PreviewAction; headSha: string; headRef: string;
   baseRef: string; beforeSha: string | null; updatedAt: string;
 }>;
+export type PreviewWebhookLineage = Readonly<{ source: 'github-webhook'; webhookEventId: string; lineageId: string } & PreviewWebhook>;
 export type PreviewRuntime = Readonly<{
   version: 1; lineageId: string; deploymentId: string; generation: number; lineageVersion: number;
   stableHost: string; probeHost: string; namespace: string; workloadName: string;
@@ -39,6 +40,7 @@ const shaPattern = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const runtimeKeys = ['version', 'lineageId', 'deploymentId', 'generation', 'lineageVersion', 'stableHost', 'probeHost', 'namespace', 'workloadName', 'serviceName', 'probeIngressName', 'routeName'] as const;
 const observationKeys = ['version', 'lineageId', 'lineageVersion', 'installationId', 'repositoryId', 'pullRequestNumber', 'state', 'headSha', 'headRef', 'baseRef', 'updatedAt', 'observedAt'] as const;
+const webhookKeys = ['deliveryId', 'installationId', 'repositoryId', 'repository', 'pullRequestNumber', 'action', 'headSha', 'headRef', 'baseRef', 'beforeSha', 'updatedAt'] as const;
 
 function invalid(): never { throw new PreviewError('preview_invalid_input'); }
 function object(value: unknown): Record<string, unknown> {
@@ -80,6 +82,41 @@ function host(value: unknown): string {
   return parsed;
 }
 
+export function parsePreviewWebhookPayload(input: unknown): PreviewWebhook {
+  const value = exact(input, webhookKeys);
+  const action = value.action;
+  if (action !== 'opened' && action !== 'synchronize' && action !== 'reopened' && action !== 'closed') return invalid();
+  const beforeSha = value.beforeSha === null ? null : text(value.beforeSha, shaPattern);
+  if (action === 'synchronize' && beforeSha === null) return invalid();
+  return {
+    deliveryId: text(value.deliveryId, uuidPattern).toLowerCase(), installationId: numericId(value.installationId), repositoryId: numericId(value.repositoryId),
+    repository: text(value.repository, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9_.-]{1,100}$/, 140),
+    pullRequestNumber: positive(value.pullRequestNumber), action, headSha: text(value.headSha, shaPattern), headRef: ref(value.headRef),
+    baseRef: ref(value.baseRef), beforeSha, updatedAt: timestamp(value.updatedAt),
+  };
+}
+
+export function canonicalPreviewWebhook(event: PreviewWebhook): PreviewWebhook {
+  return {
+    deliveryId: event.deliveryId, installationId: event.installationId, repositoryId: event.repositoryId, repository: event.repository,
+    pullRequestNumber: event.pullRequestNumber, action: event.action, headSha: event.headSha, headRef: event.headRef,
+    baseRef: event.baseRef, beforeSha: event.beforeSha, updatedAt: event.updatedAt,
+  };
+}
+
+export function previewWebhookPayloadMatches(payload: unknown, event: PreviewWebhook): boolean {
+  try {
+    return JSON.stringify(parsePreviewWebhookPayload(payload)) === JSON.stringify(canonicalPreviewWebhook(event));
+  } catch (error) {
+    if (error instanceof PreviewError) return false;
+    throw error;
+  }
+}
+
+export function previewWebhookLineage(webhookEventId: string, lineageId: string, event: PreviewWebhook): PreviewWebhookLineage {
+  return { source: 'github-webhook', webhookEventId: text(webhookEventId, idPattern), lineageId: text(lineageId, idPattern), ...canonicalPreviewWebhook(event) };
+}
+
 export function parsePreviewWebhook(input: PreviewWebhookInput): PreviewWebhook {
   if ((typeof input.body !== 'string' && !(input.body instanceof Uint8Array)) || typeof input.secret !== 'string' || !input.secret) throw new PreviewError('preview_invalid_signature', 401);
   if (Buffer.byteLength(input.body) > 1_048_576) throw new PreviewError('preview_payload_too_large', 413);
@@ -105,12 +142,12 @@ export function parsePreviewWebhook(input: PreviewWebhookInput): PreviewWebhook 
   if (positive(payload.number) !== pullRequestNumber) return invalid();
   const beforeSha = payload.before === undefined || payload.before === null ? null : text(payload.before, shaPattern);
   if (action === 'synchronize' && beforeSha === null) return invalid();
-  return {
+  return parsePreviewWebhookPayload({
     deliveryId, installationId: String(positive(object(payload.installation).id)), repositoryId: String(positive(repository.id)),
     repository: text(repository.full_name, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9_.-]{1,100}$/, 140),
     pullRequestNumber, action, headSha: text(head.sha, shaPattern), headRef: ref(head.ref), baseRef: ref(base.ref),
     beforeSha, updatedAt: timestamp(pr.updated_at),
-  };
+  });
 }
 
 export function previewProbeHost(lineageId: string, deploymentId: string, baseDomain: string): string {

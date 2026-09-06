@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PreviewWebhookSchema } from './preview.ts';
 
 export const APPROVED_INPUT_SHA256 = '0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2';
 export const OPERATOR_CONTRACT_DIGEST = '9018b7e14c139b64ce0df686901624c4238db4f8d60d987ef46b72ea0b0a4a6c';
@@ -23,6 +24,7 @@ export const EvidenceComponentSchema = z.enum(['local', 'cluster', 'lifecycle', 
 export const EvidenceProfileSchema = z.enum(['component', 'train-a', 'final']);
 export const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/).brand('Sha256');
 const IdentifierSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/);
+const WebhookEventIdSchema = z.string().regex(/^(?:c[a-z0-9]{24}|whe-github-[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/).brand('WebhookEventId');
 export const EvidenceIdentitySchema = z.strictObject({
   runId: z.uuidv4().brand('EvidenceRunId'),
   environmentFingerprint: Sha256Schema,
@@ -41,9 +43,13 @@ export const EvidenceBindingSchema = z.discriminatedUnion('kind', [
     membershipId: IdentifierSchema, userId: IdentifierSchema, role: IdentifierSchema }).readonly(),
   z.strictObject({ kind: z.literal('github-repository'), installationId: IdentifierSchema,
     repositoryId: IdentifierSchema, repository: RepositorySchema, branch: BranchSchema }).readonly(),
+  z.strictObject({ kind: z.literal('github-webhook-event'), webhookEventId: WebhookEventIdSchema,
+    provider: z.literal('github'), eventType: z.literal('pull_request'), deliveryId: PreviewWebhookSchema.shape.deliveryId,
+    handled: z.literal(true), event: PreviewWebhookSchema }).refine((value) => value.deliveryId === value.event.deliveryId).readonly(),
   z.strictObject({ kind: z.literal('tenant-revision'), tenantRevisionId: IdentifierSchema,
-    purpose: z.enum(['candidate', 'failure']), observationId: IdentifierSchema, repositoryId: IdentifierSchema,
-    repository: RepositorySchema, branch: BranchSchema, tenantCommitSha: TenantCommitShaSchema }).readonly(),
+    purpose: z.enum(['candidate', 'preview', 'failure']), observationId: IdentifierSchema, repositoryId: IdentifierSchema,
+    repository: RepositorySchema, branch: BranchSchema, tenantCommitSha: TenantCommitShaSchema,
+    pullRequestNumber: z.number().int().positive().optional() }).readonly(),
   z.strictObject({ kind: z.literal('project'), projectId: IdentifierSchema, organizationId: IdentifierSchema }).readonly(),
   z.strictObject({ kind: z.literal('service'), serviceId: IdentifierSchema, projectId: IdentifierSchema }).readonly(),
   z.strictObject({ kind: z.literal('deployment'), role: z.enum(['candidate', 'preview', 'failed', 'rollback']),
@@ -69,15 +75,34 @@ export const EvidenceArtifactSchema = z.strictObject({
   redacted: z.literal(true),
 }).readonly();
 export const BindingJournalSnapshotSchema = z.strictObject({
-  schema: z.literal('raibitserver.binding-journal-snapshot/v1'), path: EvidenceArtifactPathSchema,
-  sha256: Sha256Schema, entriesDigest: Sha256Schema, entryCount: z.number().int().positive(),
+  schema: z.literal('raibitserver.production-evidence-binding-journal-snapshot/v1'),
+  runIdentitySha256: Sha256Schema,
+  entryCount: z.number().int().positive(),
+  entriesSha256: Sha256Schema,
 }).readonly();
-export const BindingObservationSchema = z.strictObject({
-  observationId: IdentifierSchema, kind: z.enum(['builder-deployment-observation', 'github-webhook-observation', 'controlled-fixture-observation']),
+const BindingObservationFields = {
+  observationId: IdentifierSchema,
   receiptPath: EvidenceArtifactPathSchema, receiptSha256: Sha256Schema, artifactPath: EvidenceArtifactPathSchema,
   artifactSha256: Sha256Schema, identityDigest: Sha256Schema, repositoryId: IdentifierSchema,
   repository: RepositorySchema, branch: BranchSchema, tenantCommitSha: TenantCommitShaSchema,
-}).readonly();
+};
+export const BindingObservationSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ ...BindingObservationFields, kind: z.literal('builder-deployment-observation') }).readonly(),
+  z.strictObject({ ...BindingObservationFields, kind: z.literal('github-webhook-observation') }).readonly(),
+  z.strictObject({ ...BindingObservationFields, kind: z.literal('controlled-fixture-observation'), deploymentId: IdentifierSchema,
+    controlledFault: z.strictObject({ kind: z.literal('readiness-path'), originalReadinessPath: z.string().nullable(),
+      failingPath: z.string().startsWith('/'), deploymentReadinessPath: z.string().startsWith('/'),
+      probeStatusCode: z.number().int().min(400).max(599), snapshotVersion: z.literal(1), failedStatus: z.literal('FAILED'),
+      errorCode: z.literal('ROLLOUT_FAILED'), rolloutEventId: IdentifierSchema, restoredReadinessPath: z.string().nullable() })
+      .refine((value) => value.failingPath === value.deploymentReadinessPath && value.failingPath !== value.originalReadinessPath
+        && value.restoredReadinessPath === value.originalReadinessPath) }).readonly(),
+  z.strictObject({ ...BindingObservationFields, kind: z.literal('github-pull-request-observation'),
+    webhookEventId: WebhookEventIdSchema, deploymentId: IdentifierSchema, lineageId: IdentifierSchema,
+    event: PreviewWebhookSchema }).refine((value) => value.repositoryId === value.event.repositoryId
+      && value.repository === value.event.repository && value.branch === value.event.headRef
+      && value.tenantCommitSha === value.event.headSha && value.event.action !== 'closed').readonly(),
+]);
+export const EvidenceJournalPayloadSchema = z.union([EvidenceBindingSchema, BindingObservationSchema]);
 export const VerifiedBindingJournalSchema = z.strictObject({
   schema: z.literal('raibitserver.verified-binding-journal/v1'), journal: BindingJournalSnapshotSchema,
   identityDigest: Sha256Schema, bindingsDigest: Sha256Schema, entries: EvidenceBindingsSchema,

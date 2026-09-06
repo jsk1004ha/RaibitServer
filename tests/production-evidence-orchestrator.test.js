@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import {
   parseStepReceipt,
@@ -18,6 +18,9 @@ import { createRunnerContext } from '../scripts/production-evidence/lib/run.mjs'
 import { parseFixedStepArguments, runFixedStepMain, stepReceiptExitCode } from '../scripts/production-evidence/run-component.mjs';
 import { STEP_ASSERTIONS } from '../scripts/production-evidence/lib/step-contract.mjs';
 import { parseArguments, parseMatrix } from '../scripts/production-evidence/lib/public-cli.mjs';
+import { buildIdentity } from '../scripts/production-evidence/lib/orchestrator-io.mjs';
+import { assertVerifiedBindingSnapshot, createJournalAuthorityFixtureUnsafe } from '../scripts/production-evidence/lib/journal-authority.mjs';
+import { createUnsafeFixtureArtifactWriter } from '../scripts/production-evidence/lib/safe-artifact-writer.mjs';
 
 const identity = () => ({
   runId: randomUUID(), environmentFingerprint: 'a'.repeat(64), sourceCommitSha: 'b'.repeat(40),
@@ -68,19 +71,61 @@ test('Given a shared step request, When parsed for its fixed wrapper, Then the s
   assert.throws(() => parseStepRequest(request, 'preview'), { reason: 'invalid_step_contract' });
 });
 
-test.skip('NOT_RUN until cleanup scope consumes verified binding journal instead of removed identity fields', () => {
-  const request = { schema: 'raibitserver.production-evidence-step-request/v1', step: 'cleanup', identity: identity(),
-    startedAt: '2026-09-04T00:00:00.000Z', deadlineAt: '2026-09-04T00:00:30.000Z', runDirectory: path.resolve('run'),
+test('Given genuine journal bindings, When cleanup inventory is scoped, Then tenant IDs and backup ownership come only from the verified snapshot', async (t) => {
+  const runIdentity = identity(); const parent = await sandbox(t); const runDirectory = path.join(parent, runIdentity.runId);
+  await mkdir(path.join(runDirectory, 'work'), { recursive: true, mode: 0o700 });
+  await writeFile(path.join(runDirectory, 'run.json'), JSON.stringify({ schema: 'raibitserver.evidence-run/v1', identity: runIdentity,
+    startedAt: '2026-09-04T00:00:00.000Z' }), { flag: 'wx', mode: 0o600 });
+  const writer = await createUnsafeFixtureArtifactWriter({ runDirectory,
+    allowedPaths: (relative) => /^(?:bindings|cleanup-intents)\/[a-z0-9.-]+$/.test(relative) });
+  t.after(() => writer.close());
+  const authority = await createJournalAuthorityFixtureUnsafe({ runDirectory, identity: runIdentity, genuineSafeWriter: writer });
+  await authority.appendBinding({ role: 'identity', bindingId: 'membership',
+    payload: { kind: 'organization-membership', organizationId: 'org-a', membershipId: 'member-a', userId: 'user-a', role: 'OWNER' },
+    createdAt: '2026-09-04T00:00:01.000Z' });
+  await authority.appendBinding({ role: 'project', bindingId: 'primary',
+    payload: { kind: 'project', projectId: 'project-a', organizationId: 'org-a' }, createdAt: '2026-09-04T00:00:02.000Z' });
+  await authority.appendBinding({ role: 'resource', bindingId: 'source',
+    payload: { kind: 'resource', role: 'source', engine: 'postgresql', resourceId: 'resource-a', projectId: 'project-a' },
+    createdAt: '2026-09-04T00:00:03.000Z' });
+  await authority.appendBinding({ role: 'backup', bindingId: 'source',
+    payload: { kind: 'backup', engine: 'postgresql', backupId: 'backup-a', sourceResourceId: 'resource-a' },
+    createdAt: '2026-09-04T00:00:04.000Z' });
+  const verifiedBindings = await authority.verifiedBindingSnapshot();
+  assert.equal(assertVerifiedBindingSnapshot(verifiedBindings, runIdentity), verifiedBindings);
+  assert.equal(Object.isFrozen(verifiedBindings.bindings), true);
+  assert.throws(() => assertVerifiedBindingSnapshot(structuredClone(verifiedBindings), runIdentity), { reason: 'invalid_journal_authority' });
+  assert.throws(() => assertVerifiedBindingSnapshot(verifiedBindings, identity()), { reason: 'invalid_journal_authority' });
+  const request = { schema: 'raibitserver.production-evidence-step-request/v1', step: 'cleanup', identity: runIdentity,
+    startedAt: '2026-09-04T00:00:00.000Z', deadlineAt: '2026-09-04T00:00:30.000Z', runDirectory,
     selectors: { RAIBITSERVER_RELEASE_KUBE_CONTEXT: 'cluster' }, secretRefs,
-    state: { cleanupNamespace: 'tenant-run', authenticatedClient: { namespace: 'runtime', podName: 'evidence-client', podUid: 'client-uid' }, cleanupInventory: [] } };
-  const project = { type: 'control-plane', resourceType: 'project', id: request.identity.projectId,
-    organizationId: request.identity.organizationId, projectId: request.identity.projectId };
-  const pod = { type: 'kubernetes', apiVersion: 'v1', kind: 'Pod', namespace: 'runtime', name: 'evidence-client', uid: 'client-uid',
+    state: { cleanupNamespace: 'tenant-run', authenticatedClient: { schema: 'raibitserver.production-evidence-client/v1', namespace: 'runtime', podName: 'evidence-client',
+      podUid: 'client-uid', podResourceVersion: 'pod-rv-1', networkPolicyUid: 'policy-uid', networkPolicyResourceVersion: 'policy-rv-1',
+      apiServiceName: 'raibit-api', apiServiceUid: 'service-uid', port: 3000, expiresAt: '2026-09-04T00:10:00.000Z' }, cleanupInventory: [] } };
+  const project = { type: 'control-plane', resourceType: 'project', id: 'project-a', organizationId: 'org-a', projectId: 'project-a' };
+  const backup = { type: 'control-plane', resourceType: 'backup', id: 'backup-a', organizationId: 'org-a', projectId: 'project-a' };
+  const pod = { type: 'kubernetes', apiVersion: 'v1', kind: 'Pod', namespace: 'runtime', name: 'evidence-client', uid: 'client-uid', resourceVersion: 'pod-rv-1',
     labels: { 'raibitserver.io/run-id': request.identity.runId } };
-  assert.equal(parseStepRequest({ ...request, state: { ...request.state, cleanupInventory: [project, pod] } }, 'cleanup').step, 'cleanup');
+  const policy = { type: 'kubernetes', apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', namespace: 'runtime', name: 'evidence-client-egress',
+    uid: 'policy-uid', resourceVersion: 'policy-rv-1', labels: { 'raibitserver.io/run-id': request.identity.runId } };
+  const cleanupRequest = { ...request, state: { ...request.state, cleanupInventory: [project, backup, pod] } };
+  assert.throws(() => parseStepRequest(cleanupRequest, 'cleanup'), { reason: 'invalid_step_contract' });
+  assert.equal(parseStepRequest(cleanupRequest, 'cleanup', verifiedBindings).step, 'cleanup');
   assert.deepEqual(orderCleanupInventory([pod, project], request.state.authenticatedClient), [project, pod]);
   const foreign = { ...pod, name: 'foreign-pod', uid: 'foreign-uid' };
-  assert.throws(() => parseStepRequest({ ...request, state: { ...request.state, cleanupInventory: [foreign] } }, 'cleanup'), { reason: 'invalid_step_contract' });
+  assert.throws(() => parseStepRequest({ ...request, state: { ...request.state, cleanupInventory: [foreign] } }, 'cleanup', verifiedBindings), { reason: 'invalid_step_contract' });
+  assert.throws(() => parseStepRequest({ ...request, state: { ...request.state, cleanupInventory: [{ ...backup, id: 'foreign-backup' }] } }, 'cleanup', verifiedBindings), { reason: 'invalid_step_contract' });
+  const forgedAttachment = { type: 'control-plane', resourceType: 'attachment', id: 'attachment-a', organizationId: 'org-a', projectId: 'project-a' };
+  assert.throws(() => parseStepRequest({ ...request, state: { ...request.state, cleanupInventory: [forgedAttachment] } }, 'cleanup', verifiedBindings), { reason: 'invalid_step_contract' });
+  assert.equal(parseStepRequest({ ...request, state: { ...request.state, cleanupInventory: [pod, policy] } }, 'cleanup').step, 'cleanup');
+  assert.throws(() => parseStepRequest({ ...request, state: { ...request.state, cleanupInventory: [{ ...pod, resourceVersion: undefined }] } }, 'cleanup'), { reason: 'invalid_step_contract' });
+  assert.throws(() => parseStepRequest({ ...request, state: { ...request.state, cleanupInventory: [{ ...policy, resourceVersion: 'foreign-rv' }] } }, 'cleanup'), { reason: 'invalid_step_contract' });
+});
+
+test('Given fixture environment facts, When the run identity is built, Then it contains exactly the seven provenance fields', async () => {
+  const value = await buildIdentity({ inputs: inputs(), runId: randomUUID(), root: process.cwd(), fixture: true });
+  assert.deepEqual(Object.keys(value).sort(), ['approvedInputSha256', 'environmentFingerprint', 'migrationDigest', 'operatorContractDigest',
+    'operatorInputFingerprint', 'runId', 'sourceCommitSha']);
 });
 
 test('Given a step result, When assertions escape the step allowlist, Then validation fails closed', () => {
@@ -134,8 +179,8 @@ test('Given a fixed runner result, When its process outcome is selected, Then PA
   assert.throws(() => stepReceiptExitCode({ status: 'UNKNOWN' }), { reason: 'invalid_step_contract' });
   let stderr = '';
   const harness = await runFixedStepMain('runtime', ['--step', 'runtime'], { stderr: { write: (value) => { stderr += value; } } });
-  assert.deepEqual(harness, { receipt: null, exitCode: 2 });
-  assert.equal(stderr, 'invalid_arguments\n');
+  assert.deepEqual(harness, { receipt: null, status: 'NOT_RUN', reason: 'direct_component_execution_forbidden', exitCode: 1 });
+  assert.equal(stderr, 'direct_component_execution_forbidden\n');
 });
 
 test('Given a fault matrix, When its strict boundary or mode contract drifts, Then parsing fails closed', () => {
@@ -155,7 +200,7 @@ test('Given a complete immutable receipt, When parsed, Then identity and redacti
   assert.equal(parseStepReceipt(receipt).identity.runId, receipt.identity.runId);
 });
 
-test.skip('NOT_RUN until orchestrator constructs the run-provenance-only identity', async (t) => {
+test('Given injected steps, When the complete run finishes, Then all ten committed receipts remain release ineligible', async (t) => {
   const attemptDir = await sandbox(t);
   const observed = new Date();
   const result = await runProductionEvidence({ profile: 'train-a', scenario: 'happy', faultMatrix: null, attemptDir, inputs: inputs(),
@@ -171,7 +216,7 @@ test.skip('NOT_RUN until orchestrator constructs the run-provenance-only identit
   }
 });
 
-test.skip('NOT_RUN until orchestrator constructs the run-provenance-only identity', async (t) => {
+test('Given a runtime executor crash, When the run continues, Then later external steps stop and cleanup executes', async (t) => {
   const attemptDir = await sandbox(t);
   const observed = new Date();
   const calls = [];
@@ -184,11 +229,12 @@ test.skip('NOT_RUN until orchestrator constructs the run-provenance-only identit
     executeStep: executor, clock: { now: () => observed }, uuid: randomUUID, fixture: true });
   const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8'));
   assert.equal(calls.includes('cleanup'), true);
+  assert.deepEqual(calls, ['auth-source', 'supply-chain', 'runtime', 'cleanup']);
   assert.equal(manifest.fragments.find(({ component }) => component === 'lifecycle').status, 'FAIL');
   assert.equal(JSON.parse(await readFile(path.join(result.runDirectory, 'artifacts', 'lifecycle', 'preview.json'), 'utf8')).status, 'NOT_RUN');
 });
 
-test.skip('NOT_RUN until orchestrator constructs the run-provenance-only identity', async (t) => {
+test('Given failed cleanup, When the run finalizes, Then it preserves the cleanup failure', async (t) => {
   const attemptDir = await sandbox(t);
   const executor = async (request, context) => {
     if (request.step !== 'cleanup') return passingStep(request, context);

@@ -51,11 +51,9 @@ export async function buildIdentity({ inputs, runId, root, fixture }) {
     baseDomain: inputs.selectors.RAIBITSERVER_RELEASE_BASE_DOMAIN,
     registryHost: registry.slice(0, registry.indexOf('/')),
     namespacePrefix: inputs.selectors.RAIBITSERVER_RELEASE_NAMESPACE_PREFIX });
-  const suffix = runId.replaceAll('-', '').slice(0, 12);
   return Object.freeze({ runId, environmentFingerprint: fingerprint, sourceCommitSha, migrationDigest: await migrationDigest(root),
     approvedInputSha256: APPROVED_INPUT_SHA256, operatorContractDigest: OPERATOR_CONTRACT_DIGEST,
-    operatorInputFingerprint: digest(inputs), organizationId: `evidence-org-${suffix}`, projectId: `evidence-project-${suffix}`,
-    serviceId: `evidence-service-${suffix}`, deploymentId: `evidence-deployment-${suffix}`, resourceId: `evidence-resource-${suffix}` });
+    operatorInputFingerprint: digest(inputs) });
 }
 
 export async function inspectSecretReference(reference, inputs, root) {
@@ -71,13 +69,16 @@ export async function inspectSecretReference(reference, inputs, root) {
 
 export async function executeFoundation(name, context, root) {
   const commands = name === 'local'
-    ? [['npm', ['test']], ['node', ['scripts/check-structure.js']], ['node', ['src/cli.js', 'validate', 'examples/project.json']],
-      ['node', ['src/cli.js', 'manifest', 'examples/project.json']], ['node', ['src/cli.js', 'compose', 'examples/docker-compose.yml']]]
+    ? [['pnpm', ['test']], ['pnpm', ['typecheck']], ['pnpm', ['lint']], ['pnpm', ['prisma:validate']],
+      ['node', ['scripts/check-structure.js']], ['node', ['src/cli.js', 'validate', 'examples/project.json']],
+      ['node', ['src/cli.js', 'manifest', 'examples/project.json']], ['node', ['src/cli.js', 'compose', 'examples/docker-compose.yml']],
+      ['pnpm', ['e2e:dry']], ...['builder', 'orchestrator', 'provisioner', 'log-ingester', 'metrics-ingester', 'registry-broker']
+        .flatMap((service) => [['go', ['test', './...'], path.join(root, 'services', service)], ['go', ['build', './...'], path.join(root, 'services', service)]])]
     : [['bash', ['scripts/live-helm-e2e.sh']]];
   const observations = [];
-  for (const [file, args] of commands) {
+  for (const [file, args, cwd = root] of commands) {
     try {
-      const result = await context.executeFile(file, args, { cwd: root, timeoutMs: name === 'local' ? 30 * 60_000 : 60 * 60_000 });
+      const result = await context.executeFile(file, args, { cwd, timeoutMs: name === 'local' ? 30 * 60_000 : 60 * 60_000 });
       observations.push({ command: [file, ...args], exitCode: result.exitCode, stdoutSha256: digest(result.stdout), stderrSha256: digest(result.stderr), startedAt: result.startedAt, observedAt: result.observedAt });
       if (result.exitCode !== 0) break;
     } catch (error) {

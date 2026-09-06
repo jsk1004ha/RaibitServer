@@ -19,7 +19,7 @@ import { normalizeResourceEngine } from './catalog.ts';
 import { parseResourceIntent, requireResourceExecution } from './resource-execution.ts';
 import { assertDeploymentTransition, canCancelDeployment, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
-import { parsePreviewWebhook } from './preview-contract.ts';
+import { canonicalPreviewWebhook, parsePreviewWebhook, PreviewError, previewWebhookLineage, previewWebhookPayloadMatches } from './preview-contract.ts';
 import { createPreviewRuntime, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
@@ -1366,9 +1366,16 @@ export class ControlPlaneStore {
 
   handlePreviewWebhook(input: Record<string, any>) {
     const event = parsePreviewWebhook({ body: input.body, signature: input.signature, secret: input.secret, deliveryId: input.deliveryId });
-    if (this.webhookEvents.get(event.deliveryId)?.handled) return { accepted: true, duplicate: true, deliveryId: event.deliveryId, actions: [] };
+    const existingDelivery = this.webhookEvents.get(event.deliveryId);
+    if (existingDelivery && !previewWebhookPayloadMatches(existingDelivery.payload, event)) throw new PreviewError('preview_delivery_conflict', 409);
+    if (existingDelivery?.handled) return { accepted: true, duplicate: true, deliveryId: event.deliveryId, actions: [] };
     const before = this.githubWebhookTransactionSnapshot();
     try {
+      const delivery = existingDelivery || {
+        id: stableId('whe', 'github', event.deliveryId), provider: 'github', eventType: 'pull_request', deliveryId: event.deliveryId,
+        payload: canonicalPreviewWebhook(event), handled: false, errorMessage: null, createdAt: nowIso(),
+      };
+      this.webhookEvents.set(event.deliveryId, delivery);
       const actionPlan = { kind: event.action === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: event.repositoryId, installationId: event.installationId, repository: event.repository, baseBranch: event.baseRef };
       const services = this.servicesForGitHubWebhook(actionPlan);
       const actions: any[] = [];
@@ -1400,12 +1407,14 @@ export class ControlPlaneStore {
         const runtime = createPreviewRuntime(transition.lineage, deploymentId);
         const deployment = this.createDeployment({ id: deploymentId, serviceId: service.id, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime });
         const job = this.enqueueWorkflowJob({ id: stableId('job', 'github-preview', event.deliveryId, service.id), type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, runtime } });
+        this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.workload.queued', message: `Preview Kubernetes workload queued for PR #${event.pullRequestNumber}`, metadata: previewWebhookLineage(delivery.id, lineageId, event) });
         this.previewLineages.set(lineageId, { ...transition.lineage, candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation });
         actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, lineageId, deploymentId: deployment.id, workflowJobId: job.id });
       }
-      this.webhookEvents.set(event.deliveryId, { id: stableId('whe', 'github', event.deliveryId), provider: 'github', eventType: 'pull_request', deliveryId: event.deliveryId, payload: maskSecrets({ action: event.action, repositoryId: event.repositoryId, pullRequestNumber: event.pullRequestNumber }), handled: true, errorMessage: null, createdAt: nowIso() });
       this.audit('github-webhook', 'github:preview-webhook', 'github-delivery', event.deliveryId, { action: event.action, actions: actions.map(action => action.type) });
-      return { accepted: true, duplicate: false, deliveryId: event.deliveryId, matchedServiceCount: services.length, actions };
+      const handledDelivery = { ...delivery, handled: true, errorMessage: null };
+      this.webhookEvents.set(event.deliveryId, handledDelivery);
+      return { accepted: true, duplicate: false, deliveryId: event.deliveryId, matchedServiceCount: services.length, actions, webhookEvent: handledDelivery };
     } catch (error) { this.restoreGitHubWebhookTransaction(before); throw error; }
   }
 

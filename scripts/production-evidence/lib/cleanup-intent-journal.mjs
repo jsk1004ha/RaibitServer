@@ -129,7 +129,7 @@ async function appendIntent(options) {
   if (!isRecord(options) || keys.some((key) => !Object.hasOwn(options, key))
     || Object.keys(options).some((key) => ![...keys, 'unsafeFixture', 'writer'].includes(key))
     || !SAFE_NAME.test(options.intentId) || !Object.hasOwn(MUTATION_CONTRACT, options.mutationKind)
-    || !Array.isArray(options.bindingRefs) || options.bindingRefs.length === 0 || !SAFE_NAME.test(options.resourceName)
+    || !Array.isArray(options.bindingRefs) || (options.bindingRefs.length === 0 && !options.mutationKind.startsWith('kubernetes-')) || !SAFE_NAME.test(options.resourceName)
     || !validRoute(options.relativeRoute) || !validSelector(options.recoverySelector) || !isIso(options.createdAt) || !isIso(options.deadlineAt)
     || Date.parse(options.deadlineAt) <= Date.parse(options.createdAt)) fail();
   assertRedacted(options);

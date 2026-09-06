@@ -2,14 +2,22 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { verifyManifest } from './production-evidence/lib/manifest.mjs';
-import { EvidenceError, loadOperatorContract, readJson } from './production-evidence/lib/operator-inputs.mjs';
+import { digest, EvidenceError, loadOperatorContract, readJson } from './production-evidence/lib/operator-inputs.mjs';
 import { checkRun, verifyArtifacts, verifyFragmentFiles, verifyRunReceipts } from './production-evidence/lib/run.mjs';
 import { verifyResourceLifecycle } from './production-evidence/lib/resource-lifecycle.mjs';
+import { assertReceiptAuthority } from './production-evidence/lib/receipt-authority.mjs';
+import { verifyReceiptProvenance } from './production-evidence/lib/receipt-provenance.mjs';
 
 export async function verifyEvidenceFile(file, options = {}) {
   await loadOperatorContract();
   const resolved = path.resolve(file);
   const manifest = await readJson(resolved);
+  if (options.receiptAuthority) {
+    const authority = assertReceiptAuthority(options.receiptAuthority);
+    const snapshot = await authority.snapshot();
+    if (snapshot.runIdentitySha256 !== digest(manifest.identity)) throw new EvidenceError('identity_mismatch');
+    if (options.verifiedBindingJournal) verifyReceiptProvenance(await authority.loadProgression({ journalAuthority: options.journalAuthority }), options.verifiedBindingJournal);
+  } else if (!manifest.fixture && ['train-a', 'final'].includes(manifest.profile)) throw new EvidenceError('receipt_authority_unavailable');
   const result = verifyManifest(manifest, options);
   if (!result.valid) throw new EvidenceError(result.reason);
   if (!manifest.fixture) await checkRun(path.dirname(resolved), manifest);

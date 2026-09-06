@@ -52,6 +52,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   process.stdout.write(`${JSON.stringify(result.output)}\n`);
   process.exitCode = result.exitCode;
 } catch (error) {
-  process.stderr.write(`${error instanceof EvidenceError ? error.reason : 'evidence_io_failed'}\n`);
-  process.exitCode = 2;
+  const reason = error instanceof EvidenceError ? error.reason : 'evidence_io_failed';
+  process.stdout.write(`${JSON.stringify({ status: 'NOT_RUN', releaseEligible: false, reason })}\n`);
+  process.exitCode = reason === 'invalid_arguments' || reason === 'invalid_fault_matrix' ? 2 : 1;
 }
