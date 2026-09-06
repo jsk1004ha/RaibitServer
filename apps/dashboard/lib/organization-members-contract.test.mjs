@@ -46,6 +46,23 @@ test('member administration uses the authenticated BFF, concurrency versions, an
   assert.match(membersPage, /getJson\(`\/organizations\/\$\{encodeURIComponent\(organizationId\)\}\/invites`/);
 });
 
+test('client mutation components do not import the server API module', async () => {
+  const [members, form, acceptance, domains, settings, action] = await Promise.all([
+    component('organization-members.tsx'),
+    component('organization-create-form.tsx'),
+    component('organization-invite-acceptance.tsx'),
+    component('project-hub/domains.tsx'),
+    component('project-hub/settings.tsx'),
+    readFile(new URL('../lib/api-action.ts', import.meta.url), 'utf8'),
+  ]);
+
+  for (const source of [members, form, acceptance, domains, settings]) {
+    assert.match(source, /from '@\/lib\/api-action'/);
+    assert.doesNotMatch(source, /import \{ apiAction \} from '@\/lib\/api'/);
+  }
+  assert.doesNotMatch(action, /next\/headers/);
+});
+
 test('invite acceptance clears the token URL, refuses auth-token handoff, and sends the token only to the authenticated BFF endpoint', async () => {
   const [acceptance, acceptancePage] = await Promise.all([
     component('organization-invite-acceptance.tsx'),

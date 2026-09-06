@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
-import { apiAction } from '@/lib/api';
+import { apiAction } from '@/lib/api-action';
 
 type CreateState =
   | Readonly<{ kind: 'idle' | 'pending' }>

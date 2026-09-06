@@ -11,7 +11,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSet, FieldLegend 
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
-import { apiAction } from '@/lib/api';
+import { apiAction } from '@/lib/api-action';
 import type { DashboardLoadIssue } from '@/lib/api';
 import type { ProjectHubData, ProjectSettingsView } from './types';
 

@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { UserAvatar } from '@/components/user-avatar';
-import { apiAction } from '@/lib/api';
+import { apiAction } from '@/lib/api-action';
 
 const roles = ['OWNER', 'ADMIN', 'MAINTAINER', 'DEVELOPER', 'DB_ADMIN', 'VIEWER'] as const;
 type MembershipRole = typeof roles[number];

@@ -11,7 +11,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSet, FieldLegend 
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
-import { apiAction } from '@/lib/api';
+import { apiAction } from '@/lib/api-action';
 import type { CustomDomainRecord, ProjectHubData, ServiceRecord } from './types';
 
 const MAX_STATUS_POLLS = 6;

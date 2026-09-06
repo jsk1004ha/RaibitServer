@@ -2,6 +2,8 @@ import { cookies } from 'next/headers';
 import { fetchWithInitialResponseTimeout, readBoundedBody, SESSION_COOKIE_NAME } from './request-security.js';
 import { controlPlaneErrorCode } from './control-plane-errors.js';
 
+export { apiAction } from './api-action.js';
+
 const CONTROL_PLANE_CONNECT_TIMEOUT_MS = 10_000;
 const CONTROL_PLANE_BODY_TIMEOUT_MS = 15_000;
 const CONTROL_PLANE_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -39,12 +41,6 @@ export async function dashboardApiContext(): Promise<DashboardApiContext> {
 
 export function publicDashboardApiContext(): DashboardApiContext {
   return { baseUrl: dashboardApiBaseUrl(), headers: {} };
-}
-
-// Browser navigation and mutations stay on the dashboard origin. The Route Handler
-// reads the HttpOnly session and attaches the Authorization header server-side.
-export function apiAction(path: string, _context?: DashboardApiContext) {
-  return `/api/control${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 export async function getJson(path: string, fallback: any = null, context?: DashboardApiContext): Promise<DashboardApiResult> {
