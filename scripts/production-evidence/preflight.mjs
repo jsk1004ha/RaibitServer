@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { EvidenceError, APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST, loadOperatorContract, parseOperatorInputs, inputsFromEnvironment, verifyApprovedSnapshot, digest, readJson } from './lib/operator-inputs.mjs';
+import { parseCiInvocation } from './lib/ci-invocation.mjs';
 
 export { parseOperatorInputs, inputsFromEnvironment };
 export async function preflight(value, options = {}) {
@@ -21,10 +24,41 @@ export async function preflight(value, options = {}) {
     throw error;
   }
 }
+export async function runMissingSigningFixture({ fixture, ciReceipt, attemptDir }) {
+  const contract = await loadOperatorContract(), value = await readJson(fixture, 'missing_approved_input');
+  const signing = contract.secretBindings.find(({ role }) => role === 'signing');
+  if (!signing || value.secretRefs?.some(({ role }) => role === 'signing')) throw new EvidenceError('invalid_fixture');
+  parseOperatorInputs({ ...value, secretRefs: [...value.secretRefs, { role: signing.role, binding: signing.binding,
+    kind: signing.kind, namespace: 'fixture-system', existingSecret: 'fixture-signing', keys: Object.values(signing.keyFields) }] }, contract);
+  const invocation = parseCiInvocation(await readJson(ciReceipt, 'ci_identity_mismatch'));
+  await mkdir(attemptDir, { recursive: false, mode: 0o700 });
+  const result = { schema: 'raibitserver.production-evidence-preflight/v1', status: 'NOT_RUN', reason: 'missing_secret_ref',
+    releaseEligible: false, testOnly: true, approvedInputSha256: APPROVED_INPUT_SHA256,
+    operatorContractDigest: OPERATOR_CONTRACT_DIGEST, ciInvocationSha256: digest(invocation) };
+  const cleanup = { schema: 'raibitserver.production-evidence-preflight-cleanup/v1', status: 'PASS',
+    reason: null, resourcesCreated: 0, resourcesRemaining: 0, testOnly: true };
+  await Promise.all([
+    writeFile(path.join(attemptDir, 'preflight.json'), `${JSON.stringify(result)}\n`, { flag: 'wx', mode: 0o600 }),
+    writeFile(path.join(attemptDir, 'cleanup.json'), `${JSON.stringify(cleanup)}\n`, { flag: 'wx', mode: 0o600 }),
+  ]);
+  return result;
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const args = process.argv.slice(2);
-    if (args[0] === '--contract' && args.length === 1) {
+    if (args[0] === '--profile') {
+      const values = new Map();
+      if (args.length !== 8) throw new EvidenceError('invalid_arguments');
+      for (let index = 0; index < args.length; index += 2) {
+        if (values.has(args[index])) throw new EvidenceError('invalid_arguments');
+        values.set(args[index], args[index + 1]);
+      }
+      if (values.get('--profile') !== 'train-a' || !['--fixture', '--ci-receipt', '--attempt-dir'].every((flag) => values.has(flag))
+        || [values.get('--fixture'), values.get('--ci-receipt'), values.get('--attempt-dir')].some((value) => !path.isAbsolute(value))) throw new EvidenceError('invalid_arguments');
+      const result = await runMissingSigningFixture({ fixture: values.get('--fixture'), ciReceipt: values.get('--ci-receipt'), attemptDir: values.get('--attempt-dir') });
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+      process.exitCode = 1;
+    } else if (args[0] === '--contract' && args.length === 1) {
       await loadOperatorContract();
       process.stdout.write(`${JSON.stringify({ approvedInputSha256: APPROVED_INPUT_SHA256, operatorContractDigest: OPERATOR_CONTRACT_DIGEST, releaseEligible: false })}\n`);
     } else if (args[0] === '--approved-input' && args.length === 2) {

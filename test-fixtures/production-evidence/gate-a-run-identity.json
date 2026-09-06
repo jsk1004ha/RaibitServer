@@ -1,0 +1,15 @@
+{
+  "schema": "raibitserver.gate-a-run-identity-fixture/v1",
+  "testOnly": true,
+  "releaseEligible": false,
+  "execution": {
+    "repository": "jsk1004ha/RaibitServer",
+    "ref": "refs/tags/raibit-gate-a-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-happy-123e4567-e89b-42d3-a456-426614174000",
+    "sourceCommitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runId": "42",
+    "runAttempt": 1,
+    "workflowRef": "jsk1004ha/RaibitServer/.github/workflows/production-evidence.yml@refs/tags/raibit-gate-a-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-happy-123e4567-e89b-42d3-a456-426614174000",
+    "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "event": "push"
+  }
+}
