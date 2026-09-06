@@ -21,6 +21,7 @@ import { createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan
 import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
 import { publicSitesFromSnapshot } from './public-sites.ts';
 import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, encodeDeploymentActivityResumeToken, encodeServiceLogResumeToken, DeploymentActivityResumeTokenError } from './sse.ts';
+import { parseProjectDeletionConfirmation, parseProjectSettingsUpdate } from './project-settings.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = {
@@ -272,6 +273,39 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
           .sort((left, right) => Number(new Date(right.createdAt)) - Number(new Date(left.createdAt)))
           .slice(0, 200);
         return send(res, 200, { project, services, resources, deployments });
+      }
+      const projectSettingsMatch = url.pathname.match(/^\/projects\/([^/]+)\/settings$/);
+      if (projectSettingsMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const projectId = decodeURIComponent(projectSettingsMatch[1]);
+        const project = await assertProjectAccess(controlPlane.store, projectId, subject);
+        return send(res, 200, controlPlane.store.getProjectSettings(projectId, String(project.organizationId)));
+      }
+      if (projectSettingsMatch && method === 'PATCH') {
+        const subject = authorizeAction(req, 'project:update', auth);
+        const projectId = decodeURIComponent(projectSettingsMatch[1]);
+        const input = parseProjectSettingsUpdate(await readJson(req));
+        const project = await assertProjectAccess(controlPlane.store, projectId, subject);
+        const settings = controlPlane.store.updateProjectSettings({
+          projectId,
+          organizationId: String(project.organizationId),
+          actorUserId: typeof subject.id === 'string' ? subject.id : null,
+          ...input,
+        });
+        return send(res, 200, settings);
+      }
+      const projectDeletionMatch = url.pathname.match(/^\/projects\/([^/]+)\/settings\/deletion$/);
+      if (projectDeletionMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'project:delete', auth);
+        const projectId = decodeURIComponent(projectDeletionMatch[1]);
+        parseProjectDeletionConfirmation(await readJson(req));
+        const project = await assertProjectAccess(controlPlane.store, projectId, subject);
+        const scheduled = controlPlane.store.scheduleProjectDeletion({
+          projectId,
+          organizationId: String(project.organizationId),
+          actorUserId: typeof subject.id === 'string' ? subject.id : null,
+        });
+        return send(res, 202, scheduled);
       }
       const projectMatch = url.pathname.match(/^\/projects\/([^/]+)$/);
       if (projectMatch && method === 'GET') {

@@ -1,7 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
 import { projectObservationPayload } from '@raibitserver/core';
-import { PasswordRecoveryCompleteSchema, PasswordRecoveryRequestSchema, ResourceBackupListSchema, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
+import { ProjectSettingsError } from '@raibitserver/core';
+import { PasswordRecoveryCompleteSchema, PasswordRecoveryRequestSchema, ResourceBackupListSchema, type ProjectDeletionScheduled, type ProjectSettingsUpdate, type ProjectSettingsView, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, completePasswordRecovery, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requestPasswordRecovery, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
@@ -203,6 +204,39 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const project = await repositoryMutation(() => repository.updateProject ? repository.updateProject(projectId, updates || {}) : repository.store.updateProject(projectId, updates || {}));
     if (!project) throw new NotFoundException(`project not found: ${projectId}`);
     return project;
+  }
+
+  async getProjectSettings(projectId: string, subject: Record<string, unknown>): Promise<ProjectSettingsView> {
+    const repository = await this.repositoryPromise;
+    const project = await assertProjectAccess(repository, projectId, subject);
+    const settings = await repository.getProjectSettings(projectId, String(project.organizationId));
+    if (!settings) throw new NotFoundException(`project not found: ${projectId}`);
+    return settings;
+  }
+
+  async updateProjectSettings(projectId: string, input: ProjectSettingsUpdate, subject: Record<string, unknown>): Promise<ProjectSettingsView> {
+    const repository = await this.repositoryPromise;
+    const project = await assertProjectAccess(repository, projectId, subject);
+    const settings = await repositoryMutation(() => repository.updateProjectSettings({
+      projectId,
+      organizationId: String(project.organizationId),
+      actorUserId: typeof subject.id === 'string' ? subject.id : null,
+      ...input,
+    }));
+    if (!settings) throw new NotFoundException(`project not found: ${projectId}`);
+    return settings;
+  }
+
+  async scheduleProjectDeletion(projectId: string, subject: Record<string, unknown>): Promise<ProjectDeletionScheduled> {
+    const repository = await this.repositoryPromise;
+    const project = await assertProjectAccess(repository, projectId, subject);
+    const scheduled = await repositoryMutation(() => repository.scheduleProjectDeletion({
+      projectId,
+      organizationId: String(project.organizationId),
+      actorUserId: typeof subject.id === 'string' ? subject.id : null,
+    }));
+    if (!scheduled) throw new NotFoundException(`project not found: ${projectId}`);
+    return scheduled;
   }
 
   async deleteProject(projectId: string, subject: Record<string, any>) {
@@ -984,13 +1018,14 @@ export class RAIBITSERVERService implements OnModuleDestroy {
 }
 
 async function assertProjectAccess(repository: any, projectId: string, subject: Record<string, any>) {
-  if (isGlobalSubject(subject)) return;
   const project = repository.getProject
     ? await repository.getProject(projectId)
     : (await repository.snapshot()).projects.find((candidate: Record<string, any>) => String(candidate.id) === String(projectId));
   if (!project) throw new NotFoundException(`project not found: ${projectId}`);
+  if (isGlobalSubject(subject)) return project;
   if (subject.projectId || Array.isArray(subject.projectIds)) enforceScope(subject, { projectId });
   enforceScope(subject, { organizationId: project.organizationId });
+  return project;
 }
 
 async function assertServiceInProject(repository: any, projectId: string, serviceId: string) {
@@ -1083,6 +1118,7 @@ async function repositoryMutation<T>(operation: () => T | Promise<T>): Promise<T
 }
 
 function nestAuthError(error: any) {
+  if (error instanceof ProjectSettingsError) return typedOperationException(409, error.code, false);
   if (error instanceof RecoveryError) return new HttpException({ statusCode: error.statusCode, code: error.code, message: error.code }, error.statusCode);
   if (error instanceof DeploymentOperationError) return typedOperationException(error.statusCode, error.code, error.code === 'ACTIVE_DEPLOYMENT');
   if (error instanceof ResourceCapabilityUnavailable) return new BadRequestException({ ...typedOperationBody(400, error.code, false), reasonCode: error.reasonCode });

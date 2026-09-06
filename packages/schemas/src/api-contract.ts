@@ -4,6 +4,7 @@ import { ResourceBackupCreateSchema, ResourceBackupDeleteSchema, ResourceBackupL
 import { PasswordRecoveryAcceptedSchema, PasswordRecoveryCompleteSchema, PasswordRecoveryCompletedSchema, PasswordRecoveryRequestSchema } from './password-recovery.ts';
 import * as M from './api-models.ts';
 import { ProjectUpdateSchema, ServiceUpdateSchema, ResourceUpdateSchema } from './desired-state-mutations.ts';
+import { ProjectDeletionConfirmationSchema, ProjectDeletionScheduledSchema, ProjectSettingsUpdateSchema, ProjectSettingsViewSchema } from './project-settings.ts';
 
 const id = z.string().min(1);
 const project = z.object({ projectId: id });
@@ -55,6 +56,9 @@ export const apiOperations = {
   'projects-get': operation({ method: 'get', path: '/projects/{projectId}', status: 200, permission: 'project:read', input: input(project, M.Empty, M.Empty), response: M.Project }),
   'projects-update': operation({ method: 'patch', path: '/projects/{projectId}', status: 200, permission: 'project:update', input: input(project, M.Empty, ProjectUpdateSchema), response: M.Project }),
   'projects-delete': operation({ method: 'delete', path: '/projects/{projectId}', status: 200, permission: 'project:delete', input: input(project, M.Empty, M.Empty), response: M.Deletion }),
+  'project-settings-get': operation({ method: 'get', path: '/projects/{projectId}/settings', status: 200, permission: 'project:read', input: input(project, M.Empty, M.Empty), response: ProjectSettingsViewSchema }),
+  'project-settings-update': operation({ method: 'patch', path: '/projects/{projectId}/settings', status: 200, permission: 'project:update', input: input(project, M.Empty, ProjectSettingsUpdateSchema), response: ProjectSettingsViewSchema }),
+  'project-settings-delete': operation({ method: 'post', path: '/projects/{projectId}/settings/deletion', status: 202, permission: 'project:delete', input: input(project, M.Empty, ProjectDeletionConfirmationSchema), response: ProjectDeletionScheduledSchema }),
   'projects-overview': operation({ method: 'get', path: '/projects/{projectId}/overview', status: 200, permission: 'project:read', input: input(project, M.Empty, M.Empty), response: z.object({ project: M.Project, services: z.array(M.Service), resources: z.array(M.Resource), deployments: z.array(M.Deployment) }) }),
   'services-list': operation({ method: 'get', path: '/projects/{projectId}/services', status: 200, permission: 'project:read', input: input(project, M.PageQuery, M.Empty), response: M.Services }),
   'services-create': operation({ method: 'post', path: '/projects/{projectId}/services', status: 201, permission: 'service:create', input: input(project, M.Empty, M.ServiceInput), response: M.Service }),

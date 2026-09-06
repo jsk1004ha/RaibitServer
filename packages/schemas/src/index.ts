@@ -1,6 +1,7 @@
 import { z } from 'zod';
 export * from './resource-recovery.ts';
 export * from './password-recovery.ts';
+export * from './project-settings.ts';
 import { ServiceHealthFields, refineServiceHealth, type DeploymentHealth } from './deployment-health.ts';
 export * from './deployment-health.ts';
 export * from './deployment-operation.ts';

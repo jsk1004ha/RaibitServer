@@ -1,4 +1,6 @@
 export { RAIBITSERVERControlPlane } from './control-plane.ts';
+export { ProjectSettingsError, nextProjectUpdatedAt, parseProjectDeletionConfirmation, parseProjectSettingsUpdate, projectSettingsView, scheduledProjectDeletion } from './project-settings.ts';
+export type { ProjectDeletionRequest, ProjectSettingsMutation } from './project-settings.ts';
 export { ControlPlaneStore } from './store.ts';
 export { DeploymentOperationError, parseDeploymentOperationBody } from './deployment-operations.ts';
 export type { DeploymentOperation, DeploymentOperationBody, DesiredSpecSnapshot } from './deployment-operations.ts';

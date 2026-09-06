@@ -1,7 +1,9 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { ProjectsService } from './projects.service';
-import type { ProjectSpec } from '@raibitserver/schemas';
+import { ProjectDeletionConfirmationSchema, ProjectSettingsUpdateSchema, type ProjectSpec } from '@raibitserver/schemas';
+
+type AuthenticatedRequest = { readonly raibitSubject: Record<string, unknown> };
 
 @Controller('projects')
 export class ProjectsController {
@@ -23,6 +25,28 @@ export class ProjectsController {
   @Get(':projectId/overview')
   overview(@Param('projectId') projectId: string, @Req() req: any) {
     return this.projectsService.overview(projectId, req.raibitSubject);
+  }
+
+  @RequirePermission('project:read')
+  @Get(':projectId/settings')
+  settings(@Param('projectId') projectId: string, @Req() request: AuthenticatedRequest) {
+    return this.projectsService.getProjectSettings(projectId, request.raibitSubject);
+  }
+
+  @RequirePermission('project:update')
+  @Patch(':projectId/settings')
+  updateSettings(@Param('projectId') projectId: string, @Body() input: unknown, @Req() request: AuthenticatedRequest) {
+    const parsed = ProjectSettingsUpdateSchema.safeParse(input);
+    if (!parsed.success) throw new BadRequestException('INVALID_PROJECT_SETTINGS');
+    return this.projectsService.updateProjectSettings(projectId, parsed.data, request.raibitSubject);
+  }
+
+  @RequirePermission('project:delete')
+  @Post(':projectId/settings/deletion')
+  @HttpCode(202)
+  scheduleDeletion(@Param('projectId') projectId: string, @Body() input: unknown, @Req() request: AuthenticatedRequest) {
+    if (!ProjectDeletionConfirmationSchema.safeParse(input).success) throw new BadRequestException('INVALID_PROJECT_SETTINGS');
+    return this.projectsService.scheduleProjectDeletion(projectId, request.raibitSubject);
   }
 
   @RequirePermission('project:read')

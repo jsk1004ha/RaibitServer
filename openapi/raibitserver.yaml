@@ -599,6 +599,98 @@ paths:
       security:
         - bearerAuth: []
       x-permission: project:delete
+  /projects/{projectId}/settings:
+    get:
+      operationId: project-settings-get
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/project-settings-getResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    patch:
+      operationId: project-settings-update
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/project-settings-updateBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/project-settings-getResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:update
+  /projects/{projectId}/settings/deletion:
+    post:
+      operationId: project-settings-delete
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/project-settings-deleteBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/project-settings-deleteResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:delete
   /projects/{projectId}/overview:
     get:
       operationId: projects-overview
@@ -4894,6 +4986,144 @@ components:
           type: string
           maxLength: 4096
           pattern: ^[^\u0000-\u001f\u007f]*$
+      additionalProperties: false
+    project-settings-getResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        project:
+          type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+            organizationId:
+              type: string
+              minLength: 1
+            name:
+              type: string
+              minLength: 1
+              maxLength: 128
+              pattern: ^[^\u0000-\u001f\u007f]+$
+            slug:
+              type: string
+              minLength: 1
+            description:
+              type: string
+              maxLength: 4096
+              pattern: ^[^\u0000-\u001f\u007f]*$
+            status:
+              type: string
+              minLength: 1
+            updatedAt:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            deletionRequestedAt:
+              anyOf:
+                - type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                - type: "null"
+          required:
+            - id
+            - organizationId
+            - name
+            - slug
+            - description
+            - status
+            - updatedAt
+            - deletionRequestedAt
+          additionalProperties: false
+        snapshot:
+          type: object
+          properties:
+            updatedAt:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          required:
+            - updatedAt
+          additionalProperties: false
+        deletionImpact:
+          type: object
+          properties:
+            services:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            resources:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            previews:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+          required:
+            - services
+            - resources
+            - previews
+          additionalProperties: false
+      required:
+        - project
+        - snapshot
+        - deletionImpact
+      additionalProperties: false
+    project-settings-updateBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[^\u0000-\u001f\u007f]+$
+        description:
+          type: string
+          maxLength: 4096
+          pattern: ^[^\u0000-\u001f\u007f]*$
+        expectedUpdatedAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - expectedUpdatedAt
+      additionalProperties: false
+    project-settings-deleteResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        projectId:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - DELETE_REQUESTED
+            - DELETING
+        deletionRequestedAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        scheduled:
+          type: boolean
+          const: true
+      required:
+        - projectId
+        - status
+        - deletionRequestedAt
+        - scheduled
+      additionalProperties: false
+    project-settings-deleteBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        confirmed:
+          type: boolean
+          const: true
+      required:
+        - confirmed
       additionalProperties: false
     projects-overviewResponse:
       $schema: https://json-schema.org/draft/2020-12/schema

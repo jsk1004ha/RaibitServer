@@ -1,4 +1,4 @@
-import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectListResponse, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
+import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
 import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
@@ -80,6 +80,18 @@ export class RAIBITSERVERClient {
   }
   deleteProject(projectId: string): Promise<Record<string, unknown>> {
     return this.request(`/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
+  }
+
+  getProjectSettings(projectId: string): Promise<ProjectSettingsView> {
+    return this.operations['project-settings-get']({ path: { projectId }, query: {}, body: {} });
+  }
+
+  updateProjectSettings(projectId: string, input: ProjectSettingsUpdate): Promise<ProjectSettingsView> {
+    return this.operations['project-settings-update']({ path: { projectId }, query: {}, body: input });
+  }
+
+  scheduleProjectDeletion(projectId: string, confirmed: true): Promise<ProjectDeletionScheduled> {
+    return this.operations['project-settings-delete']({ path: { projectId }, query: {}, body: { confirmed } });
   }
 
   createService(projectId: string, service: Partial<ServiceSpec> & Record<string, unknown>): Promise<ServiceSpec> {

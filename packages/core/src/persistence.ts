@@ -5,6 +5,7 @@ import { PostgresRecoveryTransaction, lockRecoveryDeletion, assertPostgresRecove
 import { HEALTH_PATH_FIELDS, INITIAL_DEPLOYMENT_HEALTH, parseHealthPaths, publicDeploymentHealth } from './deployment-health.ts';
 import { assertOperationReplay, captureDeploymentSnapshot, deploymentSuccessor, DeploymentOperationError, eligibleDeploymentSource, successorWorkflow, type DeploymentOperation } from './deployment-operations.ts';
 import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
+import { ProjectSettingsError, projectSettingsView, scheduledProjectDeletion, type ProjectDeletionRequest, type ProjectSettingsMutation } from './project-settings.ts';
 import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput } from './oauth-transaction.ts';
 import { createPrismaOAuthTransaction, consumePrismaOAuthTransaction, deletePrismaOAuthTransactions } from './prisma-oauth-transaction.ts';
 import { LIFECYCLE_CONTRACT, terminalLifecycleInputs } from './lifecycle.ts';
@@ -178,6 +179,9 @@ export class InMemoryControlPlaneRepository {
     return this.runQuotaMutation(input.actorUserId, 'project:create', [{ metric: 'maxProjects', increment: existing ? 0 : 1 }], () => this.store.createProject({ ...input, status: input.actorUserId ? 'ACTIVE' : input.status }));
   }
   async updateProject(projectId: string, updates: Record<string, any>) { return this.store.updateProject(projectId, updates); }
+  async getProjectSettings(projectId: string, organizationId: string) { return this.store.getProjectSettings(projectId, organizationId); }
+  async updateProjectSettings(input: ProjectSettingsMutation) { return this.store.updateProjectSettings(input); }
+  async scheduleProjectDeletion(input: ProjectDeletionRequest) { return this.store.scheduleProjectDeletion(input); }
   async deleteProject(projectId: string) { return this.store.deleteProject(projectId); }
   async createService(input: Record<string, any>, options: Record<string, any> = {}) {
     const slug = slugInput(input.slug || input.name);
@@ -898,18 +902,59 @@ export class PrismaControlPlaneRepository {
     }, { isolationLevel: 'Serializable' });
   }
 
-  async deleteProject(projectId: string) {
+  async getProjectSettings(projectId: string, organizationId: string) {
+    const project = await this.prisma.project.findFirst({ where: { id: projectId, organizationId } });
+    if (!project) return null;
+    const [services, resources, previews] = await Promise.all([
+      this.prisma.service.count({ where: { projectId } }),
+      this.prisma.resource.count({ where: { projectId } }),
+      this.prisma.deployment.count({ where: { projectId, deploymentType: { in: ['preview', 'PREVIEW'] } } }),
+    ]);
+    return projectSettingsView(project, { services, resources, previews });
+  }
+
+  async updateProjectSettings(input: ProjectSettingsMutation) {
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.project.findFirst({ where: { id: input.projectId, organizationId: input.organizationId } });
+      if (!current) return null;
+      assertMutable(current, 'project');
+      const parsed = parseProjectMutation({ ...(input.name === undefined ? {} : { name: input.name }), ...(input.description === undefined ? {} : { description: input.description }) });
+      const data = projectUpdateData(parsed);
+      const result = await tx.project.updateMany({
+        where: { id: input.projectId, organizationId: input.organizationId, updatedAt: new Date(input.expectedUpdatedAt), status: { notIn: deletionStatuses } },
+        data,
+      });
+      if (result.count !== 1) throw new ProjectSettingsError();
+      await tx.auditLog.create({ data: { actorUserId: input.actorUserId, action: 'project:settings-update', targetType: 'project', targetId: input.projectId, metadata: maskSecrets(data) } });
+      const project = await tx.project.findUnique({ where: { id: input.projectId } });
+      if (!project) throw new ProjectSettingsError();
+      const [services, resources, previews] = await Promise.all([
+        tx.service.count({ where: { projectId: input.projectId } }),
+        tx.resource.count({ where: { projectId: input.projectId } }),
+        tx.deployment.count({ where: { projectId: input.projectId, deploymentType: { in: ['preview', 'PREVIEW'] } } }),
+      ]);
+      return projectSettingsView(project, { services, resources, previews });
+    }, { isolationLevel: 'Serializable' });
+  }
+
+  async scheduleProjectDeletion(input: ProjectDeletionRequest) {
+    const project = await this.deleteProject(input.projectId, { organizationId: input.organizationId, actorUserId: input.actorUserId, auditRepeated: false });
+    return project ? scheduledProjectDeletion(project) : null;
+  }
+
+  async deleteProject(projectId: string, options: { readonly organizationId?: string; readonly actorUserId?: string | null; readonly auditRepeated?: boolean } = {}) {
     return this.prisma.$transaction(async (tx: any) => {
-      await lockRecoveryDeletion(tx, { projectId });
       const current = await tx.project.findUnique({ where: { id: projectId } });
       if (!current) return null;
+      if (options.organizationId !== undefined && String(current.organizationId) !== options.organizationId) return null;
+      await lockRecoveryDeletion(tx, { projectId });
       const requestedAt = current.deletionRequestedAt || new Date();
       const services = await tx.service.findMany({ where: { projectId }, select: { id: true } });
       const resources = await tx.resource.findMany({ where: { projectId }, select: { id: true } });
       const deployments = await tx.deployment.findMany({ where: { projectId }, select: { id: true } });
       await revokeResourceAttachments(tx, resources.map((row: Record<string, any>) => row.id));
       await tx.project.updateMany({
-        where: { id: projectId, status: { notIn: deletionStatuses } },
+        where: { id: projectId, ...(options.organizationId === undefined ? {} : { organizationId: options.organizationId }), status: { notIn: deletionStatuses } },
         data: { status: deletionRequestedStatus, deletionRequestedAt: requestedAt },
       });
       await tx.service.updateMany({
@@ -926,7 +971,7 @@ export class PrismaControlPlaneRepository {
         resourceIds: resources.map((row: Record<string, any>) => row.id),
         deploymentIds: deployments.map((row: Record<string, any>) => row.id),
       });
-      await tx.auditLog.create({ data: { actorUserId: null, action: 'project:delete-requested', targetType: 'project', targetId: projectId, metadata: maskSecrets({ repeated: isDeleting(current), childServices: services.length, childResources: resources.length }) } });
+      if (options.auditRepeated !== false || !isDeleting(current)) await tx.auditLog.create({ data: { actorUserId: options.actorUserId ?? null, action: 'project:delete-requested', targetType: 'project', targetId: projectId, metadata: maskSecrets({ repeated: isDeleting(current), childServices: services.length, childResources: resources.length }) } });
       return tx.project.findUnique({ where: { id: projectId } });
     }, { isolationLevel: 'Serializable' });
   }

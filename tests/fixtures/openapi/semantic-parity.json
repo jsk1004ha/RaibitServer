@@ -9,6 +9,8 @@
     "auth-password-reset-request": {"email":"parity@example.test"},
     "auth-password-reset-complete": {"email":"parity@example.test","code":"123456","newPassword":"test-password"},
     "projects-create": {"name":"Parity"},
+    "project-settings-update": {"name":"Parity settings","expectedUpdatedAt":"2026-09-06T00:00:00.000Z"},
+    "project-settings-delete": {"confirmed":true},
     "services-create": {"name":"web"},
     "deployments-status": {"status":"BUILDING"},
     "deployments-status-post": {"status":"BUILDING"},

@@ -22,6 +22,7 @@ import { previewRuntimePlan } from './preview-deployments.ts';
 import { canonicalPreviewWebhook, parsePreviewWebhook, PreviewError, previewWebhookLineage, previewWebhookPayloadMatches } from './preview-contract.ts';
 import { createPreviewRuntime, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
+import { nextProjectUpdatedAt, ProjectSettingsError, projectSettingsView, scheduledProjectDeletion, type ProjectDeletionRequest, type ProjectSettingsMutation } from './project-settings.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
@@ -441,6 +442,41 @@ export class ControlPlaneStore {
     this.projects.set(projectId, next);
     this.audit('system', 'project:update', 'project', projectId, maskSecrets(mutableUpdates));
     return deepClone(next);
+  }
+
+  getProjectSettings(projectId: string, organizationId: string) {
+    const project = this.projects.get(projectId);
+    if (!project || String(project.organizationId) !== organizationId) return null;
+    const services = [...this.services.values()].filter((row) => String(row.projectId) === projectId);
+    const resources = [...this.resources.values()].filter((row) => String(row.projectId) === projectId);
+    const previews = [...this.deployments.values()].filter((row) => String(row.projectId) === projectId && String(row.deploymentType).toLowerCase() === 'preview');
+    return deepClone(projectSettingsView(project, { services: services.length, resources: resources.length, previews: previews.length }));
+  }
+
+  updateProjectSettings(input: ProjectSettingsMutation) {
+    const current = this.projects.get(input.projectId);
+    if (!current || String(current.organizationId) !== input.organizationId) return null;
+    if (String(current.updatedAt) !== input.expectedUpdatedAt) throw new ProjectSettingsError();
+    const parsed = parseProjectMutation({ ...(input.name === undefined ? {} : { name: input.name }), ...(input.description === undefined ? {} : { description: input.description }) });
+    const mutableUpdates = Object.fromEntries(Object.entries(parsed).filter(([, value]) => value !== undefined));
+    const next = { ...current, ...mutableUpdates, updatedAt: nextProjectUpdatedAt(String(current.updatedAt)) };
+    this.projects.set(input.projectId, next);
+    this.audit(input.actorUserId || 'system', 'project:settings-update', 'project', input.projectId, maskSecrets(mutableUpdates));
+    return this.getProjectSettings(input.projectId, input.organizationId);
+  }
+
+  scheduleProjectDeletion(input: ProjectDeletionRequest) {
+    const current = this.projects.get(input.projectId);
+    if (!current || String(current.organizationId) !== input.organizationId) return null;
+    assertRecoveryPins(this.recoveryState, [...this.resources.values()].filter((row) => row.projectId === input.projectId).map((row) => row.id));
+    if (['DELETE_REQUESTED', 'DELETING'].includes(String(current.status).toUpperCase())) return scheduledProjectDeletion(current);
+    const requestedAt = nowIso();
+    const tombstone = (row: Record<string, unknown>) => ({ ...row, status: 'DELETE_REQUESTED', deletionRequestedAt: requestedAt, updatedAt: nextProjectUpdatedAt(String(row.updatedAt || requestedAt)) });
+    this.projects.set(input.projectId, tombstone(current));
+    for (const row of this.services.values()) if (String(row.projectId) === input.projectId) this.services.set(row.id, tombstone(row));
+    for (const row of this.resources.values()) if (String(row.projectId) === input.projectId) this.resources.set(row.id, tombstone(row));
+    this.audit(input.actorUserId || 'system', 'project:delete-requested', 'project', input.projectId, { organizationId: input.organizationId });
+    return scheduledProjectDeletion(this.projects.get(input.projectId));
   }
 
   deleteProject(projectId: string) {
