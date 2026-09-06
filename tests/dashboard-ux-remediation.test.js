@@ -52,13 +52,15 @@ test('API loader failures stay sanitized, preserve fallback data and surface on 
 });
 
 test('dangerous actions require an explicit target-specific confirmation', async () => {
-	const [admin, deployment] = await Promise.all([
+	const [admin, deployment, recovery] = await Promise.all([
 		read('../apps/dashboard/app/admin/page.tsx'),
 		read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
+		read('../apps/dashboard/components/project-hub/deployment-recovery-action.tsx'),
 	]);
 	assert.doesNotMatch(admin, /state\.users\[0\]/);
 	assert.match(admin, /user\.id[\s\S]*name="confirmed"[\s\S]*required/);
-	assert.match(deployment, /id="rollback-deployment"[\s\S]*name="confirmed"[\s\S]*required/);
+	assert.match(deployment, /<DeploymentRecoveryAction action=\{history\.eligibleAction\}/);
+	assert.match(recovery, /action\.type === 'rollback' \? <input name="confirmed" type="hidden" value="true"/);
 });
 
 test('project creation displays the route organization but does not submit tenant identity', async () => {
@@ -83,10 +85,14 @@ test('project cards render API aggregate service and resource counts', async () 
 });
 
 test('authenticated users can clear their dashboard session through the same-origin BFF', async () => {
-	const shell = await read('../apps/dashboard/components/console-ui.tsx');
-	assert.match(shell, /method="post"\s+action=\{apiAction\('\/auth\/logout'\)\}/);
-	assert.match(shell, /name="_returnTo"\s+value="\/login"/);
-	assert.match(shell, />로그아웃<\/button>/);
+	const [shell, accountMenu] = await Promise.all([
+		read('../apps/dashboard/components/console-ui.tsx'),
+		read('../apps/dashboard/components/account-menu.tsx'),
+	]);
+	assert.match(shell, /const logoutAction = apiAction\('\/auth\/logout'\);/);
+	assert.match(shell, /<AccountMenu[\s\S]*?logoutAction=\{logoutAction\}/);
+	assert.match(accountMenu, /<form action=\{logoutAction\} method="post"><input name="_returnTo" type="hidden" value="\/login" \/>/);
+	assert.match(accountMenu, />로그아웃<\/button>/);
 });
 
 test('dashboard request hardening uses the supported Next proxy convention', async () => {

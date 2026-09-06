@@ -6,10 +6,11 @@ const component = (name) => readFile(new URL(`../components/${name}`, import.met
 
 test('authenticated console shell remains server-first and preserves tenant-safe navigation', async () => {
   // Given: the authenticated shell and its two client-only interaction leaves.
-  const [shell, search, mobile] = await Promise.all([
+  const [shell, search, mobile, accountMenu] = await Promise.all([
     component('console-ui.tsx'),
     component('console-search.tsx'),
     component('console-mobile-nav.tsx'),
+    component('account-menu.tsx'),
   ]);
 
   // When: the source boundary is inspected as Next.js will compile it.
@@ -20,11 +21,13 @@ test('authenticated console shell remains server-first and preserves tenant-safe
   assert.match(shell, /getJson\('\/auth\/me'/);
   assert.match(shell, /redirect\('\/login\?error=session_expired'\)/);
   assert.match(shell, /String\(user\?\.role \|\| subject\?\.userRole \|\| ''\)\.toUpperCase\(\) === 'ADMIN'/);
-  assert.match(shell, /requested: orgRouteValue/);
+  assert.match(shell, /const requestedOrganizationId = typeof orgRouteValue === 'string' \? orgRouteValue\.trim\(\) : '';/);
+  assert.match(shell, /organizationMemberships\.find\(\(membership\) => membership\.organizationId === requestedOrganizationId\)\?\.organizationId/);
   assert.match(shell, /memberships: me\.body\?\.memberships/);
   assert.match(shell, /<Suspense fallback=\{null\}><FlashBanner \/><\/Suspense>/);
-  assert.match(shell, /method="post" action=\{apiAction\('\/auth\/logout'\)\}/);
-  assert.match(shell, /name="_returnTo" value="\/login"/);
+  assert.match(shell, /const logoutAction = apiAction\('\/auth\/logout'\);/);
+  assert.match(shell, /<AccountMenu[\s\S]*?logoutAction=\{logoutAction\}/);
+  assert.match(accountMenu, /<form action=\{logoutAction\} method="post"><input name="_returnTo" type="hidden" value="\/login" \/>/);
   for (const leaf of clientLeaves) assert.match(leaf, /^['"]use client['"]/);
 });
 

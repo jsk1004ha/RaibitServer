@@ -10,6 +10,7 @@ const operations = await readFile(
   new URL("app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx", dashboardRoot),
   "utf8",
 );
+const deploymentRecovery = await readFile(new URL("components/project-hub/deployment-recovery-action.tsx", dashboardRoot), "utf8");
 const resources = await readFile(
   new URL("app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx", dashboardRoot),
   "utf8",
@@ -63,7 +64,8 @@ test("Given surviving non-Tailwind consumers, when classes are composed dynamica
   assert.match(login, /className="auth-form"/);
   assert.match(login, /className="auth-message/);
   assert.match(login, /className="auth-resend"/);
-  assert.match(operations, /className="confirmation-control"/);
+  assert.match(operations, /<DeploymentRecoveryAction action=\{history\.eligibleAction\}/);
+  assert.match(deploymentRecovery, /action\.type === 'rollback' \? <input name="confirmed" type="hidden" value="true"/);
   assert.match(resources, /className="confirmation-control"/);
 
   const selectors = [...new Set([...css.matchAll(/(?<![\w-])\.([a-z][a-z0-9-]*)/g)].map((match) => match[1]))].sort();
