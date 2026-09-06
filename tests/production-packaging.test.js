@@ -255,7 +255,10 @@ test('production provisioner wires digest-pinned providers behind tenant-scoped 
   assert.match(tenantRole, /resources: \["persistentvolumeclaims", "services"\][\s\S]*verbs: \["get", "create", "patch", "update", "delete"\]/);
   assert.match(tenantRole, /resources: \["statefulsets"\][\s\S]*verbs: \["get", "watch", "create", "patch", "update", "delete"\]/);
   assert.match(tenantRole, /resources: \["networkpolicies"\][\s\S]*verbs: \["get", "watch", "create", "patch", "update", "delete"\]/);
-  assert.doesNotMatch(tenantRole, /"pods(?:\/exec)?"/);
+  assert.match(tenantRole, /resources: \["pods"\][\s\S]*verbs: \["get", "list", "patch"\]/);
+  assert.match(tenantRole, /resources: \["pods\/log"\][\s\S]*verbs: \["get"\]/);
+  assert.match(tenantRole, /resources: \["pods\/attach"\][\s\S]*verbs: \["create"\]/);
+  assert.doesNotMatch(tenantRole, /"pods\/exec"/);
   assert.doesNotMatch(tenantRole, /manageddatabases/, 'legacy CRD permissions must not replace real provider workload permissions');
 
   const clusterBindings = workerSecurity.match(/kind: ClusterRoleBinding[\s\S]*?(?=\n---|$)/g) ?? [];

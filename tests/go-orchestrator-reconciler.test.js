@@ -14,18 +14,21 @@ test('Go orchestrator reconciler contract is executable when Go exists or static
     return;
   }
 
-  const [main, reconciler, kube, store, errorSpec] = await Promise.all([
+  const [main, reconciler, deploymentApply, previewCleanup, kube, runtimeContainer, store, errorSpec] = await Promise.all([
     fs.readFile('services/orchestrator/cmd/orchestrator/main.go', 'utf8'),
     fs.readFile('services/orchestrator/internal/reconciler/reconciler.go', 'utf8'),
+    fs.readFile('services/orchestrator/internal/reconciler/deployment_apply.go', 'utf8'),
+    fs.readFile('services/orchestrator/internal/reconciler/preview_cleanup.go', 'utf8'),
     fs.readFile('services/orchestrator/internal/kube/deployment.go', 'utf8'),
+    fs.readFile('services/orchestrator/internal/kube/runtime_container.go', 'utf8'),
     fs.readFile('services/orchestrator/internal/store/store.go', 'utf8'),
     fs.readFile('services/orchestrator/internal/store/error_spec.go', 'utf8'),
   ]);
   assert.match(main, /NewServiceReconcilerWithStore/);
   assert.match(store, /ListDeploymentsForReconcile/);
-  assert.match(reconciler, /orchestrator\.apply\.started/);
+  assert.match(deploymentApply, /orchestrator\.apply\.started/);
   assert.match(reconciler, /rollout.*status/s);
-  assert.match(reconciler, /preview\.cleanup\.completed/);
+  assert.match(previewCleanup, /preview\.cleanup\.completed/);
   assert.match(reconciler, /ErrorCodeKubernetesReconcileFailed/);
   assert.match(reconciler, /ErrorSpecForFailure/);
   assert.match(errorSpec, /ErrorCodeImagePullBackoff/);
@@ -35,13 +38,14 @@ test('Go orchestrator reconciler contract is executable when Go exists or static
   assert.match(kube, /serviceName = previewKey \+ "-" \+ baseServiceName/);
   assert.match(kube, /raibitserver\.io\/preview/);
   assert.match(kube, /NetworkPolicy/);
-  assert.match(kube, /readOnlyRootFilesystem/);
+  assert.match(runtimeContainer, /readOnlyRootFilesystem/);
 });
 
 test('Go hostname expectations stay on the flat single-label routing contract', async () => {
-  const [kubeTest, reconcilerTest] = await Promise.all([
+  const [kubeTest, reconcilerTest, previewIdentityTest] = await Promise.all([
     fs.readFile('services/orchestrator/internal/kube/deployment_test.go', 'utf8'),
     fs.readFile('services/orchestrator/internal/reconciler/reconciler_test.go', 'utf8'),
+    fs.readFile('services/orchestrator/internal/store/preview_types_test.go', 'utf8'),
   ]);
   for (const hostname of [
     'apps--gdg-hongik--festival-2026.raibitserver.local',
@@ -52,7 +56,7 @@ test('Go hostname expectations stay on the flat single-label routing contract', 
     'apps--victim--team-api.example.test',
   ]) assert.match(kubeTest, new RegExp(hostname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(reconcilerTest, /apps--org-1--demo\.test\.local/);
-  assert.match(reconcilerTest, /preview--pr-42--org-1--demo\.test\.local/);
+  assert.match(previewIdentityTest, /preview--pr-42--club--demo\.raibitserver\.app/);
   assert.doesNotMatch(kubeTest, /gdg-hongik--festival-2026(?:--api)?\.apps\.raibitserver\.local/);
   assert.doesNotMatch(reconcilerTest, /org-1--demo\.apps\.test\.local|pr-42-org-1--demo\.preview\.test\.local/);
 });
