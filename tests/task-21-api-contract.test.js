@@ -131,7 +131,8 @@ test('Given the checked-in API artifact, When deployment stream and cleanup cont
   }
   assert.equal(artifact.paths['/deployments/{deploymentId}/stream'].get.parameters.find((parameter) => parameter.name === 'Last-Event-ID').schema.maxLength, 4096);
   assert.equal(artifact.components.schemas.DeploymentOperationResult.required.includes('operationId'), true);
-  assert.equal(artifact.components.schemas.ErrorBody.anyOf[0].properties.retryable.type, 'boolean');
+  const typedError = artifact.components.schemas.ErrorBody.anyOf.find((variant) => variant.properties?.retryable);
+  assert.equal(typedError?.properties.retryable.type, 'boolean');
 });
 
 function request(server, path, lastEventId, options = {}) {
