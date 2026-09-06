@@ -1,6 +1,6 @@
-import type { APIResponse, Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { expect, test } from '../helpers/fixtures';
-import { expectAccessible, expectRoute, installSession, observeBrowserErrors } from '../helpers/contracts';
+import { expectAccessible, expectRoute, FIXTURE_ORIGIN, installSession, observeBrowserErrors } from '../helpers/contracts';
 import { IDENTITY_ORGANIZATION_ACCESSIBILITY, IDENTITY_ORGANIZATION_MATRIX, IDENTITY_ORGANIZATION_VIEWPORTS } from '../identity-organization-matrix';
 import { TASK49_ROLE_BROWSER_JOURNEYS } from '../feature-expansion-matrix';
 
@@ -18,15 +18,21 @@ const membersPath = `/api/control/organizations/${organizationId}/members`;
 const targetMemberPath = `${membersPath}/${targetMemberId}`;
 
 type JsonRecord = Readonly<Record<string, unknown>>;
+type JsonResponse = Readonly<{ json(): Promise<unknown> }>;
+type UrlResponse = Readonly<{ url(): string }>;
 
-function isPath(response: APIResponse, path: string): boolean {
+function isPath(response: UrlResponse, path: string): boolean {
   return new URL(response.url()).pathname === path;
 }
 
-async function json(response: APIResponse): Promise<JsonRecord> {
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+async function json(response: JsonResponse): Promise<JsonRecord> {
   const body: unknown = await response.json();
-  expect(body !== null && typeof body === 'object' && !Array.isArray(body)).toBe(true);
-  return body as JsonRecord;
+  if (!isJsonRecord(body)) throw new TypeError('task49_json_object_required');
+  return body;
 }
 
 async function targetMember(page: Page): Promise<JsonRecord> {
@@ -34,10 +40,10 @@ async function targetMember(page: Page): Promise<JsonRecord> {
   expect(response.status()).toBe(200);
   const body = await json(response);
   const members = body.members;
-  expect(Array.isArray(members)).toBe(true);
-  const target = (members as unknown[]).find((member) => member !== null && typeof member === 'object' && (member as JsonRecord).id === targetMemberId);
-  expect(target).toBeDefined();
-  return target as JsonRecord;
+  if (!Array.isArray(members)) throw new TypeError('task49_members_array_required');
+  const target = members.find((member) => isJsonRecord(member) && member.id === targetMemberId);
+  if (!isJsonRecord(target)) throw new TypeError('task49_target_member_required');
+  return target;
 }
 
 function mediaTheme(theme: (typeof TASK49_ROLE_BROWSER_JOURNEYS)[number]['theme']): 'dark' | 'light' | 'no-preference' {
@@ -115,10 +121,12 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
   });
 
   for (const journey of TASK49_ROLE_BROWSER_JOURNEYS) {
-    test(journey.title, async ({ browser }) => {
+    test(journey.title, { tag: journey.kind === 'negative' ? '@platform-expansion-negative' : '@platform-expansion-role' }, async ({ browser }) => {
       const context = await browser.newContext();
       if (journey.token) await installSession(context, journey.token);
       const page = await context.newPage();
+      const reset = await page.request.post(`${FIXTURE_ORIGIN}/__fixture/reset`);
+      expect(reset.status()).toBe(200);
       const assertNoErrors = observeBrowserErrors(page, journey.intent === 'tenant-create' ? [403] : []);
       const mutationRequests: string[] = [];
       page.on('request', (request) => {
@@ -140,19 +148,21 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
           await expect(page.getByRole('heading', { name: '로그인' })).toBeVisible();
           expect(mutationRequests).toEqual([]);
         } else if (journey.intent === 'member-mutation') {
+          const nextRole = journey.nextRole;
+          if (!nextRole) throw new TypeError('task49_next_role_required');
           await page.goto(journey.route, { waitUntil: 'networkidle' });
           const roleControl = page.getByLabel('target@fixture.test 역할');
           await expect(roleControl).toHaveValue('VIEWER');
           const mutation = page.waitForResponse((response) => response.request().method() === 'PATCH' && isPath(response, targetMemberPath));
-          await roleControl.selectOption(journey.nextRole!);
+          await roleControl.selectOption(nextRole);
           const response = await mutation;
           expect(response.status()).toBe(200);
           const body = await json(response);
-          expect(body.membership).toMatchObject({ id: targetMemberId, role: journey.nextRole, version: 2 });
+          expect(body.membership).toMatchObject({ id: targetMemberId, role: nextRole, version: 2 });
           expect(mutationRequests).toEqual([`${dashboardOrigin}${targetMemberPath}`]);
           await expect(page.getByRole('status')).toContainText('구성원 역할을 변경했습니다.');
-          await expect(roleControl).toHaveValue(journey.nextRole!);
-          expect(await targetMember(page)).toMatchObject({ id: targetMemberId, role: journey.nextRole, version: 2 });
+          await expect(roleControl).toHaveValue(nextRole);
+          expect(await targetMember(page)).toMatchObject({ id: targetMemberId, role: nextRole, version: 2 });
         } else if (journey.intent === 'member-denied') {
           await page.goto(journey.route, { waitUntil: 'networkidle' });
           await expect(page.getByLabel('target@fixture.test 역할')).toHaveCount(0);

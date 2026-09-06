@@ -35,6 +35,7 @@ export type PlatformExpansionRow = Readonly<{
 
 const project = '/org/raibit/projects/prj_fixture_001';
 const delegatedTask35Rows = [
+  { id: 'identity-anonymous-denied', role: 'anonymous', state: 'permission', source: 'anonymous-create' },
   { id: 'identity-pending-relogin', role: 'pending', state: 'terminal', source: 'expired-session-read' },
   { id: 'identity-owner-membership', role: 'OWNER', state: 'success', source: 'owner-member-mutate' },
   { id: 'identity-admin-membership', role: 'ADMIN', state: 'success', source: 'admin-member-mutate' },
@@ -72,11 +73,11 @@ export const TASK49_ROLE_BROWSER_JOURNEYS = [
 
 export const PLATFORM_EXPANSION_MATRIX: readonly PlatformExpansionRow[] = [
   ...delegatedTask35Rows.map((row, index) => ({
-    ...row, execution: 'delegated-task35' as const, driver: null, actor: null, route: '/org/raibit/members',
+    ...row, execution: 'delegated-task35' as const, driver: null, actor: null, route: row.role === 'GLOBAL_ADMIN' ? '/organizations/new' : '/org/org_fixture_001/members',
     viewport: PLATFORM_EXPANSION_VIEWPORTS[index % PLATFORM_EXPANSION_VIEWPORTS.length], theme: 'system' as const, zoom: 100 as const,
     accessibility: ['keyboard', 'screen-reader-announcement', 'axe'] as const, representativeVisual: false,
-    action: 'Run the owned Task35 identity and organization journey.',
-    observedOutcome: 'The Task35 fixture asserts the named role outcome and its API side effect.',
+    action: 'Run the authored identity and organization role journey.',
+    observedOutcome: 'The browser fixture asserts the named role outcome and its API side effect or unchanged readback.',
     sourceRefs: [`apps/dashboard/tests/e2e/identity-organization-matrix.ts#${row.source}`, 'apps/dashboard/tests/e2e/specs/identity-organization-matrix.spec.ts'],
   })),
   { id: 'auth-login-success', execution: 'fixture-driver', driver: 'auth-login', actor: 'anonymous', route: '/login?next=%2Forg%2Fraibit%2Fprojects', role: 'anonymous', state: 'success', viewport: PLATFORM_EXPANSION_VIEWPORTS[0], theme: 'light', zoom: 200, accessibility: ['keyboard', 'axe', 'zoom-200', 'long-korean'], representativeVisual: true, action: 'Submit login with Enter.', observedOutcome: 'The allowlisted project route is reached after login.', sourceRefs: ['apps/dashboard/tests/e2e/specs/auth-flows.spec.ts'] },

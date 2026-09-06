@@ -27,9 +27,22 @@ test('Given the Task49 authored matrix, when its coverage contract is inspected,
   assert.equal(report.expectedScenarioCount, matrix.PLATFORM_EXPANSION_EXECUTABLE_ROWS.length);
   assert.equal(report.negativeScenarioCount, matrix.PLATFORM_EXPANSION_NEGATIVE_ROWS.length);
   assert.equal(report.delegatedTask41ScenarioCount, 1);
-  assert.equal(report.delegatedScenarioCount, 8);
-  assert.deepEqual(matrix.PLATFORM_EXPANSION_DELEGATED_PLAYWRIGHT_SCENARIOS.map((scenario) => scenario.kind), ['positive', 'positive', 'negative', 'negative']);
-  assert.equal(new Set(matrix.PLATFORM_EXPANSION_DELEGATED_PLAYWRIGHT_SCENARIOS.map((scenario) => scenario.title)).size, 4);
+  assert.equal(report.delegatedScenarioCount, 9);
+  assert.deepEqual(matrix.PLATFORM_EXPANSION_DELEGATED_PLAYWRIGHT_SCENARIOS, [
+    { id: 'task35-invite-acceptance', kind: 'positive', title: 'identity-owner-membership trusted invite link completes with keyboard, announcement, redaction, motion, and reflow outcomes' },
+    { id: 'task35-account-logout', kind: 'positive', title: 'identity-pending-relogin account identity and logout remain synchronized across desktop and mobile shells' },
+    { id: 'task49-role-anonymous', kind: 'negative', title: 'identity-role-anonymous cannot mutate organization membership and is asked to sign in' },
+    { id: 'task49-role-pending', kind: 'negative', title: 'identity-role-pending cannot mutate organization membership before account approval' },
+    { id: 'task49-role-owner', kind: 'positive', title: 'identity-role-OWNER changes a member role and reads back the persisted membership' },
+    { id: 'task49-role-admin', kind: 'positive', title: 'identity-role-ADMIN changes a non-owner role and reads back the persisted membership' },
+    { id: 'task49-role-maintainer', kind: 'negative', title: 'identity-role-MAINTAINER receives 403, unchanged member readback, and no mutation controls' },
+    { id: 'task49-role-developer', kind: 'negative', title: 'identity-role-DEVELOPER receives 403, unchanged member readback, and no mutation controls' },
+    { id: 'task49-role-db-admin', kind: 'negative', title: 'identity-role-DB_ADMIN receives 403, unchanged member readback, and no mutation controls' },
+    { id: 'task49-role-viewer', kind: 'negative', title: 'identity-role-VIEWER receives 403, unchanged member readback, and no mutation controls' },
+    { id: 'task49-role-global-admin', kind: 'positive', title: 'identity-role-GLOBAL_ADMIN creates a tenant without inheriting organization member authority' },
+    { id: 'task41-import-conflict-recovery', kind: 'negative', title: 'github-conflict-recovery-contract import preserves an idempotency key across retry and asks for an explicit new slug' },
+    { id: 'task41-attach-conflict-recovery', kind: 'negative', title: 'github-conflict-recovery-contract-attach attach and opaque collisions offer only their typed recovery action' },
+  ]);
   assert.ok(report.expectedScenarioCount > report.negativeScenarioCount);
 });
 

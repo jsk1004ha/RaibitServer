@@ -4,6 +4,7 @@ import {
   PUBLIC_SITE_SCENARIOS,
   loginAccounts,
   resetCustomDomainFixture,
+  resetOrganizationFixture,
   resetProjectSettingsFixture,
   resetResourceRecoveryFixture,
   resourceRecoveryFixtureSnapshot,
@@ -43,6 +44,7 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/__fixture/reset' && request.method === 'POST') {
     resetProjectSettingsFixture();
     resetCustomDomainFixture();
+    resetOrganizationFixture();
     resetResourceRecoveryFixture();
     return send(response, 200, { ...fixtureState.reset(), resourceRestores: resourceRecoveryFixtureSnapshot() });
   }

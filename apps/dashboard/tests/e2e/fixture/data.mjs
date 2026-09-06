@@ -155,7 +155,22 @@ export const TOKENS = {
   user: 'fixture-user-populated', admin: 'fixture-admin-populated', empty: 'fixture-user-empty',
   partial: 'fixture-user-partial', long: 'fixture-user-long', expired: 'fixture-expired',
   adminEmpty: 'fixture-admin-empty', adminPartial: 'fixture-admin-partial', adminLong: 'fixture-admin-long',
+  rolePending: 'fixture-role-pending', roleOwner: 'fixture-role-owner', roleAdmin: 'fixture-role-admin',
+  roleMaintainer: 'fixture-role-maintainer', roleDeveloper: 'fixture-role-developer', roleDbAdmin: 'fixture-role-db-admin',
+  roleViewer: 'fixture-role-viewer', roleGlobalAdmin: 'fixture-role-global-admin',
 };
+
+const organizationRoleSessions = Object.freeze({
+  [TOKENS.rolePending]: Object.freeze({ actor: { id: 'usr_fixture_pending', email: 'pending@fixture.test', name: 'Pending User', role: 'USER', approvalStatus: 'PENDING', accountType: 'NON_CLUB' }, organizationRole: null }),
+  [TOKENS.roleOwner]: Object.freeze({ actor: { id: 'usr_fixture_owner', email: 'owner@fixture.test', name: 'Owner User', role: 'USER', approvalStatus: 'APPROVED', accountType: 'NON_CLUB' }, organizationRole: 'OWNER' }),
+  [TOKENS.roleAdmin]: Object.freeze({ actor: { id: 'usr_fixture_role_admin', email: 'role-admin@fixture.test', name: 'Organization Admin', role: 'USER', approvalStatus: 'APPROVED', accountType: 'NON_CLUB' }, organizationRole: 'ADMIN' }),
+  [TOKENS.roleMaintainer]: Object.freeze({ actor: { id: 'usr_fixture_maintainer', email: 'maintainer@fixture.test', name: 'Maintainer User', role: 'USER', approvalStatus: 'APPROVED', accountType: 'NON_CLUB' }, organizationRole: 'MAINTAINER' }),
+  [TOKENS.roleDeveloper]: Object.freeze({ actor: { id: 'usr_fixture_developer', email: 'developer@fixture.test', name: 'Developer User', role: 'USER', approvalStatus: 'APPROVED', accountType: 'NON_CLUB' }, organizationRole: 'DEVELOPER' }),
+  [TOKENS.roleDbAdmin]: Object.freeze({ actor: { id: 'usr_fixture_db_admin', email: 'db-admin@fixture.test', name: 'DB Admin User', role: 'USER', approvalStatus: 'APPROVED', accountType: 'NON_CLUB' }, organizationRole: 'DB_ADMIN' }),
+  [TOKENS.roleViewer]: Object.freeze({ actor: { id: 'usr_fixture_role_viewer', email: 'role-viewer@fixture.test', name: 'Viewer User', role: 'USER', approvalStatus: 'APPROVED', accountType: 'NON_CLUB' }, organizationRole: 'VIEWER' }),
+  [TOKENS.roleGlobalAdmin]: Object.freeze({ actor: { id: 'usr_fixture_global_admin', email: 'global-admin@fixture.test', name: 'Platform Admin', role: 'ADMIN', approvalStatus: 'APPROVED', accountType: 'CLUB_MEMBER' }, organizationRole: null }),
+});
+const organizationTargets = new Map();
 
 export const loginAccounts = new Map([
   ['user@fixture.test', { password: 'fixture-user-pass', token: TOKENS.user }],
@@ -185,10 +200,16 @@ export function resetGitHubMutationFixture() {
   githubMutationResults.clear();
 }
 
+export function resetOrganizationFixture() {
+  organizationTargets.clear();
+}
+
 export function responseFor({ token, method, pathname, searchParams, publicSiteScenario = DEFAULT_PUBLIC_SITE_SCENARIO, body = {} }) {
   if (pathname === '/health') return json(200, { status: 'ok', checkedAt: FIXED_TIME });
   if (pathname === '/public/sites') return publicSitesResponse(publicSiteScenario, searchParams);
   if (!token || token === TOKENS.expired) return json(401, { error: 'session_expired' });
+  const organizationSession = Object.hasOwn(organizationRoleSessions, token) ? organizationRoleSessions[token] : null;
+  if (organizationSession?.actor.approvalStatus === 'PENDING') return json(401, { error: 'account_not_approved' });
   const state = [TOKENS.empty, TOKENS.adminEmpty].includes(token)
     ? 'empty'
     : [TOKENS.partial, TOKENS.adminPartial].includes(token)
@@ -196,9 +217,16 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
       : [TOKENS.long, TOKENS.adminLong].includes(token)
         ? 'long'
         : 'populated';
-  const actor = [TOKENS.admin, TOKENS.adminEmpty, TOKENS.adminPartial, TOKENS.adminLong].includes(token) ? users.admin : users.user;
+  const actor = organizationSession?.actor || ([TOKENS.admin, TOKENS.adminEmpty, TOKENS.adminPartial, TOKENS.adminLong].includes(token) ? users.admin : users.user);
   if (state === 'partial' && pathname === '/usage/me') return json(500, { error: 'fixture_internal_secret_must_not_escape' });
-  if (pathname === '/auth/me') return json(200, { user: actor, subject: { ...actor, organizationId: project.organizationId, organizationSlug: project.organizationSlug }, memberships: [{ organizationId: project.organizationId, role: actor.role === 'ADMIN' ? 'ADMIN' : 'VIEWER' }] });
+  if (pathname === '/auth/me') {
+    const memberships = organizationSession ? (organizationSession.organizationRole ? [{ organizationId: project.organizationId, role: organizationSession.organizationRole }] : []) : [{ organizationId: project.organizationId, role: actor.role === 'ADMIN' ? 'ADMIN' : 'VIEWER' }];
+    const subject = organizationSession?.organizationRole ? { ...actor, organizationId: project.organizationId, organizationSlug: project.organizationSlug } : actor;
+    return json(200, { user: actor, subject, memberships });
+  }
+  if (method === 'POST' && pathname === '/organizations') return organizationCreateResponse(actor, body);
+  if (pathname === `/organizations/${project.organizationId}/members` || pathname.startsWith(`/organizations/${project.organizationId}/members/`)) return organizationMembersResponse({ actor, body, method, pathname, session: organizationSession, token });
+  if (pathname === `/organizations/${project.organizationId}/invites`) return organizationSession?.organizationRole ? json(200, { invites: [] }) : json(403, { error: 'forbidden' });
   if (pathname === '/projects') return json(200, { projects: state === 'empty' ? [] : [{ ...project, name: state === 'long' ? longKoreanText : project.name }] });
   if (pathname === '/usage/me') return json(200, { usage: [{ metric: 'deployments', used: 1, limit: 10 }], quota: { maxProjects: 5 } });
   if (pathname === '/integrations/github') return json(200, { integrations: state === 'empty' ? [] : [githubIntegration] });
@@ -322,6 +350,34 @@ function syncConflict(body) {
 
 function githubConflict(code, recovery) {
   return { statusCode: 409, message: code, error: code, code, retryable: false, terminal: true, permission: false, recovery };
+}
+
+function organizationCreateResponse(actor, body) {
+  const organization = { id: `org_fixture_created_${body.slug}`, name: body.name, slug: body.slug, plan: 'free', createdAt: FIXED_TIME };
+  return json(201, {
+    organization,
+    membership: { id: 'mem_fixture_created_owner', organizationId: organization.id, userId: actor.id, role: 'OWNER', createdAt: FIXED_TIME },
+    reauthenticationRequired: true,
+  });
+}
+
+function organizationMembersResponse({ actor, body, method, pathname, session, token }) {
+  if (!session?.organizationRole) return json(403, { error: 'forbidden' });
+  const actorMember = {
+    id: 'mem_fixture_actor', organizationId: project.organizationId, userId: actor.id, role: session.organizationRole, version: 1, createdAt: FIXED_TIME,
+    user: { id: actor.id, email: actor.email, name: actor.name, avatarUrl: null },
+  };
+  const target = organizationTargets.get(token) || {
+    id: 'mem_fixture_target', organizationId: project.organizationId, userId: 'usr_fixture_target', role: 'VIEWER', version: 1, createdAt: FIXED_TIME,
+    user: { id: 'usr_fixture_target', email: 'target@fixture.test', name: 'Target Member', avatarUrl: null },
+  };
+  if (pathname === `/organizations/${project.organizationId}/members` && method === 'GET') return json(200, { members: [actorMember, target] });
+  if (pathname !== `/organizations/${project.organizationId}/members/${target.id}` || method !== 'PATCH') return json(404, { error: 'fixture_member_not_found' });
+  if (session.organizationRole !== 'OWNER' && session.organizationRole !== 'ADMIN') return json(403, { error: 'forbidden' });
+  if (body.expectedVersion !== target.version) return json(409, { error: 'STALE_MEMBERSHIP' });
+  const changed = { ...target, role: body.role, version: target.version + 1 };
+  organizationTargets.set(token, changed);
+  return json(200, { membership: changed });
 }
 
 function json(status, body) { return { status, body }; }

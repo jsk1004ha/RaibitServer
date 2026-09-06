@@ -11,6 +11,7 @@ import {
   PUBLIC_SITE_SCENARIOS,
   TOKENS,
   isPublicSiteScenario,
+  resetOrganizationFixture,
   resetProjectSettingsFixture,
   resetCustomDomainFixture,
   responseFor,
@@ -38,6 +39,58 @@ async function parseFixtureHistory(value) {
     await rm(directory, { force: true, recursive: true });
   }
 }
+
+test('Given OWNER and ADMIN fixture sessions, when a member role is changed, then the changed membership is returned by the next list read', () => {
+  resetOrganizationFixture();
+  for (const [token, currentRole, nextRole] of [
+    [TOKENS.roleOwner, 'OWNER', 'ADMIN'],
+    [TOKENS.roleAdmin, 'ADMIN', 'MAINTAINER'],
+  ]) {
+    const initial = request('GET', '/organizations/org_fixture_001/members', token);
+    assert.equal(initial.status, 200);
+    assert.equal(initial.body.members.find((member) => member.id === 'mem_fixture_actor')?.role, currentRole);
+    const target = initial.body.members.find((member) => member.id === 'mem_fixture_target');
+    const changed = request('PATCH', '/organizations/org_fixture_001/members/mem_fixture_target', token, { body: { role: nextRole, expectedVersion: target.version } });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.body.membership.role, nextRole);
+    assert.equal(request('GET', '/organizations/org_fixture_001/members', token).body.members.find((member) => member.id === 'mem_fixture_target')?.role, nextRole);
+  }
+});
+
+test('Given lower organization roles, when each directly changes a member role, then 403 leaves the target membership unchanged', () => {
+  resetOrganizationFixture();
+  for (const token of [TOKENS.roleMaintainer, TOKENS.roleDeveloper, TOKENS.roleDbAdmin, TOKENS.roleViewer]) {
+    const before = request('GET', '/organizations/org_fixture_001/members', token);
+    assert.equal(before.status, 200);
+    assert.deepEqual(request('GET', '/organizations/org_fixture_001/invites', token), { status: 200, body: { invites: [] } });
+    const target = before.body.members.find((member) => member.id === 'mem_fixture_target');
+    const denied = request('PATCH', '/organizations/org_fixture_001/members/mem_fixture_target', token, { body: { role: 'DEVELOPER', expectedVersion: target.version } });
+    const after = request('GET', '/organizations/org_fixture_001/members', token);
+    assert.deepEqual(denied, { status: 403, body: { error: 'forbidden' } });
+    assert.deepEqual(after.body.members.find((member) => member.id === 'mem_fixture_target'), target);
+  }
+});
+
+test('Given anonymous and pending sessions, when organization creation is requested, then neither response contains a created organization', () => {
+  const anonymous = request('POST', '/organizations', '');
+  const pending = request('POST', '/organizations', TOKENS.rolePending, { body: { name: 'Pending org', slug: 'pending-org' } });
+  assert.equal(anonymous.status, 401);
+  assert.equal(pending.status, 401);
+  assert.equal('organization' in anonymous.body, false);
+  assert.equal('organization' in pending.body, false);
+});
+
+test('Given a platform ADMIN without an organization membership, when a tenant is created, then only the new tenant grants OWNER', () => {
+  const identity = request('GET', '/auth/me', TOKENS.roleGlobalAdmin);
+  const created = request('POST', '/organizations', TOKENS.roleGlobalAdmin, { body: { name: 'Global admin tenant', slug: 'global-admin-tenant' } });
+  const foreignMutation = request('PATCH', '/organizations/org_fixture_001/members/mem_fixture_target', TOKENS.roleGlobalAdmin, { body: { role: 'ADMIN', expectedVersion: 1 } });
+  assert.equal(identity.body.user.role, 'ADMIN');
+  assert.deepEqual(identity.body.memberships, []);
+  assert.equal(created.status, 201);
+  assert.equal(created.body.membership.role, 'OWNER');
+  assert.equal(created.body.membership.userId, identity.body.user.id);
+  assert.deepEqual(foreignMutation, { status: 403, body: { error: 'forbidden' } });
+});
 
 test('Given the populated fixture, when GitHub workflow data loads, then installation, repository, project, service, and branch IDs align', () => {
   const integrations = request('GET', '/integrations/github');
