@@ -99,16 +99,19 @@ test('baseline runner accepts silent successful non-test commands', async () => 
 });
 
 test('dashboard fixture routes Playwright and Next build artifacts through external directories', async () => {
-  const [playwright, nextConfig, fixture] = await Promise.all([
+  const [playwright, nextConfig, fixture, dashboardPackage] = await Promise.all([
     readFile(path.join(sourceRoot, 'apps/dashboard/playwright.config.ts'), 'utf8'),
     readFile(path.join(sourceRoot, 'apps/dashboard/next.config.mjs'), 'utf8'),
     readFile(path.join(sourceRoot, 'apps/dashboard/tests/e2e/fixture/serve.mjs'), 'utf8'),
+    readFile(path.join(sourceRoot, 'apps/dashboard/package.json'), 'utf8'),
   ]);
   assert.match(playwright, /RAIBITSERVER_PLAYWRIGHT_OUTPUT_DIR/);
   assert.match(playwright, /RAIBITSERVER_PLAYWRIGHT_REPORT_PATH/);
   assert.doesNotMatch(playwright, /outputDir:\s*'\.\/test-results'/);
   assert.match(nextConfig, /RAIBITSERVER_NEXT_DIST_DIR/);
   assert.match(fixture, /RAIBITSERVER_E2E_FIXTURE_OUTPUT_DIR/);
+  assert.equal(JSON.parse(dashboardPackage).scripts.build, 'next build --webpack');
+  assert.match(fixture, /\[nextBin, 'build', '--webpack'\]/);
 });
 
 test('Next distDir resolves approved external paths without a source-tree write', () => {

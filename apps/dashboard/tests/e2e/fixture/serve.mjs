@@ -18,7 +18,7 @@ let cleanupPromise;
 
 try {
   await assertPortsFree([3410, 3411]);
-  await run(process.execPath, [nextBin, 'build'], { NODE_ENV: 'production', RAIBITSERVER_NEXT_DIST_DIR: nextDistDir });
+  await run(process.execPath, [nextBin, 'build', '--webpack'], { NODE_ENV: 'production', RAIBITSERVER_NEXT_DIST_DIR: nextDistDir });
   const control = start(process.execPath, [path.join(dashboardDirectory, 'tests/e2e/fixture/control-plane.mjs')]);
   await ready('http://127.0.0.1:3411/__fixture/ready', control);
   const dashboard = start(process.execPath, [nextBin, 'start', '--hostname', '127.0.0.1', '--port', '3410'], {
