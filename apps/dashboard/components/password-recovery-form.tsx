@@ -129,7 +129,7 @@ export function PasswordRecoveryForm({
 
   return (
     <div className="flex flex-col gap-5">
-      {state.kind === 'accepted' ? <div ref={messageRef} tabIndex={-1}><Alert role="status" variant="notice"><AlertTitle>코드를 보냈습니다</AlertTitle><AlertDescription>입력하신 이메일로 계정 존재 여부와 관계없이 안내를 보냈습니다. 코드는 만료되거나 여러 번 틀리면 사용할 수 없습니다.</AlertDescription></Alert></div> : null}
+      {state.kind === 'accepted' ? <div ref={messageRef} tabIndex={-1}><Alert role="status" variant="notice"><AlertTitle>요청을 접수했습니다</AlertTitle><AlertDescription>비밀번호 재설정이 가능한 계정이면 입력한 이메일로 코드를 보내드립니다. 코드는 만료되거나 여러 번 틀리면 사용할 수 없습니다.</AlertDescription></Alert></div> : null}
       {state.kind === 'completed' ? <div ref={messageRef} tabIndex={-1}><Alert role="status" variant="notice"><AlertTitle>비밀번호를 변경했습니다</AlertTitle><AlertDescription>보안을 위해 자동 로그인하지 않습니다. 새 비밀번호로 로그인해 주세요.</AlertDescription></Alert></div> : null}
       {requestError ? <div ref={messageRef} tabIndex={-1}><Alert variant="destructive"><AlertTitle>확인해 주세요</AlertTitle><AlertDescription>{requestError}</AlertDescription></Alert></div> : null}
       {completeError ? <div ref={messageRef} tabIndex={-1}><Alert variant="destructive"><AlertTitle>확인해 주세요</AlertTitle><AlertDescription>{completeError}</AlertDescription></Alert></div> : null}
@@ -140,7 +140,7 @@ export function PasswordRecoveryForm({
           <Field data-disabled={requestPending || cooldownSeconds > 0 || undefined} data-invalid={Boolean(requestError) || undefined}>
             <FieldLabel htmlFor="recovery-email">이메일</FieldLabel>
             <Input aria-invalid={Boolean(requestError) || undefined} autoComplete="email" disabled={requestPending || cooldownSeconds > 0} id="recovery-email" name="email" required type="email" />
-            <FieldDescription>가입 여부와 관계없이 동일한 안내를 보냅니다.</FieldDescription>
+            <FieldDescription>비밀번호 재설정이 가능한 계정이면 입력한 이메일로 코드를 보내드립니다.</FieldDescription>
           </Field>
           <Button disabled={requestPending || cooldownSeconds > 0} type="submit">
             {requestPending ? <Spinner data-icon="inline-start" /> : null}
@@ -179,6 +179,7 @@ export function PasswordRecoveryForm({
 
       {state.kind === 'completed' ? <a className="w-fit text-sm font-medium text-foreground underline underline-offset-4" href="/login?mode=login">로그인으로 이동</a> : null}
       {mode === 'forgot' && !showRequest && state.kind !== 'completed' ? <Button onClick={() => setState({ kind: 'idle' })} variant="outline">코드 다시 요청</Button> : null}
+      {mode === 'reset' && state.kind !== 'completed' ? <a className="w-fit text-sm font-medium text-foreground underline underline-offset-4" href="/login?mode=forgot">재설정 코드 다시 요청</a> : null}
     </div>
   );
 }

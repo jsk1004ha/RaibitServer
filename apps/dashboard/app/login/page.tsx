@@ -20,7 +20,7 @@ const authCopy: Record<AuthMode, Readonly<{ eyebrow: string; title: string; desc
   login: { eyebrow: 'RAIBIT ACCOUNT', title: '콘솔에 로그인', description: '프로젝트와 배포 현황을 계속 관리하세요.' },
   signup: { eyebrow: 'JOIN RAIBIT', title: '가입 신청', description: '관리자 확인을 위해 정확한 정보를 입력해 주세요.' },
   verify: { eyebrow: 'VERIFY EMAIL', title: '이메일 인증', description: '이메일로 받은 6자리 코드를 입력해 주세요.' },
-  forgot: { eyebrow: 'PASSWORD RECOVERY', title: '비밀번호 재설정', description: '계정 존재 여부와 관계없이 동일한 안내를 보냅니다.' },
+  forgot: { eyebrow: 'PASSWORD RECOVERY', title: '비밀번호 재설정', description: '비밀번호 재설정이 가능한 계정이면 입력한 이메일로 코드를 보내드립니다.' },
   reset: { eyebrow: 'RESET PASSWORD', title: '새 비밀번호 설정', description: '이메일과 재설정 코드를 입력해 새 비밀번호를 설정하세요.' },
 };
 
@@ -180,7 +180,7 @@ function errorMessage(code: string): string {
 }
 
 function noticeMessage(code: string): string {
-  if (code === 'password_reset_requested') return '입력하신 이메일로 계정 존재 여부와 관계없이 안내를 보냈습니다.';
+  if (code === 'password_reset_requested') return '비밀번호 재설정이 가능한 계정이면 입력한 이메일로 코드를 보내드립니다.';
   if (code === 'password_reset_completed') return '비밀번호를 변경했습니다. 새 비밀번호로 로그인해 주세요.';
   return code === 'saved' ? '요청이 처리되었습니다.' : code ? '요청 결과를 확인해 주세요.' : '';
 }

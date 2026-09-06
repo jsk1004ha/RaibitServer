@@ -23,6 +23,7 @@ test('password recovery keeps request and completion secrets out of navigation s
   assert.match(recovery, /name="confirmPassword"/);
   assert.match(recovery, /autoComplete="new-password"/);
   assert.match(recovery, /response\.headers\.get\('retry-after'\)/);
+  assert.match(recovery, /mode === 'reset'[\s\S]*href="\/login\?mode=forgot"/);
   assert.doesNotMatch(recovery, /localStorage|sessionStorage|window\.location|history\./);
   assert.match(controlRoute, /'\/auth\/password-reset\/request'/);
   assert.match(controlRoute, /'\/auth\/password-reset\/complete'/);
