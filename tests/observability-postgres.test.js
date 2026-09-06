@@ -229,6 +229,32 @@ test('Given adversarial predecessor history, When PostgreSQL establishes PEM con
       id:randomUUID(),serviceId:service.id,deploymentId:deployment.id,podName:'noise-pod',podUid:randomUUID(),containerName:'app',level:'info',timestamp:source.timestamp,line:`noise-${sourceIndex}-${rowIndex}`,
     }))).flat()});
     await repository.prisma.runtimeLog.create({data:{id:source.id,serviceId:service.id,deploymentId:deployment.id,podName:'adversarial-pod',podUid,containerName:'app',level:'info',timestamp:source.timestamp,line:'after-history'}});
+    const timezoneRuntimeRows = [
+      {id:randomUUID(),serviceId:service.id,deploymentId:deployment.id,podName:'timezone-pod',podUid:'timezone-empty',containerName:'app',level:'info',timestamp:new Date(at.getTime()+4_000),line:'runtime empty anchor'},
+      {id:randomUUID(),serviceId:service.id,deploymentId:deployment.id,podName:'timezone-pod',podUid:'timezone-history',containerName:'app',level:'info',timestamp:new Date(at.getTime()+5_000),line:'runtime known predecessor'},
+      {id:randomUUID(),serviceId:service.id,deploymentId:deployment.id,podName:'timezone-pod',podUid:'timezone-history',containerName:'app',level:'info',timestamp:new Date(at.getTime()+6_000),line:'runtime history anchor'},
+    ];
+    const timezoneBuildRows = [
+      {id:randomUUID(),deploymentId:deployment.id,step:'timezone-empty',level:'info',timestamp:new Date(at.getTime()+4_000),line:'build empty anchor'},
+      {id:randomUUID(),deploymentId:deployment.id,step:'timezone-history',level:'info',timestamp:new Date(at.getTime()+5_000),line:'build known predecessor'},
+      {id:randomUUID(),deploymentId:deployment.id,step:'timezone-history',level:'info',timestamp:new Date(at.getTime()+6_000),line:'build history anchor'},
+    ];
+    await repository.prisma.runtimeLog.createMany({data:timezoneRuntimeRows});
+    await repository.prisma.buildLog.createMany({data:timezoneBuildRows});
+    const timezoneAnchors = [timezoneRuntimeRows[0],timezoneRuntimeRows[2],timezoneBuildRows[0],timezoneBuildRows[2]];
+    const expectedTimezoneContexts = [
+      {source:`runtime:${service.id}:${deployment.id}:timezone-empty:app`,complete:true,lines:[]},
+      {source:`runtime:${service.id}:${deployment.id}:timezone-history:app`,complete:true,lines:['runtime known predecessor']},
+      {source:`build:${deployment.id}:timezone-empty`,complete:true,lines:[]},
+      {source:`build:${deployment.id}:timezone-history`,complete:true,lines:['build known predecessor']},
+    ];
+    for (const timezone of ['UTC','Asia/Seoul','America/New_York']) {
+      await repository.prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL TIME ZONE '${timezone}'`);
+        const contexts = await new PrismaControlPlaneRepository(tx).logPemContext(timezoneAnchors);
+        assert.deepEqual(contexts.map(({source,complete,rows})=>({source,complete,lines:rows.map((row)=>row.line)})),expectedTimezoneContexts,timezone);
+      });
+    }
     await repository.prisma.$executeRawUnsafe('ANALYZE "RuntimeLog"');
 
     const statement = await runtimePemContextQuery([source]);

@@ -2701,7 +2701,7 @@ function pemContextSources(rows: readonly ObservationLogRow[]): PemContextSource
 
 export async function runtimePemContextQuery(sources: readonly RuntimePemContextSource[]) {
   const { Prisma } = await import('@prisma/client');
-  const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.serviceId} AS text), CAST(${source.deploymentId} AS text), CAST(${source.podUid} AS text), CAST(${source.containerName} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
+  const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.serviceId} AS text), CAST(${source.deploymentId} AS text), CAST(${source.podUid} AS text), CAST(${source.containerName} AS text), CAST(CAST(${source.timestamp} AS timestamptz) AT TIME ZONE 'UTC' AS timestamp(3)), CAST(${source.id} AS text))`);
   return Prisma.sql`
     WITH requested("requestId", "serviceId", "deploymentId", "podUid", "containerName", "timestamp", "id") AS MATERIALIZED (VALUES ${Prisma.join(values)})
     SELECT requested."requestId", history."line", history."truncated"
@@ -2727,7 +2727,7 @@ export async function runtimePemContextQuery(sources: readonly RuntimePemContext
 
 async function buildPemContextQuery(sources: readonly BuildPemContextSource[]) {
   const { Prisma } = await import('@prisma/client');
-  const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.deploymentId} AS text), CAST(${source.step} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
+  const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.deploymentId} AS text), CAST(${source.step} AS text), CAST(CAST(${source.timestamp} AS timestamptz) AT TIME ZONE 'UTC' AS timestamp(3)), CAST(${source.id} AS text))`);
   return Prisma.sql`
     WITH requested("requestId", "deploymentId", "step", "timestamp", "id") AS MATERIALIZED (VALUES ${Prisma.join(values)})
     SELECT requested."requestId", history."line", history."truncated"
