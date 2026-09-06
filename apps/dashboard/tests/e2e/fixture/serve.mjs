@@ -8,7 +8,7 @@ import { terminateProcessTree, waitForPortsFree } from './process-tree.mjs';
 
 const dashboardDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const nextBin = path.join(dashboardDirectory, 'node_modules', 'next', 'dist', 'bin', 'next');
-const projectNodeModules = path.resolve(dashboardDirectory, '../..', 'node_modules');
+const projectNodeModules = path.join(dashboardDirectory, 'node_modules');
 const configuredOutput = process.env.RAIBITSERVER_E2E_FIXTURE_OUTPUT_DIR;
 if (configuredOutput && !path.isAbsolute(configuredOutput)) throw new Error('dashboard_fixture_output_directory_must_be_absolute');
 const fixtureOutput = configuredOutput ?? await mkdtemp(path.join(tmpdir(), 'raibitserver-dashboard-fixture-'));

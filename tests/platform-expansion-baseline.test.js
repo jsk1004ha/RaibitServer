@@ -110,7 +110,7 @@ test('dashboard fixture routes Playwright and Next build artifacts through exter
   assert.doesNotMatch(playwright, /outputDir:\s*'\.\/test-results'/);
   assert.match(nextConfig, /RAIBITSERVER_NEXT_DIST_DIR/);
   assert.match(fixture, /RAIBITSERVER_E2E_FIXTURE_OUTPUT_DIR/);
-  assert.match(fixture, /const projectNodeModules = path\.resolve\(dashboardDirectory, '\.\.\/\.\.', 'node_modules'\)/);
+  assert.match(fixture, /const projectNodeModules = path\.join\(dashboardDirectory, 'node_modules'\)/);
   assert.match(fixture, /NODE_PATH: \[projectNodeModules, process\.env\.NODE_PATH, extraEnv\.NODE_PATH\]\.filter\(Boolean\)\.join\(path\.delimiter\)/);
   assert.equal(JSON.parse(dashboardPackage).scripts.build, 'next build --webpack');
   assert.match(fixture, /\[nextBin, 'build', '--webpack'\]/);
