@@ -107,16 +107,21 @@ test('Given the populated fixture, when GitHub workflow data loads, then install
   const services = request('GET', '/projects/prj_fixture_001/services');
 
   assert.equal(integrations.status, 200);
-  assert.deepEqual(integrations.body.integrations, [{
-    id: 'ghi_fixture', provider: 'github', status: 'connected', login: 'raibit-fixture',
+  apiOperations['github-integrations-list'].response.parse(integrations.body);
+  assert.deepEqual(integrations.body.integrations.map(({ id, organizationId, accountLogin, installationId, status }) => ({ id, organizationId, accountLogin, installationId, status })), [{
+    id: 'ghi_fixture', organizationId: 'org_fixture_001', accountLogin: 'raibit-fixture', installationId: '9001', status: 'ACTIVE',
   }]);
+  apiOperations['github-installations'].response.parse(installations.body);
   assert.deepEqual(installations.body.installations, [{
-    id: '9001', installationId: '9001', integrationId: 'ghi_fixture', accountLogin: 'raibit-fixture', repositoryCount: 1,
+    id: '9001', installationId: '9001', integrationId: 'ghi_fixture', accountLogin: 'raibit-fixture', repositoryCount: 125,
   }]);
-  assert.deepEqual(repositories.body.repositories, [{
+  apiOperations['github-repositories'].response.parse(repositories.body);
+  assert.equal(repositories.body.repositories.length, 50);
+  assert.equal(repositories.body.nextCursor, 'fixture-catalog-page-2');
+  assert.deepEqual(repositories.body.repositories[0], {
     id: 'repo_fixture', githubRepoId: 'repo_fixture', fullName: 'raibit/fixture-app', name: 'fixture-app',
-    defaultBranch: 'main', private: false, installationId: '9001',
-  }]);
+    owner: 'raibit', normalizedIdentity: 'raibit/fixture-app', defaultBranch: 'main', private: false, accessState: 'ACCESSIBLE', generation: 12, installationId: '9001',
+  });
   assert.equal(projects.body.projects[0].id, 'prj_fixture_001');
   assert.deepEqual(services.body.services.map(({ id, projectId, branch }) => ({ id, projectId, branch })), [{
     id: 'svc_fixture_web', projectId: 'prj_fixture_001', branch: 'main',
@@ -169,12 +174,14 @@ test('Given deployed service settings, when preview, conditional save, and repla
 test('Given non-populated sessions, when GitHub data loads, then empty and authorization behavior stay deterministic', () => {
   assert.deepEqual(request('GET', '/github/installations', TOKENS.empty), { status: 200, body: { installations: [] } });
   assert.deepEqual(request('GET', '/github/installations', TOKENS.expired), { status: 401, body: { error: 'session_expired' } });
-  assert.deepEqual(request('GET', '/github/installations/9001/repositories', TOKENS.partial), {
-    status: 200,
-    body: { repositories: [{
-      id: 'repo_fixture', githubRepoId: 'repo_fixture', fullName: 'raibit/fixture-app', name: 'fixture-app',
-      defaultBranch: 'main', private: false, installationId: '9001',
-    }] },
+  const repositories = request('GET', '/github/installations/9001/repositories', TOKENS.partial);
+  assert.equal(repositories.status, 200);
+  apiOperations['github-repositories'].response.parse(repositories.body);
+  assert.equal(repositories.body.repositories.length, 50);
+  assert.equal(repositories.body.nextCursor, 'fixture-catalog-page-2');
+  assert.deepEqual(repositories.body.repositories[0], {
+    id: 'repo_fixture', githubRepoId: 'repo_fixture', fullName: 'raibit/fixture-app', name: 'fixture-app',
+    owner: 'raibit', normalizedIdentity: 'raibit/fixture-app', defaultBranch: 'main', private: false, accessState: 'ACCESSIBLE', generation: 12, installationId: '9001',
   });
 });
 
