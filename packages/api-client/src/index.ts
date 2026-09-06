@@ -200,6 +200,9 @@ export class RAIBITSERVERClient {
 
   connectGitHub(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/integrations/github', { method: 'POST', body: input }); }
   listGitHub(organizationId?: string): Promise<Record<string, unknown>> { return this.request(organizationId ? `/integrations/github?organizationId=${encodeURIComponent(organizationId)}` : '/integrations/github'); }
+  disconnectGitHubIntegration(organizationId: string, integrationId: string, expectedVersion: number): Promise<ApiOutput<'github-integrations-disconnect'>> {
+    return this.operations['github-integrations-disconnect']({ path: { organizationId, integrationId }, query: {}, body: { expectedVersion } });
+  }
   listGitHubInstallations(organizationId?: string): Promise<Record<string, unknown>> { return this.request(organizationId ? `/github/installations?organizationId=${encodeURIComponent(organizationId)}` : '/github/installations'); }
   beginGitHubAppInstallation(): Promise<Record<string, unknown>> { return this.request('/github/install'); }
   beginGitHubAppAuthorization(input: Record<string, unknown>): Promise<Record<string, unknown>> {

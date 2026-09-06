@@ -21,6 +21,7 @@ const organization = z.object({ organizationId: id });
 const domain = z.object({ domainId: id });
 const scopedService = project.extend({ serviceId: id });
 const orgQuery = z.object({ organizationId: id.optional() });
+const organizationGitHubIntegration = z.object({ organizationId: id, integrationId: id });
 const query = z.object({ query: z.string().min(1), confirmed: z.boolean().optional(), limit: z.number().int().max(1000).optional() });
 function input<P extends z.ZodType, Q extends z.ZodType, B extends z.ZodType>(path: P, query: Q, body: B) { return z.object({ path, query, body }).strict(); }
 const noInput = input(M.Empty, M.Empty, M.Empty);
@@ -129,6 +130,7 @@ export const apiOperations = {
   'github-installations': operation({ method: 'get', path: '/github/installations', status: 200, permission: 'project:read', input: input(M.Empty, orgQuery, M.Empty), response: z.object({ installations: z.array(M.JsonFields) }) }),
   'github-integrations-create': operation({ method: 'post', path: '/integrations/github', status: 201, permission: 'team:invite', input: input(M.Empty, M.Empty, z.object({ organizationId: id.optional(), accountLogin: id, installationId: id.optional() })), response: M.Integration }),
   'github-integrations-list': operation({ method: 'get', path: '/integrations/github', status: 200, permission: 'project:read', input: input(M.Empty, orgQuery, M.Empty), response: z.object({ integrations: z.array(M.Integration) }) }),
+  'github-integrations-disconnect': operation({ method: 'post', path: '/organizations/{organizationId}/integrations/github/{integrationId}/disconnect', status: 200, permission: 'github:disconnect', input: input(organizationGitHubIntegration, M.Empty, z.object({ expectedVersion: z.number().int().positive() }).strict()), response: z.object({ integration: M.Integration, affectedServiceCount: z.number().int().nonnegative(), credentialIssuance: z.literal('denied'), githubAppUninstalled: z.literal(false) }).strict() }),
   'github-attach': operation({ method: 'post', path: '/projects/{projectId}/services/{serviceId}/github', status: 201, permission: 'deploy:run', input: input(scopedService, M.Empty, M.GithubAttach), response: z.object({ service: M.Service, github: M.JsonFields }) }),
   'github-repositories': operation({ method: 'get', path: '/github/installations/{installationId}/repositories', status: 200, permission: 'project:read', input: input(z.object({ installationId: id }), M.Empty, M.Empty), response: z.object({ installationId: id, repositories: z.array(M.Repository) }) }),
   'github-webhooks': operation({ method: 'post', path: '/github/webhooks', status: 201, permission: null, input: input(M.Empty, M.Empty, z.object({ action: z.string().optional(), repository: M.JsonFields.optional(), installation: M.JsonFields.optional() }).catchall(z.json())), response: z.object({ accepted: z.boolean() }).catchall(z.json()) }),

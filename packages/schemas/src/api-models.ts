@@ -54,7 +54,19 @@ export const PreviewCleanupResult = z.object({ operationId: id, status: z.enum([
 export const StreamError = z.object({ error: z.string() });
 export const Environment = z.object({ serviceId: id, entries: z.array(z.object({ key: z.string(), value: z.string().nullable(), isSecret: z.boolean(), valueMasked: z.string() }).catchall(json)), plainCount: z.number().int(), secretCount: z.number().int() }).catchall(json);
 export const ConsoleResult = z.object({ engine: z.string(), rows: z.array(json).optional(), fields: z.array(json).optional(), rowCount: z.number().optional(), mode: z.string().optional(), warning: z.string().optional() }).catchall(json);
-export const Integration = z.object({ id, organizationId: id, verifiedAt: z.string().nullable() }).catchall(json);
+export const Integration = z.object({
+  id,
+  organizationId: id,
+  accountLogin: z.string().nullable(),
+  installationId: z.string().nullable(),
+  status: z.enum(['ACTIVE', 'SUSPENDED', 'DISCONNECTED', 'DELETED']),
+  version: z.number().int().positive(),
+  connected: z.boolean(),
+  credentialIssuance: z.enum(['allowed', 'denied']),
+  verifiedAt: z.iso.datetime().nullable(),
+  externalGitHubSettingsUrl: z.url(),
+  reattachUrl: z.string().startsWith('/github/install'),
+}).catchall(json);
 export const Repository = z.object({ id, name: z.string().optional() }).catchall(json);
 export const AgentPlan = z.object({ version: z.literal('v1'), projectId: id, generatedBy: z.enum(['deterministic', 'external-ai']), summary: z.string(), blocked: z.boolean(), canApply: z.boolean(), deploymentOrder: z.array(id), services: z.array(z.object({ serviceId: id, name: z.string(), type: z.string(), eligible: z.boolean(), findings: z.array(z.object({ severity: z.enum(['critical', 'high', 'medium', 'low']), code: z.string(), message: z.string(), field: z.string().optional() })) })), security: z.object({ highestSeverity: z.enum(['critical', 'high', 'medium', 'low', 'none']), critical: z.number(), high: z.number(), medium: z.number(), low: z.number() }) });
 export const AuthInput = z.object({ email: z.email(), password: z.string().min(1) });

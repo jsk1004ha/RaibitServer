@@ -30,6 +30,7 @@ import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrgani
 import { PostgresOrganizationInviteRepository } from './organization-invite-postgres.ts';
 import type { ReplaceOrganizationInviteInput } from './organization-invite.ts';
 import { parseGitHubRepository } from './github-integration.ts';
+import { GITHUB_INTEGRATION_STATUS, githubIntegrationStatus, githubServiceSourceState, githubSourceAccess, publicGitHubIntegration } from './github-lifecycle.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
@@ -316,6 +317,7 @@ export class InMemoryControlPlaneRepository {
   async importServiceEnvFile(input: Record<string, any>) { return this.store.importServiceEnvFile(input); }
   async listServiceEnvironment(input: Record<string, any>) { return this.store.listServiceEnvironment(input); }
   async createGitHubIntegration(input: Record<string, any>) { return this.store.createGitHubIntegration(input); }
+  async disconnectGitHubIntegration(input: Record<string, any>) { return this.store.disconnectGitHubIntegration(input); }
   async verifyGitHubIntegration(input: Record<string, any>) { return this.store.verifyGitHubIntegration(input); }
   async registerGitHubRepository(input: Record<string, any>) { return this.store.registerGitHubRepository(input); }
   async listGitHubIntegrations(input: Record<string, any>) { return this.store.listGitHubIntegrations(input); }
@@ -1648,6 +1650,8 @@ export class PrismaControlPlaneRepository {
         tokenFingerprint: summary.tokenFingerprint,
         scopes: summary.scopes,
         defaultBranch: input.defaultBranch || 'main',
+        status: GITHUB_INTEGRATION_STATUS.DISCONNECTED,
+        disconnectedAt: new Date(),
       },
     });
     if (input.token) {
@@ -1659,11 +1663,12 @@ export class PrismaControlPlaneRepository {
       row = await this.prisma.gitHubIntegration.update({ where: { id: row.id }, data: { tokenSecretId: secret.id } });
     }
     await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.userId), action: 'github:connect', targetType: 'organization', targetId: input.organizationId, metadata: maskSecrets({ integrationId: row.id, accountLogin: row.accountLogin }) } });
-    return row;
+    return publicGitHubIntegration(row);
   }
 
   async listGitHubIntegrations(input: Record<string, any>) {
-    return this.prisma.gitHubIntegration.findMany({ where: { organizationId: input.organizationId } });
+    const integrations = await this.prisma.gitHubIntegration.findMany({ where: { organizationId: input.organizationId } });
+    return integrations.map(publicGitHubIntegration);
   }
 
   async verifyGitHubIntegration(input: Record<string, any>) {
@@ -1673,10 +1678,11 @@ export class PrismaControlPlaneRepository {
       const installationId = String(input.installationId || '').trim();
       if (!installationId) throw conflictError('verified GitHub integration requires an installationId');
       if (integration.verifiedAt && String(integration.installationId) !== installationId) throw conflictError('verified GitHub installation binding is immutable');
-      const conflictRow = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null }, id: { not: integration.id } } });
+      const conflictRow = await tx.gitHubIntegration.findFirst({ where: { installationId, id: { not: integration.id } } });
       if (conflictRow) throw conflictError(String(conflictRow.organizationId) === String(integration.organizationId) ? 'GitHub installation is already verified by another integration' : 'GitHub installation is already verified for another organization');
-      const verifiedAt = new Date();
-      const row = await tx.gitHubIntegration.update({ where: { id: integration.id }, data: { installationId, accountLogin: input.accountLogin || integration.accountLogin, verifiedAt } });
+      const verifiedAt = integration.verifiedAt || new Date();
+      const reactivated = githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE;
+      const row = await tx.gitHubIntegration.update({ where: { id: integration.id }, data: { installationId, accountLogin: input.accountLogin || integration.accountLogin, status: GITHUB_INTEGRATION_STATUS.ACTIVE, version: { increment: reactivated ? 1 : 0 }, verifiedAt, disconnectedAt: null } });
       await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.verifiedBy), action: 'github:verify-installation', targetType: 'github-integration', targetId: integration.id, metadata: { organizationId: integration.organizationId, installationId } } });
       return row;
     }, { isolationLevel: 'Serializable' });
@@ -1690,26 +1696,47 @@ export class PrismaControlPlaneRepository {
       if (!organizationId) throw badRequestError('organizationId is required for GitHub integration');
       if (!/^\d+$/.test(installationId)) throw badRequestError('GitHub installationId must be numeric');
       if (!accountLogin) throw badRequestError('GitHub installation accountLogin is required');
-      const existing = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null } } });
+      const existing = await tx.gitHubIntegration.findFirst({ where: { installationId } });
       if (existing && String(existing.organizationId) !== organizationId) throw forbiddenError('GitHub installation is already verified for another organization');
       const verifiedAt = existing?.verifiedAt || new Date();
+      const reactivated = existing ? githubIntegrationStatus(existing) !== GITHUB_INTEGRATION_STATUS.ACTIVE : false;
       const row = existing
-        ? await tx.gitHubIntegration.update({ where: { id: existing.id }, data: { accountLogin, userId: existing.userId || input.userId || null, verifiedAt } })
-        : await tx.gitHubIntegration.create({ data: { organizationId, userId: input.userId || null, accountLogin, installationId, scopes: ['repo:read'], defaultBranch: 'main', verifiedAt } });
+        ? await tx.gitHubIntegration.update({ where: { id: existing.id }, data: { accountLogin, userId: existing.userId || input.userId || null, status: GITHUB_INTEGRATION_STATUS.ACTIVE, version: { increment: reactivated ? 1 : 0 }, verifiedAt, disconnectedAt: null } })
+        : await tx.gitHubIntegration.create({ data: { organizationId, userId: input.userId || null, accountLogin, installationId, scopes: ['repo:read'], defaultBranch: 'main', status: GITHUB_INTEGRATION_STATUS.ACTIVE, verifiedAt } });
       await tx.gitHubInstallation.upsert({
         where: { installationId },
         update: { accountLogin, accountType: String(input.accountType || 'Organization') },
         create: { installationId, accountLogin, accountType: String(input.accountType || 'Organization') },
       });
       await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.verifiedBy || input.userId), action: 'github:verify-installation', targetType: 'github-integration', targetId: row.id, metadata: { organizationId, installationId, accountLogin } } });
-      return row;
+      return publicGitHubIntegration(row);
+    }, { isolationLevel: 'Serializable' });
+  }
+
+  async disconnectGitHubIntegration(input: Record<string, any>) {
+    return this.prisma.$transaction(async (tx: any) => {
+      const organizationId = String(input.organizationId || '');
+      const integration = await tx.gitHubIntegration.findFirst({ where: { id: String(input.integrationId), organizationId } });
+      if (!integration) throw notFoundError('GitHub integration not found');
+      const expectedVersion = Number(input.expectedVersion);
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw badRequestError('expectedVersion must be a positive integer');
+      if (Number(integration.version || 1) !== expectedVersion) throw conflictError('GitHub integration version conflict');
+      const updated = await tx.gitHubIntegration.updateMany({
+        where: { id: integration.id, organizationId, version: expectedVersion },
+        data: { status: GITHUB_INTEGRATION_STATUS.DISCONNECTED, version: { increment: 1 }, verifiedAt: null, disconnectedAt: new Date() },
+      });
+      if (updated.count !== 1) throw conflictError('GitHub integration version conflict');
+      const next = await tx.gitHubIntegration.findUnique({ where: { id: integration.id } });
+      const affectedServiceCount = await setPrismaGitHubServiceAccess(tx, next, 'GITHUB_SOURCE_DISCONNECTED');
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:disconnect', targetType: 'github-integration', targetId: integration.id, metadata: sanitizeJson({ organizationId, installationId: integration.installationId, previousStatus: githubIntegrationStatus(integration), version: expectedVersion + 1, affectedServiceCount }) } });
+      return { integration: publicGitHubIntegration(next), affectedServiceCount, credentialIssuance: 'denied', githubAppUninstalled: false };
     }, { isolationLevel: 'Serializable' });
   }
 
   async registerGitHubRepository(input: Record<string, any>) {
     return this.prisma.$transaction(async (tx: any) => {
       const installationId = String(input.installationId || '').trim();
-      const integration = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null } } });
+      const integration = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null }, status: GITHUB_INTEGRATION_STATUS.ACTIVE } });
       if (!integration) throw forbiddenError('repository catalog updates require a verified GitHub installation');
       const record = canonicalPrismaGitHubRepositoryRecord(input);
       const existing = await tx.gitHubRepository.findUnique({ where: { githubRepoId: record.githubRepoId } });
@@ -1726,7 +1753,7 @@ export class PrismaControlPlaneRepository {
   async replaceGitHubInstallationRepositories(input: Record<string, any>) {
     return this.prisma.$transaction(async (tx: any) => {
       const installationId = String(input.installationId || '').trim();
-      const integration = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null } } });
+      const integration = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null }, status: GITHUB_INTEGRATION_STATUS.ACTIVE } });
       if (!integration) throw forbiddenError('repository catalog updates require a verified GitHub installation');
       if (!Array.isArray(input.repositories)) throw badRequestError('GitHub repositories must be an array');
       const records = input.repositories.map((repository: Record<string, any>) => canonicalPrismaGitHubRepositoryRecord({ ...repository, installationId }));
@@ -1734,9 +1761,12 @@ export class PrismaControlPlaneRepository {
       if (new Set(ids).size !== ids.length) throw conflictError('GitHub repository catalog contains duplicate repository IDs');
       const conflicts = ids.length ? await tx.gitHubRepository.findMany({ where: { githubRepoId: { in: ids }, installationId: { not: installationId } } }) : [];
       if (conflicts.length) throw conflictError('GitHub repository is already bound to another installation');
+      const removed = await tx.gitHubRepository.findMany({ where: { installationId, ...(ids.length ? { githubRepoId: { notIn: ids } } : {}) } });
+      await setPrismaGitHubServiceAccess(tx, integration, 'SOURCE_ACCESS_REVOKED', new Set(removed.map((repository: Record<string, any>) => String(repository.githubRepoId))));
       await tx.gitHubRepository.deleteMany({ where: { installationId, ...(ids.length ? { githubRepoId: { notIn: ids } } : {}) } });
       const repositories = [];
       for (const record of records) repositories.push(await tx.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record }));
+      await setPrismaGitHubServiceAccess(tx, integration, null, new Set(ids));
       await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:sync-installation-repositories', targetType: 'github-installation', targetId: installationId, metadata: { repositoryCount: repositories.length } } });
       return { installationId, repositories: repositories.map(publicPrismaGitHubRepository), repositoryCount: repositories.length };
     }, { isolationLevel: 'Serializable' });
@@ -1765,15 +1795,13 @@ export class PrismaControlPlaneRepository {
   }
 
   async listGitHubInstallations(input: Record<string, any>) {
-    const integrations = await this.prisma.gitHubIntegration.findMany({ where: { organizationId: input.organizationId, installationId: { not: null }, verifiedAt: { not: null } } });
+    const integrations = await this.prisma.gitHubIntegration.findMany({ where: { organizationId: input.organizationId, installationId: { not: null } } });
     const repositoryCounts = await Promise.all(integrations.map((integration: Record<string, any>) => this.prisma.gitHubRepository.count({ where: { installationId: String(integration.installationId) } })));
     return {
       installations: integrations.map((integration: Record<string, any>, index: number) => ({
+        ...publicGitHubIntegration(integration),
         id: String(integration.installationId),
-        installationId: String(integration.installationId),
         integrationId: integration.id,
-        accountLogin: integration.accountLogin,
-        organizationId: integration.organizationId,
         repositoryCount: repositoryCounts[index],
       })),
     };
@@ -3059,7 +3087,7 @@ async function requireVerifiedPrismaGitHubIntegration(db: any, integrationId: an
   const integration = id ? await db.gitHubIntegration.findUnique({ where: { id } }) : null;
   if (!integration) throw notFoundError(`GitHub integration not found: ${id || '<missing>'}`);
   if (String(integration.organizationId) !== String(organizationId)) throw forbiddenError('GitHub integration does not belong to project organization');
-  if (!integration.verifiedAt || !integration.installationId) throw forbiddenError('repository attachment requires a verified GitHub App installation');
+  if (!integration.verifiedAt || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || !integration.installationId) throw forbiddenError('repository attachment requires a verified GitHub App installation');
   return integration;
 }
 
@@ -3497,10 +3525,21 @@ async function applyPrismaGitHubCatalogWebhook(prisma: any, event: any, payload:
       && (!integration.verifiedAt || String(integration.installationId || '') === installationId));
     if (candidates.length !== 1) return actions;
     const integration = candidates[0];
-    const conflict = await prisma.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null }, id: { not: integration.id } } });
+    const conflict = await prisma.gitHubIntegration.findFirst({ where: { installationId, id: { not: integration.id } } });
     if (conflict) return actions;
     const verifiedAt = new Date();
-    await prisma.gitHubIntegration.update({ where: { id: integration.id }, data: { installationId, accountLogin, verifiedAt } });
+    const reactivated = githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE;
+    await prisma.gitHubIntegration.update({
+      where: { id: integration.id },
+      data: {
+        installationId,
+        accountLogin,
+        status: GITHUB_INTEGRATION_STATUS.ACTIVE,
+        version: { increment: reactivated ? 1 : 0 },
+        verifiedAt,
+        disconnectedAt: null,
+      },
+    });
     await prisma.gitHubInstallation.upsert({ where: { installationId }, update: { accountLogin, accountType: String(payload.installation?.account?.type || 'Organization') }, create: { installationId, accountLogin, accountType: String(payload.installation?.account?.type || 'Organization') } });
     let repositoryCount = 0;
     for (const repository of Array.isArray(payload.repositories) ? payload.repositories : []) {
@@ -3514,26 +3553,53 @@ async function applyPrismaGitHubCatalogWebhook(prisma: any, event: any, payload:
     actions.push({ type: 'github-installation-catalog-verified', integrationId: integration.id, installationId, repositoryCount });
     return actions;
   }
-  if (eventName === 'installation' && ['deleted', 'suspend'].includes(action) && /^\d+$/.test(installationId)) {
-    const removed = await prisma.gitHubRepository.deleteMany({ where: { installationId } });
-    await prisma.gitHubIntegration.updateMany({ where: { installationId }, data: { verifiedAt: null } });
-    actions.push({ type: 'github-installation-catalog-invalidated', installationId, repositoryCount: Number(removed?.count || 0) });
+  if (eventName === 'installation' && ['deleted', 'suspend', 'suspended'].includes(action) && /^\d+$/.test(installationId)) {
+    const status = action === 'deleted' ? GITHUB_INTEGRATION_STATUS.DELETED : GITHUB_INTEGRATION_STATUS.SUSPENDED;
+    const integrations = await prisma.gitHubIntegration.findMany({
+      where: {
+        installationId,
+        status: action === 'deleted'
+          ? { not: GITHUB_INTEGRATION_STATUS.DELETED }
+          : GITHUB_INTEGRATION_STATUS.ACTIVE,
+      },
+    });
+    let affectedServiceCount = 0;
+    for (const integration of integrations) {
+      const next = await prisma.gitHubIntegration.update({ where: { id: integration.id }, data: { status, version: { increment: 1 }, verifiedAt: null } });
+      affectedServiceCount += await setPrismaGitHubServiceAccess(prisma, next, 'SOURCE_ACCESS_REVOKED');
+    }
+    actions.push({ type: 'github-installation-access-revoked', installationId, status, affectedServiceCount });
+    return actions;
+  }
+  if (eventName === 'installation' && action === 'unsuspended' && /^\d+$/.test(installationId)) {
+    const integrations = await prisma.gitHubIntegration.findMany({ where: { installationId, status: GITHUB_INTEGRATION_STATUS.SUSPENDED } });
+    let affectedServiceCount = 0;
+    for (const integration of integrations) {
+      const next = await prisma.gitHubIntegration.update({ where: { id: integration.id }, data: { status: GITHUB_INTEGRATION_STATUS.ACTIVE, version: { increment: 1 }, verifiedAt: new Date() } });
+      affectedServiceCount += await setPrismaGitHubServiceAccess(prisma, next, null);
+    }
+    actions.push({ type: 'github-installation-access-restored', installationId, affectedServiceCount });
     return actions;
   }
   if (eventName === 'installation_repositories' && /^\d+$/.test(installationId)) {
-    const integration = await prisma.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null } } });
+    const integration = await prisma.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null }, status: GITHUB_INTEGRATION_STATUS.ACTIVE } });
     if (!integration) return actions;
+    const addedIds: string[] = [];
     for (const repository of Array.isArray(payload.repositories_added) ? payload.repositories_added : []) {
       if (!/^\d+$/.test(String(repository?.id || '')) || !repository?.full_name) continue;
       const record = canonicalPrismaGitHubRepositoryRecord({ installationId, githubRepoId: String(repository.id), fullName: repository.full_name, defaultBranch: repository.default_branch || 'main', private: repository.private === true });
       const existing = await prisma.gitHubRepository.findUnique({ where: { githubRepoId: record.githubRepoId } });
       if (!existing || String(existing.installationId) === installationId) {
         await prisma.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record });
+        addedIds.push(record.githubRepoId);
       }
     }
     const removedIds = (Array.isArray(payload.repositories_removed) ? payload.repositories_removed : []).map((repository: any) => String(repository?.id || '')).filter((id: string) => /^\d+$/.test(id));
+    let affectedServiceCount = 0;
+    if (removedIds.length) affectedServiceCount += await setPrismaGitHubServiceAccess(prisma, integration, 'SOURCE_ACCESS_REVOKED', new Set(removedIds));
+    if (addedIds.length) affectedServiceCount += await setPrismaGitHubServiceAccess(prisma, integration, null, new Set(addedIds));
     if (removedIds.length) await prisma.gitHubRepository.deleteMany({ where: { installationId, githubRepoId: { in: removedIds } } });
-    actions.push({ type: 'github-installation-repositories-catalog-updated', installationId });
+    actions.push({ type: 'github-installation-repositories-catalog-updated', installationId, affectedServiceCount });
     return actions;
   }
   if (eventName === 'repository' && ['transferred', 'deleted', 'archived'].includes(action)) {
@@ -3547,6 +3613,26 @@ async function applyPrismaGitHubCatalogWebhook(prisma: any, event: any, payload:
     }
   }
   return actions;
+}
+
+async function setPrismaGitHubServiceAccess(prisma: any, integration: Record<string, any>, sourceAccess: string | null, repositoryIds: ReadonlySet<string> | null = null) {
+  const services = await prisma.service.findMany({ where: { project: { organizationId: integration.organizationId } } });
+  let affected = 0;
+  for (const service of services) {
+    const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+    const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
+    const serviceIntegrationId = String(desired.githubIntegrationId || github.integrationId || '');
+    const serviceInstallationId = String(desired.githubInstallationId || github.installationId || '');
+    const serviceRepositoryId = String(service.githubRepositoryId || desired.githubRepositoryId || github.repositoryId || '');
+    if (serviceIntegrationId !== String(integration.id)
+      || serviceInstallationId !== String(integration.installationId)
+      || (repositoryIds && !repositoryIds.has(serviceRepositoryId))) continue;
+    const nextAccess = sourceAccess || githubSourceAccess({ ...service, desiredState: desired });
+    const next = githubServiceSourceState({ ...service, desiredState: desired }, nextAccess);
+    await prisma.service.update({ where: { id: service.id }, data: { desiredState: sanitizeJson(next.desiredState) } });
+    affected += 1;
+  }
+  return affected;
 }
 
 async function prismaGitHubWebhookQuotaBlocks(prisma: any, services: any[], actionPlan: Record<string, any>, actions: any[]) {

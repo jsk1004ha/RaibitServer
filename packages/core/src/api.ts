@@ -18,6 +18,7 @@ import { quotaUsageGauges, quotaWarnings } from './quota.ts';
 import { assertSystemDeploymentActor, enforceAuthAbuseLimits, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth } from './github-oauth-flow.ts';
 import { createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, resolveGitHubAppInstallationSelection, verifyGitHubAppInstallationState } from './github-app.ts';
+import { publicGitHubIntegration } from './github-lifecycle.ts';
 import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
 import { publicSitesFromSnapshot } from './public-sites.ts';
 import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, encodeDeploymentActivityResumeToken, encodeServiceLogResumeToken, DeploymentActivityResumeTokenError } from './sse.ts';
@@ -837,12 +838,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         });
         return send(res, 200, {
           connected: true,
-          integration: {
-            id: integration.id,
-            installationId: integration.installationId,
-            accountLogin: integration.accountLogin,
-            verifiedAt: integration.verifiedAt,
-          },
+          integration: publicGitHubIntegration(integration),
           repositoryCount: catalog.repositoryCount,
         });
       }
@@ -851,6 +847,14 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const organizationId = url.searchParams.get('organizationId') || subject.organizationId;
         requireScope(subject, { organizationId });
         return send(res, 200, { integrations: controlPlane.store.listGitHubIntegrations({ organizationId }) });
+      }
+      const githubDisconnectMatch = url.pathname.match(/^\/organizations\/([^/]+)\/integrations\/github\/([^/]+)\/disconnect$/);
+      if (githubDisconnectMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'github:disconnect', auth);
+        const [organizationId, integrationId] = githubDisconnectMatch.slice(1).map(decodeURIComponent);
+        requireScope(subject, { organizationId });
+        const body = await readJson(req);
+        return send(res, 200, controlPlane.store.disconnectGitHubIntegration({ organizationId, integrationId, expectedVersion: body.expectedVersion, actorUserId: subject.id }));
       }
       if (method === 'GET' && url.pathname === '/github/installations') {
         const subject = authorizeAction(req, 'project:read', auth);

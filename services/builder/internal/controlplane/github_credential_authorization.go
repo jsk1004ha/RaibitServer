@@ -41,7 +41,7 @@ AND (LOWER(w."targetType") <> 'deployment' OR w."targetId" = d.id)
 AND (NULLIF(w.payload ->> 'serviceId', '') IS NULL OR w.payload ->> 'serviceId' = s.id)
 AND (NULLIF(w.payload ->> 'projectId', '') IS NULL OR w.payload ->> 'projectId' = p.id)
 AND (NULLIF(w.payload ->> 'organizationId', '') IS NULL OR w.payload ->> 'organizationId' = p."organizationId")
-AND p."organizationId" = $8 AND i."verifiedAt" IS NOT NULL
+AND p."organizationId" = $8 AND i."verifiedAt" IS NOT NULL AND i.status = 'ACTIVE'
 AND i."installationId" = $9 AND r."githubRepoId" = $10 AND r.private = TRUE
 AND LOWER(r."fullName") = $11 AND s."githubRepositoryId" = r."githubRepoId"
 AND LOWER(s."repoUrl") = 'https://github.com/' || $11 || '.git'
@@ -50,6 +50,7 @@ AND COALESCE(s."desiredState" ->> 'githubInstallationId', s."desiredState" -> 'g
 AND COALESCE(s."desiredState" ->> 'githubRepositoryId', s."desiredState" -> 'github' ->> 'repositoryId') = r."githubRepoId"
 AND LOWER(COALESCE(s."desiredState" ->> 'githubRepository', s."desiredState" -> 'github' ->> 'repository')) = $11
 AND COALESCE(s."desiredState" ->> 'githubRepositoryVisibility', s."desiredState" -> 'github' ->> 'visibility') = 'private'
+AND COALESCE(s."desiredState" ->> 'sourceAccess', s."desiredState" -> 'github' ->> 'sourceAccess') IN ('github-app-private','github-app-public')
 AND UPPER(p.status) NOT IN ('DELETE_REQUESTED', 'DELETING', 'DELETE_FAILED', 'DELETED')
 AND UPPER(s.status) NOT IN ('DELETE_REQUESTED', 'DELETING', 'DELETE_FAILED', 'DELETED')
 AND d.status IN ('BUILDING', 'QUEUED')

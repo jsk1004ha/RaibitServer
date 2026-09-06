@@ -967,12 +967,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       });
       return {
         connected: true,
-        integration: {
-          id: integration.id,
-          installationId: integration.installationId,
-          accountLogin: integration.accountLogin,
-          verifiedAt: integration.verifiedAt,
-        },
+        integration,
         repositoryCount: catalog.repositoryCount,
       };
     } catch (error) {
@@ -984,6 +979,12 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     enforceScope(subject, { organizationId });
     return { integrations: await repository.listGitHubIntegrations({ organizationId }) };
+  }
+
+  async disconnectGitHubIntegration(organizationId: string, integrationId: string, input: Record<string, any>, subject: Record<string, any>) {
+    enforceActionScope(subject, 'github:disconnect', { organizationId });
+    const repository = await this.repositoryPromise;
+    return repository.disconnectGitHubIntegration({ organizationId, integrationId, expectedVersion: input.expectedVersion, actorUserId: subject.id });
   }
 
   async attachGitHub(projectId: string, serviceId: string, input: Record<string, any>, subject: Record<string, any>) {

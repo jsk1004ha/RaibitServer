@@ -36,6 +36,7 @@
     "environment-upsert": {"entries":[{"key":"HELLO","value":"world"}]},
     "environment-upload": {"filename":".env","content":"HELLO=world"},
     "github-integrations-create": {"accountLogin":"parity"},
+    "github-integrations-disconnect": {"expectedVersion":1},
     "github-attach": {"integrationId":"integration","repositoryId":"123"},
     "github-import": {"integrationId":"integration","repositoryId":"123","projectId":"project"},
     "admin-reject": {"confirmed":true},

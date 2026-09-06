@@ -12,6 +12,7 @@ import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecor
 import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts';
 import { githubIntegrationSummary, githubWebhookActionPlan, githubWebhookOutboundPlan, parseGitHubRepository, verifyGitHubWebhookSignature } from './github-integration.ts';
+import { GITHUB_INTEGRATION_STATUS, githubIntegrationStatus, githubServiceSourceState, githubSourceAccess, publicGitHubIntegration } from './github-lifecycle.ts';
 import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 import { buildResourceProviderPlan, publicResourceProviderPlan } from './resource-providers.ts';
@@ -249,7 +250,7 @@ export class ControlPlaneStore {
       updatedAt: nowIso(),
     };
     this.emailVerificationCodes.push(row);
-    return deepClone(row);
+    return deepClone(publicGitHubIntegration(row));
   }
 
   replaceEmailVerificationCode(input: Record<string, any>) {
@@ -1079,14 +1080,14 @@ export class ControlPlaneStore {
       const secret = this.createSecret({ scopeType: 'github-integration', scopeId: id, key: 'GITHUB_TOKEN', value: token, actorUserId: userId || 'system' });
       tokenSecretId = secret.id;
     }
-    const row = { id, organizationId, userId, ...summary, tokenSecretId, defaultBranch, verifiedAt: null, createdAt: nowIso(), updatedAt: nowIso() };
+    const row = { id, organizationId, userId, ...summary, tokenSecretId, defaultBranch, status: GITHUB_INTEGRATION_STATUS.DISCONNECTED, version: 1, verifiedAt: null, disconnectedAt: nowIso(), createdAt: nowIso(), updatedAt: nowIso() };
     this.githubIntegrations.set(id, row);
     this.audit(userId || 'system', 'github:connect', 'organization', organizationId, { integrationId: id, accountLogin: summary.accountLogin, installationId });
-    return deepClone(row);
+    return deepClone(publicGitHubIntegration(row));
   }
 
   listGitHubIntegrations({ organizationId }: Record<string, any>) {
-    return deepClone([...this.githubIntegrations.values()].filter((row) => String(row.organizationId) === String(organizationId)));
+    return deepClone([...this.githubIntegrations.values()].filter((row) => String(row.organizationId) === String(organizationId)).map(publicGitHubIntegration));
   }
 
   verifyGitHubIntegration({ integrationId, installationId, accountLogin = null, verifiedBy = 'github-app' }: Record<string, any>) {
@@ -1095,9 +1096,10 @@ export class ControlPlaneStore {
     const authoritativeInstallationId = String(installationId || '').trim();
     if (!authoritativeInstallationId) throw conflict('verified GitHub integration requires an installationId');
     if (integration.verifiedAt && String(integration.installationId) !== authoritativeInstallationId) throw conflict('verified GitHub installation binding is immutable');
-    const conflictRow = [...this.githubIntegrations.values()].find((candidate) => candidate.id !== integration.id && candidate.verifiedAt && String(candidate.installationId) === authoritativeInstallationId);
+    const conflictRow = [...this.githubIntegrations.values()].find((candidate) => candidate.id !== integration.id && String(candidate.installationId) === authoritativeInstallationId);
     if (conflictRow) throw conflict(String(conflictRow.organizationId) === String(integration.organizationId) ? 'GitHub installation is already verified by another integration' : 'GitHub installation is already verified for another organization');
-    const next = { ...integration, installationId: authoritativeInstallationId, accountLogin: accountLogin || integration.accountLogin, verifiedAt: nowIso(), updatedAt: nowIso() };
+    const reactivated = githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE;
+    const next = { ...integration, installationId: authoritativeInstallationId, accountLogin: accountLogin || integration.accountLogin, status: GITHUB_INTEGRATION_STATUS.ACTIVE, version: Number(integration.version || 1) + (reactivated ? 1 : 0), verifiedAt: integration.verifiedAt || nowIso(), disconnectedAt: null, updatedAt: nowIso() };
     this.githubIntegrations.set(integrationId, next);
     this.audit(verifiedBy, 'github:verify-installation', 'github-integration', integrationId, { organizationId: integration.organizationId, installationId: authoritativeInstallationId });
     return deepClone(next);
@@ -1109,10 +1111,11 @@ export class ControlPlaneStore {
     if (!/^\d+$/.test(authoritativeInstallationId)) throw badRequest('GitHub installationId must be numeric');
     const login = String(accountLogin || '').trim();
     if (!login) throw badRequest('GitHub installation accountLogin is required');
-    const existing = [...this.githubIntegrations.values()].find((candidate) => candidate.verifiedAt && String(candidate.installationId) === authoritativeInstallationId);
+    const existing = [...this.githubIntegrations.values()].find((candidate) => String(candidate.installationId) === authoritativeInstallationId);
     if (existing && String(existing.organizationId) !== String(organizationId)) throw forbidden('GitHub installation is already verified for another organization');
     const timestamp = nowIso();
     const id = existing?.id || stableId('ghi', organizationId, authoritativeInstallationId);
+    const reactivated = existing ? githubIntegrationStatus(existing) !== GITHUB_INTEGRATION_STATUS.ACTIVE : false;
     const row = {
       ...(existing || {}),
       id,
@@ -1126,7 +1129,10 @@ export class ControlPlaneStore {
       tokenSecretId: null,
       scopes: existing?.scopes || ['repo:read'],
       defaultBranch: existing?.defaultBranch || 'main',
+      status: GITHUB_INTEGRATION_STATUS.ACTIVE,
+      version: Number(existing?.version || 1) + (reactivated ? 1 : 0),
       verifiedAt: existing?.verifiedAt || timestamp,
+      disconnectedAt: null,
       createdAt: existing?.createdAt || timestamp,
       updatedAt: timestamp,
     };
@@ -1137,12 +1143,57 @@ export class ControlPlaneStore {
       accountLogin: login,
       accountType: String(accountType || 'Organization'),
     });
-    return deepClone(row);
+    return deepClone(publicGitHubIntegration(row));
+  }
+
+  disconnectGitHubIntegration({ organizationId, integrationId, expectedVersion, actorUserId = 'system' }: Record<string, any>) {
+    const integration = this.githubIntegrations.get(String(integrationId));
+    if (!integration || String(integration.organizationId) !== String(organizationId)) throw notFound('GitHub integration not found');
+    const version = Number(expectedVersion);
+    if (!Number.isInteger(version) || version < 1) throw badRequest('expectedVersion must be a positive integer');
+    if (Number(integration.version || 1) !== version) throw conflict('GitHub integration version conflict');
+    const next = { ...integration, status: GITHUB_INTEGRATION_STATUS.DISCONNECTED, version: version + 1, verifiedAt: null, disconnectedAt: nowIso(), updatedAt: nowIso() };
+    this.githubIntegrations.set(integration.id, next);
+    const affectedServiceCount = this.setGitHubServiceAccess(next, 'GITHUB_SOURCE_DISCONNECTED');
+    this.audit(actorUserId, 'github:disconnect', 'github-integration', integration.id, { organizationId, installationId: integration.installationId, previousStatus: githubIntegrationStatus(integration), version: next.version, affectedServiceCount });
+    return { integration: publicGitHubIntegration(next), affectedServiceCount, credentialIssuance: 'denied', githubAppUninstalled: false };
+  }
+
+  setGitHubServiceAccess(integration: Record<string, any>, sourceAccess: string, repositoryIds: ReadonlySet<string> | null = null) {
+    let affected = 0;
+    for (const [id, service] of this.services.entries()) {
+      const project = this.projects.get(service.projectId);
+      const desired = service.desiredState || {};
+      const github = desired.github || {};
+      if (String(project?.organizationId) !== String(integration.organizationId)
+        || String(service.githubInstallationId || desired.githubInstallationId || github.installationId || '') !== String(integration.installationId)
+        || String(service.githubIntegrationId || desired.githubIntegrationId || github.integrationId || '') !== String(integration.id)
+        || (repositoryIds && !repositoryIds.has(String(service.githubRepositoryId || desired.githubRepositoryId || github.repositoryId || '')))) continue;
+      this.services.set(id, githubServiceSourceState(service, sourceAccess));
+      affected += 1;
+    }
+    return affected;
+  }
+
+  restoreGitHubServiceAccess(integration: Record<string, any>, repositoryIds: ReadonlySet<string> | null = null) {
+    let affected = 0;
+    for (const [id, service] of this.services.entries()) {
+      const project = this.projects.get(service.projectId);
+      const desired = service.desiredState || {};
+      const github = desired.github || {};
+      if (String(project?.organizationId) !== String(integration.organizationId)
+        || String(service.githubInstallationId || desired.githubInstallationId || github.installationId || '') !== String(integration.installationId)
+        || String(service.githubIntegrationId || desired.githubIntegrationId || github.integrationId || '') !== String(integration.id)
+        || (repositoryIds && !repositoryIds.has(String(service.githubRepositoryId || desired.githubRepositoryId || github.repositoryId || '')))) continue;
+      this.services.set(id, githubServiceSourceState(service, githubSourceAccess(service)));
+      affected += 1;
+    }
+    return affected;
   }
 
   registerGitHubRepository({ installationId, githubRepoId, repositoryId = null, fullName = null, owner = null, name = null, defaultBranch = 'main', private: privateRepository = false }: Record<string, any>) {
     const normalizedInstallationId = String(installationId || '').trim();
-    if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && String(integration.installationId) === normalizedInstallationId)) {
+    if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && githubIntegrationStatus(integration) === GITHUB_INTEGRATION_STATUS.ACTIVE && String(integration.installationId) === normalizedInstallationId)) {
       throw forbidden('repository catalog updates require a verified GitHub installation');
     }
     const repository = canonicalGitHubRepositoryRecord({ installationId: normalizedInstallationId, githubRepoId: githubRepoId || repositoryId, fullName, owner, name, defaultBranch, private: privateRepository });
@@ -1155,7 +1206,7 @@ export class ControlPlaneStore {
 
   replaceGitHubInstallationRepositories({ installationId, repositories = [], actorUserId = 'github-app-callback' }: Record<string, any>) {
     const normalizedInstallationId = String(installationId || '').trim();
-    if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && String(integration.installationId) === normalizedInstallationId)) {
+    if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && githubIntegrationStatus(integration) === GITHUB_INTEGRATION_STATUS.ACTIVE && String(integration.installationId) === normalizedInstallationId)) {
       throw forbidden('repository catalog updates require a verified GitHub installation');
     }
     if (!Array.isArray(repositories)) throw badRequest('GitHub repositories must be an array');
@@ -1167,6 +1218,9 @@ export class ControlPlaneStore {
       const crossInstallation = [...this.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === record.githubRepoId && String(candidate.installationId) !== normalizedInstallationId);
       if (crossInstallation) throw conflict('GitHub repository is already bound to another installation');
     }
+    const integration = [...this.githubIntegrations.values()].find((candidate) => String(candidate.installationId) === normalizedInstallationId && githubIntegrationStatus(candidate) === GITHUB_INTEGRATION_STATUS.ACTIVE);
+    const removedIds = new Set([...this.githubRepositories.values()].filter((repository) => String(repository.installationId) === normalizedInstallationId && !ids.has(String(repository.githubRepoId))).map((repository) => String(repository.githubRepoId)));
+    if (integration) this.setGitHubServiceAccess(integration, 'SOURCE_ACCESS_REVOKED', removedIds);
     for (const [id, repository] of this.githubRepositories.entries()) {
       if (String(repository.installationId) === normalizedInstallationId && !ids.has(String(repository.githubRepoId))) this.githubRepositories.delete(id);
     }
@@ -1176,6 +1230,7 @@ export class ControlPlaneStore {
       this.githubRepositories.set(row.id, row);
       return row;
     });
+    if (integration) this.restoreGitHubServiceAccess(integration, ids);
     this.audit(actorUserId, 'github:sync-installation-repositories', 'github-installation', normalizedInstallationId, { repositoryCount: rows.length });
     return { installationId: normalizedInstallationId, repositories: deepClone(rows), repositoryCount: rows.length };
   }
@@ -1314,10 +1369,10 @@ export class ControlPlaneStore {
   listGitHubInstallations({ organizationId }: Record<string, any>) {
     const integrations = this.listGitHubIntegrations({ organizationId });
     const installations = integrations
-      .filter((integration: Record<string, any>) => integration.verifiedAt && integration.installationId)
+      .filter((integration: Record<string, any>) => integration.installationId)
       .map((integration: Record<string, any>) => {
-        const repositories = this.githubRepositoriesForIntegration(integration.id);
-        return { id: String(integration.installationId), installationId: String(integration.installationId), integrationId: integration.id, accountLogin: integration.accountLogin, organizationId: integration.organizationId, repositoryCount: repositories.length };
+        const repositories = [...this.githubRepositories.values()].filter((repository) => String(repository.installationId) === String(integration.installationId));
+        return { ...integration, id: String(integration.installationId), integrationId: integration.id, repositoryCount: repositories.length };
       });
     return { installations };
   }
@@ -1405,34 +1460,53 @@ export class ControlPlaneStore {
       actions.push({ type: 'github-installation-catalog-verified', integrationId: integration.id, installationId });
       return actions;
     }
-    if (eventName === 'installation' && ['deleted', 'suspend'].includes(action) && /^\d+$/.test(installationId)) {
-      let removed = 0;
-      for (const [id, repository] of this.githubRepositories.entries()) {
-        if (String(repository.installationId) === installationId) {
-          this.githubRepositories.delete(id);
-          removed += 1;
-        }
-      }
+    if (eventName === 'installation' && ['deleted', 'suspend', 'suspended'].includes(action) && /^\d+$/.test(installationId)) {
+      const status = action === 'deleted' ? GITHUB_INTEGRATION_STATUS.DELETED : GITHUB_INTEGRATION_STATUS.SUSPENDED;
+      let affectedServiceCount = 0;
       for (const [id, integration] of this.githubIntegrations.entries()) {
-        if (String(integration.installationId) === installationId) {
-          this.githubIntegrations.set(id, { ...integration, verifiedAt: null, updatedAt: nowIso() });
-        }
+        const currentStatus = githubIntegrationStatus(integration);
+        const eligible = action === 'deleted'
+          ? currentStatus !== GITHUB_INTEGRATION_STATUS.DELETED
+          : currentStatus === GITHUB_INTEGRATION_STATUS.ACTIVE;
+        if (String(integration.installationId) !== installationId || !eligible) continue;
+        const next = { ...integration, status, version: Number(integration.version || 1) + 1, verifiedAt: null, updatedAt: nowIso() };
+        this.githubIntegrations.set(id, next);
+        affectedServiceCount += this.setGitHubServiceAccess(next, 'SOURCE_ACCESS_REVOKED');
       }
-      actions.push({ type: 'github-installation-catalog-invalidated', installationId, repositoryCount: removed });
+      actions.push({ type: 'github-installation-access-revoked', installationId, status, affectedServiceCount });
+      return actions;
+    }
+    if (eventName === 'installation' && action === 'unsuspended' && /^\d+$/.test(installationId)) {
+      let affectedServiceCount = 0;
+      for (const [id, integration] of this.githubIntegrations.entries()) {
+        if (String(integration.installationId) !== installationId || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.SUSPENDED) continue;
+        const next = { ...integration, status: GITHUB_INTEGRATION_STATUS.ACTIVE, version: Number(integration.version || 1) + 1, verifiedAt: nowIso(), updatedAt: nowIso() };
+        this.githubIntegrations.set(id, next);
+        affectedServiceCount += this.restoreGitHubServiceAccess(next);
+      }
+      actions.push({ type: 'github-installation-access-restored', installationId, affectedServiceCount });
       return actions;
     }
     if (eventName === 'installation_repositories' && /^\d+$/.test(installationId)) {
-      const verified = [...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && String(integration.installationId) === installationId);
+      const verified = [...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && githubIntegrationStatus(integration) === GITHUB_INTEGRATION_STATUS.ACTIVE && String(integration.installationId) === installationId);
       if (!verified) return actions;
+      const addedIds = new Set<string>();
       for (const repository of Array.isArray(payload.repositories_added) ? payload.repositories_added : []) {
         if (!/^\d+$/.test(String(repository?.id || '')) || !repository?.full_name) continue;
         this.registerGitHubRepository({ installationId, githubRepoId: String(repository.id), fullName: repository.full_name, defaultBranch: repository.default_branch || 'main', private: repository.private === true });
+        addedIds.add(String(repository.id));
       }
       const removedIds = new Set((Array.isArray(payload.repositories_removed) ? payload.repositories_removed : []).map((repository: any) => String(repository?.id || '')).filter((id: string) => /^\d+$/.test(id)));
+      let affectedServiceCount = 0;
+      for (const integration of this.githubIntegrations.values()) {
+        if (String(integration.installationId) !== installationId || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE) continue;
+        affectedServiceCount += this.setGitHubServiceAccess(integration, 'SOURCE_ACCESS_REVOKED', removedIds);
+        affectedServiceCount += this.restoreGitHubServiceAccess(integration, addedIds);
+      }
       for (const [id, repository] of this.githubRepositories.entries()) {
         if (String(repository.installationId) === installationId && removedIds.has(String(repository.githubRepoId))) this.githubRepositories.delete(id);
       }
-      actions.push({ type: 'github-installation-repositories-catalog-updated', installationId });
+      actions.push({ type: 'github-installation-repositories-catalog-updated', installationId, affectedServiceCount });
       return actions;
     }
     if (eventName === 'repository' && ['transferred', 'deleted', 'archived'].includes(action)) {
@@ -1629,7 +1703,7 @@ export class ControlPlaneStore {
 
   githubRepositoriesForIntegration(integrationId: string) {
     const integration = this.githubIntegrations.get(integrationId);
-    if (!integration?.verifiedAt || !integration.installationId) return [];
+    if (!integration?.verifiedAt || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || !integration.installationId) return [];
     return [...this.githubRepositories.values()]
       .filter((repository) => String(repository.installationId) === String(integration.installationId))
       .map((repository) => ({
@@ -2150,7 +2224,7 @@ function requireVerifiedGitHubIntegration(integrations: Map<string, any>, integr
   const integration = id ? integrations.get(id) : null;
   if (!integration) throw notFound(`GitHub integration not found: ${id || '<missing>'}`);
   if (String(integration.organizationId) !== String(organizationId)) throw forbidden('GitHub integration does not belong to project organization');
-  if (!integration.verifiedAt || !integration.installationId) throw forbidden('repository attachment requires a verified GitHub App installation');
+  if (!integration.verifiedAt || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || !integration.installationId) throw forbidden('repository attachment requires a verified GitHub App installation');
   return integration;
 }
 

@@ -349,7 +349,7 @@ func (h *dispatchHandler) resolveSession(ctx context.Context, job *WorkflowJob) 
 		ProjectID:    project.ID,
 		ServiceID:    service.ID,
 		DeploymentID: deployment.ID,
-		GitHub: &githubCredentialSession{private: strings.EqualFold(service.GitHubRepositoryVisibility, "private"), binding: githubCredentialBinding{
+		GitHub: &githubCredentialSession{private: strings.EqualFold(service.GitHubRepositoryVisibility, "private"), accessAllowed: service.SourceAccess == "github-app-private", binding: githubCredentialBinding{
 			Lease: job.Lease(), OrganizationID: project.OrganizationID, ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID,
 			IntegrationID: service.GitHubIntegrationID, InstallationID: service.GitHubInstallationID, RepositoryID: service.GitHubRepositoryID, Repository: strings.ToLower(service.GitHubRepository),
 		}},

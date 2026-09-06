@@ -3109,6 +3109,46 @@ paths:
       security:
         - bearerAuth: []
       x-permission: project:read
+  /organizations/{organizationId}/integrations/github/{integrationId}/disconnect:
+    post:
+      operationId: github-integrations-disconnect
+      parameters:
+        - name: organizationId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: integrationId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/github-integrations-disconnectBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-integrations-disconnectResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: github:disconnect
   /projects/{projectId}/services/{serviceId}/github:
     post:
       operationId: github-attach
@@ -4265,14 +4305,56 @@ components:
         organizationId:
           type: string
           minLength: 1
-        verifiedAt:
+        accountLogin:
           anyOf:
             - type: string
             - type: "null"
+        installationId:
+          anyOf:
+            - type: string
+            - type: "null"
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - SUSPENDED
+            - DISCONNECTED
+            - DELETED
+        version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        connected:
+          type: boolean
+        credentialIssuance:
+          type: string
+          enum:
+            - allowed
+            - denied
+        verifiedAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        externalGitHubSettingsUrl:
+          type: string
+          format: uri
+        reattachUrl:
+          type: string
+          pattern: ^\/github\/install.*
       required:
         - id
         - organizationId
+        - accountLogin
+        - installationId
+        - status
+        - version
+        - connected
+        - credentialIssuance
         - verifiedAt
+        - externalGitHubSettingsUrl
+        - reattachUrl
       additionalProperties:
         $ref: "#/components/schemas/JsonValue"
     JsonFields:
@@ -7043,6 +7125,39 @@ components:
             $ref: "#/components/schemas/Integration"
       required:
         - integrations
+      additionalProperties: false
+    github-integrations-disconnectResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        integration:
+          $ref: "#/components/schemas/Integration"
+        affectedServiceCount:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        credentialIssuance:
+          type: string
+          const: denied
+        githubAppUninstalled:
+          type: boolean
+          const: false
+      required:
+        - integration
+        - affectedServiceCount
+        - credentialIssuance
+        - githubAppUninstalled
+      additionalProperties: false
+    github-integrations-disconnectBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+      required:
+        - expectedVersion
       additionalProperties: false
     github-attachResponse:
       $schema: https://json-schema.org/draft/2020-12/schema

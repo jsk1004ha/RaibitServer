@@ -48,9 +48,9 @@ func githubPostgresFixture(t *testing.T) (*PostgresStore, githubCredentialBindin
 	exec(`INSERT INTO "Organization" (id,name,slug,"updatedAt") VALUES ($1,$1,$1,NOW())`, id)
 	exec(`INSERT INTO "Project" (id,"organizationId",name,slug,"updatedAt") VALUES ($1,$1,$1,$1,NOW())`, id)
 	exec(`INSERT INTO "GitHubInstallation" (id,"installationId","accountLogin","accountType","updatedAt") VALUES ($1,$2,$1,'Organization',NOW())`, id, b.InstallationID)
-	exec(`INSERT INTO "GitHubIntegration" (id,"organizationId","installationId","verifiedAt","updatedAt") VALUES ($1,$1,$2,NOW(),NOW())`, id, b.InstallationID)
+	exec(`INSERT INTO "GitHubIntegration" (id,"organizationId","installationId",status,"verifiedAt","updatedAt") VALUES ($1,$1,$2,'ACTIVE',NOW(),NOW())`, id, b.InstallationID)
 	exec(`INSERT INTO "GitHubRepository" (id,"installationId","githubRepoId",owner,name,"fullName",private,"updatedAt") VALUES ($1,$2,$3,'acme','private','acme/private',TRUE,NOW())`, id, b.InstallationID, b.RepositoryID)
-	desired, err := json.Marshal(map[string]string{"githubIntegrationId": id, "githubInstallationId": b.InstallationID, "githubRepositoryId": b.RepositoryID, "githubRepository": b.Repository, "githubRepositoryVisibility": "private"})
+	desired, err := json.Marshal(map[string]string{"githubIntegrationId": id, "githubInstallationId": b.InstallationID, "githubRepositoryId": b.RepositoryID, "githubRepository": b.Repository, "githubRepositoryVisibility": "private", "sourceAccess": "github-app-private"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func githubPostgresFixture(t *testing.T) (*PostgresStore, githubCredentialBindin
 }
 
 func TestGitHubCredentialFailureMatrixPostgres(t *testing.T) {
-	for _, field := range []string{"organization", "project", "service", "deployment", "installation", "repository", "integration", "worker", "attempt", "expired", "catalog-removed", "unverified", "url", "desired-state"} {
+	for _, field := range []string{"organization", "project", "service", "deployment", "installation", "repository", "integration", "worker", "attempt", "expired", "catalog-removed", "unverified", "disconnected", "source-access-revoked", "url", "desired-state"} {
 		t.Run(field, func(t *testing.T) {
 			// Given independent actual PostgreSQL ownership rows.
 			store, binding := githubPostgresFixture(t)
@@ -91,6 +91,10 @@ func TestGitHubCredentialFailureMatrixPostgres(t *testing.T) {
 				query = `DELETE FROM "GitHubRepository" WHERE id=$1`
 			case "unverified":
 				query = `UPDATE "GitHubIntegration" SET "verifiedAt"=NULL WHERE id=$1`
+			case "disconnected":
+				query = `UPDATE "GitHubIntegration" SET status='DISCONNECTED', "verifiedAt"=NULL WHERE id=$1`
+			case "source-access-revoked":
+				query = `UPDATE "Service" SET "desiredState"=jsonb_set("desiredState", '{sourceAccess}', '"SOURCE_ACCESS_REVOKED"') WHERE id=$1`
 			case "url":
 				query = `UPDATE "Service" SET "repoUrl"='https://github.com/acme/foreign.git' WHERE id=$1`
 			case "desired-state":

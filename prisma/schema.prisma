@@ -610,7 +610,10 @@ model GitHubIntegration {
   tokenSecretId    String?
   scopes           Json?
   defaultBranch    String       @default("main")
+  status           String       @default("DISCONNECTED")
+  version          Int          @default(1)
   verifiedAt       DateTime?
+  disconnectedAt   DateTime?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
   organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

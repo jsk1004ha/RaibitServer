@@ -28,7 +28,7 @@ export function parseOrganizationRouteSlug(value: unknown): OrganizationRouteSlu
 
 const ROLE_PERMISSIONS: Readonly<Record<OrganizationMembershipRole, readonly string[]>> = Object.freeze({
   OWNER: ['*'],
-  ADMIN: ['project:read', 'project:create', 'project:update', 'project:delete', 'service:create', 'service:update', 'deploy:run', 'env:write', 'env:read', 'db:create', 'db:delete', 'db:schema:read', 'backup:manage', 'team:invite', 'audit:read', 'billing:read', 'logs:read', 'metrics:read', 'domain:read', 'domain:verify', 'domain:manage'],
+  ADMIN: ['project:read', 'project:create', 'project:update', 'project:delete', 'service:create', 'service:update', 'deploy:run', 'env:write', 'env:read', 'db:create', 'db:delete', 'db:schema:read', 'backup:manage', 'team:invite', 'github:disconnect', 'audit:read', 'billing:read', 'logs:read', 'metrics:read', 'domain:read', 'domain:verify', 'domain:manage'],
   MAINTAINER: ['project:read', 'project:update', 'service:create', 'service:update', 'deploy:run', 'env:write', 'env:read', 'db:connect', 'db:schema:read', 'db:data:read', 'logs:read', 'metrics:read', 'domain:read', 'domain:verify'],
   DEVELOPER: ['project:read', 'deploy:run', 'logs:read', 'metrics:read', 'env:write-limited', 'db:schema:read', 'domain:read'],
   DB_ADMIN: ['project:read', 'db:create', 'db:delete', 'db:connect', 'db:schema:read', 'db:data:read', 'db:query', 'db:query:write', 'backup:manage', 'backup:restore', 'domain:read'],

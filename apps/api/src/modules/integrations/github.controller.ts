@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Param, Post, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { GitHubIntegrationService } from './github.service';
 
@@ -34,6 +34,13 @@ export class GitHubIntegrationController {
   @Post('integrations/github')
   connect(@Body() input: Record<string, any>, @Req() req: any) {
     return this.githubService.connectGitHub(input, req.raibitSubject);
+  }
+
+  @RequirePermission('github:disconnect')
+  @Post('organizations/:organizationId/integrations/github/:integrationId/disconnect')
+  @HttpCode(200)
+  disconnect(@Param('organizationId') organizationId: string, @Param('integrationId') integrationId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.githubService.disconnectGitHubIntegration(organizationId, integrationId, input, req.raibitSubject);
   }
 
   @RequirePermission('project:read')

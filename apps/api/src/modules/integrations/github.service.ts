@@ -42,6 +42,7 @@ export class GitHubIntegrationService implements OnModuleInit, OnModuleDestroy {
   }
 
   listGitHubInstallations(subject: Record<string, any>, organizationId?: string) { return this.controlPlane.listGitHubInstallations(subject, organizationId); }
+  disconnectGitHubIntegration(organizationId: string, integrationId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.disconnectGitHubIntegration(organizationId, integrationId, input, subject); }
   githubAppInstall(subject: Record<string, any>) { return this.controlPlane.githubAppInstall(subject); }
   githubAppAuthorize(input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.githubAppAuthorize(input, subject); }
   githubAppComplete(input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.githubAppComplete(input, subject); }

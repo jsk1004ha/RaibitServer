@@ -238,7 +238,7 @@ func newDispatchFixtureStore() *dispatchFixtureStore {
 	return &dispatchFixtureStore{
 		job:        &WorkflowJob{ID: "job-1", Type: "deployment.build", Status: WorkflowRunning, TargetType: "deployment", TargetID: "deployment-1", Attempts: 1, LockedBy: "executor-1", Payload: map[string]any{"deploymentId": "deployment-1"}},
 		deployment: &Deployment{ID: "deployment-1", ServiceID: "service-1", ProjectID: "project-1"},
-		service:    &Service{ID: "service-1", ProjectID: "project-1"},
+		service:    &Service{ID: "service-1", ProjectID: "project-1", SourceAccess: "github-app-private"},
 		project:    &Project{ID: "project-1", OrganizationID: "organization-1"},
 	}
 }

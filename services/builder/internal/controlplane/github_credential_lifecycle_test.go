@@ -105,3 +105,21 @@ func TestGitHubCredentialFailureMatrixUseDeadline(t *testing.T) {
 		}
 	}
 }
+
+func TestGitHubCredentialDeniedWhenSourceAccessRevoked(t *testing.T) {
+	fixture := newDispatchFixtureStore()
+	fixture.service.GitHubInstallationID, fixture.service.GitHubRepositoryID = "202", "101"
+	fixture.service.GitHubRepositoryVisibility = "private"
+	fixture.service.SourceAccess = "GITHUB_SOURCE_DISCONNECTED"
+	issuer := &recordingGitHubCredentialIssuer{credential: &GitHubRepositoryCredential{Token: "ghs_must_not_issue", InstallationID: "202", RepositoryID: "101", UpstreamExpiresAt: time.Now().Add(time.Hour)}}
+	handler := NewDispatchHandlerWithGitHubCredentials(fixture, 15*time.Minute, issuer)
+	claim := sendDispatchRPCRequest(t, handler, "", map[string]any{"operation": "claim", "claimOptions": map[string]any{"workerId": "executor"}})
+	var claimed dispatchRPCResponse
+	if json.Unmarshal(claim.Body.Bytes(), &claimed) != nil || claim.Code != 200 {
+		t.Fatal("claim fixture failed")
+	}
+	issued := sendDispatchRPCRequest(t, handler, claimed.Token, map[string]any{"operation": "issueGitHubCredential", "githubCredential": map[string]any{"serviceId": "service-1", "installationId": "202", "repositoryId": "101"}})
+	if issued.Code == 200 || issuer.calls != 0 {
+		t.Fatal("disconnected source reached credential issuer")
+	}
+}

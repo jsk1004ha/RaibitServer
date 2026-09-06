@@ -11,14 +11,15 @@ import (
 var errGitHubCredentialLifecycle = errors.New("GitHub clone credential lifecycle is not released")
 
 type githubCredentialSession struct {
-	mu       sync.Mutex
-	binding  githubCredentialBinding
-	private  bool
-	state    string
-	token    string
-	stop     chan struct{}
-	deadline time.Time
-	revoked  bool
+	mu            sync.Mutex
+	binding       githubCredentialBinding
+	private       bool
+	accessAllowed bool
+	state         string
+	token         string
+	stop          chan struct{}
+	deadline      time.Time
+	revoked       bool
 }
 
 func githubUseDeadline(now time.Time, ttl time.Duration) (time.Time, error) {
@@ -30,7 +31,7 @@ func githubUseDeadline(now time.Time, ttl time.Duration) (time.Time, error) {
 
 func (h *dispatchHandler) issueGitHubCredential(ctx context.Context, session dispatchSession, request *GitHubRepositoryCredentialRequest) (*GitHubRepositoryCredential, error) {
 	c := session.GitHub
-	if c == nil || !c.private || request == nil || request.ServiceID != session.ServiceID || request.RepositoryID != c.binding.RepositoryID || request.InstallationID != c.binding.InstallationID {
+	if c == nil || !c.private || !c.accessAllowed || request == nil || request.ServiceID != session.ServiceID || request.RepositoryID != c.binding.RepositoryID || request.InstallationID != c.binding.InstallationID {
 		return nil, errGitHubCredentialScope
 	}
 	authorizer, ok := h.store.(githubCredentialAuthorizer)
