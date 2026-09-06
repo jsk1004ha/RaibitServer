@@ -5,10 +5,24 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import test from 'node:test';
 import ts from 'typescript';
-import { createApiHandler } from '../packages/core/src/api.ts';
-import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
-import { ResourceCapabilityUnavailable, ResourceIntentInvalid } from '../packages/core/src/index.ts';
-import { createSessionToken, hashPassword, normalizeEmail, shouldPromoteFirstLogin, verifyPasswordAsync } from '../packages/core/src/identity.ts';
+import { registerHooks } from 'node:module';
+
+const schemaSubpaths = new Map([
+  ['@raibitserver/schemas', new URL('../packages/schemas/src/index.ts', import.meta.url)],
+  ['@raibitserver/schemas/deployment-health-contract', new URL('../packages/schemas/src/deployment-health-contract.ts', import.meta.url)],
+  ['@raibitserver/schemas/desired-state-validation', new URL('../packages/schemas/src/desired-state-validation.ts', import.meta.url)],
+]);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (schemaSubpaths.has(specifier)) return { url: schemaSubpaths.get(specifier).href, shortCircuit: true };
+    return nextResolve(specifier, context);
+  },
+});
+const { createApiHandler } = await import('../packages/core/src/api.ts');
+const { RAIBITSERVERControlPlane, ResourceCapabilityUnavailable, ResourceIntentInvalid } = await import('../packages/core/src/index.ts');
+const { createSessionToken, hashPassword, normalizeEmail, shouldPromoteFirstLogin, verifyPasswordAsync } = await import('../packages/core/src/identity.ts');
+const schemas = await import('../packages/schemas/src/index.ts');
+const UnmatchedCoreError = class extends Error {};
 
 test('compatibility API login runs one async scrypt for every account state', async () => {
   const controlPlane = new RAIBITSERVERControlPlane();
@@ -238,6 +252,11 @@ async function loadNestService(repository) {
   const core = new Proxy({
     ResourceCapabilityUnavailable,
     ResourceIntentInvalid,
+    OrganizationCreationError: UnmatchedCoreError,
+    ProjectSettingsError: UnmatchedCoreError,
+    GitHubSourceConflict: UnmatchedCoreError,
+    RecoveryError: UnmatchedCoreError,
+    DeploymentOperationError: UnmatchedCoreError,
     createSessionToken,
     createControlPlaneRepository: () => Promise.resolve(repository),
     enforceAuthAbuseLimits: async () => {},
@@ -255,6 +274,7 @@ async function loadNestService(repository) {
   const require = (specifier) => {
     if (specifier === '@nestjs/common') return nest;
     if (specifier === '@raibitserver/core') return core;
+    if (specifier === '@raibitserver/schemas') return schemas;
     throw new Error(`unexpected module import: ${specifier}`);
   };
   const execute = new Function('exports', 'require', 'module', compiled);

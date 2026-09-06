@@ -4,9 +4,16 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const apiRoot = new URL('../../apps/api/', import.meta.url);
+const schemasRoot = new URL('../../packages/schemas/src/index.ts', import.meta.url);
+const schemaSubpaths = new Map([
+  ['@raibitserver/schemas/deployment-health-contract', new URL('../../packages/schemas/src/deployment-health-contract.ts', import.meta.url)],
+  ['@raibitserver/schemas/desired-state-validation', new URL('../../packages/schemas/src/desired-state-validation.ts', import.meta.url)],
+]);
 const apiRequire = createRequire(new URL('package.json', apiRoot));
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    if (specifier === '@raibitserver/schemas') return { url: schemasRoot.href, shortCircuit: true };
+    if (schemaSubpaths.has(specifier)) return { url: schemaSubpaths.get(specifier).href, shortCircuit: true };
     if (specifier.startsWith('.') && context.parentURL?.startsWith(apiRoot.href)) {
       const candidate = new URL(`${specifier}.ts`, context.parentURL);
       if (existsSync(candidate)) return { url: candidate.href, shortCircuit: true };

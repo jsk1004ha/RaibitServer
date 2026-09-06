@@ -10,6 +10,10 @@ import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
 import { hashPassword } from '../packages/core/src/identity.ts';
 import { bootParityApi } from './fixtures/api-parity-runtime.mjs';
 
+const requiredWireBodies = {
+  'github-repositories-refresh': { expectedIntegrationVersion: 1, expectedGeneration: 0 },
+};
+
 test('OAuth callback contract represents exactly one bound code or fixed denial', () => {
   // Given: the same binding is required for both callback variants.
   const binding = { state: 'A'.repeat(43), codeVerifier: 'B'.repeat(43) };
@@ -79,7 +83,7 @@ test('Given the running Nest graph, when contracts and HTTP are exercised, then 
       assert.deepEqual(document.paths[operation.path][operation.method], expectedDocument.paths[operation.path][operation.method], `${id}: OpenAPI/Zod schema disagreement`);
       if (typeof client.operations[id] !== 'function') report.counts.missingClientMethods += 1;
       assert.equal(typeof client.operations[id], 'function', `${id}: missing typed client method`);
-      const input = { path: Object.fromEntries(operation.parameters.filter((parameter) => parameter.in === 'path').map((parameter) => [parameter.name, `${parameter.name} /+?`])), query: fixtures.wireQueries[id] || {}, body: fixtures.wireBodies[id] || {} };
+      const input = { path: Object.fromEntries(operation.parameters.filter((parameter) => parameter.in === 'path').map((parameter) => [parameter.name, `${parameter.name} /+?`])), query: fixtures.wireQueries[id] || {}, body: fixtures.wireBodies[id] || requiredWireBodies[id] || {} };
       await assert.rejects(client.operations[id](input), (error) => error.status === 400, `${id}: client must parse the wire error`);
       const captured = observed.at(-1);
       const expectedPath = operation.path.replace(/\{([^}]+)\}/g, (_match, key) => encodeURIComponent(input.path[key]));
@@ -87,7 +91,8 @@ test('Given the running Nest graph, when contracts and HTTP are exercised, then 
       assert.equal(captured.method, operation.method.toUpperCase(), `${id}: client method disagreement`);
       assert.equal(captured.url, expectedPath + (expectedQuery ? `?${expectedQuery}` : ''), `${id}: client path/query disagreement`);
       assert.equal(captured.authorization, 'Bearer wire-fixture-token', `${id}: client authorization missing`);
-      if (['post', 'patch'].includes(operation.method)) assert.deepEqual(JSON.parse(captured.body), input.body, `${id}: client body disagreement`);
+      if (Object.keys(input.body).length) assert.deepEqual(JSON.parse(captured.body), input.body, `${id}: client body disagreement`);
+      else assert.equal(captured.body, '', `${id}: empty request body disagreement`);
       report.operations.push({ operationId: id, method: captured.method, path: operation.path, status: route.status, permission: route.permission, wire: operation.path.startsWith('/auth/github/') ? expectedPath + '?[REDACTED]' : captured.url });
     }
     for (const fixture of fixtures.responseFixtures) {
@@ -177,6 +182,7 @@ test('Given the running Nest graph, when contracts and HTTP are exercised, then 
 function hasTypedBody(schema, components) {
   if (!schema || typeof schema !== 'object') return false;
   if (schema.$ref) return hasTypedBody(components[schema.$ref.split('/').at(-1)], components);
+  if (schema.oneOf) return schema.oneOf.every((branch) => hasTypedBody(branch, components));
   if (schema.anyOf) return schema.anyOf.every((branch) => hasTypedBody(branch, components));
   return schema.type === 'object' && Object.keys(schema.properties || {}).length > 0 && (schema.required || []).length > 0;
 }

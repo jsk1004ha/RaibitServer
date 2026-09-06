@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,6 +15,19 @@ function cleanupSandboxAndRestoreWorkspaceState({ sandbox, statePath, state, rem
   } finally {
     if (state === null) rmSync(statePath, { force: true });
     else writeFileSync(statePath, state);
+  }
+}
+
+function materializeWorkspacePackage(deployed, packageName) {
+  const destination = path.join(deployed, 'node_modules', '@raibitserver', packageName);
+  rmSync(destination, { recursive: true, force: true });
+  cpSync(path.join(root, 'packages', packageName), destination, {
+    recursive: true,
+    dereference: true,
+    filter: source => path.basename(source) !== 'node_modules',
+  });
+  if (packageName === 'schemas') {
+    cpSync(path.join(root, 'packages', 'schemas', 'node_modules', 'zod'), path.join(destination, 'node_modules', 'zod'), { recursive: true, dereference: true });
   }
 }
 
@@ -40,6 +53,8 @@ test('Given production dependencies, when Docker packages the CLI, then Node loa
     const deployArgs = ['--filter', '@raibitserver/cli', 'deploy', '--legacy', '--prod', path.relative(root, deployed)];
     if (pnpmScript?.includes('pnpm')) run('deploy', process.execPath, [pnpmScript, ...deployArgs]);
     else run('deploy', process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', deployArgs, { shell: process.platform === 'win32' });
+    materializeWorkspacePackage(deployed, 'api-client');
+    materializeWorkspacePackage(deployed, 'schemas');
     run('build', process.execPath, ['scripts/build-cli-runtime.mjs', deployed]);
     const probe = `
       import assert from 'node:assert/strict';
