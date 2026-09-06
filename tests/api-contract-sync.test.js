@@ -58,7 +58,7 @@ test('security-sensitive persistence and auth boundary regressions remain enforc
   assert.ok(loginMethod.indexOf('enforceAuthAbuseLimits') >= 0 && loginMethod.indexOf('enforceAuthAbuseLimits') < loginMethod.indexOf('verifyPassword'), 'Nest login must durably charge IP+email abuse-limit keys before expensive password verification');
   assert.match(authController, /login\(@Body\(\) input: Record<string, any>, @Req\(\) req: any\)/, 'Nest auth controller must pass request context for auth rate-limit source keys');
   assert.match(rbacGuard, /await this\.controlPlane\.validateSessionSubject\(req\.raibitSubject\)/, 'Nest RBAC guard must validate current approval and session version on every protected request');
-  assert.ok(persistence.includes('if (integrations.length === 0) return { installationId: String(input.installationId), repositories: [] };'), 'Prisma GitHub installation repository listing must not leak all repos when scope filters out integrations');
+  assert.match(persistence, /if \(integrations\.length === 0\) return \{[^}]*repositories: \[\][^}]*\};/, 'Prisma GitHub installation repository listing must not leak all repos when scope filters out integrations');
   assert.ok(persistence.includes('return redactUser(user);'), 'Prisma user creation/update surfaces must redact passwordHash');
   assert.ok(!persistence.includes('integrations.length === 0 ||'), 'Prisma GitHub installation repository listing must not use broad fallback matching');
   assert.ok(persistence.includes('servicesForPrismaGitHubRepository'), 'Prisma GitHub webhook must map deliveries to attached services');

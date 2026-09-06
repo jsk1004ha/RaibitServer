@@ -403,8 +403,8 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(JSON.stringify(github.body).includes('ghp_private_token'), false);
 
     const attached = await request(port, 'POST', `/projects/${aliceProject.body.id}/services/${aliceService.body.id}/github`, { integrationId: github.body.id, repoUrl: 'https://github.com/alice/web', branch: 'main' }, aliceLogin.body.token);
-    assert.equal(attached.statusCode, 403);
-    assert.match(attached.body.error, /verified GitHub App installation/i);
+    assert.equal(attached.statusCode, 409);
+    assert.equal(attached.body.code, 'GITHUB_SOURCE_DISCONNECTED');
     assert.equal(controlPlane.store.services.get(aliceService.body.id).repoUrl, undefined);
   } finally {
     server.close();
