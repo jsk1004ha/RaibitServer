@@ -227,7 +227,7 @@ export async function loadAdminConsole(context?: DashboardApiContext) {
   };
 }
 
-export async function loadGitHubConsole(context?: DashboardApiContext) {
+export async function loadGitHubConsole(context?: DashboardApiContext, catalog?: { readonly installationId?: string; readonly cursor?: string; readonly q?: string }) {
   const resolved = context || await dashboardApiContext();
   const [integrations, installations, projects, me] = await Promise.all([
     getJson('/integrations/github', { integrations: [] }, resolved),
@@ -237,23 +237,32 @@ export async function loadGitHubConsole(context?: DashboardApiContext) {
   ]);
   const projectRows = projects.body?.projects || [];
   const installationRows = installations.body?.installations || [];
-  const [repositoryLoads, serviceLoads] = await Promise.all([
-    Promise.all(installationRows.map(async (installation: any) => {
-      const result = await getJson(`/github/installations/${encodeURIComponent(installation.installationId || installation.id)}/repositories`, { repositories: [] }, resolved);
-      return { installationId: installation.installationId || installation.id, result };
-    })),
+  const catalogInstallationId = catalog?.installationId && installationRows.some((installation: any) => String(installation.installationId || installation.id) === catalog.installationId)
+    ? catalog.installationId
+    : installationRows[0] ? String(installationRows[0].installationId || installationRows[0].id) : '';
+  const catalogSearch = new URLSearchParams();
+  if (catalog?.cursor) catalogSearch.set('cursor', catalog.cursor);
+  if (catalog?.q) catalogSearch.set('q', catalog.q);
+  const catalogPath = catalogInstallationId
+    ? `/github/installations/${encodeURIComponent(catalogInstallationId)}/repositories${catalogSearch.size ? `?${catalogSearch.toString()}` : ''}`
+    : null;
+  const [repositoryLoad, serviceLoads] = await Promise.all([
+    catalogPath
+      ? getJson(catalogPath, { repositories: [] }, resolved)
+      : Promise.resolve({ ok: true, status: 200, body: { repositories: [] } }),
     Promise.all(projectRows.map(async (project: any) => {
       const result = await getJson(`/projects/${encodeURIComponent(project.id)}/services`, { services: [] }, resolved);
       return { projectId: project.id, projectName: project.name || project.slug, result };
     })),
   ]);
-  const repositoriesByInstallation = repositoryLoads.map((row) => ({ installationId: row.installationId, repositories: row.result.body?.repositories || [] }));
+  const repositoriesByInstallation = catalogInstallationId ? [{ installationId: catalogInstallationId, repositories: repositoryLoad.body?.repositories || [] }] : [];
   const servicesByProject = serviceLoads.map((row) => ({ projectId: row.projectId, projectName: row.projectName, services: row.result.body?.services || [] }));
   return {
     context: resolved,
     integrations: integrations.body?.integrations || [],
     installations: installationRows,
     repositoriesByInstallation,
+    repositoryCatalog: repositoryLoad.body || { repositories: [] },
     repositories: repositoriesByInstallation.flatMap((row) => row.repositories.map((repository: any) => ({ ...repository, installationId: row.installationId }))),
     projects: projectRows,
     services: servicesByProject.flatMap((row) => row.services.map((service: any) => ({ ...service, projectId: row.projectId, projectName: row.projectName }))),
@@ -261,7 +270,7 @@ export async function loadGitHubConsole(context?: DashboardApiContext) {
     memberships: me.body?.memberships || [],
     loadErrors: [
       ...collectLoadIssues([['GitHub 연동', integrations], ['GitHub 설치', installations], ['프로젝트', projects], ['조직 권한', me]]),
-      ...collectLoadIssues(repositoryLoads.map((row) => ['설치 저장소', row.result] as [string, DashboardApiResult])),
+      ...collectLoadIssues(catalogPath ? [['설치 저장소', repositoryLoad] as [string, DashboardApiResult]] : []),
       ...collectLoadIssues(serviceLoads.map((row) => ['프로젝트 서비스', row.result] as [string, DashboardApiResult])),
     ],
   };

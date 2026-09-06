@@ -53,12 +53,24 @@ const githubIntegration = {
   externalGitHubSettingsUrl: 'https://github.com/settings/installations/9001', reattachUrl: '/github/install',
 };
 const githubInstallation = {
-  id: '9001', installationId: '9001', integrationId: githubIntegration.id, accountLogin: 'raibit-fixture', repositoryCount: 1,
+  id: '9001', installationId: '9001', integrationId: githubIntegration.id, accountLogin: 'raibit-fixture', repositoryCount: 125,
 };
 const githubRepository = {
   id: 'repo_fixture', githubRepoId: 'repo_fixture', fullName: 'raibit/fixture-app', name: 'fixture-app',
-  defaultBranch: service.branch, private: false, installationId: githubInstallation.installationId,
+  owner: 'raibit', normalizedIdentity: 'raibit/fixture-app', defaultBranch: service.branch, private: false,
+  accessState: 'ACCESSIBLE', generation: 12, installationId: githubInstallation.installationId,
 };
+const githubRepositories = Object.freeze(Array.from({ length: 125 }, (_, index) => {
+  if (index === 0) return githubRepository;
+  const ordinal = String(index + 1).padStart(3, '0');
+  const name = `fixture-repository-${ordinal}`;
+  return Object.freeze({
+    id: `repo_fixture_${ordinal}`, githubRepoId: `repo_fixture_${ordinal}`, installationId: githubInstallation.installationId,
+    owner: 'raibit', name, fullName: `raibit/${name}`, normalizedIdentity: `raibit/${name}`,
+    defaultBranch: index % 3 === 0 ? 'develop' : 'main', private: index % 2 === 0,
+    accessState: index === 74 || index === 124 ? 'REVOKED' : 'ACCESSIBLE', generation: 12,
+  });
+}));
 const deployment = {
   id: 'dep_fixture_ready', serviceId: service.id, deploymentType: 'production', status: 'READY',
   imageUrl: 'registry.fixture.invalid/raibit/web:fixed', imageDigest: 'sha256:fixture0001', commitSha: '0123456789abcdef0123456789abcdef01234567', createdAt: FIXED_TIME,
@@ -183,7 +195,12 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   }
   if (pathname === '/github/install') return json(200, { installUrl: 'https://github.com/apps/raibit-fixture/installations/new?state=public-fixture-state' });
   if (pathname === '/github/installations') return json(200, { installations: state === 'empty' ? [] : [githubInstallation] });
-  if (pathname === '/github/installations/9001/repositories') return json(200, { repositories: [githubRepository] });
+  if (method === 'POST' && pathname === '/github/installations/9001/repositories/refresh') {
+    if (actor.role !== 'ADMIN') return json(403, { error: 'forbidden' });
+    if (body.expectedIntegrationVersion !== githubIntegration.version || body.expectedGeneration !== 12) return json(409, {});
+    return json(200, { refreshed: true, repositoryCount: githubRepositories.length, generation: 12, refreshStatus: 'IDLE', lastSuccessfulSyncAt: FIXED_TIME, staleAt: null });
+  }
+  if (pathname === '/github/installations/9001/repositories') return githubCatalogResponse(searchParams);
   if (pathname === `/projects/${project.id}/services`) return json(200, { services: [service, workerService] });
   if (pathname === `/projects/${project.id}/domains`) return customDomainsResponse({ actor, body, method });
   const domainRoute = /^\/domains\/([^/]+)(?:\/(rotate|verify))?$/.exec(pathname);
@@ -226,6 +243,32 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   }
   if (method === 'POST') return json(200, { ok: true });
   return json(404, { error: 'fixture_route_not_found' });
+}
+
+function githubCatalogResponse(searchParams) {
+  const q = normalizeRepositoryQuery(searchParams.get('q') || '');
+  const cursor = searchParams.get('cursor') || '';
+  const offsetByCursor = { '': 0, 'fixture-catalog-page-2': 50, 'fixture-catalog-page-3': 100 };
+  if (!Object.hasOwn(offsetByCursor, cursor)) return json(400, { error: 'invalid_cursor' });
+  const repositories = q ? githubRepositories.filter((repository) => repository.normalizedIdentity.includes(q)) : githubRepositories;
+  const offset = offsetByCursor[cursor];
+  const page = repositories.slice(offset, offset + 50);
+  const nextCursor = offset + 50 < repositories.length
+    ? offset === 0 ? 'fixture-catalog-page-2' : 'fixture-catalog-page-3'
+    : null;
+  return json(200, {
+    installationId: githubInstallation.installationId,
+    generation: 12,
+    refreshStatus: 'IDLE',
+    lastSuccessfulSyncAt: FIXED_TIME,
+    staleAt: null,
+    repositories: page,
+    nextCursor,
+  });
+}
+
+function normalizeRepositoryQuery(value) {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 200);
 }
 
 function json(status, body) { return { status, body }; }
