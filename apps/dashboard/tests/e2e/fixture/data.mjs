@@ -411,6 +411,7 @@ function deploymentHistoryRow(value, actor) {
     : null;
   return {
     ...value,
+    projectId: project.id,
     service: { id: value.serviceId, name: value.serviceId === workerService.id ? workerService.name : service.name, slug: value.serviceId === workerService.id ? workerService.slug : service.slug },
     environment: value.deploymentType, trigger: 'push', updatedAt: value.createdAt,
     source: { commitSha: value.commitSha || null, imageDigest: value.imageDigest || null, snapshotVersion: 3 },
@@ -456,7 +457,7 @@ function deploymentResponse({ actor, body, deploymentFixture, method, pathname, 
   if (pathname === `${base}/cancel` && method === 'POST') {
     const cancellable = new Set(['QUEUED', 'BUILDING', 'IMAGE_READY']);
     if (!cancellable.has(deploymentFixture.deployment.status)) return json(409, { error: 'fixture_cancel_not_allowed' });
-    return json(200, { operationId: 'op_fixture_cancel', status: 'CANCEL_REQUESTED', streamHref: `${base}/stream`, deployment: deploymentFixture.deployment });
+    return json(200, { operationId: 'op_fixture_cancel', status: 'CANCELLED', streamHref: `${base}/stream`, deployment: { ...deploymentFixture.deployment, status: 'CANCELLED' } });
   }
   return json(405, { error: 'fixture_operation_method_not_allowed' });
 }

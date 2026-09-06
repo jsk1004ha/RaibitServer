@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import test from 'node:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import typescript from 'typescript';
 import {
   DEFAULT_PUBLIC_SITE_SCENARIO,
   FIXTURE_IDS,
@@ -19,6 +24,20 @@ const request = (method, pathname, token = TOKENS.user, options = {}) => respons
   searchParams: new URLSearchParams(),
   ...options,
 });
+
+async function parseFixtureHistory(value) {
+  const directory = await mkdtemp(join(tmpdir(), 'task38-history-parser-'));
+  try {
+    const source = await readFile(new URL('../../../components/project-hub/deployment-history-model.ts', import.meta.url), 'utf8');
+    const output = typescript.transpileModule(source, { compilerOptions: { module: typescript.ModuleKind.ESNext, target: typescript.ScriptTarget.ES2022 } }).outputText;
+    const modulePath = join(directory, 'deployment-history-model.mjs');
+    await writeFile(modulePath, output);
+    const parser = await import(pathToFileURL(modulePath).href);
+    return parser.deploymentHistoryPage(value);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+}
 
 test('Given the populated fixture, when GitHub workflow data loads, then installation, repository, project, service, and branch IDs align', () => {
   const integrations = request('GET', '/integrations/github');
@@ -186,7 +205,7 @@ test('Given a fixture-only state holder, when a public scenario is selected and 
   assert.deepEqual(state.reset(), { publicSiteScenario: 'populated' });
 });
 
-test('Given deployment detail fixtures, when overview, logs, events, rollback, and cancel endpoints run, then status gating and sanitized partial failures stay exact', () => {
+test('Given deployment detail and history fixtures, when overview, logs, events, recovery, and parser boundaries run, then typed rows and operation contracts stay exact', async () => {
   const readyPath = `/deployments/${FIXTURE_IDS.readyDeployment}`;
   const cancellablePaths = [
     `/deployments/${FIXTURE_IDS.queuedDeployment}`,
@@ -195,21 +214,39 @@ test('Given deployment detail fixtures, when overview, logs, events, rollback, a
   ];
 
   assert.deepEqual(request('GET', readyPath).body, {
-    id: FIXTURE_IDS.readyDeployment, serviceId: 'svc_fixture_web', deploymentType: 'production', status: 'READY',
+    id: FIXTURE_IDS.readyDeployment, projectId: FIXTURE_IDS.project, serviceId: 'svc_fixture_web', deploymentType: 'production', status: 'READY',
     imageUrl: 'registry.fixture.invalid/raibit/web:fixed', imageDigest: 'sha256:fixture0001', commitSha: '0123456789abcdef0123456789abcdef01234567', createdAt: '2026-08-31T03:00:00.000Z',
+    service: { id: 'svc_fixture_web', name: 'web', slug: 'web' }, environment: 'production', trigger: 'push', updatedAt: '2026-08-31T03:00:00.000Z',
+    source: { commitSha: '0123456789abcdef0123456789abcdef01234567', imageDigest: 'sha256:fixture0001', snapshotVersion: 3 },
+    lineage: { sourceDeploymentId: null, retryOfDeploymentId: null, rollbackOfDeploymentId: null, previousDeploymentId: FIXTURE_IDS.failedDeployment, previewLineageId: null, previewGeneration: null },
+    operation: { requestedByUserId: 'usr_fixture_user', requestIdempotencyKey: `fixture-${FIXTURE_IDS.readyDeployment}` },
+    health: { rolloutStatus: 'ready', publicHealthStatus: 'healthy', healthCheckedAt: '2026-08-31T03:00:00.000Z', healthFailureCode: null, observedGeneration: 3 },
+    recovery: { retryable: false, reason: '서버 상태가 이 복구 요청을 허용하지 않습니다.' }, permissions: { execute: false }, eligibleAction: null,
   });
+  const history = request('GET', `/projects/${FIXTURE_IDS.project}/deployments/history`, TOKENS.admin, { searchParams: new URLSearchParams('serviceId=svc_fixture_web&status=FAILED') });
+  const parsedHistory = await parseFixtureHistory(history.body);
+  assert.equal(history.status, 200);
+  assert.equal(parsedHistory.deployments.length, 1);
+  assert.equal(parsedHistory.deployments[0].projectId, FIXTURE_IDS.project);
+  assert.equal(parsedHistory.deployments[0].eligibleAction?.type, 'retry');
   assert.equal(request('GET', `${readyPath}/logs`).body.logs[0].line, '이미지 준비가 완료되었습니다.');
   assert.equal(request('GET', `${readyPath}/events`).body.events[0].id, 'evt_fixture_ready');
-  assert.deepEqual(request('POST', `${readyPath}/rollback`, TOKENS.user, { body: { confirmed: 'true' } }), {
-    status: 202, body: { operation: 'rollback_requested', deploymentId: FIXTURE_IDS.readyDeployment, status: 'QUEUED' },
+  assert.deepEqual(request('POST', `${readyPath}/rollback`, TOKENS.user, { body: { confirmed: true } }), {
+    status: 202, body: {
+      operationId: 'op_fixture_rollback', status: 'QUEUED', streamHref: `${readyPath}/stream`, rollbackOfDeploymentId: FIXTURE_IDS.readyDeployment, workflowJob: {},
+      deployment: { id: 'dep_fixture_rollback_successor', serviceId: 'svc_fixture_web', deploymentType: 'production', status: 'QUEUED', imageUrl: 'registry.fixture.invalid/raibit/web:fixed', imageDigest: 'sha256:fixture0001', commitSha: '0123456789abcdef0123456789abcdef01234567', createdAt: '2026-08-31T03:00:00.000Z' },
+      previousDeployment: { id: FIXTURE_IDS.readyDeployment, serviceId: 'svc_fixture_web', deploymentType: 'production', status: 'READY', imageUrl: 'registry.fixture.invalid/raibit/web:fixed', imageDigest: 'sha256:fixture0001', commitSha: '0123456789abcdef0123456789abcdef01234567', createdAt: '2026-08-31T03:00:00.000Z' },
+    },
   });
   assert.deepEqual(request('POST', `${readyPath}/rollback`), { status: 400, body: { error: 'fixture_confirmation_required' } });
   assert.deepEqual(request('POST', `${readyPath}/cancel`), { status: 409, body: { error: 'fixture_cancel_not_allowed' } });
   for (const path of cancellablePaths) {
     const cancelled = request('POST', `${path}/cancel`);
-    assert.equal(cancelled.status, 202);
+    const detail = request('GET', path).body;
+    assert.equal(cancelled.status, 200);
     assert.deepEqual(cancelled.body, {
-      operation: 'cancel_requested', deploymentId: decodeURIComponent(path.slice('/deployments/'.length)), status: 'CANCEL_REQUESTED',
+      operationId: 'op_fixture_cancel', status: 'CANCELLED', streamHref: `${path}/stream`,
+      deployment: { id: detail.id, serviceId: detail.serviceId, deploymentType: detail.deploymentType, status: 'CANCELLED', imageUrl: detail.imageUrl, imageDigest: detail.imageDigest, commitSha: detail.commitSha, createdAt: detail.createdAt },
     });
   }
 
