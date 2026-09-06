@@ -23,29 +23,9 @@ ALTER TABLE "Domain"
   ADD COLUMN "lastErrorMessage" TEXT;
 
 UPDATE "Domain" AS domain
-SET "organizationId" = project."organizationId",
-    "actorUserId" = 'system',
-    "status" = CASE WHEN domain."verified" THEN 'READY' ELSE 'PENDING_VERIFICATION' END
+SET "organizationId" = project."organizationId"
 FROM "Project" AS project
 WHERE project."id" = domain."projectId";
-
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM "Domain" AS domain
-    LEFT JOIN "Project" AS project ON project."id" = domain."projectId"
-    LEFT JOIN "Service" AS service ON service."id" = domain."serviceId" AND service."projectId" = domain."projectId"
-    WHERE project."id" IS NULL OR service."id" IS NULL OR domain."organizationId" IS NULL
-  ) THEN
-    RAISE EXCEPTION 'custom domain migration requires project-bound, matching services';
-  END IF;
-END $$;
-
-ALTER TABLE "Domain"
-  ALTER COLUMN "organizationId" SET NOT NULL,
-  ALTER COLUMN "projectId" SET NOT NULL,
-  ALTER COLUMN "serviceId" SET NOT NULL,
-  ALTER COLUMN "actorUserId" SET NOT NULL;
 
 CREATE UNIQUE INDEX "Project_id_organizationId_key" ON "Project"("id", "organizationId");
 CREATE UNIQUE INDEX "Service_id_projectId_key" ON "Service"("id", "projectId");

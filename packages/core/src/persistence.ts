@@ -1482,18 +1482,18 @@ export class PrismaControlPlaneRepository {
 
   async listCustomDomainsForProject(projectId: string) {
     const rows = await this.prisma.domain.findMany({ where: { projectId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
-    return rows.map((row) => publicCustomDomain(persistedDomainRecord(row)));
+    return rows.filter(isManagedDomainRow).map((row) => publicCustomDomain(persistedDomainRecord(row)));
   }
 
   async getCustomDomain(domainId: string) {
     const row = await this.prisma.domain.findUnique({ where: { id: domainId } });
-    return row ? publicCustomDomain(persistedDomainRecord(row)) : null;
+    return isManagedDomainRow(row) ? publicCustomDomain(persistedDomainRecord(row)) : null;
   }
 
   async rotateCustomDomainChallenge(domainId: string, input: Record<string, any>) {
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const current = await tx.domain.findUnique({ where: { id: domainId } });
-      if (!current) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
+      if (!isManagedDomainRow(current)) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
       const rotated = rotateCustomDomain(persistedDomainRecord(current), input.expectedVersion, String(input.actorUserId), input.now);
       const changed = await tx.domain.updateMany({ where: { id: domainId, verificationVersion: input.expectedVersion }, data: domainPersistenceUpdate(rotated.domain) });
       if (changed.count !== 1) throw new DomainLifecycleError('DOMAIN_VERSION_CONFLICT', 409);
@@ -1506,7 +1506,7 @@ export class PrismaControlPlaneRepository {
   async requestCustomDomainVerification(domainId: string, input: Record<string, any>) {
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const current = await tx.domain.findUnique({ where: { id: domainId } });
-      if (!current) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
+      if (!isManagedDomainRow(current)) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
       const requested = requestCustomDomainCheck(persistedDomainRecord(current), input.expectedVersion, String(input.actorUserId), input.now);
       const changed = await tx.domain.updateMany({ where: { id: domainId, verificationVersion: input.expectedVersion }, data: domainPersistenceUpdate(requested) });
       if (changed.count !== 1) throw new DomainLifecycleError('DOMAIN_VERSION_CONFLICT', 409);
@@ -1519,7 +1519,7 @@ export class PrismaControlPlaneRepository {
   async requestCustomDomainDeletion(domainId: string, input: Record<string, any>) {
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const current = await tx.domain.findUnique({ where: { id: domainId } });
-      if (!current) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
+      if (!isManagedDomainRow(current)) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
       const requested = requestCustomDomainDelete(persistedDomainRecord(current), input.expectedVersion, String(input.actorUserId), input.now);
       const changed = await tx.domain.updateMany({ where: { id: domainId, verificationVersion: input.expectedVersion }, data: domainPersistenceUpdate(requested) });
       if (changed.count !== 1) throw new DomainLifecycleError('DOMAIN_VERSION_CONFLICT', 409);
@@ -3488,6 +3488,17 @@ function auditActorUserId(value: any) {
   if (!actor) return null;
   if (new Set(['system', 'provider', 'github-app', 'github-webhook', 'github-installation-webhook', 'workflow-worker', 'builder']).has(actor.toLowerCase())) return null;
   return actor;
+}
+
+function isManagedDomainRow(row: Readonly<Record<string, unknown>> | null | undefined): row is Readonly<Record<string, unknown>> & {
+  organizationId: string;
+  projectId: string;
+  serviceId: string;
+  actorUserId: string;
+} {
+  return Boolean(row)
+    && [row.organizationId, row.projectId, row.serviceId, row.actorUserId]
+      .every((value) => typeof value === 'string' && value.trim().length > 0);
 }
 
 function persistedDomainRecord(row: Record<string, any>): CustomDomainRecord {
