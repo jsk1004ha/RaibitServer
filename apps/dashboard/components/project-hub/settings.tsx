@@ -77,7 +77,7 @@ function errorMessage(code: string): string {
 
 function savedAt(value: string): string {
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }).format(parsed);
+  return Number.isNaN(parsed.getTime()) ? value : new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Seoul', hour12: false }).format(parsed);
 }
 
 async function responsePayload(response: Response): Promise<unknown> {

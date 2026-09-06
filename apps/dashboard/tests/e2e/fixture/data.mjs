@@ -121,7 +121,7 @@ const resourceConsole = {
 const resourceBackups = [
   {
     id: 'bak_fixture_ready', organizationId: project.organizationId, projectId: project.id, resourceId: resource.id, engine: resource.engine,
-    status: 'READY', createdAt: FIXED_TIME, readyAt: FIXED_TIME, errorCode: null, size: '1048576', expiresAt: '2026-09-07T03:00:00.000Z', recoverable: true,
+    status: 'READY', createdAt: FIXED_TIME, readyAt: FIXED_TIME, errorCode: null, size: '1048576', expiresAt: '2099-09-07T03:00:00.000Z', recoverable: true,
   },
   {
     id: 'bak_fixture_verifying', organizationId: project.organizationId, projectId: project.id, resourceId: resource.id, engine: resource.engine,
