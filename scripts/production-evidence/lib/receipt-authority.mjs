@@ -12,6 +12,9 @@ import {
 } from './receipt-authority-files.mjs';
 
 const authorities = new WeakSet();
+const sealContexts = new WeakMap();
+const committedSealReceipts = new WeakMap();
+const completedSealJournals = new WeakMap();
 const authorityWriters = new WeakSet();
 const preparedValues = new WeakMap();
 const executionValues = new WeakMap();
@@ -47,6 +50,23 @@ function verifiedView(record) {
 export function assertReceiptAuthority(value) {
   if ((typeof value !== 'object' && typeof value !== 'function') || value === null || !authorities.has(value)) fail('invalid_receipt_authority');
   return value;
+}
+
+export async function receiptAuthoritySealContext(value) {
+  const authority = assertReceiptAuthority(value);
+  const receipts = await authority.loadCommitted();
+  const snapshot = await authority.snapshot();
+  const genuine = committedSealReceipts.get(authority);
+  if (snapshot.entryCount !== STEP_NAMES.length || genuine.length !== STEP_NAMES.length || receipts.some(({ receipt }) => receipt.status !== 'PASS'
+    || receipt.assertions.some(({ status }) => status !== 'PASS'))) fail('incomplete_receipt_authority');
+  const claims = values => values.map(({ step, requestSha256, receipt, descriptor }) => ({ step, requestSha256, receipt, descriptor }));
+  if (digest(claims(receipts)) !== digest(claims(genuine))) fail('receipt_authority_mutated');
+  const context = sealContexts.get(authority), pinned = completedSealJournals.get(authority);
+  const runtime = { context: context.fullOperatorInput.selectors.RAIBITSERVER_RELEASE_KUBE_CONTEXT,
+    namespace: context.fullOperatorInput.secretRefs.find(reference => reference.role === 'runtime')?.namespace };
+  const [bindings, cleanup] = await Promise.all([context.journalAuthority.bindingSnapshot(), context.journalAuthority.cleanupSnapshot({ approvedRuntimeSelector: runtime })]);
+  if (!pinned || bindings.entriesSha256 !== pinned.bindingJournalSha256 || cleanup.entriesSha256 !== pinned.cleanupJournalSha256) fail('receipt_authority_mutated');
+  return Object.freeze({ ...context, ...pinned, committedReceiptsSha256: digest(claims(genuine)) });
 }
 
 export function assertVerifiedStepReceipt(value, expectedStep = undefined) {
@@ -190,6 +210,13 @@ async function create(options, unsafeFixture) {
       const loaded = await load(); return loaded.views.at(-1);
     }, runDirectory);
       if (!unsafeFixture || options.bootstrap) await appendReceiptProvenance({ committed, journalAuthority, observations: await verifyCandidateArtifacts(runDirectory, committed.receipt, unsafeFixture) });
+      if (committed.step === STEP_NAMES.at(-1)) {
+        const runtime = { context: fullOperatorInput.selectors.RAIBITSERVER_RELEASE_KUBE_CONTEXT,
+          namespace: fullOperatorInput.secretRefs.find(reference => reference.role === 'runtime')?.namespace };
+        const [bindings, cleanup] = await Promise.all([journalAuthority.bindingSnapshot(), journalAuthority.cleanupSnapshot({ approvedRuntimeSelector: runtime })]);
+        completedSealJournals.set(authority, Object.freeze({ bindingJournalSha256: bindings.entriesSha256, cleanupJournalSha256: cleanup.entriesSha256 }));
+      }
+      committedSealReceipts.get(authority).push(committed);
       return committed;
     }
     catch (error) {
@@ -258,7 +285,10 @@ async function create(options, unsafeFixture) {
       snapshots.add(snapshot); return snapshot;
     },
   });
-  authorities.add(authority); return authority;
+  authorities.add(authority);
+  sealContexts.set(authority, Object.freeze({ runDirectory, identity, fullOperatorInput, writer, journalAuthority, fixture: unsafeFixture }));
+  committedSealReceipts.set(authority, []);
+  return authority;
 }
 
 export const createReceiptAuthority = (options) => create(options, false);
