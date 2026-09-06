@@ -8,6 +8,7 @@ import { ProjectDeletionConfirmationSchema, ProjectDeletionScheduledSchema, Proj
 import { OrganizationInviteAcceptSchema, OrganizationInviteAcceptanceSchema, OrganizationInviteCreateSchema, OrganizationInviteIssuedSchema, OrganizationInviteListSchema } from './organization-invite.ts';
 import { ServiceReplacementInputSchema, ServiceReplacementResultSchema, ServiceSettingsMutationSchema, ServiceSettingsPreviewSchema, ServiceSettingsSnapshotSchema } from './service-settings.ts';
 import { CustomDomainChallengeSchema, CustomDomainCreateSchema, CustomDomainListSchema, CustomDomainMutationSchema, CustomDomainRotateSchema, CustomDomainSchema } from './domain.ts';
+import { OrganizationInviteRevokedSchema, OrganizationMemberListSchema, OrganizationMembershipChangedSchema, OrganizationMembershipLeftSchema, OrganizationMembershipRemovedSchema, OrganizationMembershipRoleChangeSchema, OrganizationMembershipSnapshotSchema } from './membership-transition.ts';
 
 const id = z.string().min(1);
 const project = z.object({ projectId: id });
@@ -19,6 +20,8 @@ const restore = z.object({ restoreId: id });
 const user = z.object({ userId: id });
 const organization = z.object({ organizationId: id });
 const domain = z.object({ domainId: id });
+const organizationMember = organization.extend({ membershipId: id });
+const organizationInvite = organization.extend({ inviteId: id });
 const scopedService = project.extend({ serviceId: id });
 const orgQuery = z.object({ organizationId: id.optional() });
 const organizationGitHubIntegration = z.object({ organizationId: id, integrationId: id });
@@ -60,6 +63,11 @@ export const apiOperations = {
   'organizations-invites': operation({ method: 'get', path: '/organizations/{organizationId}/invites', status: 200, permission: 'team:invite', input: input(organization, M.Empty, M.Empty), response: OrganizationInviteListSchema }),
   'organizations-invites-post': operation({ method: 'post', path: '/organizations/{organizationId}/invites', status: 201, permission: 'team:invite', input: input(organization, M.Empty, OrganizationInviteCreateSchema), response: OrganizationInviteIssuedSchema }),
   'organization-invites-accept-post': operation({ method: 'post', path: '/organization-invites/accept', status: 200, permission: 'project:read', input: input(M.Empty, M.Empty, OrganizationInviteAcceptSchema), response: OrganizationInviteAcceptanceSchema }),
+  'organizations-members': operation({ method: 'get', path: '/organizations/{organizationId}/members', status: 200, permission: 'project:read', input: input(organization, M.Empty, M.Empty), response: OrganizationMemberListSchema }),
+  'organizations-members-patch': operation({ method: 'patch', path: '/organizations/{organizationId}/members/{membershipId}', status: 200, permission: 'team:invite', input: input(organizationMember, M.Empty, OrganizationMembershipRoleChangeSchema), response: OrganizationMembershipChangedSchema }),
+  'organizations-members-delete': operation({ method: 'delete', path: '/organizations/{organizationId}/members/{membershipId}', status: 200, permission: 'team:invite', input: input(organizationMember, M.Empty, OrganizationMembershipSnapshotSchema), response: OrganizationMembershipRemovedSchema }),
+  'organizations-leave-post': operation({ method: 'post', path: '/organizations/{organizationId}/leave', status: 200, permission: 'project:read', input: input(organization, M.Empty, OrganizationMembershipSnapshotSchema), response: OrganizationMembershipLeftSchema }),
+  'organizations-invites-delete': operation({ method: 'delete', path: '/organizations/{organizationId}/invites/{inviteId}', status: 200, permission: 'team:invite', input: input(organizationInvite, M.Empty, M.Empty), response: OrganizationInviteRevokedSchema }),
   'projects-list': operation({ method: 'get', path: '/projects', status: 200, permission: 'project:read', input: input(M.Empty, M.PageQuery, M.Empty), response: M.Projects }),
   'projects-create': operation({ method: 'post', path: '/projects', status: 201, permission: 'project:create', input: input(M.Empty, M.Empty, M.ProjectInput), response: M.Project }),
   'projects-get': operation({ method: 'get', path: '/projects/{projectId}', status: 200, permission: 'project:read', input: input(project, M.Empty, M.Empty), response: M.Project }),

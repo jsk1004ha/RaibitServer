@@ -27,10 +27,11 @@ import { normalizeAccountType } from './identity.ts';
 import { nextProjectUpdatedAt, ProjectSettingsError, projectSettingsView, scheduledProjectDeletion, type ProjectDeletionRequest, type ProjectSettingsMutation } from './project-settings.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
-import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
+import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug, type OrganizationMembershipRole } from './rbac.ts';
 import { acceptMemoryOrganizationInvite, listMemoryOrganizationInvites, replaceMemoryOrganizationInvite, revokeMemoryOrganizationInviteAfterDeliveryFailure } from './organization-invite-memory.ts';
 import type { OrganizationInviteRecord, ReplaceOrganizationInviteInput } from './organization-invite.ts';
 import { DomainLifecycleError, issueCustomDomain, normalizeCustomHostname, publicCustomDomain, requestCustomDomainCheck, requestCustomDomainDelete, rotateCustomDomain, type CustomDomainRecord } from './domain.ts';
+import { changeMemoryOrganizationMembershipRole, leaveMemoryOrganization, listMemoryOrganizationMembers, removeMemoryOrganizationMember, revokeMemoryOrganizationInvite } from './membership-transition-memory.ts';
 import {
   boundedActivityRows,
   dateMs,
@@ -428,6 +429,26 @@ export class ControlPlaneStore {
 
   listOrganizationInvites(input: { readonly organizationId: string; readonly actorUserId: string }) {
     return listMemoryOrganizationInvites(this, input);
+  }
+
+  listOrganizationMembers(input: { readonly organizationId: string; readonly actorUserId: string }) {
+    return listMemoryOrganizationMembers(this, input);
+  }
+
+  changeOrganizationMembershipRole(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly role: OrganizationMembershipRole; readonly expectedVersion: number }) {
+    return changeMemoryOrganizationMembershipRole(this, input);
+  }
+
+  removeOrganizationMember(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly expectedVersion: number }) {
+    return removeMemoryOrganizationMember(this, input);
+  }
+
+  leaveOrganization(input: { readonly organizationId: string; readonly actorUserId: string; readonly expectedVersion: number }) {
+    return leaveMemoryOrganization(this, input);
+  }
+
+  revokeOrganizationInvite(input: { readonly organizationId: string; readonly inviteId: string; readonly actorUserId: string; readonly now: string }) {
+    return revokeMemoryOrganizationInvite(this, input);
   }
 
   createProject({ organizationId, name, slug, description = '', status = 'active' }: Record<string, any>) {

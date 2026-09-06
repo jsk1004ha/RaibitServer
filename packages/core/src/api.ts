@@ -24,6 +24,7 @@ import { publicSitesFromSnapshot } from './public-sites.ts';
 import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, encodeDeploymentActivityResumeToken, encodeServiceLogResumeToken, DeploymentActivityResumeTokenError } from './sse.ts';
 import { parseProjectDeletionConfirmation, parseProjectSettingsUpdate } from './project-settings.ts';
 import { acceptOrganizationInvite, issueOrganizationInvite, listOrganizationInvites } from './organization-invite.ts';
+import { changeOrganizationMembershipRole, leaveOrganization, listOrganizationMembers, removeOrganizationMember, revokeOrganizationInvite } from './membership-transition.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = {
@@ -253,6 +254,38 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'project:read', auth);
         const body = await readJson(req);
         return send(res, 200, await acceptOrganizationInvite(controlPlane.store, { token: body.token, userId: subject.id }));
+      }
+      const organizationMembersMatch = url.pathname.match(/^\/organizations\/([^/]+)\/members$/);
+      if (organizationMembersMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const organizationId = decodeURIComponent(organizationMembersMatch[1]);
+        return send(res, 200, await listOrganizationMembers(controlPlane.store, { organizationId, actorUserId: subject.id }));
+      }
+      const organizationMemberMatch = url.pathname.match(/^\/organizations\/([^/]+)\/members\/([^/]+)$/);
+      if (organizationMemberMatch && method === 'PATCH') {
+        const subject = authorizeAction(req, 'team:invite', auth);
+        const organizationId = decodeURIComponent(organizationMemberMatch[1]);
+        const membershipId = decodeURIComponent(organizationMemberMatch[2]);
+        const body = await readJson(req);
+        return send(res, 200, await changeOrganizationMembershipRole(controlPlane.store, { organizationId, membershipId, actorUserId: subject.id, role: body.role, expectedVersion: body.expectedVersion }));
+      }
+      if (organizationMemberMatch && method === 'DELETE') {
+        const subject = authorizeAction(req, 'team:invite', auth);
+        const organizationId = decodeURIComponent(organizationMemberMatch[1]);
+        const membershipId = decodeURIComponent(organizationMemberMatch[2]);
+        const body = await readJson(req);
+        return send(res, 200, await removeOrganizationMember(controlPlane.store, { organizationId, membershipId, actorUserId: subject.id, expectedVersion: body.expectedVersion }));
+      }
+      const organizationLeaveMatch = url.pathname.match(/^\/organizations\/([^/]+)\/leave$/);
+      if (organizationLeaveMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const body = await readJson(req);
+        return send(res, 200, await leaveOrganization(controlPlane.store, { organizationId: decodeURIComponent(organizationLeaveMatch[1]), actorUserId: subject.id, expectedVersion: body.expectedVersion }));
+      }
+      const organizationInviteMatch = url.pathname.match(/^\/organizations\/([^/]+)\/invites\/([^/]+)$/);
+      if (organizationInviteMatch && method === 'DELETE') {
+        const subject = authorizeAction(req, 'team:invite', auth);
+        return send(res, 200, await revokeOrganizationInvite(controlPlane.store, { organizationId: decodeURIComponent(organizationInviteMatch[1]), inviteId: decodeURIComponent(organizationInviteMatch[2]), actorUserId: subject.id }));
       }
       const organizationProjectsMatch = url.pathname.match(/^\/organizations\/([^/]+)\/projects$/);
       if (organizationProjectsMatch && method === 'GET') {

@@ -535,6 +535,179 @@ paths:
       security:
         - bearerAuth: []
       x-permission: project:read
+  /organizations/{organizationId}/members:
+    get:
+      operationId: organizations-members
+      parameters:
+        - name: organizationId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/organizations-membersResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+  /organizations/{organizationId}/members/{membershipId}:
+    patch:
+      operationId: organizations-members-patch
+      parameters:
+        - name: organizationId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: membershipId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/organizations-members-patchBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/organizations-members-patchResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: team:invite
+    delete:
+      operationId: organizations-members-delete
+      parameters:
+        - name: organizationId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: membershipId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/organizations-members-deleteBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/organizations-members-deleteResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: team:invite
+  /organizations/{organizationId}/leave:
+    post:
+      operationId: organizations-leave-post
+      parameters:
+        - name: organizationId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/organizations-members-deleteBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/organizations-leave-postResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+  /organizations/{organizationId}/invites/{inviteId}:
+    delete:
+      operationId: organizations-invites-delete
+      parameters:
+        - name: organizationId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: inviteId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/organizations-invites-deleteResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: team:invite
   /projects:
     get:
       operationId: projects-list
@@ -5668,6 +5841,210 @@ components:
           pattern: ^[A-Za-z0-9_-]+$
       required:
         - token
+      additionalProperties: false
+    organizations-membersResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                minLength: 1
+              organizationId:
+                type: string
+                minLength: 1
+              userId:
+                type: string
+                minLength: 1
+              role:
+                type: string
+                enum:
+                  - OWNER
+                  - ADMIN
+                  - MAINTAINER
+                  - DEVELOPER
+                  - DB_ADMIN
+                  - VIEWER
+              version:
+                type: integer
+                exclusiveMinimum: 0
+                maximum: 9007199254740991
+              createdAt:
+                type: string
+                format: date-time
+                pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+              user:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    minLength: 1
+                  email:
+                    type: string
+                    format: email
+                    pattern: ^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                  name:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  avatarUrl:
+                    anyOf:
+                      - type: string
+                        format: uri
+                      - type: "null"
+                required:
+                  - id
+                  - email
+                  - name
+                  - avatarUrl
+                additionalProperties: false
+            required:
+              - id
+              - organizationId
+              - userId
+              - role
+              - version
+              - createdAt
+              - user
+            additionalProperties: false
+      required:
+        - members
+      additionalProperties: false
+    organizations-members-patchResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        membership:
+          type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+            organizationId:
+              type: string
+              minLength: 1
+            userId:
+              type: string
+              minLength: 1
+            role:
+              type: string
+              enum:
+                - OWNER
+                - ADMIN
+                - MAINTAINER
+                - DEVELOPER
+                - DB_ADMIN
+                - VIEWER
+            version:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            createdAt:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            user:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+                email:
+                  type: string
+                  format: email
+                  pattern: ^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                name:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+                avatarUrl:
+                  anyOf:
+                    - type: string
+                      format: uri
+                    - type: "null"
+              required:
+                - id
+                - email
+                - name
+                - avatarUrl
+              additionalProperties: false
+          required:
+            - id
+            - organizationId
+            - userId
+            - role
+            - version
+            - createdAt
+            - user
+          additionalProperties: false
+      required:
+        - membership
+      additionalProperties: false
+    organizations-members-patchBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        role:
+          type: string
+          enum:
+            - OWNER
+            - ADMIN
+            - MAINTAINER
+            - DEVELOPER
+            - DB_ADMIN
+            - VIEWER
+        expectedVersion:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+      required:
+        - role
+        - expectedVersion
+      additionalProperties: false
+    organizations-members-deleteResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        removed:
+          type: boolean
+          const: true
+      required:
+        - removed
+      additionalProperties: false
+    organizations-members-deleteBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+      required:
+        - expectedVersion
+      additionalProperties: false
+    organizations-leave-postResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        left:
+          type: boolean
+          const: true
+      required:
+        - left
+      additionalProperties: false
+    organizations-invites-deleteResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        revoked:
+          type: boolean
+          const: true
+      required:
+        - revoked
       additionalProperties: false
     projects-updateBody:
       $schema: https://json-schema.org/draft/2020-12/schema

@@ -8,7 +8,8 @@ import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublic
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, completePasswordRecovery, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requestPasswordRecovery, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 import { RecoveryError, ResourceCapabilityUnavailable, ResourceIntentInvalid, publicRecovery, resourceAvailability, resourceStorageMb, can, listCatalog } from '@raibitserver/core';
 import { acceptOrganizationInvite, issueOrganizationInvite, listOrganizationInvites } from '@raibitserver/core';
-import type { OrganizationInviteCreate } from '@raibitserver/schemas';
+import { changeOrganizationMembershipRole, leaveOrganization, listOrganizationMembers, removeOrganizationMember, revokeOrganizationInvite } from '@raibitserver/core';
+import type { OrganizationInviteCreate, OrganizationMembershipRoleChange, OrganizationMembershipSnapshot } from '@raibitserver/schemas';
 
 /**
  * NestJS-facing desired-state service.
@@ -194,6 +195,31 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   async acceptOrganizationInvite(token: string, subject: Record<string, unknown>) {
     const repository = await this.repositoryPromise;
     return repositoryMutation(() => acceptOrganizationInvite(repository, { token, userId: String(subject.id) }));
+  }
+
+  async listOrganizationMembers(organizationId: string, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    return repositoryMutation(() => listOrganizationMembers(repository, { organizationId, actorUserId: String(subject.id) }));
+  }
+
+  async changeOrganizationMembershipRole(input: OrganizationMembershipRoleChange & { readonly organizationId: string; readonly membershipId: string }, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    return repositoryMutation(() => changeOrganizationMembershipRole(repository, { ...input, actorUserId: String(subject.id) }));
+  }
+
+  async removeOrganizationMember(input: OrganizationMembershipSnapshot & { readonly organizationId: string; readonly membershipId: string }, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    return repositoryMutation(() => removeOrganizationMember(repository, { ...input, actorUserId: String(subject.id) }));
+  }
+
+  async leaveOrganization(organizationId: string, input: OrganizationMembershipSnapshot, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    return repositoryMutation(() => leaveOrganization(repository, { organizationId, actorUserId: String(subject.id), ...input }));
+  }
+
+  async revokeOrganizationInvite(input: { readonly organizationId: string; readonly inviteId: string }, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    return repositoryMutation(() => revokeOrganizationInvite(repository, { ...input, actorUserId: String(subject.id) }));
   }
 
   async getProject(projectId: string, subject: Record<string, any>) {

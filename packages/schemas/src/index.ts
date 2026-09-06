@@ -29,6 +29,7 @@ export * from './desired-state-mutations.ts';
 export * from './service-settings.ts';
 export * from './production-evidence.ts';
 export * from './organization-invite.ts';
+export * from './membership-transition.ts';
 
 export const AccountTypeSchema = z.enum(['CLUB_MEMBER', 'NON_CLUB']);
 export const ApprovalStatusSchema = z.enum(['APPROVED', 'PENDING', 'REJECTED']);

@@ -26,9 +26,10 @@ import { previewRuntimePlan } from './preview-deployments.ts';
 import { canonicalPreviewWebhook, parsePreviewObservation, parsePreviewWebhook, PreviewError, previewWebhookLineage, previewWebhookPayloadMatches } from './preview-contract.ts';
 import { applyPreviewObservation, assertPreviewRetry, createPreviewRuntime, PREVIEW_APPLY_JOB, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage, type PreviewLineageRecord } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
-import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
+import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug, type OrganizationMembershipRole } from './rbac.ts';
 import { PostgresOrganizationInviteRepository } from './organization-invite-postgres.ts';
 import type { ReplaceOrganizationInviteInput } from './organization-invite.ts';
+import { PostgresMembershipTransitionRepository } from './membership-transition-postgres.ts';
 import { parseGitHubRepository } from './github-integration.ts';
 import { GITHUB_INTEGRATION_STATUS, githubIntegrationStatus, githubServiceSourceState, githubSourceAccess, publicGitHubIntegration } from './github-lifecycle.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
@@ -182,6 +183,11 @@ export class InMemoryControlPlaneRepository {
   async revokeOrganizationInviteAfterDeliveryFailure(id: string, revokedAt: string) { return this.store.revokeOrganizationInviteAfterDeliveryFailure(id, revokedAt); }
   async acceptOrganizationInvite(input: { readonly tokenHash: string; readonly userId: string; readonly now: string }) { return this.store.acceptOrganizationInvite(input); }
   async listOrganizationInvites(input: { readonly organizationId: string; readonly actorUserId: string }) { return this.store.listOrganizationInvites(input); }
+  async listOrganizationMembers(input: { readonly organizationId: string; readonly actorUserId: string }) { return this.store.listOrganizationMembers(input); }
+  async changeOrganizationMembershipRole(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly role: OrganizationMembershipRole; readonly expectedVersion: number }) { return this.store.changeOrganizationMembershipRole(input); }
+  async removeOrganizationMember(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly expectedVersion: number }) { return this.store.removeOrganizationMember(input); }
+  async leaveOrganization(input: { readonly organizationId: string; readonly actorUserId: string; readonly expectedVersion: number }) { return this.store.leaveOrganization(input); }
+  async revokeOrganizationInvite(input: { readonly organizationId: string; readonly inviteId: string; readonly actorUserId: string; readonly now: string }) { return this.store.revokeOrganizationInvite(input); }
   async createProject(input: Record<string, any>) {
     const slug = slugInput(input.slug || input.name);
     const existing = [...this.store.projects.values()].find((project) => String(project.organizationId) === String(input.organizationId) && String(project.slug) === slug);
@@ -907,6 +913,11 @@ export class PrismaControlPlaneRepository {
   async revokeOrganizationInviteAfterDeliveryFailure(id: string, revokedAt: string) { return new PostgresOrganizationInviteRepository(this.prisma).revokeOrganizationInviteAfterDeliveryFailure(id, revokedAt); }
   async acceptOrganizationInvite(input: { readonly tokenHash: string; readonly userId: string; readonly now: string }) { return new PostgresOrganizationInviteRepository(this.prisma).acceptOrganizationInvite(input); }
   async listOrganizationInvites(input: { readonly organizationId: string; readonly actorUserId: string }) { return new PostgresOrganizationInviteRepository(this.prisma).listOrganizationInvites(input); }
+  async listOrganizationMembers(input: { readonly organizationId: string; readonly actorUserId: string }) { return new PostgresMembershipTransitionRepository(this.prisma).listOrganizationMembers(input); }
+  async changeOrganizationMembershipRole(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly role: OrganizationMembershipRole; readonly expectedVersion: number }) { return new PostgresMembershipTransitionRepository(this.prisma).changeOrganizationMembershipRole(input); }
+  async removeOrganizationMember(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly expectedVersion: number }) { return new PostgresMembershipTransitionRepository(this.prisma).removeOrganizationMember(input); }
+  async leaveOrganization(input: { readonly organizationId: string; readonly actorUserId: string; readonly expectedVersion: number }) { return new PostgresMembershipTransitionRepository(this.prisma).leaveOrganization(input); }
+  async revokeOrganizationInvite(input: { readonly organizationId: string; readonly inviteId: string; readonly actorUserId: string; readonly now: string }) { return new PostgresMembershipTransitionRepository(this.prisma).revokeOrganizationInvite(input); }
 
   async createProject(input: Record<string, any>) {
     const slug = input.slug || slugInput(input.name);

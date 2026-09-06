@@ -61,4 +61,6 @@ export * from './deployment-health.ts';
 export * from './resource-recovery.ts';
 export * from './organization-invite.ts';
 export * from './organization-invite-postgres.ts';
+export * from './membership-transition.ts';
+export * from './membership-transition-postgres.ts';
 export { clearObservationProjectionContinuation, createObservationProjectionContinuation, projectObservationPayload, type ObservationProjectionContinuation } from './observability-projection.ts';
