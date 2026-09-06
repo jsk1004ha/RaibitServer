@@ -966,6 +966,131 @@ paths:
       security:
         - bearerAuth: []
       x-permission: project:delete
+  /services/{serviceId}/settings:
+    get:
+      operationId: services-settings-get
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/services-settings-getResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    patch:
+      operationId: services-settings-update
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/services-settings-previewBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/services-settings-getResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: service:update
+  /services/{serviceId}/settings/preview:
+    post:
+      operationId: services-settings-preview
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/services-settings-previewBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/services-settings-previewResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: service:update
+  /services/{serviceId}/replacements:
+    post:
+      operationId: services-replacements-create
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/services-replacements-createBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/services-replacements-createResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: service:create
   /projects/{projectId}/services/{serviceId}/deployments:
     get:
       operationId: project-deployments-list
@@ -5473,6 +5598,32 @@ components:
             - cron
             - job
           description: Editable only before the first deployment
+        sourceType:
+          type: string
+          enum:
+            - github
+            - gitlab
+            - zip
+            - image
+            - local
+          description: Editable only before the first deployment
+        repoUrl:
+          anyOf:
+            - type: string
+              format: uri
+            - type: string
+              pattern: ^[\w.-]+\/[\w.-]+$
+          description: Editable only before the first deployment
+        image:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: Editable only before the first deployment
+        imageUrl:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: Editable only before the first deployment
         branch:
           type: string
           minLength: 1
@@ -5592,6 +5743,198 @@ components:
                     quota (512Mi fallback)
               additionalProperties: false
           additionalProperties: false
+      additionalProperties: false
+    services-settings-getResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        serviceId:
+          type: string
+          minLength: 1
+        projectId:
+          type: string
+          minLength: 1
+        updatedAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        deployed:
+          type: boolean
+        settings:
+          $ref: "#/components/schemas/services-updateBody"
+      required:
+        - serviceId
+        - projectId
+        - updatedAt
+        - deployed
+        - settings
+      additionalProperties: false
+    services-settings-previewResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        snapshot:
+          $ref: "#/components/schemas/services-settings-getResponse"
+        settings:
+          $ref: "#/components/schemas/services-updateBody"
+        diff:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                minLength: 1
+              before:
+                anyOf:
+                  - $ref: "#/components/schemas/__shared#/$defs/schema2"
+                  - type: "null"
+              after:
+                anyOf:
+                  - $ref: "#/components/schemas/__shared#/$defs/schema3"
+                  - type: "null"
+            required:
+              - field
+              - before
+              - after
+            additionalProperties: false
+        buildPlan:
+          type: object
+          properties:
+            before:
+              type: object
+              propertyNames:
+                type: string
+              additionalProperties: {}
+            after:
+              type: object
+              propertyNames:
+                type: string
+              additionalProperties: {}
+          required:
+            - before
+            - after
+          additionalProperties: false
+      required:
+        - snapshot
+        - settings
+        - diff
+        - buildPlan
+      additionalProperties: false
+    services-settings-previewBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        expectedUpdatedAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        changes:
+          $ref: "#/components/schemas/services-updateBody"
+        files:
+          type: object
+          propertyNames:
+            type: string
+            maxLength: 1024
+          additionalProperties:
+            type: string
+            maxLength: 1048576
+      required:
+        - expectedUpdatedAt
+        - changes
+      additionalProperties: false
+    services-replacements-createResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        impact:
+          type: string
+          const: old_service_preserved
+        oldServiceId:
+          type: string
+          minLength: 1
+        service:
+          type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+            projectId:
+              type: string
+              minLength: 1
+            name:
+              type: string
+            type:
+              type: string
+            sourceType:
+              type: string
+              enum:
+                - github
+                - gitlab
+                - zip
+                - image
+                - local
+          required:
+            - id
+            - projectId
+            - name
+            - type
+            - sourceType
+          additionalProperties:
+            $ref: "#/components/schemas/__shared#/$defs/schema4"
+      required:
+        - impact
+        - oldServiceId
+        - service
+      additionalProperties: false
+    services-replacements-createBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        expectedUpdatedAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        confirmed:
+          type: boolean
+          const: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        source:
+          type: object
+          properties:
+            sourceType:
+              type: string
+              enum:
+                - github
+                - gitlab
+                - zip
+                - image
+                - local
+            repoUrl:
+              anyOf:
+                - type: string
+                  format: uri
+                - type: string
+                  pattern: ^[\w.-]+\/[\w.-]+$
+            image:
+              type: string
+              minLength: 1
+              maxLength: 2048
+            imageUrl:
+              type: string
+              minLength: 1
+              maxLength: 2048
+          required:
+            - sourceType
+          additionalProperties: false
+      required:
+        - expectedUpdatedAt
+        - confirmed
+        - name
+        - source
       additionalProperties: false
     deployments-cancelResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
@@ -5772,7 +6115,7 @@ components:
         - resourceId
         - serviceId
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema2"
+        $ref: "#/components/schemas/__shared#/$defs/schema5"
     resources-attachBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -6037,7 +6380,7 @@ components:
         tables:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema3"
+            $ref: "#/components/schemas/__shared#/$defs/schema6"
       required:
         - engine
         - tables
@@ -6052,7 +6395,7 @@ components:
         rows:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema4"
+            $ref: "#/components/schemas/__shared#/$defs/schema7"
         fields:
           type: array
           items:
@@ -6092,7 +6435,7 @@ components:
         collections:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema5"
+            $ref: "#/components/schemas/__shared#/$defs/schema8"
       required:
         - engine
         - collections
@@ -6121,7 +6464,7 @@ components:
         keys:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema6"
+            $ref: "#/components/schemas/__shared#/$defs/schema9"
       required:
         - engine
         - keys
@@ -6308,7 +6651,7 @@ components:
       required:
         - accepted
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema7"
+        $ref: "#/components/schemas/__shared#/$defs/schema10"
     github-webhooksBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -6320,7 +6663,7 @@ components:
         installation:
           $ref: "#/components/schemas/JsonFields"
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema8"
+        $ref: "#/components/schemas/__shared#/$defs/schema11"
     github-importResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -6330,7 +6673,7 @@ components:
       required:
         - service
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema9"
+        $ref: "#/components/schemas/__shared#/$defs/schema12"
     github-importBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -6431,7 +6774,7 @@ components:
         - quotas
         - auditLogs
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema10"
+        $ref: "#/components/schemas/__shared#/$defs/schema13"
     usage-meResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -6451,7 +6794,7 @@ components:
         warnings:
           type: array
           items:
-            $ref: "#/components/schemas/__shared#/$defs/schema11"
+            $ref: "#/components/schemas/__shared#/$defs/schema14"
       required:
         - unlimited
         - quota
@@ -6460,7 +6803,7 @@ components:
         - gauges
         - warnings
       additionalProperties:
-        $ref: "#/components/schemas/__shared#/$defs/schema12"
+        $ref: "#/components/schemas/__shared#/$defs/schema15"
     __shared:
       $defs:
         schema0:
@@ -6632,6 +6975,45 @@ components:
               propertyNames:
                 type: string
               additionalProperties: *a13
+        schema13:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a14
+                $ref: "#/components/schemas/__shared#/$defs/schema13"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a14
+        schema14:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a15
+                $ref: "#/components/schemas/__shared#/$defs/schema14"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a15
+        schema15:
+          anyOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: "null"
+            - type: array
+              items: &a16
+                $ref: "#/components/schemas/__shared#/$defs/schema15"
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties: *a16
   securitySchemes:
     bearerAuth:
       type: http

@@ -25,6 +25,7 @@ export {
 export type { OrganizationMembershipReadRole, OrganizationMembershipRole, OrganizationRouteSlugResult } from './organization-role.ts';
 export * from './api-contract.ts';
 export * from './desired-state-mutations.ts';
+export * from './service-settings.ts';
 export * from './production-evidence.ts';
 export * from './organization-invite.ts';
 

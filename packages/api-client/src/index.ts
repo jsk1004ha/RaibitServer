@@ -1,4 +1,4 @@
-import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationInviteAccept, OrganizationInviteCreate, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
+import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationInviteAccept, OrganizationInviteCreate, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec, ServiceReplacementInput, ServiceReplacementResult, ServiceSettingsMutation, ServiceSettingsPreview, ServiceSettingsSnapshot } from '@raibitserver/schemas';
 import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
@@ -106,6 +106,10 @@ export class RAIBITSERVERClient {
   updateService(serviceId: string, service: Partial<ServiceSpec> & Record<string, unknown>): Promise<ServiceSpec> {
     return this.request(`/services/${encodeURIComponent(serviceId)}`, { method: 'PATCH', body: service });
   }
+  getServiceSettings(serviceId: string): Promise<ServiceSettingsSnapshot> { return this.operations['services-settings-get']({ path: { serviceId }, query: {}, body: {} }); }
+  previewServiceSettings(serviceId: string, input: ServiceSettingsMutation): Promise<ServiceSettingsPreview> { return this.operations['services-settings-preview']({ path: { serviceId }, query: {}, body: input }); }
+  updateServiceSettings(serviceId: string, input: ServiceSettingsMutation): Promise<ServiceSettingsSnapshot> { return this.operations['services-settings-update']({ path: { serviceId }, query: {}, body: input }); }
+  createServiceReplacement(serviceId: string, input: ServiceReplacementInput): Promise<ServiceReplacementResult> { return this.operations['services-replacements-create']({ path: { serviceId }, query: {}, body: input }); }
   deleteService(serviceId: string): Promise<Record<string, unknown>> {
     return this.request(`/services/${encodeURIComponent(serviceId)}`, { method: 'DELETE' });
   }

@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, HttpExcepti
 import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
 import { projectObservationPayload } from '@raibitserver/core';
 import { ProjectSettingsError } from '@raibitserver/core';
-import { PasswordRecoveryCompleteSchema, PasswordRecoveryRequestSchema, ResourceBackupListSchema, type ProjectDeletionScheduled, type ProjectSettingsUpdate, type ProjectSettingsView, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
+import { PasswordRecoveryCompleteSchema, PasswordRecoveryRequestSchema, ResourceBackupListSchema, type ProjectDeletionScheduled, type ProjectSettingsUpdate, type ProjectSettingsView, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceReplacementInput, type ServiceSettingsMutation, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, completePasswordRecovery, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requestPasswordRecovery, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
@@ -299,6 +299,38 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     });
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     return service;
+  }
+
+  async getServiceSettings(serviceId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, service.projectId, subject);
+    return repository.getServiceSettings(serviceId);
+  }
+
+  async previewServiceSettings(serviceId: string, input: ServiceSettingsMutation, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, service.projectId, subject);
+    return repositoryMutation(() => repository.previewServiceSettings(serviceId, input, { actorUserId: subject.id }));
+  }
+
+  async updateServiceSettings(serviceId: string, input: ServiceSettingsMutation, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, service.projectId, subject);
+    return repositoryMutation(() => repository.updateServiceSettings(serviceId, input, { actorUserId: subject.id }));
+  }
+
+  async createServiceReplacement(serviceId: string, input: ServiceReplacementInput, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, service.projectId, subject);
+    return repositoryMutation(() => repository.createServiceReplacement(serviceId, input, { actorUserId: subject.id }));
   }
 
   async deleteService(serviceId: string, subject: Record<string, any>) {

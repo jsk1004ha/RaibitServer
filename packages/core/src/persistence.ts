@@ -33,6 +33,7 @@ import { parseGitHubRepository } from './github-integration.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
+import { assertExpectedServiceVersion, parseServiceReplacement, parseServiceSettingsInput, previewServiceSettings, serviceSettingsSnapshot, ServiceSettingsError } from './service-settings.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
   activityLimit,
@@ -195,6 +196,14 @@ export class InMemoryControlPlaneRepository {
     return this.runQuotaMutation(input.actorUserId, 'service:create', serviceQuotaRequirements(existing, input), () => this.store.createService(input, options));
   }
   async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateService(serviceId, updates, options); }
+  async getServiceSettings(serviceId: string) { return this.store.getServiceSettings(serviceId); }
+  async previewServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) { return this.store.previewServiceSettings(serviceId, input, options); }
+  async updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateServiceSettings(serviceId, input, options); }
+  async createServiceReplacement(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const current = this.store.getService(serviceId);
+    if (!current) return null;
+    return this.runQuotaMutation(options.actorUserId, 'service:create', serviceQuotaRequirements(null, input.source || {}), () => this.store.createServiceReplacement(serviceId, input, options));
+  }
   async deleteService(serviceId: string) { return this.store.deleteService(serviceId); }
   async createResource(input: Record<string, any>) {
     requireResourceExecution(normalizeResourceEngine(input.engine || input.type));
@@ -1311,6 +1320,60 @@ export class PrismaControlPlaneRepository {
 
   async getService(serviceId: string) {
     return this.prisma.service.findUnique({ where: { id: serviceId } });
+  }
+
+  async getServiceSettings(serviceId: string) {
+    const service = await this.getService(serviceId);
+    if (!service) return null;
+    const deployed = Boolean(await this.prisma.deployment.findFirst({ where: { serviceId }, select: { id: true } }));
+    return serviceSettingsSnapshot(service, deployed);
+  }
+
+  async previewServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const service = await this.getService(serviceId);
+    if (!service) return null;
+    const parsed = parseServiceSettingsInput(input);
+    const deployed = Boolean(await this.prisma.deployment.findFirst({ where: { serviceId }, select: { id: true } }));
+    const quota = options.actorUserId ? await this.prisma.quota.findFirst({ where: { userId: options.actorUserId }, orderBy: { updatedAt: 'desc' } }) : undefined;
+    return previewServiceSettings(service, parsed, { deployed, quota: quota ?? undefined });
+  }
+
+  async updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const parsed = parseServiceSettingsInput(input);
+    return this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.service.findUnique({ where: { id: serviceId } });
+      if (!current) return null;
+      await requireMutableProject(tx, current.projectId);
+      const deployed = Boolean(await tx.deployment.findFirst({ where: { serviceId }, select: { id: true } }));
+      const quota = options.actorUserId ? await tx.quota.findFirst({ where: { userId: options.actorUserId }, orderBy: { updatedAt: 'desc' } }) : undefined;
+      previewServiceSettings(current, parsed, { deployed, quota });
+      const safeUpdates = serviceMutationState(current, parsed.changes, { deployed, quota });
+      const result = await tx.service.updateMany({
+        where: { id: serviceId, updatedAt: current.updatedAt },
+        data: serviceUpdateData(safeUpdates, { currentDesiredState: current.desiredState, currentDesiredSpec: current.desiredSpec }),
+      });
+      if (result.count !== 1) throw new ServiceSettingsError('STALE_SERVICE', 409);
+      await tx.auditLog.create({ data: { actorUserId: options.actorUserId || null, action: 'service:update', targetType: 'service', targetId: serviceId, metadata: maskSecrets(safeUpdates) } });
+      const updated = await tx.service.findUnique({ where: { id: serviceId } });
+      return updated ? serviceSettingsSnapshot(updated, deployed) : null;
+    }, { isolationLevel: 'Serializable' });
+  }
+
+  async createServiceReplacement(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const replacementInput = parseServiceReplacement(input);
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const current = await tx.service.findUnique({ where: { id: serviceId } });
+      if (!current) return null;
+      assertExpectedServiceVersion(current, replacementInput.expectedUpdatedAt);
+      await requireMutableProject(tx, current.projectId);
+      if (!await tx.deployment.findFirst({ where: { serviceId }, select: { id: true } })) throw new ServiceSettingsError('REPLACEMENT_REQUIRES_DEPLOYMENT', 409);
+      const slug = slugInput(replacementInput.name);
+      if (await tx.service.findUnique({ where: { projectId_slug: { projectId: current.projectId, slug } }, select: { id: true } })) throw conflictError('replacement service name is already in use');
+      await enforcePrismaQuotaRequirements(tx, options.actorUserId, 'service:create', serviceQuotaRequirements(null, replacementInput.source));
+      const service = await tx.service.create({ data: { projectId: current.projectId, name: replacementInput.name, slug, ...serviceData(replacementInput.source) } });
+      await tx.auditLog.create({ data: { actorUserId: options.actorUserId || null, action: 'service:create', targetType: 'service', targetId: service.id, metadata: { projectId: current.projectId, replacementForServiceId: serviceId } } });
+      return { impact: 'old_service_preserved', oldServiceId: serviceId, service };
+    });
   }
 
   async createDeploymentOperation(input: DeploymentOperation) {

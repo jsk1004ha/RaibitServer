@@ -374,6 +374,35 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
         return send(res, 201, controlPlane.store.createService(sanitizeTenantServiceInput(body)));
       }
+      const serviceSettingsMatch = url.pathname.match(/^\/services\/([^/]+)\/settings$/);
+      if (serviceSettingsMatch && ['GET', 'PATCH'].includes(method)) {
+        const permission = method === 'GET' ? 'project:read' : 'service:update';
+        const subject = authorizeAction(req, permission, auth);
+        const serviceId = decodeURIComponent(serviceSettingsMatch[1]);
+        const service = controlPlane.store.getService(serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        if (method === 'GET') return send(res, 200, controlPlane.store.getServiceSettings(serviceId));
+        return send(res, 200, controlPlane.store.updateServiceSettings(serviceId, await readJson(req), { actorUserId: subject.id }));
+      }
+      const serviceSettingsPreviewMatch = url.pathname.match(/^\/services\/([^/]+)\/settings\/preview$/);
+      if (serviceSettingsPreviewMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'service:update', auth);
+        const serviceId = decodeURIComponent(serviceSettingsPreviewMatch[1]);
+        const service = controlPlane.store.getService(serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        return send(res, 200, controlPlane.store.previewServiceSettings(serviceId, await readJson(req), { actorUserId: subject.id }));
+      }
+      const serviceReplacementMatch = url.pathname.match(/^\/services\/([^/]+)\/replacements$/);
+      if (serviceReplacementMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'service:create', auth);
+        const serviceId = decodeURIComponent(serviceReplacementMatch[1]);
+        const service = controlPlane.store.getService(serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        return send(res, 201, controlPlane.store.createServiceReplacement(serviceId, await readJson(req), { actorUserId: subject.id }));
+      }
       const serviceMatch = url.pathname.match(/^\/services\/([^/]+)$/);
       if (serviceMatch && method === 'GET') {
         const subject = authorizeAction(req, 'project:read', auth);

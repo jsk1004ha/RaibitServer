@@ -3,8 +3,8 @@ import { HEALTH_PATH_FIELDS, parseHealthPaths } from './deployment-health.ts';
 export const SERVICE_SETTINGS_LIMITS = { cpuMillicores: 500, memoryMiB: 512 } as const;
 /** Only a server-side caller can hold this token; JSON cannot opt into runtime writes. */
 export const INTERNAL_SERVICE_MUTATION = Symbol('internal-service-mutation');
-const editable = new Set(['name', 'type', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'port', 'healthCheck', 'resources', ...HEALTH_PATH_FIELDS]);
-const identity = new Set(['id', 'projectId', 'organizationId', 'organizationSlug', 'slug', 'sourceType', 'repoUrl', 'repositoryUrl', 'image', 'imageUrl', 'githubRepositoryId', 'githubInstallationId', 'githubIntegrationId', 'githubRepository', 'sourceAccess']);
+const editable = new Set(['name', 'type', 'sourceType', 'repoUrl', 'image', 'imageUrl', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'port', 'healthCheck', 'resources', ...HEALTH_PATH_FIELDS]);
+const identity = new Set(['id', 'projectId', 'organizationId', 'organizationSlug', 'slug', 'repositoryUrl', 'githubRepositoryId', 'githubInstallationId', 'githubIntegrationId', 'githubRepository', 'sourceAccess']);
 const resourceKeys = new Set(['name', 'type', 'engine', 'provider', 'plan', 'region', 'version', 'storageMb', 'storageGb', 'databaseName', 'database', 'username', 'bucket', 'collection', 'topic', 'backup', 'desiredSpec']);
 const resourceSpecKeys = new Set(['storageMb', 'storageGb', 'databaseName', 'database', 'username', 'bucket', 'collection', 'topic', 'schemas', 'tables', 'collections', 'documents', 'keys', 'values', 'ttl', 'buckets', 'objects', 'subjects']);
 
@@ -54,6 +54,7 @@ export function parseServiceMutation(input: unknown) {
     }
   }
   if (parsed.type !== undefined && !['web', 'private', 'worker', 'cron', 'job'].includes(String(parsed.type))) invalid('type');
+  if (parsed.sourceType !== undefined && !['github', 'gitlab', 'zip', 'image', 'local'].includes(String(parsed.sourceType))) invalid('sourceType');
   if (parsed.port !== undefined && (typeof parsed.port !== 'number' || !Number.isInteger(parsed.port) || parsed.port < 1 || parsed.port > 65535)) invalid('port');
   Object.assign(parsed, parseHealthPaths(parsed));
   if (parsed.resources !== undefined) {
@@ -81,7 +82,7 @@ function settingQuantity(value: unknown, unit: string) {
   return quantity;
 }
 export function serviceMutationState(current: Record<string, unknown>, updates: Record<string, unknown>, context: { readonly deployed: boolean; readonly quota?: Record<string, unknown> }) {
-  if (context.deployed) for (const field of ['name', 'type']) if (Object.hasOwn(updates, field) && updates[field] !== current[field]) immutable(field);
+  if (context.deployed) for (const field of ['name', 'type', 'sourceType', 'repoUrl', 'image', 'imageUrl']) if (Object.hasOwn(updates, field) && updates[field] !== current[field]) immutable(field);
   const desired = { ...optionalRecord(current.desiredSpec), ...optionalRecord(current.desiredState), ...current };
   parseHealthPaths({ ...desired, ...updates });
   if (!Object.hasOwn(updates, 'resources')) return updates;

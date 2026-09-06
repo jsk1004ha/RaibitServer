@@ -6,6 +6,7 @@ import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
 import { createMemoryOAuthTransaction, consumeMemoryOAuthTransaction, deleteMemoryOAuthTransactions } from './oauth-transaction.ts';
 import type { CreateOAuthTransactionInput, ConsumeOAuthTransactionInput, OAuthCleanupInput, OAuthTransactionRecord } from './oauth-transaction.ts';
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
+import { assertExpectedServiceVersion, parseServiceReplacement, parseServiceSettingsInput, previewServiceSettings, serviceSettingsSnapshot, ServiceSettingsError } from './service-settings.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { assertNoTenantGitHubBinding, redactDbConsoleStatement, sanitizeLogRecord } from './security.ts';
 import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
@@ -517,6 +518,7 @@ export class ControlPlaneStore {
     delete rest.projectId;
     delete rest.desiredState;
     const resolvedImageUrl = imageUrl || image || undefined;
+    const timestamp = nowIso();
     const service = {
       id: stableId('svc', projectId, name),
       projectId,
@@ -528,7 +530,8 @@ export class ControlPlaneStore {
       image: image || imageUrl || undefined,
       imageUrl: resolvedImageUrl,
       status: 'created',
-      createdAt: nowIso(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
       ...rest,
     };
     assertServiceReplacement(this.services.has(service.id) && [...this.deployments.values()].some((deployment) => deployment.serviceId === service.id));
@@ -558,10 +561,44 @@ export class ControlPlaneStore {
     if (normalized.image && !normalized.imageUrl) normalized.imageUrl = normalized.image;
     if (normalized.imageUrl && !normalized.image) normalized.image = normalized.imageUrl;
     const health = parseHealthPaths(normalized);
-    const next = { ...current, ...normalized, ...(Object.keys(health).length ? { desiredSpec: { ...current.desiredSpec, ...health }, desiredState: { ...current.desiredState, ...health } } : {}), updatedAt: nowIso() };
+    const updatedAt = new Date(Math.max(Date.now(), Date.parse(current.updatedAt || current.createdAt) + 1)).toISOString();
+    const next = { ...current, ...normalized, ...(Object.keys(health).length ? { desiredSpec: { ...current.desiredSpec, ...health }, desiredState: { ...current.desiredState, ...health } } : {}), updatedAt };
     this.services.set(serviceId, next);
     this.audit('system', 'service:update', 'service', serviceId, maskSecrets(updates));
     return deepClone(next);
+  }
+
+  getServiceSettings(serviceId: string) {
+    const service = this.services.get(serviceId);
+    return service ? serviceSettingsSnapshot(service, [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId)) : null;
+  }
+
+  previewServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const service = this.services.get(serviceId);
+    if (!service) return null;
+    return previewServiceSettings(service, parseServiceSettingsInput(input), {
+      deployed: [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId),
+      quota: [...this.quotas.values()].find((quota) => quota.userId === options.actorUserId),
+    });
+  }
+
+  updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const parsed = parseServiceSettingsInput(input);
+    const preview = this.previewServiceSettings(serviceId, parsed, options);
+    if (!preview) return null;
+    this.updateService(serviceId, parsed.changes, options);
+    return this.getServiceSettings(serviceId);
+  }
+
+  createServiceReplacement(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const service = this.services.get(serviceId);
+    if (!service) return null;
+    const replacementInput = parseServiceReplacement(input);
+    assertExpectedServiceVersion(service, replacementInput.expectedUpdatedAt);
+    if (![...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId)) throw new ServiceSettingsError('REPLACEMENT_REQUIRES_DEPLOYMENT', 409);
+    if ([...this.services.values()].some((candidate) => candidate.projectId === service.projectId && candidate.slug === slugify(replacementInput.name))) throw new ServiceSettingsError('REPLACEMENT_NAME_CONFLICT', 409);
+    const replacement = this.createService({ projectId: service.projectId, name: replacementInput.name, ...replacementInput.source });
+    return { impact: 'old_service_preserved', oldServiceId: serviceId, service: replacement };
   }
 
   deleteService(serviceId: string) {

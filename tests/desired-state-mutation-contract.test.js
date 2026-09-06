@@ -214,7 +214,8 @@ test('desired-state public PATCH schemas reject hidden and invalid fields', () =
   // Given / When / Then
   assert.equal(ProjectUpdateSchema.safeParse({ name: 'okay', organizationId: 'forged' }).success, false);
   assert.equal(ServiceUpdateSchema.safeParse(fixture.editable).success, true);
-  for (const body of invalidService.filter((entry) => !('name' in entry) && !('type' in entry) && !('resources' in entry && /100m|501m|513Mi/.test(JSON.stringify(entry))))) assert.equal(ServiceUpdateSchema.safeParse(body).success, false, JSON.stringify(body));
+  for (const body of [{ sourceType: 'image' }, { repoUrl: 'https://github.com/fixture/other' }, { image: 'other:1' }]) assert.equal(ServiceUpdateSchema.safeParse(body).success, true, JSON.stringify(body));
+  for (const body of invalidService.filter((entry) => !('name' in entry) && !('type' in entry) && !('sourceType' in entry) && !('repoUrl' in entry) && !('image' in entry) && !('resources' in entry && /100m|501m|513Mi/.test(JSON.stringify(entry))))) assert.equal(ServiceUpdateSchema.safeParse(body).success, false, JSON.stringify(body));
 });
 
 test('desired-state editable happy path: actor quota and retained higher settings', async () => {

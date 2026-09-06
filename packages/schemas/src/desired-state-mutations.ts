@@ -15,6 +15,10 @@ export const ProjectUpdateSchema = z.object({ name: label.optional(), descriptio
 export const ServiceUpdateSchema = z.object({
   name: label.describe('Editable only before the first deployment').optional(),
   type: z.enum(['web', 'private', 'worker', 'cron', 'job']).describe('Editable only before the first deployment').optional(),
+  sourceType: z.enum(['github', 'gitlab', 'zip', 'image', 'local']).describe('Editable only before the first deployment').optional(),
+  repoUrl: z.string().url().or(z.string().regex(/^[\w.-]+\/[\w.-]+$/)).describe('Editable only before the first deployment').optional(),
+  image: z.string().min(1).max(2048).describe('Editable only before the first deployment').optional(),
+  imageUrl: z.string().min(1).max(2048).describe('Editable only before the first deployment').optional(),
   branch: z.string().min(1).max(1024).regex(/^[^\u0000-\u001f\u007f]+$/).optional(),
   rootDirectory: sourcePath.optional(), buildContext: sourcePath.optional(), dockerfilePath: sourcePath.optional(), outputDirectory: sourcePath.optional(),
   installCommand: command.optional(), buildCommand: command.optional(), startCommand: command.optional(),

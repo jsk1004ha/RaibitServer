@@ -2,6 +2,9 @@
   "wireBodies": {
     "deployments-retry": {"requestIdempotencyKey":"parity-retry","snapshotVersion":1},
     "services-redeploy": {"requestIdempotencyKey":"parity-redeploy","snapshotVersion":1},
+    "services-settings-preview": {"expectedUpdatedAt":"2026-09-06T00:00:00.000Z","changes":{"branch":"main"}},
+    "services-settings-update": {"expectedUpdatedAt":"2026-09-06T00:00:00.000Z","changes":{"branch":"main"}},
+    "services-replacements-create": {"expectedUpdatedAt":"2026-09-06T00:00:00.000Z","confirmed":true,"name":"replacement","source":{"sourceType":"image","image":"example/app:v2"}},
     "auth-signup": {"email":"parity@example.test","password":"test-password","name":"Parity","studentId":"1"},
     "auth-login": {"email":"parity@example.test","password":"test-password"},
     "auth-email-verify": {"email":"parity@example.test","code":"123456"},

@@ -19,6 +19,7 @@ export { connectionEnvForResource, injectResourceEnv } from './env-injection.ts'
 export { parseDotEnv, normalizeEnvEntries, maskEnvEntries } from './env-file.ts';
 export { assertEnvironmentWriteAllowed, secretEnvironmentKeys } from './env-policy.ts';
 export { validateServiceSecurity, guardDatabaseQuery, sanitizeLogRecord, safeAuthModeFromEnv, unsafeDisabledAuthAllowed, securityHeaders, createFixedWindowRateLimiter, assertRateLimit, enforceAuthAbuseLimits, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantDeploymentCreate, sanitizeDeploymentStatusInput, assertSystemDeploymentActor, redactDbConsoleStatement, normalizeTenantGitUrl } from './security.ts';
+export { ServiceSettingsError, assertExpectedServiceVersion, parseServiceReplacement, parseServiceSettingsInput, previewServiceSettings, serviceSettingsSnapshot, serviceVersion } from './service-settings.ts';
 export { can, assertCan, membershipRoleTransition, visibleEnvironment } from './rbac.ts';
 export { checkQuota, quotaForPlan, usageMetricDefinitions, quotaUsageGauges, quotaWarnings } from './quota.ts';
 export { domainPlanForProject, organizationRouteTenantSegment, resourceConsoleHostname, serviceConsoleHostname, serviceHostname } from './domain-router.ts';

@@ -6,6 +6,7 @@ import * as M from './api-models.ts';
 import { ProjectUpdateSchema, ServiceUpdateSchema, ResourceUpdateSchema } from './desired-state-mutations.ts';
 import { ProjectDeletionConfirmationSchema, ProjectDeletionScheduledSchema, ProjectSettingsUpdateSchema, ProjectSettingsViewSchema } from './project-settings.ts';
 import { OrganizationInviteAcceptSchema, OrganizationInviteAcceptanceSchema, OrganizationInviteCreateSchema, OrganizationInviteIssuedSchema, OrganizationInviteListSchema } from './organization-invite.ts';
+import { ServiceReplacementInputSchema, ServiceReplacementResultSchema, ServiceSettingsMutationSchema, ServiceSettingsPreviewSchema, ServiceSettingsSnapshotSchema } from './service-settings.ts';
 
 const id = z.string().min(1);
 const project = z.object({ projectId: id });
@@ -69,6 +70,10 @@ export const apiOperations = {
   'services-create': operation({ method: 'post', path: '/projects/{projectId}/services', status: 201, permission: 'service:create', input: input(project, M.Empty, M.ServiceInput), response: M.Service }),
   'services-get': operation({ method: 'get', path: '/services/{serviceId}', status: 200, permission: 'project:read', input: input(service, M.Empty, M.Empty), response: M.Service }),
   'services-update': operation({ method: 'patch', path: '/services/{serviceId}', status: 200, permission: 'service:update', input: input(service, M.Empty, ServiceUpdateSchema), response: M.Service }),
+  'services-settings-get': operation({ method: 'get', path: '/services/{serviceId}/settings', status: 200, permission: 'project:read', input: input(service, M.Empty, M.Empty), response: ServiceSettingsSnapshotSchema }),
+  'services-settings-preview': operation({ method: 'post', path: '/services/{serviceId}/settings/preview', status: 200, permission: 'service:update', input: input(service, M.Empty, ServiceSettingsMutationSchema), response: ServiceSettingsPreviewSchema }),
+  'services-settings-update': operation({ method: 'patch', path: '/services/{serviceId}/settings', status: 200, permission: 'service:update', input: input(service, M.Empty, ServiceSettingsMutationSchema), response: ServiceSettingsSnapshotSchema }),
+  'services-replacements-create': operation({ method: 'post', path: '/services/{serviceId}/replacements', status: 201, permission: 'service:create', input: input(service, M.Empty, ServiceReplacementInputSchema), response: ServiceReplacementResultSchema }),
   'services-delete': operation({ method: 'delete', path: '/services/{serviceId}', status: 200, permission: 'project:delete', input: input(service, M.Empty, M.Empty), response: M.Deletion }),
   'project-deployments-list': operation({ method: 'get', path: '/projects/{projectId}/services/{serviceId}/deployments', status: 200, permission: 'project:read', input: input(scopedService, M.PageQuery, M.Empty), response: M.Deployments }),
   'project-deployments-create': operation({ method: 'post', path: '/projects/{projectId}/services/{serviceId}/deployments', status: 202, permission: 'deploy:run', input: input(scopedService, M.Empty, M.DeploymentInput), response: M.DeploymentMutationResult }),
