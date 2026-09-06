@@ -26,7 +26,7 @@ test('Given the Task49 authored matrix, when its coverage contract is inspected,
   const report = validatePlatformExpansionMatrix(matrix.PLATFORM_EXPANSION_MATRIX);
   assert.equal(report.expectedScenarioCount, matrix.PLATFORM_EXPANSION_EXECUTABLE_ROWS.length);
   assert.equal(report.negativeScenarioCount, matrix.PLATFORM_EXPANSION_NEGATIVE_ROWS.length);
-  assert.equal(report.contractPendingScenarioCount, 1);
+  assert.equal(report.delegatedTask41ScenarioCount, 1);
   assert.equal(report.delegatedScenarioCount, 8);
   assert.ok(report.expectedScenarioCount > report.negativeScenarioCount);
 });

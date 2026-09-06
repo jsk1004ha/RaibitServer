@@ -1,13 +1,13 @@
 import type { Page, TestInfo } from '@playwright/test';
 import { expect, test } from '../helpers/fixtures';
 import { captureScreenshot, expectAccessible, installSession } from '../helpers/contracts';
-import { PLATFORM_EXPANSION_EXECUTABLE_ROWS, PLATFORM_EXPANSION_MATRIX, PLATFORM_EXPANSION_NEGATIVE_ROWS, type PlatformExpansionRow } from '../feature-expansion-matrix';
+import { PLATFORM_EXPANSION_DELEGATED_TASK35_ROWS, PLATFORM_EXPANSION_DELEGATED_TASK41_ROWS, PLATFORM_EXPANSION_EXECUTABLE_ROWS, PLATFORM_EXPANSION_MATRIX, PLATFORM_EXPANSION_NEGATIVE_ROWS, type PlatformExpansionRow } from '../feature-expansion-matrix';
 import { createOutcomeRecorder, validatePlatformExpansionMatrix, writePlatformExpansionReport } from '../platform-expansion-report.js';
 
 const evidencePath = process.env.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH;
 const negativeIds = new Set(PLATFORM_EXPANSION_NEGATIVE_ROWS.map((row) => row.id));
 const positives = PLATFORM_EXPANSION_EXECUTABLE_ROWS.filter((row) => !negativeIds.has(row.id));
-const positiveRecorder = createOutcomeRecorder(positives, 'positive');
+const positiveRecorder = createOutcomeRecorder(positives, 'positive', [...PLATFORM_EXPANSION_DELEGATED_TASK35_ROWS, ...PLATFORM_EXPANSION_DELEGATED_TASK41_ROWS].map((row) => row.id));
 const negativeRecorder = createOutcomeRecorder(PLATFORM_EXPANSION_NEGATIVE_ROWS, 'negative');
 
 function colorScheme(theme: PlatformExpansionRow['theme']): 'light' | 'dark' | 'no-preference' {

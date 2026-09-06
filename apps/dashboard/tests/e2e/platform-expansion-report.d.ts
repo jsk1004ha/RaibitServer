@@ -3,7 +3,7 @@ import type { PlatformExpansionRow } from './feature-expansion-matrix';
 export type PlatformExpansionReport = Readonly<{
   expectedScenarioCount: number;
   negativeScenarioCount: number;
-  contractPendingScenarioCount: number;
+  delegatedTask41ScenarioCount: number;
   delegatedScenarioCount: number;
 }>;
 
@@ -14,5 +14,5 @@ export type PlatformExpansionRecorder = Readonly<{
   finish(): Readonly<{ schema: 'raibit.task49.v1'; kind: string; expectedScenarioIds: readonly string[]; outcomes: readonly unknown[]; summary: Readonly<{ expected: number; passed: number; failed: 0; skipped: 0; unexpected: 0; flaky: 0 }> }>;
 }>;
 
-export function createOutcomeRecorder(rows: readonly PlatformExpansionRow[], kind: string): PlatformExpansionRecorder;
+export function createOutcomeRecorder(rows: readonly PlatformExpansionRow[], kind: string, requiredCoverageIds?: readonly string[]): PlatformExpansionRecorder;
 export function writePlatformExpansionReport(report: ReturnType<PlatformExpansionRecorder['finish']>, outputPath: string): Promise<string>;
