@@ -104,6 +104,7 @@ export type ResourceRestoreView = {
   readonly backupId: string; readonly sourceResourceId: string; readonly targetResourceId: string;
 };
 export interface RecoveryTransaction {
-  run<T>(organizationId: string, work: (state: RecoveryState) => T | Promise<T>): Promise<T>;
+  run<T>(organizationId: string, work: (state: RecoveryState) => T | Promise<T>, context?: RecoveryTransactionContext): Promise<T>;
 }
+export type RecoveryTransactionContext = { readonly actorUserId?: string };
 export type RecoveryQuotaPolicy = (state: Readonly<RecoveryState>, request: RecoveryRequest, kind: RecoveryKind) => void | Promise<void>;

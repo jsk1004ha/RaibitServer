@@ -1,4 +1,4 @@
-import type { RecoveryState, RecoveryTransaction } from './resource-recovery-types.ts';
+import type { RecoveryState, RecoveryTransaction, RecoveryTransactionContext } from './resource-recovery-types.ts';
 import { RecoveryError } from './resource-recovery-provenance.ts';
 
 export interface RecoverySql {
@@ -17,9 +17,11 @@ async function recoveryRows<T>(tx: RecoverySql, sql: string, organizationId: str
 export class PostgresRecoveryTransaction implements RecoveryTransaction {
   readonly client: RecoverySqlClient;
   constructor(client: RecoverySqlClient) { this.client = client; }
-  run<T>(organizationId: string, work: (state: RecoveryState) => T | Promise<T>): Promise<T> {
+  run<T>(organizationId: string, work: (state: RecoveryState) => T | Promise<T>, context: RecoveryTransactionContext = {}): Promise<T> {
     return this.client.$transaction(async tx => {
-      // Org-scoped serialization prevents replay races; all subsequent lock orders are stable.
+      const actorUserId = String(context.actorUserId ?? '').trim();
+      if (actorUserId) await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtext($1))', `raibitserver:quota:${actorUserId}`);
+      // Quota mutations take the user lock before resource writes; preserve that order here before org-scoped serialization.
       const organizations = await recoveryRows<RecoveryState['organizations'][number]>(tx, 'SELECT to_jsonb(o) AS row FROM "Organization" o WHERE id=$1 FOR UPDATE', organizationId);
       const projects = await recoveryRows<RecoveryState['projects'][number]>(tx, 'SELECT to_jsonb(p) AS row FROM "Project" p WHERE "organizationId"=$1 ORDER BY id FOR UPDATE', organizationId);
       const resources = await recoveryRows<RecoveryState['resources'][number]>(tx, 'SELECT to_jsonb(r) AS row FROM "Resource" r WHERE "projectId" IN (SELECT id FROM "Project" WHERE "organizationId"=$1) ORDER BY id FOR UPDATE', organizationId);

@@ -1,5 +1,5 @@
 import type { ControlPlaneStore } from './store.ts';
-import type { RecoveryState, RecoveryTransaction } from './resource-recovery-types.ts';
+import type { RecoveryState, RecoveryTransaction, RecoveryTransactionContext } from './resource-recovery-types.ts';
 import { RecoveryError } from './resource-recovery-provenance.ts';
 
 export function emptyRecoveryState(): RecoveryState {
@@ -10,7 +10,7 @@ export class MemoryRecoveryTransaction implements RecoveryTransaction {
   readonly state: RecoveryState;
   readonly store: ControlPlaneStore | undefined;
   constructor(state: RecoveryState = emptyRecoveryState(), store?: ControlPlaneStore) { this.state = state; this.store = store; }
-  async run<T>(_organizationId: string, work: (state: RecoveryState) => T | Promise<T>): Promise<T> {
+  async run<T>(_organizationId: string, work: (state: RecoveryState) => T | Promise<T>, _context: RecoveryTransactionContext = {}): Promise<T> {
     const previous = memoryRecoveryTails.get(this.state) ?? Promise.resolve();
     let unlock = () => {};
     memoryRecoveryTails.set(this.state, new Promise<void>(resolve => { unlock = resolve; }));

@@ -23,7 +23,7 @@ export class ResourceRecoveryRepository {
       const result = createRecovery(state, request, kind);
       if (!result.replay) await this.enforceQuota(before, request, kind);
       return structuredClone(result);
-    });
+    }, { actorUserId: request.actorUserId });
   }
   getBackup(scope: RecoveryScope, id: string) {
     return this.transaction.run(scope.organizationId, state => {
