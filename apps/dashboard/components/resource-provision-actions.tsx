@@ -22,7 +22,7 @@ export function ResourceProvisionActions({ action, availability, resourceStatus,
         <Alert className="break-keep"><AlertTitle>현재 서버: {allowed?.environment === 'local' ? '로컬 전용' : allowed?.environment === 'release' ? '운영 릴리스' : '설정 확인 필요'}</AlertTitle><AlertDescription>{canLive ? '로컬 검증용 실행 요청이 가능합니다. 운영 릴리스 지원을 의미하지 않습니다.' : '현재 엔진, 권한 또는 리소스 상태에서는 실제 실행을 요청할 수 없습니다.'}<span className="block break-all font-mono text-xs">{allowed?.reasonCode ?? 'RESOURCE_ENVIRONMENT_UNAVAILABLE'}</span></AlertDescription></Alert>
       </CardContent>
       <CardFooter className="flex flex-wrap gap-raibit-sm">
-        <OperationSubmit action={action} className="contents" disabled={!canPreview} pendingLabel="계획 요청을 확인하고 있습니다." returnTo={returnTo} submitClassName={buttonVariants({ variant: 'outline' })} submitLabel="계획 미리보기"><input name="intent" type="hidden" value="preview-plan" /></OperationSubmit>
+        <OperationSubmit action={action} className="contents" disabled={!canPreview} pendingLabel="계획 요청을 확인하고 있습니다." returnTo={returnTo} submitClassName={buttonVariants({ variant: 'outline' })} submitLabel="계획 미리보기" successKind="resource-plan"><input name="intent" type="hidden" value="preview-plan" /></OperationSubmit>
         <OperationSubmit action={action} className="contents" disabled={!canLive} pendingLabel="실제 실행 요청을 확인하고 있습니다." returnTo={returnTo} submitClassName={buttonVariants()} submitLabel="실제 실행 요청"><input name="intent" type="hidden" value="live-provision" /></OperationSubmit>
       </CardFooter>
     </Card>
