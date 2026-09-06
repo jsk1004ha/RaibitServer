@@ -91,6 +91,10 @@
       "sha256": "166ec8f77c0720aa2adc48dae2680be4e4c0b6254b16ff9de716b5945ab1e9fe"
     },
     {
+      "id": "000019_github_source_mutation_idempotency",
+      "sha256": "771d79c2bb5ac0dcb1d6a467c89ee7f67abea552e91b902fe67e293c977bb9e5"
+    },
+    {
       "id": "202609060001_custom_domain_lifecycle",
       "sha256": "44a36e6face136eac2dad193ab2282f5c41f423435de61127c4aba08fb36e6bb"
     }

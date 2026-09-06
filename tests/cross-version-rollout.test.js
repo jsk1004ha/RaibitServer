@@ -78,7 +78,9 @@ test('cross-version matrix uses an immutable N-1 source and preserves old CR sch
   assert.equal(git(['rev-parse', `${nMinusOneRef}^{commit}`]).trim(), nMinusOneRef);
   assert.equal(spawnSync('git', ['merge-base', '--is-ancestor', nMinusOneRef, 'HEAD'], { cwd: projectRoot }).status, 0);
   const oldManifest = JSON.parse(gitFile(nMinusOneRef, 'prisma/migration-contract.json'));
+  const currentManifest = JSON.parse(readFileSync(join(projectRoot, 'prisma/migration-contract.json'), 'utf8'));
   assert.equal(oldManifest.migrations.at(-1).id, '000016_pem_context_indexes');
+  assert.deepEqual(currentManifest.migrations.filter((entry) => entry.id === '000019_github_source_mutation_idempotency'), [{ id: '000019_github_source_mutation_idempotency', sha256: '771d79c2bb5ac0dcb1d6a467c89ee7f67abea552e91b902fe67e293c977bb9e5' }]);
   assert.equal(digest(gitFile(nMinusOneRef, 'prisma/schema.prisma')), '31b9db46b73929aa48995c9f0ec46369ac118426ef2e139871e032a85a94225e');
   for (const path of ['infra/k8s/appservice-crd.yaml', 'infra/operators/manageddatabase-crd.yaml']) {
     checkCrd(parse(gitFile(nMinusOneRef, path)), parse(readFileSync(join(projectRoot, path), 'utf8')));
