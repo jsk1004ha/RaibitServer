@@ -67,10 +67,14 @@ function roleLabel(role: string): string {
   return { OWNER: '소유자', ADMIN: '관리자', MAINTAINER: '유지관리자', DEVELOPER: '개발자', DB_ADMIN: 'DB 관리자', VIEWER: '뷰어' }[role] ?? role;
 }
 
-function canManage(actor: OrganizationMember | undefined, target: OrganizationMember): boolean {
+function canManageRole(actor: OrganizationMember | undefined, targetRole: string): boolean {
   if (!actor) return false;
   if (actor.role === 'OWNER') return true;
-  return actor.role === 'ADMIN' && target.role !== 'OWNER';
+  return actor.role === 'ADMIN' && targetRole !== 'OWNER';
+}
+
+function canManage(actor: OrganizationMember | undefined, target: OrganizationMember): boolean {
+  return canManageRole(actor, target.role);
 }
 
 export function OrganizationMembers({ initialInvites, initialMembers, organizationId, userId }: Readonly<{
@@ -87,6 +91,8 @@ export function OrganizationMembers({ initialInvites, initialMembers, organizati
   const [actionState, setActionState] = useState<ActionState>({ kind: 'idle' });
   const [confirming, setConfirming] = useState<{ kind: 'remove' | 'revoke' | 'leave'; target: OrganizationMember | OrganizationInvite } | null>(null);
   const currentMember = useMemo(() => members.find((member) => member.userId === userId), [members, userId]);
+  const inviteRoles = roles.filter((role) => canManageRole(currentMember, role));
+  const canInvite = inviteRoles.length > 0;
 
   async function request(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: Record<string, unknown>): Promise<{ ok: boolean; body: unknown; status: number }> {
     try {
@@ -104,7 +110,7 @@ export function OrganizationMembers({ initialInvites, initialMembers, organizati
 
   async function submitInvite(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (inviteState.kind === 'pending') return;
+    if (!canInvite || inviteState.kind === 'pending') return;
     setInviteState({ kind: 'pending' });
     const result = await request(`/organizations/${encodeURIComponent(organizationId)}/invites`, 'POST', { email: inviteEmail, role: inviteRole });
     const issued = record(result.body)?.invite;
@@ -182,10 +188,10 @@ export function OrganizationMembers({ initialInvites, initialMembers, organizati
       {actionState.kind === 'success' ? <Alert role="status" variant="notice"><AlertTitle>완료</AlertTitle><AlertDescription>{actionState.message}</AlertDescription></Alert> : null}
       {actionState.kind === 'error' ? <Alert role="alert" variant="destructive"><AlertTitle>작업을 완료하지 못했습니다.</AlertTitle><AlertDescription>{actionState.message}</AlertDescription></Alert> : null}
       <Card>
-        <CardHeader><CardTitle><h2>구성원 초대</h2></CardTitle><CardDescription>초대받은 이메일과 인증된 계정 이메일이 같아야 초대를 수락할 수 있습니다.</CardDescription></CardHeader>
+        <CardHeader><CardTitle><h2>구성원 초대</h2></CardTitle><CardDescription>{canInvite ? '초대받은 이메일과 인증된 계정 이메일이 같아야 초대를 수락할 수 있습니다.' : '구성원 초대는 소유자 또는 관리자만 할 수 있습니다.'}</CardDescription></CardHeader>
         <form onSubmit={submitInvite}>
-          <CardContent><FieldGroup className="sm:grid sm:grid-cols-[minmax(0,1fr)_12rem] sm:items-end"><Field><FieldLabel htmlFor="organization-invite-email">이메일</FieldLabel><Input autoComplete="email" disabled={inviteState.kind === 'pending'} id="organization-invite-email" name="email" onChange={(event) => setInviteEmail(event.target.value)} required type="email" value={inviteEmail} /></Field><Field><FieldLabel htmlFor="organization-invite-role">역할</FieldLabel><Select disabled={inviteState.kind === 'pending'} id="organization-invite-role" onChange={(event) => setInviteRole(event.target.value as MembershipRole)} value={inviteRole}>{roles.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}</Select></Field></FieldGroup></CardContent>
-          <CardFooter className="flex flex-wrap justify-between gap-3"><div aria-live="polite">{inviteState.kind === 'success' ? <span className="text-sm text-muted-foreground">{inviteState.message}</span> : null}{inviteState.kind === 'error' ? <span className="text-sm text-destructive">{inviteState.message}</span> : null}</div><Button disabled={inviteState.kind === 'pending'} type="submit">{inviteState.kind === 'pending' ? <><Spinner data-icon="inline-start" />초대 요청 중</> : '초대 보내기'}</Button></CardFooter>
+          <CardContent><FieldGroup className="sm:grid sm:grid-cols-[minmax(0,1fr)_12rem] sm:items-end"><Field><FieldLabel htmlFor="organization-invite-email">이메일</FieldLabel><Input autoComplete="email" disabled={!canInvite || inviteState.kind === 'pending'} id="organization-invite-email" name="email" onChange={(event) => setInviteEmail(event.target.value)} required type="email" value={inviteEmail} /></Field><Field><FieldLabel htmlFor="organization-invite-role">역할</FieldLabel><Select disabled={!canInvite || inviteState.kind === 'pending'} id="organization-invite-role" onChange={(event) => setInviteRole(event.target.value as MembershipRole)} value={inviteRole}>{inviteRoles.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}</Select></Field></FieldGroup></CardContent>
+          <CardFooter className="flex flex-wrap justify-between gap-3"><div aria-live="polite">{inviteState.kind === 'success' ? <span className="text-sm text-muted-foreground">{inviteState.message}</span> : null}{inviteState.kind === 'error' ? <span className="text-sm text-destructive">{inviteState.message}</span> : null}</div><Button disabled={!canInvite || inviteState.kind === 'pending'} type="submit">{inviteState.kind === 'pending' ? <><Spinner data-icon="inline-start" />초대 요청 중</> : '초대 보내기'}</Button></CardFooter>
         </form>
       </Card>
 

@@ -16,6 +16,7 @@ const organizationId = 'org_fixture_001';
 const targetMemberId = 'mem_fixture_target';
 const membersPath = `/api/control/organizations/${organizationId}/members`;
 const targetMemberPath = `${membersPath}/${targetMemberId}`;
+const invitesPath = `/api/control/organizations/${organizationId}/invites`;
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 type JsonResponse = Readonly<{ json(): Promise<unknown> }>;
@@ -44,6 +45,13 @@ async function targetMember(page: Page): Promise<JsonRecord> {
   const target = members.find((member) => isJsonRecord(member) && member.id === targetMemberId);
   if (!isJsonRecord(target)) throw new TypeError('task49_target_member_required');
   return target;
+}
+
+async function patchTargetMember(page: Page, data: Readonly<{ role: string; expectedVersion: number }>) {
+  return page.request.patch(`${dashboardOrigin}${targetMemberPath}`, {
+    data,
+    headers: { origin: dashboardOrigin },
+  });
 }
 
 function mediaTheme(theme: (typeof TASK49_ROLE_BROWSER_JOURNEYS)[number]['theme']): 'dark' | 'light' | 'no-preference' {
@@ -102,6 +110,9 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
       await userPage.setViewportSize(viewport);
       await userPage.goto('/account/security', { waitUntil: 'networkidle' });
       await expect(userPage.getByRole('heading', { level: 1, name: '계정 보안' })).toBeVisible();
+      if (viewport.width < 768) {
+        await userPage.getByRole('button', { name: '콘솔 메뉴 열기' }).click();
+      }
       const accountMenu = userPage.getByRole('button', { name: '계정 메뉴 열기' }).filter({ visible: true });
       await accountMenu.focus();
       await userPage.keyboard.press('Enter');
@@ -129,10 +140,11 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
       expect(reset.status()).toBe(200);
       const assertNoErrors = observeBrowserErrors(page, journey.intent === 'tenant-create' ? [403] : []);
       const mutationRequests: string[] = [];
+      const inviteRequests: string[] = [];
       page.on('request', (request) => {
-        if (request.method() !== 'PATCH') return;
         const url = new URL(request.url());
-        if (url.pathname === targetMemberPath) mutationRequests.push(url.href);
+        if (request.method() === 'PATCH' && url.pathname === targetMemberPath) mutationRequests.push(url.href);
+        if (request.method() === 'POST' && url.pathname === invitesPath) inviteRequests.push(url.href);
       });
 
       try {
@@ -140,7 +152,7 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
         await page.emulateMedia({ colorScheme: mediaTheme(journey.theme), reducedMotion: 'reduce' });
 
         if (journey.intent === 'authentication-required') {
-          const denied = await page.request.patch(`${dashboardOrigin}${targetMemberPath}`, { data: { role: 'ADMIN', expectedVersion: 1 } });
+          const denied = await patchTargetMember(page, { role: 'ADMIN', expectedVersion: 1 });
           expect(denied.status()).toBe(401);
           expect(await json(denied)).toEqual(journey.role === 'pending' ? { error: 'account_not_approved' } : { error: 'session_expired' });
           await page.goto(journey.route, { waitUntil: 'networkidle' });
@@ -151,6 +163,12 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
           const nextRole = journey.nextRole;
           if (!nextRole) throw new TypeError('task49_next_role_required');
           await page.goto(journey.route, { waitUntil: 'networkidle' });
+          await expect(page.getByLabel('이메일', { exact: true })).toBeEnabled();
+          await expect(page.locator('#organization-invite-role')).toBeEnabled();
+          await expect(page.getByRole('button', { name: '초대 보내기' })).toBeEnabled();
+          const inviteOptions = await page.locator('#organization-invite-role option').evaluateAll((options) => options.map((option) => option.getAttribute('value')));
+          if (journey.role === 'ADMIN') expect(inviteOptions).not.toContain('OWNER');
+          else expect(inviteOptions).toContain('OWNER');
           const roleControl = page.getByLabel('target@fixture.test 역할');
           await expect(roleControl).toHaveValue('VIEWER');
           const mutation = page.waitForResponse((response) => response.request().method() === 'PATCH' && isPath(response, targetMemberPath));
@@ -167,12 +185,21 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
           await page.goto(journey.route, { waitUntil: 'networkidle' });
           await expect(page.getByLabel('target@fixture.test 역할')).toHaveCount(0);
           await expect(page.getByRole('button', { name: '제거' })).toHaveCount(0);
+          if (journey.role === 'VIEWER') {
+            await expect(page.getByLabel('이메일', { exact: true })).toBeDisabled();
+            await expect(page.locator('#organization-invite-role')).toBeDisabled();
+            await expect(page.getByRole('button', { name: '초대 보내기' })).toBeDisabled();
+            await expect(page.getByText('구성원 초대는 소유자 또는 관리자만 할 수 있습니다.')).toBeVisible();
+          }
           const before = await targetMember(page);
-          const denied = await page.request.patch(`${dashboardOrigin}${targetMemberPath}`, { data: { role: 'DEVELOPER', expectedVersion: before.version } });
+          const expectedVersion = before.version;
+          if (typeof expectedVersion !== 'number') throw new TypeError('task49_target_member_version_required');
+          const denied = await patchTargetMember(page, { role: 'DEVELOPER', expectedVersion });
           expect(denied.status()).toBe(403);
           expect(await json(denied)).toEqual({ error: 'forbidden' });
           expect(await targetMember(page)).toEqual(before);
           expect(mutationRequests).toEqual([]);
+          expect(inviteRequests).toEqual([]);
         } else {
           await page.goto(journey.route, { waitUntil: 'networkidle' });
           await page.getByLabel('조직 이름').fill('Role matrix organization');
@@ -185,7 +212,7 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
           expect(body.membership).toMatchObject({ organizationId: 'org_fixture_created_role-matrix-global-admin', role: 'OWNER', userId: 'usr_fixture_global_admin' });
           await expect(page.getByRole('status')).toContainText('새 조직을 만들었습니다.');
           await expect(page.getByRole('link', { name: '다시 로그인하기' })).toBeVisible();
-          const denied = await page.request.patch(`${dashboardOrigin}${targetMemberPath}`, { data: { role: 'DEVELOPER', expectedVersion: 1 } });
+          const denied = await patchTargetMember(page, { role: 'DEVELOPER', expectedVersion: 1 });
           expect(denied.status()).toBe(403);
           expect(await json(denied)).toEqual({ error: 'forbidden' });
         }
