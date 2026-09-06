@@ -187,6 +187,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@raibitserver/schemas':
+        specifier: workspace:*
+        version: link:../schemas
       '@prisma/client':
         specifier: ^6.19.0
         version: 6.19.0(prisma@6.19.0(typescript@6.0.3))(typescript@6.0.3)

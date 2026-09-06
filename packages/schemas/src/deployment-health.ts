@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HEALTH_FAILURE_CODES, HealthPathError, isSafeHealthPath, serviceHealthInput } from '../../core/src/deployment-health.ts';
+import { HEALTH_FAILURE_CODES, HealthPathError, isSafeHealthPath, serviceHealthInput } from './deployment-health-contract.ts';
 import { HealthStatusSchema } from './lifecycle.ts';
 
 export const HealthPathSchema = z.string().max(1024).regex(/^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$/).refine(isSafeHealthPath).describe('Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot segments or encoded separators/controls');

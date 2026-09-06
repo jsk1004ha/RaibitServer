@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ServiceHealthFields, refineServiceHealth } from './deployment-health.ts';
-import { HealthPathError } from '../../core/src/deployment-health.ts';
-import { DesiredStateMutationError, parseServiceMutation } from '../../core/src/desired-state-mutations.ts';
+import { HealthPathError } from './deployment-health-contract.ts';
+import { DesiredStateMutationError, parseServiceMutation } from './desired-state-validation.ts';
 import { SupportedResourceEngineSchema } from './resource-execution.ts';
 
 const label = z.string().min(1).max(128).regex(/^[^\u0000-\u001f\u007f]+$/);
