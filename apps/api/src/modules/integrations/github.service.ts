@@ -49,7 +49,8 @@ export class GitHubIntegrationService implements OnModuleInit, OnModuleDestroy {
   connectGitHub(input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.connectGitHub(input, subject); }
   listGitHub(organizationId: string, subject: Record<string, any>) { return this.controlPlane.listGitHub(organizationId, subject); }
   attachGitHub(projectId: string, serviceId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.attachGitHub(projectId, serviceId, input, subject); }
-  listGitHubInstallationRepositories(installationId: string, subject: Record<string, any>) { return this.controlPlane.listGitHubInstallationRepositories(installationId, subject); }
+  listGitHubInstallationRepositories(installationId: string, query: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.listGitHubInstallationRepositories(installationId, query, subject); }
+  refreshGitHubInstallationRepositories(installationId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.refreshGitHubInstallationRepositories(installationId, input, subject); }
   handleGitHubWebhook(input: Record<string, any>) { return this.controlPlane.handleGitHubWebhook(input); }
   importGitHubRepository(input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.importGitHubRepository(input, subject); }
   syncGitHubRepository(repositoryId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.syncGitHubRepository(repositoryId, input, subject); }

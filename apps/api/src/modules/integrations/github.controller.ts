@@ -57,8 +57,15 @@ export class GitHubIntegrationController {
 
   @RequirePermission('project:read')
   @Get('github/installations/:installationId/repositories')
-  repositories(@Param('installationId') installationId: string, @Req() req: any) {
-    return this.githubService.listGitHubInstallationRepositories(installationId, req.raibitSubject);
+  repositories(@Param('installationId') installationId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.githubService.listGitHubInstallationRepositories(installationId, query, req.raibitSubject);
+  }
+
+  @RequirePermission('github:refresh')
+  @Post('github/installations/:installationId/repositories/refresh')
+  @HttpCode(200)
+  refreshRepositories(@Param('installationId') installationId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.githubService.refreshGitHubInstallationRepositories(installationId, input, req.raibitSubject);
   }
 
   @Post('github/webhooks')

@@ -187,6 +187,7 @@ export function createOperationsClient(transport: OperationTransport) {
     'github-integrations-disconnect': bind(apiOperations['github-integrations-disconnect']),
     'github-attach': bind(apiOperations['github-attach']),
     'github-repositories': bind(apiOperations['github-repositories']),
+    'github-repositories-refresh': bind(apiOperations['github-repositories-refresh']),
     'github-webhooks': bind(apiOperations['github-webhooks']),
     'github-import': bind(apiOperations['github-import']),
     'github-sync': bind(apiOperations['github-sync']),

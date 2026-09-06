@@ -34,6 +34,7 @@ import { PostgresMembershipTransitionRepository } from './membership-transition-
 import { assertOrganizationCreatorEligible, OrganizationCreationError, parseAuthenticatedOrganizationCreateInput, type AuthenticatedOrganizationCreateInput } from './organization-creation.ts';
 import { parseGitHubRepository } from './github-integration.ts';
 import { GITHUB_INTEGRATION_STATUS, githubIntegrationStatus, githubServiceSourceState, githubSourceAccess, publicGitHubIntegration } from './github-lifecycle.ts';
+import { GITHUB_CATALOG_STATUS, catalogError, fetchCompleteGitHubCatalog, pageGitHubCatalog, type GitHubCatalogPageFetcher } from './github-catalog.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
@@ -350,6 +351,7 @@ export class InMemoryControlPlaneRepository {
   async attachGitHubRepositoryToService(input: Record<string, any>) { return this.store.attachGitHubRepositoryToService(input); }
   async listGitHubInstallations(input: Record<string, any>) { return this.store.listGitHubInstallations(input); }
   async listGitHubInstallationRepositories(input: Record<string, any>) { return this.store.listGitHubInstallationRepositories(input); }
+  async refreshGitHubInstallationRepositories(input: Record<string, any>) { return this.store.refreshGitHubInstallationRepositories(input); }
   async importGitHubRepository(input: Record<string, any>) {
     const repository = [...this.store.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === String(input.repositoryId)
       || normalizePrismaRepositoryId(candidate.fullName) === normalizePrismaRepositoryId(input.repoUrl || input.repository || ''));
@@ -447,12 +449,15 @@ export class InMemoryControlPlaneRepository {
 }
 
 export class PrismaControlPlaneRepository {
+  private githubCatalogPageFetcher: GitHubCatalogPageFetcher | null = null;
   resourceRecovery(enforceQuota: RecoveryQuotaPolicy) { return new ResourceRecoveryRepository(new PostgresRecoveryTransaction(this.prisma), enforceQuota); }
   readonly prisma: PrismaClient;
 
   constructor(prisma: PrismaClient) {
     this.prisma = prisma;
   }
+
+  setGitHubCatalogPageFetcher(fetcher: GitHubCatalogPageFetcher | null) { this.githubCatalogPageFetcher = fetcher; }
 
   static async connect(options: Record<string, any> = {}) {
     const moduleName = options.clientModule || '@prisma/client';
@@ -1855,7 +1860,9 @@ export class PrismaControlPlaneRepository {
       const integration = await tx.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null }, status: GITHUB_INTEGRATION_STATUS.ACTIVE } });
       if (!integration) throw forbiddenError('repository catalog updates require a verified GitHub installation');
       if (!Array.isArray(input.repositories)) throw badRequestError('GitHub repositories must be an array');
-      const records = input.repositories.map((repository: Record<string, any>) => canonicalPrismaGitHubRepositoryRecord({ ...repository, installationId }));
+      const installation = await tx.gitHubInstallation.findUnique({ where: { installationId } });
+      const generation = Number(installation?.generation || 0) + 1;
+      const records = input.repositories.map((repository: Record<string, any>) => canonicalPrismaGitHubRepositoryRecord({ ...repository, installationId, generation }));
       const ids = records.map((record: Record<string, any>) => record.githubRepoId);
       if (new Set(ids).size !== ids.length) throw conflictError('GitHub repository catalog contains duplicate repository IDs');
       const conflicts = ids.length ? await tx.gitHubRepository.findMany({ where: { githubRepoId: { in: ids }, installationId: { not: installationId } } }) : [];
@@ -1865,6 +1872,7 @@ export class PrismaControlPlaneRepository {
       await tx.gitHubRepository.deleteMany({ where: { installationId, ...(ids.length ? { githubRepoId: { notIn: ids } } : {}) } });
       const repositories = [];
       for (const record of records) repositories.push(await tx.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record }));
+      await tx.gitHubInstallation.update({ where: { installationId }, data: { generation, refreshStatus: GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: new Date(), staleAt: null } });
       await setPrismaGitHubServiceAccess(tx, integration, null, new Set(ids));
       await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:sync-installation-repositories', targetType: 'github-installation', targetId: installationId, metadata: { repositoryCount: repositories.length } } });
       return { installationId, repositories: repositories.map(publicPrismaGitHubRepository), repositoryCount: repositories.length };
@@ -1909,10 +1917,48 @@ export class PrismaControlPlaneRepository {
   async listGitHubInstallationRepositories(input: Record<string, any>) {
     const organizationIds = organizationScopeArray(input);
     const integrations = await this.prisma.gitHubIntegration.findMany({ where: { installationId: String(input.installationId), verifiedAt: { not: null }, ...(organizationIds.length ? { organizationId: { in: organizationIds } } : {}) } });
-    if (integrations.length === 0) return { installationId: String(input.installationId), repositories: [] };
-    const rows = await this.prisma.gitHubRepository.findMany({ where: { installationId: String(input.installationId) }, orderBy: [{ fullName: 'asc' }, { githubRepoId: 'asc' }] });
-    const repositories = rows.map(publicPrismaGitHubRepository);
-    return { installationId: String(input.installationId), repositories };
+    if (integrations.length === 0) return { installationId: String(input.installationId), generation: 0, refreshStatus: GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: null, staleAt: null, repositories: [], nextCursor: null };
+    const installation: Record<string, any> | null = await this.prisma.gitHubInstallation.findUnique({ where: { installationId: String(input.installationId) } });
+    const generation = Number(installation?.generation || 0);
+    const rows = await this.prisma.gitHubRepository.findMany({ where: { installationId: String(input.installationId), generation }, orderBy: [{ normalizedIdentity: 'asc' }, { githubRepoId: 'asc' }] });
+    const page = pageGitHubCatalog(rows.map(publicPrismaGitHubRepository), { organizationId: integrations[0].organizationId, installationId: input.installationId, generation, cursor: input.cursor, q: input.q });
+    return { installationId: String(input.installationId), generation, refreshStatus: installation?.refreshStatus || GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: installation?.lastSuccessfulSyncAt?.toISOString?.() || null, staleAt: installation?.staleAt?.toISOString?.() || null, repositories: page.repositories, nextCursor: page.nextCursor };
+  }
+
+  async refreshGitHubInstallationRepositories(input: Record<string, any>) {
+    const installationId = String(input.installationId || '');
+    const integration = await this.prisma.gitHubIntegration.findFirst({ where: { installationId, organizationId: String(input.organizationId) } });
+    const expectedVersion = Number(input.expectedIntegrationVersion);
+    const expectedGeneration = Number(input.expectedGeneration);
+    if (!integration) throw notFoundError('GitHub installation not found');
+    if (githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || Number(integration.version) !== expectedVersion) throw conflictError('GitHub integration version conflict');
+    const installation: Record<string, any> | null = await this.prisma.gitHubInstallation.findUnique({ where: { installationId } });
+    if (!installation || Number(installation.generation) !== expectedGeneration) throw conflictError('GitHub catalog generation conflict');
+    const fetchPage = input.fetchPage || this.githubCatalogPageFetcher;
+    if (typeof fetchPage !== 'function') throw catalogError('GITHUB_CATALOG_REFRESH_UNAVAILABLE', 503, true);
+    await this.prisma.gitHubInstallation.update({ where: { installationId }, data: { refreshStatus: GITHUB_CATALOG_STATUS.REFRESHING } });
+    let repositories;
+    try { repositories = await fetchCompleteGitHubCatalog(installationId, fetchPage); }
+    catch (error) {
+      await this.prisma.gitHubInstallation.updateMany({ where: { installationId, generation: expectedGeneration }, data: { refreshStatus: GITHUB_CATALOG_STATUS.STALE, staleAt: new Date() } });
+      await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:refresh-installation-repositories-failed', targetType: 'github-installation', targetId: installationId, metadata: { generation: expectedGeneration, reason: 'GITHUB_CATALOG_REFRESH_FAILED' } } });
+      throw error;
+    }
+    return this.prisma.$transaction(async (tx: any) => {
+      const currentIntegration = await tx.gitHubIntegration.findFirst({ where: { id: integration.id, organizationId: input.organizationId, version: expectedVersion, status: GITHUB_INTEGRATION_STATUS.ACTIVE } });
+      const advanced = await tx.gitHubInstallation.updateMany({ where: { installationId, generation: expectedGeneration }, data: { generation: { increment: 1 }, refreshStatus: GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: new Date(), staleAt: null } });
+      if (!currentIntegration || advanced.count !== 1) throw conflictError('GitHub catalog generation conflict');
+      const generation = expectedGeneration + 1;
+      const records = repositories.map((repository: Record<string, any>) => canonicalPrismaGitHubRepositoryRecord({ ...repository, installationId, generation }));
+      const ids = records.map((repository: Record<string, any>) => repository.githubRepoId);
+      const removed = await tx.gitHubRepository.findMany({ where: { installationId, githubRepoId: { notIn: ids } } });
+      await setPrismaGitHubServiceAccess(tx, integration, 'SOURCE_ACCESS_REVOKED', new Set(removed.map((repository: Record<string, any>) => String(repository.githubRepoId))));
+      await tx.gitHubRepository.deleteMany({ where: { installationId, githubRepoId: { notIn: ids } } });
+      for (const record of records) await tx.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record });
+      await setPrismaGitHubServiceAccess(tx, integration, null, new Set(ids));
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:refresh-installation-repositories', targetType: 'github-installation', targetId: installationId, metadata: { repositoryCount: records.length, generation } } });
+      return { refreshed: true, repositoryCount: records.length, generation, refreshStatus: GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: new Date().toISOString(), staleAt: null };
+    }, { isolationLevel: 'Serializable' });
   }
 
   async importGitHubRepository(input: Record<string, any>) {
@@ -3178,6 +3224,9 @@ function canonicalPrismaGitHubRepositoryRecord(input: Record<string, any>) {
     fullName: `${owner}/${name}`,
     defaultBranch: String(input.defaultBranch || 'main'),
     private: input.private === true,
+    normalizedIdentity: `${owner}/${name}`,
+    accessState: input.accessState === 'REVOKED' ? 'REVOKED' : 'ACCESSIBLE',
+    generation: Number(input.generation || 0),
   };
 }
 
@@ -3231,11 +3280,17 @@ function publicPrismaGitHubRepository(repository: Record<string, any>) {
   const parsed = parseGitHubRepository(repository.fullName);
   return {
     id: String(repository.githubRepoId),
+    installationId: String(repository.installationId),
     githubRepoId: String(repository.githubRepoId),
     fullName: parsed.fullName.toLowerCase(),
     repoUrl: `https://github.com/${parsed.fullName.toLowerCase()}.git`,
     defaultBranch: repository.defaultBranch || 'main',
     private: repository.private === true,
+    owner: parsed.owner.toLowerCase(),
+    name: parsed.repo.toLowerCase(),
+    normalizedIdentity: String(repository.normalizedIdentity || parsed.fullName).toLowerCase(),
+    accessState: repository.accessState === 'REVOKED' ? 'REVOKED' : 'ACCESSIBLE',
+    generation: Number(repository.generation || 0),
   };
 }
 
@@ -3683,10 +3738,14 @@ async function applyPrismaGitHubCatalogWebhook(prisma: any, event: any, payload:
   if (eventName === 'installation_repositories' && /^\d+$/.test(installationId)) {
     const integration = await prisma.gitHubIntegration.findFirst({ where: { installationId, verifiedAt: { not: null }, status: GITHUB_INTEGRATION_STATUS.ACTIVE } });
     if (!integration) return actions;
+    const installation = await prisma.gitHubInstallation.findUnique({ where: { installationId } });
+    const generation = Number(installation?.generation || 0);
+    if (payload.catalog_generation !== undefined && Number(payload.catalog_generation) !== generation) return actions;
+    const nextGeneration = generation + 1;
     const addedIds: string[] = [];
     for (const repository of Array.isArray(payload.repositories_added) ? payload.repositories_added : []) {
       if (!/^\d+$/.test(String(repository?.id || '')) || !repository?.full_name) continue;
-      const record = canonicalPrismaGitHubRepositoryRecord({ installationId, githubRepoId: String(repository.id), fullName: repository.full_name, defaultBranch: repository.default_branch || 'main', private: repository.private === true });
+      const record = canonicalPrismaGitHubRepositoryRecord({ installationId, githubRepoId: String(repository.id), fullName: repository.full_name, defaultBranch: repository.default_branch || 'main', private: repository.private === true, generation: nextGeneration });
       const existing = await prisma.gitHubRepository.findUnique({ where: { githubRepoId: record.githubRepoId } });
       if (!existing || String(existing.installationId) === installationId) {
         await prisma.gitHubRepository.upsert({ where: { githubRepoId: record.githubRepoId }, update: record, create: record });
@@ -3698,7 +3757,10 @@ async function applyPrismaGitHubCatalogWebhook(prisma: any, event: any, payload:
     if (removedIds.length) affectedServiceCount += await setPrismaGitHubServiceAccess(prisma, integration, 'SOURCE_ACCESS_REVOKED', new Set(removedIds));
     if (addedIds.length) affectedServiceCount += await setPrismaGitHubServiceAccess(prisma, integration, null, new Set(addedIds));
     if (removedIds.length) await prisma.gitHubRepository.deleteMany({ where: { installationId, githubRepoId: { in: removedIds } } });
-    actions.push({ type: 'github-installation-repositories-catalog-updated', installationId, affectedServiceCount });
+    await prisma.gitHubRepository.updateMany({ where: { installationId }, data: { generation: nextGeneration } });
+    const advanced = await prisma.gitHubInstallation.updateMany({ where: { installationId, generation }, data: { generation: { increment: 1 }, ...(installation?.refreshStatus === GITHUB_CATALOG_STATUS.REFRESHING ? { refreshStatus: GITHUB_CATALOG_STATUS.IDLE } : {}) } });
+    if (advanced.count !== 1) throw conflictError('GitHub catalog generation conflict');
+    actions.push({ type: 'github-installation-repositories-catalog-updated', installationId, generation: nextGeneration, affectedServiceCount });
     return actions;
   }
   if (eventName === 'repository' && ['transferred', 'deleted', 'archived'].includes(action)) {

@@ -1099,9 +1099,14 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return repository.listGitHubInstallations({ organizationId: scopedOrganizationId });
   }
 
-  async listGitHubInstallationRepositories(installationId: string, subject: Record<string, any>) {
+  async listGitHubInstallationRepositories(installationId: string, query: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
-    return repository.listGitHubInstallationRepositories({ installationId, actorUserId: subject.id, organizationId: subject.organizationId, organizationIds: subject.organizationIds });
+    return repository.listGitHubInstallationRepositories({ installationId, actorUserId: subject.id, organizationId: subject.organizationId, organizationIds: subject.organizationIds, cursor: query.cursor, q: query.q });
+  }
+
+  async refreshGitHubInstallationRepositories(installationId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    return repository.refreshGitHubInstallationRepositories({ installationId, organizationId: subject.organizationId, expectedIntegrationVersion: input.expectedIntegrationVersion, expectedGeneration: input.expectedGeneration, actorUserId: subject.id });
   }
 
   async importGitHubRepository(input: Record<string, any>, subject: Record<string, any>) {

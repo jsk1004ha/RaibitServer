@@ -29,7 +29,7 @@ JOIN "Service" s ON s.id = d."serviceId" AND s.id = $5
 JOIN "Project" p ON p.id = d."projectId" AND p.id = s."projectId" AND p.id = $4
 JOIN "GitHubIntegration" i ON i.id = $7 AND i."organizationId" = p."organizationId"
 JOIN "GitHubInstallation" a ON a."installationId" = i."installationId"
-JOIN "GitHubRepository" r ON r."installationId" = a."installationId"
+JOIN "GitHubRepository" r ON r."installationId" = a."installationId" AND r.generation = a.generation AND r."accessState" = 'ACCESSIBLE'
 WHERE w.id = $1 AND w.status = 'running' AND w."lockedBy" = $2 AND w.attempts = $3
 AND w.type IN ('build-and-deploy', 'preview-deploy', 'build', 'builder')
 AND w."lockedAt" > (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - INTERVAL '300 seconds'

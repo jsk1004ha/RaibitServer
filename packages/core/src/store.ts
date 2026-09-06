@@ -13,6 +13,7 @@ import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflow
 import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts';
 import { githubIntegrationSummary, githubWebhookActionPlan, githubWebhookOutboundPlan, parseGitHubRepository, verifyGitHubWebhookSignature } from './github-integration.ts';
 import { GITHUB_INTEGRATION_STATUS, githubIntegrationStatus, githubServiceSourceState, githubSourceAccess, publicGitHubIntegration } from './github-lifecycle.ts';
+import { GITHUB_CATALOG_STATUS, catalogError, fetchCompleteGitHubCatalog, pageGitHubCatalog, type GitHubCatalogPageFetcher } from './github-catalog.ts';
 import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 import { buildResourceProviderPlan, publicResourceProviderPlan } from './resource-providers.ts';
@@ -82,6 +83,7 @@ export class ControlPlaneStore {
   authRateLimits: Map<string, any>;
   oauthTransactions = new Map<string, OAuthTransactionRecord>();
   previewLineages = new Map<string, any>();
+  private githubCatalogPageFetcher: GitHubCatalogPageFetcher | null = null;
 
   constructor() {
     this.organizations = new Map();
@@ -110,6 +112,8 @@ export class ControlPlaneStore {
     this.organizationInvites = [];
     this.authRateLimits = new Map();
   }
+
+  setGitHubCatalogPageFetcher(fetcher: GitHubCatalogPageFetcher | null) { this.githubCatalogPageFetcher = fetcher; }
 
   createOrganization(input: Record<string, any>) {
     const { name, plan = 'free' } = input;
@@ -1185,6 +1189,10 @@ export class ControlPlaneStore {
       version: Number(existing?.version || 1) + (reactivated ? 1 : 0),
       verifiedAt: existing?.verifiedAt || timestamp,
       disconnectedAt: null,
+      catalogGeneration: Number(existing?.catalogGeneration || 0),
+      refreshStatus: existing?.refreshStatus || GITHUB_CATALOG_STATUS.IDLE,
+      lastSuccessfulSyncAt: existing?.lastSuccessfulSyncAt || null,
+      staleAt: existing?.staleAt || null,
       createdAt: existing?.createdAt || timestamp,
       updatedAt: timestamp,
     };
@@ -1248,7 +1256,8 @@ export class ControlPlaneStore {
     if (![...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && githubIntegrationStatus(integration) === GITHUB_INTEGRATION_STATUS.ACTIVE && String(integration.installationId) === normalizedInstallationId)) {
       throw forbidden('repository catalog updates require a verified GitHub installation');
     }
-    const repository = canonicalGitHubRepositoryRecord({ installationId: normalizedInstallationId, githubRepoId: githubRepoId || repositoryId, fullName, owner, name, defaultBranch, private: privateRepository });
+    const integration = [...this.githubIntegrations.values()].find((candidate) => String(candidate.installationId) === normalizedInstallationId);
+    const repository = { ...canonicalGitHubRepositoryRecord({ installationId: normalizedInstallationId, githubRepoId: githubRepoId || repositoryId, fullName, owner, name, defaultBranch, private: privateRepository }), normalizedIdentity: String(fullName || `${owner}/${name}`).toLowerCase(), accessState: 'ACCESSIBLE', generation: Number(integration?.catalogGeneration || 0) };
     const existing = [...this.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === repository.githubRepoId);
     if (existing && String(existing.installationId) !== normalizedInstallationId) throw conflict('GitHub repository is already bound to another installation');
     const row = { id: existing?.id || stableId('ghr', repository.githubRepoId), ...repository, createdAt: existing?.createdAt || nowIso(), updatedAt: nowIso() };
@@ -1262,7 +1271,12 @@ export class ControlPlaneStore {
       throw forbidden('repository catalog updates require a verified GitHub installation');
     }
     if (!Array.isArray(repositories)) throw badRequest('GitHub repositories must be an array');
-    const records = repositories.map((repository) => canonicalGitHubRepositoryRecord({ ...repository, installationId: normalizedInstallationId }));
+    const integration = [...this.githubIntegrations.values()].find((candidate) => String(candidate.installationId) === normalizedInstallationId && githubIntegrationStatus(candidate) === GITHUB_INTEGRATION_STATUS.ACTIVE);
+    const generation = Number(integration?.catalogGeneration || 0) + 1;
+    const records = repositories.map((repository) => {
+      const record = canonicalGitHubRepositoryRecord({ ...repository, installationId: normalizedInstallationId });
+      return { ...record, normalizedIdentity: record.fullName.toLowerCase(), accessState: 'ACCESSIBLE', generation };
+    });
     const ids = new Set<string>();
     for (const record of records) {
       if (ids.has(record.githubRepoId)) throw conflict('GitHub repository catalog contains duplicate repository IDs');
@@ -1270,7 +1284,6 @@ export class ControlPlaneStore {
       const crossInstallation = [...this.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === record.githubRepoId && String(candidate.installationId) !== normalizedInstallationId);
       if (crossInstallation) throw conflict('GitHub repository is already bound to another installation');
     }
-    const integration = [...this.githubIntegrations.values()].find((candidate) => String(candidate.installationId) === normalizedInstallationId && githubIntegrationStatus(candidate) === GITHUB_INTEGRATION_STATUS.ACTIVE);
     const removedIds = new Set([...this.githubRepositories.values()].filter((repository) => String(repository.installationId) === normalizedInstallationId && !ids.has(String(repository.githubRepoId))).map((repository) => String(repository.githubRepoId)));
     if (integration) this.setGitHubServiceAccess(integration, 'SOURCE_ACCESS_REVOKED', removedIds);
     for (const [id, repository] of this.githubRepositories.entries()) {
@@ -1283,6 +1296,8 @@ export class ControlPlaneStore {
       return row;
     });
     if (integration) this.restoreGitHubServiceAccess(integration, ids);
+    const timestamp = nowIso();
+    if (integration) this.githubIntegrations.set(integration.id, { ...integration, catalogGeneration: generation, refreshStatus: GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: timestamp, staleAt: null, updatedAt: timestamp });
     this.audit(actorUserId, 'github:sync-installation-repositories', 'github-installation', normalizedInstallationId, { repositoryCount: rows.length });
     return { installationId: normalizedInstallationId, repositories: deepClone(rows), repositoryCount: rows.length };
   }
@@ -1429,13 +1444,46 @@ export class ControlPlaneStore {
     return { installations };
   }
 
-  listGitHubInstallationRepositories({ installationId, organizationId = null, organizationIds = null }: Record<string, any>) {
+  listGitHubInstallationRepositories({ installationId, organizationId = null, organizationIds = null, cursor = null, q = '' }: Record<string, any>) {
     const allowedOrganizationIds = organizationScopeSet({ organizationId, organizationIds });
     const integrations = [...this.githubIntegrations.values()]
       .filter((integration) => String(integration.installationId) === String(installationId))
       .filter((integration) => allowedOrganizationIds.size === 0 || allowedOrganizationIds.has(String(integration.organizationId)));
-    const repositories = uniqueRepositories(integrations.flatMap((integration) => this.githubRepositoriesForIntegration(integration.id)));
-    return { installationId: String(installationId), repositories };
+    if (!integrations.length) return { installationId: String(installationId), generation: 0, refreshStatus: GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: null, staleAt: null, repositories: [], nextCursor: null };
+    const integration = integrations[0];
+    const generation = Number(integration.catalogGeneration || 0);
+    const page = pageGitHubCatalog(uniqueRepositories(integrations.flatMap((candidate) => this.githubRepositoriesForIntegration(candidate.id))), { organizationId: integration.organizationId, installationId, generation, cursor, q });
+    return { installationId: String(installationId), generation, refreshStatus: integration.refreshStatus || GITHUB_CATALOG_STATUS.IDLE, lastSuccessfulSyncAt: integration.lastSuccessfulSyncAt || null, staleAt: integration.staleAt || null, repositories: page.repositories, nextCursor: page.nextCursor };
+  }
+
+  async refreshGitHubInstallationRepositories(input: Record<string, any>) {
+    const installationId = String(input.installationId || '');
+    const integration = [...this.githubIntegrations.values()].find(candidate => String(candidate.installationId) === installationId && String(candidate.organizationId) === String(input.organizationId));
+    if (!integration) throw notFound('GitHub installation not found');
+    const expectedVersion = Number(input.expectedIntegrationVersion);
+    const expectedGeneration = Number(input.expectedGeneration);
+    if (githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || Number(integration.version || 1) !== expectedVersion) throw conflict('GitHub integration version conflict');
+    if (Number(integration.catalogGeneration || 0) !== expectedGeneration) throw conflict('GitHub catalog generation conflict');
+    const fetchPage = input.fetchPage || this.githubCatalogPageFetcher;
+    if (typeof fetchPage !== 'function') throw catalogError('GITHUB_CATALOG_REFRESH_UNAVAILABLE', 503, true);
+    this.githubIntegrations.set(integration.id, { ...integration, refreshStatus: GITHUB_CATALOG_STATUS.REFRESHING, updatedAt: nowIso() });
+    let repositories;
+    try { repositories = await fetchCompleteGitHubCatalog(installationId, fetchPage); }
+    catch (error) {
+      const current = this.githubIntegrations.get(integration.id);
+      if (Number(current?.version || 0) === expectedVersion && Number(current?.catalogGeneration || 0) === expectedGeneration) this.githubIntegrations.set(integration.id, { ...current, refreshStatus: GITHUB_CATALOG_STATUS.STALE, staleAt: nowIso(), updatedAt: nowIso() });
+      this.audit(input.actorUserId || 'system', 'github:refresh-installation-repositories-failed', 'github-installation', installationId, { generation: expectedGeneration, reason: 'GITHUB_CATALOG_REFRESH_FAILED' });
+      throw error;
+    }
+    const current = this.githubIntegrations.get(integration.id);
+    if (githubIntegrationStatus(current || {}) !== GITHUB_INTEGRATION_STATUS.ACTIVE || Number(current?.version || 0) !== expectedVersion) {
+      if (Number(current?.catalogGeneration || 0) === expectedGeneration) this.githubIntegrations.set(integration.id, { ...current, refreshStatus: GITHUB_CATALOG_STATUS.STALE, staleAt: nowIso(), updatedAt: nowIso() });
+      throw conflict('GitHub integration version conflict');
+    }
+    if (Number(current?.catalogGeneration || 0) !== expectedGeneration) throw conflict('GitHub catalog generation conflict');
+    const result = this.replaceGitHubInstallationRepositories({ installationId, repositories, actorUserId: input.actorUserId });
+    const next = this.githubIntegrations.get(integration.id);
+    return { refreshed: true, repositoryCount: result.repositoryCount, generation: next.catalogGeneration, refreshStatus: next.refreshStatus, lastSuccessfulSyncAt: next.lastSuccessfulSyncAt, staleAt: next.staleAt };
   }
 
   importGitHubRepository({ projectId, integrationId = null, repositoryId = null, repository, repoUrl, branch = null, serviceName = null, actorUserId = 'system' }: Record<string, any>) {
@@ -1540,8 +1588,10 @@ export class ControlPlaneStore {
       return actions;
     }
     if (eventName === 'installation_repositories' && /^\d+$/.test(installationId)) {
-      const verified = [...this.githubIntegrations.values()].some((integration) => integration.verifiedAt && githubIntegrationStatus(integration) === GITHUB_INTEGRATION_STATUS.ACTIVE && String(integration.installationId) === installationId);
-      if (!verified) return actions;
+      const integration = [...this.githubIntegrations.values()].find((candidate) => candidate.verifiedAt && githubIntegrationStatus(candidate) === GITHUB_INTEGRATION_STATUS.ACTIVE && String(candidate.installationId) === installationId);
+      if (!integration) return actions;
+      const generation = Number(integration.catalogGeneration || 0);
+      if (payload.catalog_generation !== undefined && Number(payload.catalog_generation) !== generation) return actions;
       const addedIds = new Set<string>();
       for (const repository of Array.isArray(payload.repositories_added) ? payload.repositories_added : []) {
         if (!/^\d+$/.test(String(repository?.id || '')) || !repository?.full_name) continue;
@@ -1550,15 +1600,14 @@ export class ControlPlaneStore {
       }
       const removedIds = new Set((Array.isArray(payload.repositories_removed) ? payload.repositories_removed : []).map((repository: any) => String(repository?.id || '')).filter((id: string) => /^\d+$/.test(id)));
       let affectedServiceCount = 0;
-      for (const integration of this.githubIntegrations.values()) {
-        if (String(integration.installationId) !== installationId || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE) continue;
-        affectedServiceCount += this.setGitHubServiceAccess(integration, 'SOURCE_ACCESS_REVOKED', removedIds);
-        affectedServiceCount += this.restoreGitHubServiceAccess(integration, addedIds);
-      }
+      affectedServiceCount += this.setGitHubServiceAccess(integration, 'SOURCE_ACCESS_REVOKED', removedIds);
+      affectedServiceCount += this.restoreGitHubServiceAccess(integration, addedIds);
       for (const [id, repository] of this.githubRepositories.entries()) {
         if (String(repository.installationId) === installationId && removedIds.has(String(repository.githubRepoId))) this.githubRepositories.delete(id);
+        else if (String(repository.installationId) === installationId) this.githubRepositories.set(id, { ...repository, generation: generation + 1 });
       }
-      actions.push({ type: 'github-installation-repositories-catalog-updated', installationId, affectedServiceCount });
+      this.githubIntegrations.set(integration.id, { ...integration, catalogGeneration: generation + 1, refreshStatus: integration.refreshStatus === GITHUB_CATALOG_STATUS.REFRESHING ? GITHUB_CATALOG_STATUS.IDLE : integration.refreshStatus, updatedAt: nowIso() });
+      actions.push({ type: 'github-installation-repositories-catalog-updated', installationId, generation: generation + 1, affectedServiceCount });
       return actions;
     }
     if (eventName === 'repository' && ['transferred', 'deleted', 'archived'].includes(action)) {
@@ -1760,6 +1809,7 @@ export class ControlPlaneStore {
       .filter((repository) => String(repository.installationId) === String(integration.installationId))
       .map((repository) => ({
         id: repository.githubRepoId,
+        installationId: String(repository.installationId),
         githubRepoId: repository.githubRepoId,
         fullName: repository.fullName,
         owner: repository.owner,
@@ -1767,6 +1817,9 @@ export class ControlPlaneStore {
         repoUrl: repository.repoUrl,
         defaultBranch: repository.defaultBranch,
         private: Boolean(repository.private),
+        normalizedIdentity: repository.normalizedIdentity || String(repository.fullName).toLowerCase(),
+        accessState: repository.accessState || 'ACCESSIBLE',
+        generation: Number(repository.generation || 0),
       }));
   }
 

@@ -583,6 +583,10 @@ model GitHubInstallation {
   accountType    String
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+  generation     Int      @default(0)
+  refreshStatus  String   @default("IDLE")
+  lastSuccessfulSyncAt DateTime?
+  staleAt        DateTime?
   repositories   GitHubRepository[]
 }
 
@@ -595,9 +599,14 @@ model GitHubRepository {
   fullName       String
   defaultBranch  String   @default("main")
   private        Boolean  @default(false)
+  normalizedIdentity String @default("")
+  accessState    String   @default("ACCESSIBLE")
+  generation     Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   installation   GitHubInstallation @relation(fields: [installationId], references: [installationId], onDelete: Cascade)
+
+  @@index([installationId, generation, normalizedIdentity, githubRepoId])
 }
 
 model GitHubIntegration {

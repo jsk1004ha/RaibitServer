@@ -936,7 +936,13 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       const githubInstallationRepositoriesMatch = url.pathname.match(/^\/github\/installations\/([^/]+)\/repositories$/);
       if (githubInstallationRepositoriesMatch && method === 'GET') {
         const subject = authorizeAction(req, 'project:read', auth);
-        return send(res, 200, controlPlane.store.listGitHubInstallationRepositories({ installationId: decodeURIComponent(githubInstallationRepositoriesMatch[1]), organizationId: subject.organizationId, organizationIds: subject.organizationIds }));
+        return send(res, 200, controlPlane.store.listGitHubInstallationRepositories({ installationId: decodeURIComponent(githubInstallationRepositoriesMatch[1]), organizationId: subject.organizationId, organizationIds: subject.organizationIds, cursor: url.searchParams.get('cursor'), q: url.searchParams.get('q') }));
+      }
+      const githubInstallationRefreshMatch = url.pathname.match(/^\/github\/installations\/([^/]+)\/repositories\/refresh$/);
+      if (githubInstallationRefreshMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'github:refresh', auth);
+        const body = await readJson(req);
+        return send(res, 200, await controlPlane.store.refreshGitHubInstallationRepositories({ installationId: decodeURIComponent(githubInstallationRefreshMatch[1]), organizationId: subject.organizationId, expectedIntegrationVersion: body.expectedIntegrationVersion, expectedGeneration: body.expectedGeneration, actorUserId: subject.id }));
       }
       if (method === 'POST' && url.pathname === '/github/webhooks') {
         const bodyText = await readRaw(req);

@@ -3491,13 +3491,24 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 200
       responses:
         "200":
           description: Successful response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/github-repositoriesResponse"
+                $ref: "#/components/schemas/GitHubCatalogPage"
         default:
           description: Typed error response
           content:
@@ -3507,6 +3518,39 @@ paths:
       security:
         - bearerAuth: []
       x-permission: project:read
+  /github/installations/{installationId}/repositories/refresh:
+    post:
+      operationId: github-repositories-refresh
+      parameters:
+        - name: installationId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/github-repositories-refreshBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/github-repositories-refreshResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: github:refresh
   /github/webhooks:
     post:
       operationId: github-webhooks
@@ -4534,6 +4578,101 @@ components:
         - events
         - nextCursor
       additionalProperties: false
+    GitHubCatalogPage:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        installationId:
+          type: string
+          minLength: 1
+        generation:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        refreshStatus:
+          type: string
+          enum:
+            - IDLE
+            - REFRESHING
+            - STALE
+        lastSuccessfulSyncAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        staleAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        repositories:
+          maxItems: 50
+          type: array
+          items:
+            $ref: "#/components/schemas/GitHubRepository"
+        nextCursor:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - installationId
+        - generation
+        - refreshStatus
+        - lastSuccessfulSyncAt
+        - staleAt
+        - repositories
+        - nextCursor
+      additionalProperties: false
+    GitHubRepository:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        installationId:
+          type: string
+          minLength: 1
+        githubRepoId:
+          type: string
+          minLength: 1
+        owner:
+          type: string
+        name:
+          type: string
+        fullName:
+          type: string
+        normalizedIdentity:
+          type: string
+        defaultBranch:
+          type: string
+        private:
+          type: boolean
+        accessState:
+          type: string
+          enum:
+            - ACCESSIBLE
+            - REVOKED
+        generation:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+      required:
+        - id
+        - installationId
+        - githubRepoId
+        - owner
+        - name
+        - fullName
+        - normalizedIdentity
+        - defaultBranch
+        - private
+        - accessState
+        - generation
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
     GithubAttach:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -8426,20 +8565,53 @@ components:
         - service
         - github
       additionalProperties: false
-    github-repositoriesResponse:
+    github-repositories-refreshResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
       properties:
-        installationId:
+        refreshed:
+          type: boolean
+          const: true
+        repositoryCount:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        generation:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        refreshStatus:
           type: string
-          minLength: 1
-        repositories:
-          type: array
-          items:
-            $ref: "#/components/schemas/Repository"
+          const: IDLE
+        lastSuccessfulSyncAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        staleAt:
+          type: "null"
       required:
-        - installationId
-        - repositories
+        - refreshed
+        - repositoryCount
+        - generation
+        - refreshStatus
+        - lastSuccessfulSyncAt
+        - staleAt
+      additionalProperties: false
+    github-repositories-refreshBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        expectedIntegrationVersion:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        expectedGeneration:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+      required:
+        - expectedIntegrationVersion
+        - expectedGeneration
       additionalProperties: false
     github-webhooksResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
