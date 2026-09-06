@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { apiAction, loadGitHubConsole } from '../../lib/api';
 import { ConsoleShell, LoadErrorSummary, SectionNav } from '../../components/console-ui';
+import { GitHubLifecycleControls, type GitHubLifecycleIntegration, type GitHubLifecycleStatus } from '../../components/github-lifecycle-controls';
 
 const steps = ['connect', 'import', 'attach', 'sync'] as const;
 type GitHubStep = typeof steps[number];
@@ -50,6 +51,10 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
   const canImportRepository = Boolean(state.projects[0]?.id && integrationId && repositoryId);
   const canAttachRepository = Boolean(firstService?.projectId && firstService?.id && integrationId && repositoryId);
   const canSyncRepository = Boolean(selectedRepository?.fullName);
+  const lifecycleIntegrations: readonly GitHubLifecycleIntegration[] = state.integrations.flatMap((integration: unknown) => {
+    const parsed = lifecycleIntegration(integration);
+    return parsed ? [parsed] : [];
+  });
   const navItems = [
     { id: 'connect', label: 'GitHub 연결', description: 'App 설치', href: '/github?step=connect' },
     { id: 'import', label: '저장소 선택', description: '프로젝트 추가', href: '/github?step=import' },
@@ -74,18 +79,21 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
         </div>
 
         {step === 'connect' ? (
-          <Card>
-            <CardHeader><CardTitle><h2>GitHub App 연결</h2></CardTitle><CardDescription>계정과 저장소를 GitHub에서 선택합니다. OAuth 로그인과 App 설치는 별도 흐름으로 유지됩니다.</CardDescription></CardHeader>
-            <CardContent>
-              {state.installations.length ? (
-                <dl className="divide-y divide-border rounded-md border border-border">{state.installations.map((installation: GitHubInstallation) => <div className="grid gap-1 px-4 py-3 sm:grid-cols-[9rem_1fr] sm:items-center" key={installation.installationId}><dt className="text-sm text-muted-foreground">연결 계정</dt><dd className="min-w-0 truncate text-sm font-medium text-foreground">{installation.accountLogin} · 저장소 {installation.repositoryCount || 0}개</dd></div>)}</dl>
-              ) : <Empty className="border border-dashed border-border" role="status"><EmptyHeader><EmptyTitle>연결된 계정이 없습니다.</EmptyTitle><EmptyDescription>GitHub에서 설치할 계정과 접근 가능한 저장소를 선택하세요.</EmptyDescription></EmptyHeader></Empty>}
-            </CardContent>
-            <CardFooter className="flex flex-col-reverse gap-2 border-t border-border sm:flex-row sm:justify-end">
-              {state.installations.length ? <ActionLink className="justify-center sm:mr-auto" href="/github?step=import">저장소 선택</ActionLink> : null}
-              <a className={cn(buttonVariants(), 'w-full sm:w-auto')} href="/github/install">{state.installations.length ? '다른 계정 연결' : 'GitHub 연결'}</a>
-            </CardFooter>
-          </Card>
+          <div className="flex flex-col gap-6">
+            <Card>
+              <CardHeader><CardTitle><h2>GitHub App 연결</h2></CardTitle><CardDescription>계정과 저장소를 GitHub에서 선택합니다. OAuth 로그인과 App 설치는 별도 흐름으로 유지됩니다.</CardDescription></CardHeader>
+              <CardContent>
+                {state.installations.length ? (
+                  <dl className="divide-y divide-border rounded-md border border-border">{state.installations.map((installation: GitHubInstallation) => <div className="grid gap-1 px-4 py-3 sm:grid-cols-[9rem_1fr] sm:items-center" key={installation.installationId}><dt className="text-sm text-muted-foreground">연결 계정</dt><dd className="min-w-0 truncate text-sm font-medium text-foreground">{installation.accountLogin} · 저장소 {installation.repositoryCount || 0}개</dd></div>)}</dl>
+                ) : <Empty className="border border-dashed border-border" role="status"><EmptyHeader><EmptyTitle>연결된 계정이 없습니다.</EmptyTitle><EmptyDescription>GitHub에서 설치할 계정과 접근 가능한 저장소를 선택하세요.</EmptyDescription></EmptyHeader></Empty>}
+              </CardContent>
+              <CardFooter className="flex flex-col-reverse gap-2 border-t border-border sm:flex-row sm:justify-end">
+                {state.installations.length ? <ActionLink className="justify-center sm:mr-auto" href="/github?step=import">저장소 선택</ActionLink> : null}
+                <a className={cn(buttonVariants(), 'w-full sm:w-auto')} href="/github/install">{state.installations.length ? '다른 계정 연결' : 'GitHub 연결'}</a>
+              </CardFooter>
+            </Card>
+            {lifecycleIntegrations.map((integration) => <GitHubLifecycleControls canDisconnect={canDisconnectIntegration(integration, state.memberships, state.subject)} integration={integration} key={integration.id} />)}
+          </div>
         ) : null}
 
         {step === 'import' ? (
@@ -160,4 +168,42 @@ function InstallationChooser({ installations, selectedId, step }: { installation
 function EmptyGitHubStep({ hasInstallation, hasRepositories, hasProjects, message }: { hasInstallation?: boolean; hasRepositories?: boolean; hasProjects?: boolean; message?: string }) {
   const description = message || (!hasInstallation ? '먼저 GitHub를 연결하세요.' : !hasRepositories ? '선택된 저장소가 없습니다. GitHub에서 권한을 추가하세요.' : !hasProjects ? '먼저 프로젝트를 만드세요.' : '선택할 항목이 없습니다.');
   return <Empty className="border border-dashed border-border" role="status"><EmptyHeader><EmptyTitle>현재 단계를 진행할 수 없습니다.</EmptyTitle><EmptyDescription>{description}</EmptyDescription></EmptyHeader><EmptyContent>{!hasInstallation && !message ? <a className={buttonVariants()} href="/github/install">GitHub 연결</a> : null}</EmptyContent></Empty>;
+}
+
+function lifecycleIntegration(value: unknown): GitHubLifecycleIntegration | null {
+  if (!isRecord(value)) return null;
+  const status = value.status;
+  if (typeof value.id !== 'string' || typeof value.organizationId !== 'string' || typeof value.version !== 'number'
+    || !Number.isSafeInteger(value.version) || value.version < 1 || !isGitHubLifecycleStatus(status)
+    || typeof value.connected !== 'boolean' || (value.credentialIssuance !== 'allowed' && value.credentialIssuance !== 'denied')
+    || typeof value.externalGitHubSettingsUrl !== 'string' || typeof value.reattachUrl !== 'string') return null;
+  return {
+    id: value.id,
+    organizationId: value.organizationId,
+    accountLogin: typeof value.accountLogin === 'string' ? value.accountLogin : null,
+    installationId: typeof value.installationId === 'string' ? value.installationId : null,
+    status,
+    version: value.version,
+    connected: value.connected,
+    credentialIssuance: value.credentialIssuance,
+    externalGitHubSettingsUrl: value.externalGitHubSettingsUrl,
+    reattachUrl: value.reattachUrl,
+  };
+}
+
+function canDisconnectIntegration(integration: GitHubLifecycleIntegration, memberships: unknown, subject: unknown): boolean {
+  const membershipRole = Array.isArray(memberships)
+    ? memberships.find((membership) => isRecord(membership) && membership.organizationId === integration.organizationId)?.role
+    : null;
+  const subjectRole = isRecord(subject) && subject.organizationId === integration.organizationId ? subject.role : null;
+  const mappedRole = isRecord(subject) && isRecord(subject.rolesByOrganization) ? subject.rolesByOrganization[integration.organizationId] : null;
+  return [membershipRole, subjectRole, mappedRole].some((role) => role === 'OWNER' || role === 'ADMIN');
+}
+
+function isGitHubLifecycleStatus(value: unknown): value is GitHubLifecycleStatus {
+  return value === 'ACTIVE' || value === 'SUSPENDED' || value === 'DISCONNECTED' || value === 'DELETED';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

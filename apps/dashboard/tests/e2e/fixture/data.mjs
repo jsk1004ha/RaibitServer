@@ -30,7 +30,11 @@ const serviceSettings = {
   healthCheckPath: '/healthz', livenessPath: '/healthz/live', readinessPath: '/healthz/ready', publicHealthPath: '/healthz',
   resources: { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '500m', memory: '512Mi' } },
 };
-const githubIntegration = { id: 'ghi_fixture', provider: 'github', status: 'connected', login: 'raibit-fixture' };
+const githubIntegration = {
+  id: 'ghi_fixture', provider: 'github', organizationId: project.organizationId, accountLogin: 'raibit-fixture', installationId: '9001',
+  status: 'ACTIVE', version: 7, connected: true, credentialIssuance: 'allowed', verifiedAt: FIXED_TIME,
+  externalGitHubSettingsUrl: 'https://github.com/settings/installations/9001', reattachUrl: '/github/install',
+};
 const githubInstallation = {
   id: '9001', installationId: '9001', integrationId: githubIntegration.id, accountLogin: 'raibit-fixture', repositoryCount: 1,
 };
@@ -147,10 +151,15 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
         : 'populated';
   const actor = [TOKENS.admin, TOKENS.adminEmpty, TOKENS.adminPartial, TOKENS.adminLong].includes(token) ? users.admin : users.user;
   if (state === 'partial' && pathname === '/usage/me') return json(500, { error: 'fixture_internal_secret_must_not_escape' });
-  if (pathname === '/auth/me') return json(200, { user: actor, subject: { ...actor, organizationId: project.organizationId, organizationSlug: project.organizationSlug } });
+  if (pathname === '/auth/me') return json(200, { user: actor, subject: { ...actor, organizationId: project.organizationId, organizationSlug: project.organizationSlug }, memberships: [{ organizationId: project.organizationId, role: actor.role === 'ADMIN' ? 'ADMIN' : 'VIEWER' }] });
   if (pathname === '/projects') return json(200, { projects: state === 'empty' ? [] : [{ ...project, name: state === 'long' ? longKoreanText : project.name }] });
   if (pathname === '/usage/me') return json(200, { usage: [{ metric: 'deployments', used: 1, limit: 10 }], quota: { maxProjects: 5 } });
   if (pathname === '/integrations/github') return json(200, { integrations: state === 'empty' ? [] : [githubIntegration] });
+  if (method === 'POST' && pathname === `/organizations/${project.organizationId}/integrations/github/${githubIntegration.id}/disconnect`) {
+    if (actor.role !== 'ADMIN') return json(403, { error: 'forbidden' });
+    if (body.expectedVersion !== githubIntegration.version) return json(409, { error: 'stale_version' });
+    return json(200, { integration: { ...githubIntegration, status: 'DISCONNECTED', version: githubIntegration.version + 1, connected: false, credentialIssuance: 'denied' }, affectedServiceCount: 2, credentialIssuance: 'denied', githubAppUninstalled: false });
+  }
   if (pathname === '/github/install') return json(200, { installUrl: 'https://github.com/apps/raibit-fixture/installations/new?state=public-fixture-state' });
   if (pathname === '/github/installations') return json(200, { installations: state === 'empty' ? [] : [githubInstallation] });
   if (pathname === '/github/installations/9001/repositories') return json(200, { repositories: [githubRepository] });

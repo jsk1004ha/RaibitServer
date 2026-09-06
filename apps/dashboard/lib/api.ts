@@ -229,10 +229,11 @@ export async function loadAdminConsole(context?: DashboardApiContext) {
 
 export async function loadGitHubConsole(context?: DashboardApiContext) {
   const resolved = context || await dashboardApiContext();
-  const [integrations, installations, projects] = await Promise.all([
+  const [integrations, installations, projects, me] = await Promise.all([
     getJson('/integrations/github', { integrations: [] }, resolved),
     getJson('/github/installations', { installations: [] }, resolved),
     getJson('/projects', { projects: [] }, resolved),
+    getJson('/auth/me', { subject: null, memberships: [] }, resolved),
   ]);
   const projectRows = projects.body?.projects || [];
   const installationRows = installations.body?.installations || [];
@@ -256,8 +257,10 @@ export async function loadGitHubConsole(context?: DashboardApiContext) {
     repositories: repositoriesByInstallation.flatMap((row) => row.repositories.map((repository: any) => ({ ...repository, installationId: row.installationId }))),
     projects: projectRows,
     services: servicesByProject.flatMap((row) => row.services.map((service: any) => ({ ...service, projectId: row.projectId, projectName: row.projectName }))),
+    subject: me.body?.subject || null,
+    memberships: me.body?.memberships || [],
     loadErrors: [
-      ...collectLoadIssues([['GitHub 연동', integrations], ['GitHub 설치', installations], ['프로젝트', projects]]),
+      ...collectLoadIssues([['GitHub 연동', integrations], ['GitHub 설치', installations], ['프로젝트', projects], ['조직 권한', me]]),
       ...collectLoadIssues(repositoryLoads.map((row) => ['설치 저장소', row.result] as [string, DashboardApiResult])),
       ...collectLoadIssues(serviceLoads.map((row) => ['프로젝트 서비스', row.result] as [string, DashboardApiResult])),
     ],
