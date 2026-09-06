@@ -93,6 +93,13 @@ try {
   const envUpload = await request('POST', `/projects/${project.body.id}/services/${service.body.id}/env-file`, { filename: '.env', content: 'PUBLIC_URL=http://example.local\n' }, pendingToken);
   assertStatus(envUpload, 200, 'env file upload');
 
+  const githubIntegration = controlPlane.store.createGitHubIntegration({ organizationId: project.body.organizationId, userId: pendingVerified.body.user.id, accountLogin: 'student-org', installationId: '4200' });
+  controlPlane.store.verifyGitHubIntegration({ integrationId: githubIntegration.id, installationId: '4200', accountLogin: 'student-org' });
+  controlPlane.store.registerGitHubRepository({ installationId: '4200', githubRepoId: '42001', fullName: 'student-org/local-e2e', private: false, defaultBranch: 'main' });
+  controlPlane.store.attachGitHubRepositoryToService({ projectId: project.body.id, serviceId: service.body.id, integrationId: githubIntegration.id, repositoryId: '42001', branch: 'main' });
+  const githubRepository = { id: 42001, full_name: 'student-org/local-e2e', default_branch: 'main' };
+  const githubInstallation = { id: 4200 };
+
   const consoleCreate = await request('POST', `/resources/${resource.body.id}/console/query`, { query: 'CREATE TABLE IF NOT EXISTS health (id INTEGER PRIMARY KEY, status TEXT)', confirmed: true }, pendingToken);
   assertStatus(consoleCreate, 200, 'sqlite console create');
   await request('POST', `/resources/${resource.body.id}/console/query`, { query: "INSERT INTO health(status) VALUES ('ok')", confirmed: true }, pendingToken);
@@ -132,30 +139,28 @@ try {
 
   const preview = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'preview', triggerType: 'pull_request', pullRequestNumber: 42, branch: 'feature/local-e2e', previewUrl: `http://pr-42--${urlHost.replace(/^express-api--/, '')}` }, pendingToken);
   assertStatus(preview, 202, 'PR preview deployment enqueue');
-  const githubIntegration = controlPlane.store.createGitHubIntegration({ organizationId: project.body.organizationId, userId: pendingVerified.body.user.id, accountLogin: 'student-org', installationId: '4200' });
-  controlPlane.store.verifyGitHubIntegration({ integrationId: githubIntegration.id, installationId: '4200', accountLogin: 'student-org' });
-  controlPlane.store.registerGitHubRepository({ installationId: '4200', githubRepoId: '42001', fullName: 'student-org/local-e2e', private: false, defaultBranch: 'main' });
-  controlPlane.store.attachGitHubRepositoryToService({ projectId: project.body.id, serviceId: service.body.id, integrationId: githubIntegration.id, repositoryId: '42001', branch: 'main' });
-  const githubRepository = { id: 42001, full_name: 'student-org/local-e2e', default_branch: 'main' };
-  const githubInstallation = { id: 4200 };
   const pushPayload = { installation: githubInstallation, repository: githubRepository, ref: 'refs/heads/main', after: 'a'.repeat(40) };
   const githubPush = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('push', 'local-e2e-push-main', pushPayload));
   if (!githubPush.actions.some((action) => action.type === 'production-deployment-enqueued')) throw new Error('GitHub push webhook did not enqueue production deployment');
   const githubPreviewActions = [];
-  for (const [action, sha] of [['opened', 'b'.repeat(40)], ['synchronize', 'c'.repeat(40)], ['reopened', 'd'.repeat(40)]]) {
-    const deliveryId = `local-e2e-pr-${action}`;
-    const payload = { action, number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha } } };
+  for (const [action, sha, before, deliveryId, updatedAt] of [
+    ['opened', 'b'.repeat(40), null, '00000000-0000-4000-8000-000000000001', '2026-09-07T00:00:01Z'],
+    ['synchronize', 'c'.repeat(40), 'b'.repeat(40), '00000000-0000-4000-8000-000000000002', '2026-09-07T00:00:02Z'],
+    ['reopened', 'd'.repeat(40), null, '00000000-0000-4000-8000-000000000003', '2026-09-07T00:00:03Z'],
+  ]) {
+    const payload = { action, ...(before ? { before } : {}), number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, state: 'open', head: { ref: 'feature/local-e2e', sha }, base: { ref: 'main' }, updated_at: updatedAt } };
     const result = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', deliveryId, payload));
     const queued = result.actions.find((item) => item.type === 'preview-deployment-enqueued');
     const queuedJob = controlPlane.store.workflowJobs.find((item) => item.id === queued?.workflowJobId);
-    if (!queued?.previewUrl || !/^pr-42-express-api-[a-f0-9]{12}$/.test(queued.previewWorkloadName || '') || queuedJob?.payload?.kubernetes?.workloadName !== queued.previewWorkloadName) {
+    const runtime = queuedJob?.payload?.runtime;
+    if (!queued?.lineageId || !queued?.deploymentId || queuedJob?.payload?.lineageId !== queued.lineageId || runtime?.deploymentId !== queued.deploymentId || !/^pr-42-[a-z0-9-]+-[a-f0-9]{12}$/.test(runtime?.workloadName || '')) {
       throw new Error(`GitHub PR ${action} did not enqueue deterministic preview workload`);
     }
-    githubPreviewActions.push({ action, deliveryId, previewUrl: queued.previewUrl, previewWorkloadName: queued.previewWorkloadName });
+    githubPreviewActions.push({ action, deliveryId, previewUrl: `https://${runtime.stableHost}`, previewWorkloadName: runtime.workloadName });
   }
-  const cleanupPayload = { action: 'closed', number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: 'e'.repeat(40) } } };
-  const previewCleanup = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', 'local-e2e-pr-closed', cleanupPayload));
-  if (!previewCleanup.actions.some((action) => action.type === 'preview-cleanup-enqueued')) throw new Error('preview cleanup webhook did not enqueue cleanup');
+  const cleanupPayload = { action: 'closed', number: 42, installation: githubInstallation, repository: githubRepository, pull_request: { number: 42, state: 'closed', head: { ref: 'feature/local-e2e', sha: 'e'.repeat(40) }, base: { ref: 'main' }, updated_at: '2026-09-07T00:00:04Z' } };
+  const previewCleanup = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', '00000000-0000-4000-8000-000000000004', cleanupPayload));
+  if (!previewCleanup.actions.some((action) => action.type === 'preview-cleanup-requested')) throw new Error('preview cleanup webhook did not request cleanup');
 
   const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', name: 'Club User', studentId: '2503', organizationSlug: 'club-org' });
   assertStatus(club, 201, 'club signup');
@@ -202,10 +207,10 @@ try {
   evidence.githubWebhookEvidence = {
     pushAction: githubPush.actions[0]?.type || null,
     previewActions: githubPreviewActions,
-    previewWorkloadPayloads: controlPlane.store.workflowJobs.filter((job) => job.type === 'preview-deploy').map((job) => job.payload.kubernetes?.workloadName).filter(Boolean),
+    previewWorkloadPayloads: controlPlane.store.workflowJobs.filter((job) => job.type === 'preview-deploy').map((job) => job.payload.runtime?.workloadName).filter(Boolean),
   };
   evidence.previewCleanupAction = previewCleanup.actions[0]?.type || null;
-  evidence.checks.push('first-user admin bootstrap works', 'non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'Beta DB/resource consoles and env injection work', 'GitHub push webhook fixture enqueues production deployment', 'GitHub PR opened/synchronize/reopened fixtures enqueue preview workloads', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
+  evidence.checks.push('first-user admin bootstrap works', 'non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'Beta DB/resource consoles and env injection work', 'GitHub push webhook fixture enqueues production deployment', 'GitHub PR opened/synchronize/reopened fixtures enqueue preview workloads', 'preview deployment fixture created', 'preview cleanup workflow requested', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
   evidence.ok = true;
 } catch (error) {
   evidence.ok = false;

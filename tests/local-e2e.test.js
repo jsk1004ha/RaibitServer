@@ -11,6 +11,7 @@ import { once } from 'node:events';
 import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
+import { hashPassword } from '../packages/core/src/identity.ts';
 import { sealSecretValue, unsealSecretValue, maskSecrets } from '../packages/core/src/secrets.ts';
 import { RESOURCE_CAPABILITIES } from '../packages/core/src/resource-capabilities.ts';
 
@@ -54,11 +55,14 @@ test('local E2E script verifies approval, quota, logs, preview, and SQLite conso
   assert.match(report.previewDeploymentId, /^dep[-_]/);
   assert.equal(report.checks.includes('SQLite DB console query works'), true);
   assert.equal(report.checks.includes('PostgreSQL provider dry-run and env injection works'), true);
-  assert.equal(report.checks.includes('preview cleanup workflow enqueued'), true);
+  assert.equal(report.checks.includes('preview cleanup workflow requested'), true);
   assert.equal(report.checks.includes('build/Kubernetes/provisioning dry-run artifacts generated'), true);
   assert.equal(report.postgresProviderDryRun, true);
   assert.equal(report.postgresEnvInjected, true);
-  assert.equal(report.previewCleanupAction, 'preview-cleanup-enqueued');
+  assert.equal(report.githubWebhookEvidence.pushAction, 'production-deployment-enqueued');
+  assert.deepEqual(report.githubWebhookEvidence.previewActions.map((action) => action.action), ['opened', 'synchronize', 'reopened']);
+  assert.equal(report.githubWebhookEvidence.previewWorkloadPayloads.length, 3);
+  assert.equal(report.previewCleanupAction, 'preview-cleanup-requested');
   assert.equal(report.liveSetup.clusterEngine, 'dry-run');
   assert.deepEqual(Object.values(report.liveBeta.betaChecklist).filter(Boolean).length, Object.keys(report.liveBeta.betaChecklist).length);
   assert.equal(report.liveBeta.services.some((service) => service.service === 'express-api' && service.imageDigest), true);
@@ -69,13 +73,26 @@ test('local E2E script verifies approval, quota, logs, preview, and SQLite conso
 });
 
 test('api-client matches prototype API project/service/resource contract', async () => {
+  const jwtSecret = 'client-contract-secret-at-least-32-bytes';
+  const password = 'client-contract-password';
   const controlPlane = new RAIBITSERVERControlPlane();
-  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'disabled', allowDisabled: true } }));
+  const user = controlPlane.store.createUser({
+    name: 'Client User',
+    email: 'client@example.com',
+    passwordHash: hashPassword(password),
+    approvalStatus: 'APPROVED',
+    accountType: 'NON_CLUB',
+  });
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret, issuer: 'raibitserver' } }));
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  const client = new RAIBITSERVERClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+  const publicClient = new RAIBITSERVERClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
   try {
-    const org = await client.createOrganization({ name: 'Client Org', slug: 'client-org' });
+    const session = await publicClient.operations['auth-login']({ path: {}, query: {}, body: { email: user.email, password } });
+    const initialClient = publicClient.withToken(session.token);
+    const org = await initialClient.createOrganization({ name: 'Client Org', slug: 'client-org' });
+    const refreshedSession = await publicClient.operations['auth-login']({ path: {}, query: {}, body: { email: user.email, password } });
+    const client = publicClient.withToken(refreshedSession.token);
     const project = await client.createProject({ name: 'Client App', slug: 'client-app' }, org.id);
     const service = await client.createService(project.id, { name: 'web', sourceType: 'image', image: 'localhost:5000/client/web:latest' });
     const resource = await client.createResource(project.id, { name: 'data', type: 'database', engine: 'sqlite' });
