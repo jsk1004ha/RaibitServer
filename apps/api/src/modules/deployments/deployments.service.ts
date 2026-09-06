@@ -6,6 +6,7 @@ export class DeploymentsService {
   constructor(private readonly controlPlane: RAIBITSERVERService) {}
 
   createDeploymentOperation(target: { readonly operation: 'retry' | 'redeploy'; readonly id: string }, input: unknown, subject: { readonly id: string }) { return this.controlPlane.createDeploymentOperation(target, input, subject); }
+  listDeploymentHistory(projectId: string, query: Record<string, unknown>, subject: Record<string, unknown>) { return this.controlPlane.listDeploymentHistory(projectId, query, subject); }
 
   listDeployments(projectId: string, serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.listDeployments(projectId, serviceId, subject, options); }
   createDeployment(projectId: string, serviceId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.createDeployment(projectId, serviceId, input, subject); }

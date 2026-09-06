@@ -53,6 +53,7 @@
     "github-authorize":{"installation_id":"123","setup_action":"install","state":"state +/?"},
     "github-callback":{"code":"code +/?","state":"state +/?"},
     "projects-list":{"limit":2,"cursor":"cursor +/?"},
+    "project-deployment-history":{"serviceId":"service","environment":"production","status":"READY","trigger":"manual","from":"2026-09-01T00:00:00.000Z","to":"2026-09-07T00:00:00.000Z","limit":2},
     "resource-backups-list":{"limit":1,"cursor":"cursor +/?"},
     "services-logs":{"limit":1,"after":"cursor +/?"},
     "github-integrations-list":{"organizationId":"organization +/?"}
@@ -60,7 +61,7 @@
   "responseFixtures": [
     {"operation":"health","body":{"status":"ok","service":"raibitserver-api","uptimeSeconds":1}},
     {"operation":"projects-list","body":{"projects":[{"id":"project","name":"Parity","organizationId":"org","slug":"parity"}],"nextCursor":null}},
-    {"operation":"deployments-get","body":{"id":"deployment","serviceId":"service","status":"READY","imageDigest":null,"errorCode":null,"errorMessage":null}},
+    {"operation":"deployments-get","body":{"id":"deployment","projectId":"project","serviceId":"service","service":{"id":"service","name":"Web","slug":"web"},"environment":"production","status":"READY","trigger":"manual","createdAt":"2026-09-06T00:00:00.000Z","updatedAt":"2026-09-06T00:00:00.000Z","imageDigest":null,"errorCode":null,"errorMessage":null,"source":{"commitSha":null,"imageDigest":null,"snapshotVersion":1},"lineage":{"sourceDeploymentId":null,"retryOfDeploymentId":null,"rollbackOfDeploymentId":null,"previousDeploymentId":null,"previewLineageId":null,"previewGeneration":null},"operation":{"requestedByUserId":null,"requestIdempotencyKey":null},"health":{"rolloutStatus":"READY","publicHealthStatus":"UNKNOWN","healthCheckedAt":null,"healthFailureCode":null,"observedGeneration":null},"recovery":{"retryable":false,"reason":"STATUS_NOT_RETRYABLE"},"permissions":{"execute":true},"eligibleAction":null}},
     {"operation":"services-logs-stream","body":{"service":null,"logs":[{"id":"log","line":"ready","timestamp":"2026-09-02T00:00:00Z"}],"serviceCursor":"v1","logCursor":null,"stream":{"retryMs":3000,"heartbeatMs":15000,"maxLifetimeMs":900000,"slowClientTimeoutMs":5000}}},
     {"operation":"auth-github-login","body":{"provider":"github","configured":true,"oauthUrl":"https://github.com/login/oauth/authorize","state":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","mode":"redirect"}}
   ],
@@ -79,6 +80,7 @@
     {"operation":"deployments-create","method":"POST","path":"/services/{serviceId}/deployments","body":{},"status":202,"save":"deploymentId"},
     {"operation":"deployments-get","method":"GET","path":"/deployments/{deploymentId}","status":200},
     {"operation":"deployments-list","method":"GET","path":"/services/{serviceId}/deployments?limit=1","status":200},
+    {"operation":"project-deployment-history","method":"GET","path":"/projects/{projectId}/deployments/history?limit=1","status":200},
     {"operation":"deployments-logs","method":"GET","path":"/deployments/{deploymentId}/logs?limit=1","status":200},
     {"operation":"deployments-events","method":"GET","path":"/deployments/{deploymentId}/events?limit=1","status":200},
     {"operation":"services-logs","method":"GET","path":"/services/{serviceId}/logs?limit=1","status":200},

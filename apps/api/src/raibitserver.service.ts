@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
-import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, DomainLifecycleError, parseDeploymentOperationBody } from '@raibitserver/core';
+import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, DomainLifecycleError, parseDeploymentHistoryQuery, parseDeploymentOperationBody, roleForOrganization } from '@raibitserver/core';
 import { projectObservationPayload } from '@raibitserver/core';
 import { ProjectSettingsError } from '@raibitserver/core';
 import { PasswordRecoveryCompleteSchema, PasswordRecoveryRequestSchema, ResourceBackupListSchema, type CustomDomainCreate, type CustomDomainMutation, type CustomDomainRotate, type ProjectDeletionScheduled, type ProjectSettingsUpdate, type ProjectSettingsView, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceReplacementInput, type ServiceSettingsMutation, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
@@ -540,6 +540,16 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return keysetPage('deployments', deployments, 'createdAt');
   }
 
+  async listDeploymentHistory(projectId: string, queryInput: Record<string, unknown>, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    const project = await assertProjectAccess(repository, projectId, subject);
+    const query = parseDeploymentHistoryQuery(queryInput);
+    const execute = isGlobalSubject(subject) || can(roleForOrganization(subject, project.organizationId), 'deploy:run');
+    const history = await repository.listDeploymentHistory({ organizationId: project.organizationId, projectId, cursorSecret: jwtSecretOrThrow(), query, execute });
+    if (!history) throw new NotFoundException(`project not found: ${projectId}`);
+    return history;
+  }
+
   async createDeployment(projectId: string, serviceId: string, input: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
@@ -569,8 +579,11 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
     if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
-    await assertProjectAccess(repository, deployment.projectId, subject);
-    return deployment;
+    const project = await assertProjectAccess(repository, deployment.projectId, subject);
+    const execute = isGlobalSubject(subject) || can(roleForOrganization(subject, project.organizationId), 'deploy:run');
+    const history = await repository.getDeploymentHistoryItem(deploymentId, { organizationId: project.organizationId, projectId: deployment.projectId, execute });
+    if (!history) throw new NotFoundException(`deployment not found: ${deploymentId}`);
+    return { ...deployment, ...history };
   }
 
   async updateDeploymentStatus(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) {

@@ -3,9 +3,11 @@ import { projectObservationPayload } from './observability-projection.ts';
 import { publicDeploymentHealth } from './deployment-health.ts';
 import { InMemoryControlPlaneRepository } from './persistence.ts';
 import { DeploymentOperationError, parseDeploymentOperationBody } from './deployment-operations.ts';
+import { deploymentHistoryPage, deploymentHistoryRow, parseDeploymentHistoryQuery } from './deployment-history.ts';
 import { oauthAttempt, publicOAuthError, OAuthPublicError } from './oauth-security.ts';
 import { maskSecrets } from './secrets.ts';
-import { authorizeRequest, authorizeSubject, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
+import { authorizeRequest, authorizeSubject, requireAction, requireScope, roleForOrganization, signJwtHs256, subjectFromRequest } from './auth.ts';
+import { can } from './rbac.ts';
 import { organizationScopeFromProjectInput } from './scope.ts';
 import { createSessionToken, normalizeEmail, sessionTtlSeconds, shouldPromoteFirstLogin, verifyPasswordAsync } from './identity.ts';
 import { assertUserEmailVerified, issueSignupEmailVerificationCode, resendEmailVerificationCode, verifyEmailCodeAndCreateSession } from './email-verification.ts';
@@ -385,6 +387,19 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (!project) return send(res, 404, { error: 'project_not_found' });
         return send(res, 200, { deleted: true, projectId: project.id });
       }
+      const deploymentHistoryMatch = url.pathname.match(/^\/projects\/([^/]+)\/deployments\/history$/);
+      if (deploymentHistoryMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const projectId = decodeURIComponent(deploymentHistoryMatch[1]);
+        const project = await assertProjectAccess(controlPlane.store, projectId, subject);
+        const query = parseDeploymentHistoryQuery(Object.fromEntries(url.searchParams));
+        const execute = subject.global === true || subject.authMode === 'disabled' || can(roleForOrganization(subject, project.organizationId), 'deploy:run');
+        return send(res, 200, deploymentHistoryPage({
+          deployments: [...controlPlane.store.deployments.values()].filter((deployment) => deployment.projectId === projectId),
+          services: [...controlPlane.store.services.values()].filter((service) => service.projectId === projectId),
+          query, execute, scope: { organizationId: project.organizationId, projectId, cursorSecret: auth.jwtSecret },
+        }));
+      }
       const projectServicesMatch = url.pathname.match(/^\/projects\/([^/]+)\/services$/);
       if (projectServicesMatch && method === 'GET') {
         const subject = authorizeAction(req, 'project:read', auth);
@@ -607,8 +622,12 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const deploymentId = decodeURIComponent(deploymentMatch[1]);
         const deployment = controlPlane.store.getDeployment(deploymentId);
         if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
-        await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
-        return send(res, 200, deployment);
+        const project = await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
+        const service = controlPlane.store.services.get(deployment.serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        const execute = subject.global === true || subject.authMode === 'disabled' || can(roleForOrganization(subject, project.organizationId), 'deploy:run');
+        const history = deploymentHistoryRow({ deployment, service, serviceDeployments: [...controlPlane.store.deployments.values()].filter((candidate) => candidate.serviceId === deployment.serviceId), execute });
+        return send(res, 200, { ...deployment, ...history });
       }
       const deploymentStatusMatch = url.pathname.match(/^\/deployments\/([^/]+)\/status$/);
       if (deploymentStatusMatch && (method === 'PATCH' || method === 'POST')) {

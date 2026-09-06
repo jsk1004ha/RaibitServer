@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { DeploymentOperationInputSchema } from './deployment-operation.ts';
+import { DeploymentHistoryQuerySchema, DeploymentHistoryResponseSchema, DeploymentHistoryRowSchema } from './deployment-history.ts';
 import { ResourceBackupCreateSchema, ResourceBackupDeleteSchema, ResourceBackupListSchema, ResourceBackupListViewSchema, ResourceBackupViewSchema, ResourceRestoreCreateSchema, ResourceRestoreViewSchema } from './resource-recovery.ts';
 import { PasswordRecoveryAcceptedSchema, PasswordRecoveryCompleteSchema, PasswordRecoveryCompletedSchema, PasswordRecoveryRequestSchema } from './password-recovery.ts';
 import * as M from './api-models.ts';
@@ -93,10 +94,11 @@ export const apiOperations = {
   'domains-verify': operation({ method: 'post', path: '/domains/{domainId}/verify', status: 202, permission: 'domain:verify', input: input(domain, M.Empty, CustomDomainMutationSchema), response: CustomDomainSchema }),
   'domains-delete': operation({ method: 'delete', path: '/domains/{domainId}', status: 202, permission: 'domain:manage', input: input(domain, M.Empty, CustomDomainMutationSchema), response: CustomDomainSchema }),
   'project-deployments-list': operation({ method: 'get', path: '/projects/{projectId}/services/{serviceId}/deployments', status: 200, permission: 'project:read', input: input(scopedService, M.PageQuery, M.Empty), response: M.Deployments }),
+  'project-deployment-history': operation({ method: 'get', path: '/projects/{projectId}/deployments/history', status: 200, permission: 'project:read', input: input(project, DeploymentHistoryQuerySchema, M.Empty), response: DeploymentHistoryResponseSchema }),
   'project-deployments-create': operation({ method: 'post', path: '/projects/{projectId}/services/{serviceId}/deployments', status: 202, permission: 'deploy:run', input: input(scopedService, M.Empty, M.DeploymentInput), response: M.DeploymentMutationResult }),
   'deployments-list': operation({ method: 'get', path: '/services/{serviceId}/deployments', status: 200, permission: 'project:read', input: input(service, M.PageQuery, M.Empty), response: M.Deployments }),
   'deployments-create': operation({ method: 'post', path: '/services/{serviceId}/deployments', status: 202, permission: 'deploy:run', input: input(service, M.Empty, M.DeploymentInput), response: M.DeploymentMutationResult }),
-  'deployments-get': operation({ method: 'get', path: '/deployments/{deploymentId}', status: 200, permission: 'project:read', input: input(deployment, M.Empty, M.Empty), response: M.Deployment }),
+  'deployments-get': operation({ method: 'get', path: '/deployments/{deploymentId}', status: 200, permission: 'project:read', input: input(deployment, M.Empty, M.Empty), response: M.Deployment.extend(DeploymentHistoryRowSchema.shape) }),
   'deployments-status': operation({ method: 'patch', path: '/deployments/{deploymentId}/status', status: 200, permission: 'deploy:run', input: input(deployment, M.Empty, M.StatusInput), response: M.Deployment }),
   'deployments-status-post': operation({ method: 'post', path: '/deployments/{deploymentId}/status', status: 201, permission: 'deploy:run', input: input(deployment, M.Empty, M.StatusInput), response: M.Deployment }),
   'deployments-cancel': operation({ method: 'post', path: '/deployments/{deploymentId}/cancel', status: 200, permission: 'deploy:run', input: input(deployment, M.Empty, M.Empty), response: z.object({ operationId: id, status: z.string(), streamHref: z.string(), deployment: M.Deployment }) }),

@@ -92,6 +92,7 @@ export function createOperationsClient(transport: OperationTransport) {
   return {
     'deployments-retry': bind(apiOperations['deployments-retry']),
     'services-redeploy': bind(apiOperations['services-redeploy']),
+    'project-deployment-history': bind(apiOperations['project-deployment-history']),
     'health': bind(apiOperations.health),
     'auth-signup': bind(apiOperations['auth-signup']),
     'auth-login': bind(apiOperations['auth-login']),

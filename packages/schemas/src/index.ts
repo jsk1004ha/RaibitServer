@@ -6,6 +6,7 @@ export * from './domain.ts';
 import { ServiceHealthFields, refineServiceHealth, type DeploymentHealth } from './deployment-health.ts';
 export * from './deployment-health.ts';
 export * from './deployment-operation.ts';
+export * from './deployment-history.ts';
 export * from './preview.ts';
 import type { DeploymentStatus } from './lifecycle.ts';
 export * from './lifecycle.ts';

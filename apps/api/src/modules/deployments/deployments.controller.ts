@@ -43,6 +43,12 @@ export class ServiceDeploymentsController {
 export class DeploymentLogsController {
   constructor(private readonly deploymentsService: DeploymentsService) {}
 
+  @RequirePermission('project:read')
+  @Get('projects/:projectId/deployments/history')
+  history(@Param('projectId') projectId: string, @Query() query: Record<string, unknown>, @Req() request: { readonly raibitSubject: Record<string, unknown> }) {
+    return this.deploymentsService.listDeploymentHistory(projectId, query, request.raibitSubject);
+  }
+
   @RequirePermission('deploy:run')
   @Post('deployments/:deploymentId/retry')
   @HttpCode(202)

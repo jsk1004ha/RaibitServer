@@ -1,4 +1,4 @@
-import type { ApiOutput, CustomDomain, CustomDomainChallenge, CustomDomainCreate, CustomDomainMutation, CustomDomainRotate, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationInviteAccept, OrganizationInviteCreate, OrganizationMembershipRoleChange, OrganizationMembershipSnapshot, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec, ServiceReplacementInput, ServiceReplacementResult, ServiceSettingsMutation, ServiceSettingsPreview, ServiceSettingsSnapshot } from '@raibitserver/schemas';
+import type { ApiOutput, CustomDomain, CustomDomainChallenge, CustomDomainCreate, CustomDomainMutation, CustomDomainRotate, DeploymentHistoryQueryInput, DeploymentHistoryResponse, DeploymentHistoryRow, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationInviteAccept, OrganizationInviteCreate, OrganizationMembershipRoleChange, OrganizationMembershipSnapshot, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec, ServiceReplacementInput, ServiceReplacementResult, ServiceSettingsMutation, ServiceSettingsPreview, ServiceSettingsSnapshot } from '@raibitserver/schemas';
 import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
@@ -165,6 +165,10 @@ export class RAIBITSERVERClient {
     return this.request(withPageQuery(path, page));
   }
 
+  listDeploymentHistory(projectId: string, query: DeploymentHistoryQueryInput = {}): Promise<DeploymentHistoryResponse> {
+    return this.operations['project-deployment-history']({ path: { projectId }, query, body: {} });
+  }
+
   listDeploymentLogs(deploymentId: string, options: PageOptions = {}): Promise<DeploymentLogsResult> { return this.operations['deployments-logs']({ path: { deploymentId }, query: options, body: {} }); }
   listDeploymentEvents(deploymentId: string, options: PageOptions = {}): Promise<DeploymentEventsResult> { return this.operations['deployments-events']({ path: { deploymentId }, query: options, body: {} }); }
   deploymentActivityStream(deploymentId: string, options: { readonly lastEventId?: string; readonly signal?: AbortSignal; readonly onStreamEvent?: (value: DeploymentActivityStreamResult, eventId?: string) => void } = {}): Promise<DeploymentActivityStreamResult> {
@@ -177,7 +181,7 @@ export class RAIBITSERVERClient {
   serviceLogStream(serviceId: string, options: { readonly lastEventId?: string; readonly signal?: AbortSignal; readonly onStreamEvent?: (value: ApiOutput<'services-logs-stream'>, eventId?: string) => void } = {}): Promise<ApiOutput<'services-logs-stream'>> {
     return this.operations['services-logs-stream']({ path: { serviceId }, query: {}, body: {} }, options);
   }
-  getDeployment(deploymentId: string): Promise<DeploymentSpec> { return this.request(`/deployments/${encodeURIComponent(deploymentId)}`); }
+  getDeployment(deploymentId: string): Promise<DeploymentSpec & DeploymentHistoryRow> { return this.operations['deployments-get']({ path: { deploymentId }, query: {}, body: {} }); }
   updateDeploymentStatus(deploymentId: string, input: Record<string, unknown>): Promise<DeploymentSpec> {
     return this.request(`/deployments/${encodeURIComponent(deploymentId)}/status`, { method: 'PATCH', body: input });
   }

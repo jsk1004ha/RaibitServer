@@ -3,6 +3,7 @@ import { ResourceRecoveryRepository, type RecoveryQuotaPolicy } from './resource
 import { MemoryRecoveryTransaction } from './resource-recovery-memory.ts';
 import { PostgresRecoveryTransaction, lockRecoveryDeletion, assertPostgresRecoveryPublished } from './resource-recovery-postgres.ts';
 import { HEALTH_PATH_FIELDS, INITIAL_DEPLOYMENT_HEALTH, parseHealthPaths, publicDeploymentHealth } from './deployment-health.ts';
+import { decodeDeploymentHistoryCursor, deploymentHistoryPage, deploymentHistoryRow, type DeploymentHistoryQuery, type DeploymentHistoryScope } from './deployment-history.ts';
 import { assertOperationReplay, captureDeploymentSnapshot, deploymentSuccessor, DeploymentOperationError, eligibleDeploymentSource, successorWorkflow, type DeploymentOperation } from './deployment-operations.ts';
 import { oauthAuditData, type OAuthAuditEvent } from './oauth-security.ts';
 import { ProjectSettingsError, projectSettingsView, scheduledProjectDeletion, type ProjectDeletionRequest, type ProjectSettingsMutation } from './project-settings.ts';
@@ -318,6 +319,23 @@ export class InMemoryControlPlaneRepository {
   async listDeploymentsForProject(projectId: string, options: Record<string, any> = {}) {
     return deepClone(boundedKeysetRows([...this.store.deployments.values()]
       .filter((deployment) => String(deployment.projectId) === String(projectId)), options)).map(publicDeploymentHealth);
+  }
+  async listDeploymentHistory(input: DeploymentHistoryScope & { readonly query: DeploymentHistoryQuery; readonly execute: boolean }) {
+    const project = this.store.projects.get(input.projectId);
+    if (!project || project.organizationId !== input.organizationId) return null;
+    return deploymentHistoryPage({
+      deployments: [...this.store.deployments.values()].filter((deployment) => deployment.projectId === input.projectId),
+      services: [...this.store.services.values()].filter((service) => service.projectId === input.projectId),
+      query: input.query, scope: input, execute: input.execute,
+    });
+  }
+  async getDeploymentHistoryItem(deploymentId: string, input: Omit<DeploymentHistoryScope, 'cursorSecret'> & { readonly execute: boolean }) {
+    const deployment = this.store.deployments.get(deploymentId);
+    const project = deployment ? this.store.projects.get(deployment.projectId) : null;
+    if (!deployment || !project || project.organizationId !== input.organizationId || project.id !== input.projectId) return null;
+    const service = this.store.services.get(deployment.serviceId);
+    if (!service) return null;
+    return deploymentHistoryRow({ deployment, service, serviceDeployments: [...this.store.deployments.values()].filter((candidate) => candidate.serviceId === deployment.serviceId), execute: input.execute });
   }
   async upsertServiceEnvironment(input: Record<string, any>) { return this.store.upsertServiceEnvironment(input); }
   async importServiceEnvFile(input: Record<string, any>) { return this.store.importServiceEnvFile(input); }
@@ -1624,6 +1642,42 @@ export class PrismaControlPlaneRepository {
 
   async listDeploymentsForProject(projectId: string, options: Record<string, any> = {}) {
     return (await findKeysetRows(this.prisma.deployment, { projectId }, options)).map(publicDeploymentHealth);
+  }
+
+  async listDeploymentHistory(input: DeploymentHistoryScope & { readonly query: DeploymentHistoryQuery; readonly execute: boolean }) {
+    const project = await this.prisma.project.findFirst({ where: { id: input.projectId, organizationId: input.organizationId }, select: { id: true } });
+    if (!project) return null;
+    const cursor = input.query.cursor ? decodeDeploymentHistoryCursor(input.query.cursor, input, input.query) : null;
+    const createdAt = {
+      ...(input.query.from ? { gte: new Date(input.query.from) } : {}),
+      ...(input.query.to ? { lte: new Date(input.query.to) } : {}),
+    };
+    const filters: Prisma.DeploymentWhereInput = {
+      projectId: input.projectId,
+      ...(input.query.serviceId ? { serviceId: input.query.serviceId } : {}),
+      ...(input.query.environment ? { deploymentType: { in: [input.query.environment, input.query.environment.toUpperCase()] } } : {}),
+      ...(input.query.status ? { status: input.query.status } : {}),
+      ...(input.query.trigger ? { triggerType: { equals: input.query.trigger, mode: 'insensitive' } } : {}),
+      ...(Object.keys(createdAt).length > 0 ? { createdAt } : {}),
+    };
+    const where: Prisma.DeploymentWhereInput = cursor ? { AND: [filters, { OR: [{ createdAt: { lt: new Date(cursor.at) } }, { createdAt: new Date(cursor.at), id: { lt: cursor.id } }] }] } : filters;
+    const rows = await this.prisma.deployment.findMany({
+      where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: input.query.limit + 1,
+      include: { service: { select: { id: true, name: true, slug: true } } },
+    });
+    const serviceIds = [...new Set(rows.map((row) => row.serviceId))];
+    const actionDeployments = serviceIds.length === 0 ? [] : await this.prisma.deployment.findMany({ where: { projectId: input.projectId, serviceId: { in: serviceIds } } });
+    return deploymentHistoryPage({ deployments: rows, actionDeployments, services: rows.map((row) => row.service), query: input.query, scope: input, execute: input.execute });
+  }
+
+  async getDeploymentHistoryItem(deploymentId: string, input: Omit<DeploymentHistoryScope, 'cursorSecret'> & { readonly execute: boolean }) {
+    const deployment = await this.prisma.deployment.findFirst({
+      where: { id: deploymentId, projectId: input.projectId, project: { organizationId: input.organizationId } },
+      include: { service: { select: { id: true, name: true, slug: true } } },
+    });
+    if (!deployment) return null;
+    const serviceDeployments = await this.prisma.deployment.findMany({ where: { projectId: input.projectId, serviceId: deployment.serviceId } });
+    return deploymentHistoryRow({ deployment, service: deployment.service, serviceDeployments, execute: input.execute });
   }
 
   async upsertServiceEnvironment(input: Record<string, any>) {

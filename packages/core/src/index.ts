@@ -33,6 +33,8 @@ export { createWorkflowJobRecord, processNextWorkflowJob, processWorkflowQueue, 
 export { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, encodeDeploymentActivityResumeToken, encodeServiceLogResumeToken, DeploymentActivityResumeTokenError, ServiceLogResumeTokenError, startBoundedSseStream } from './sse.ts';
 export type { DeploymentActivityResumeCursor, DeploymentActivityResumeScope, ServiceLogResumeCursor, ServiceLogResumeScope } from './sse.ts';
 export { encodeKeysetCursor, decodeKeysetCursor, keysetCursorForRows, resourceQuotaMetric, resourceStorageMb } from './store-helpers.ts';
+export { decodeDeploymentHistoryCursor, deploymentHistoryPage, deploymentHistoryRow, encodeDeploymentHistoryCursor, parseDeploymentHistoryQuery, DeploymentHistoryError } from './deployment-history.ts';
+export type { DeploymentHistoryQuery, DeploymentHistoryScope, HistoryDeployment } from './deployment-history.ts';
 export { ERROR_CODE_CATALOG, errorSpecForCode, normalizeErrorCode, normalizeInfrastructureError } from './error-spec.ts';
 export { DEPLOYMENT_STATUSES, normalizeDeploymentStatus, canTransitionDeployment, assertDeploymentTransition, isDeploymentTerminal } from './deployments.ts';
 export { createDeploymentWorkflowHandlers, processBuilderWorkflowJob, processBuildAndRolloutWorkflowJob, reconcileDeploymentRollout } from './deployment-workflow.ts';
