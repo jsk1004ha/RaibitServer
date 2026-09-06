@@ -5,10 +5,12 @@ import { Card, CardContent, CardDescription, CardHeader } from '../../components
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '../../components/ui/field';
 import { Input } from '../../components/ui/input';
 import { Brand } from '../../components/brand';
+import { PasswordRecoveryForm } from '../../components/password-recovery-form';
 import { ThemeMenu } from '../../components/theme-menu';
 import { apiAction } from '../../lib/api';
 
-const modes = ['login', 'signup', 'verify'] as const;
+const modes = ['login', 'signup', 'verify', 'forgot', 'reset'] as const;
+const navigationModes = ['login', 'signup', 'verify'] as const;
 
 type AuthMode = typeof modes[number];
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -18,13 +20,15 @@ const authCopy: Record<AuthMode, Readonly<{ eyebrow: string; title: string; desc
   login: { eyebrow: 'RAIBIT ACCOUNT', title: '콘솔에 로그인', description: '프로젝트와 배포 현황을 계속 관리하세요.' },
   signup: { eyebrow: 'JOIN RAIBIT', title: '가입 신청', description: '관리자 확인을 위해 정확한 정보를 입력해 주세요.' },
   verify: { eyebrow: 'VERIFY EMAIL', title: '이메일 인증', description: '이메일로 받은 6자리 코드를 입력해 주세요.' },
+  forgot: { eyebrow: 'PASSWORD RECOVERY', title: '비밀번호 재설정', description: '계정 존재 여부와 관계없이 동일한 안내를 보냅니다.' },
+  reset: { eyebrow: 'RESET PASSWORD', title: '새 비밀번호 설정', description: '이메일과 재설정 코드를 입력해 새 비밀번호를 설정하세요.' },
 };
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const query = await searchParams;
   const requestedMode = queryValue(query.mode, 'login');
   const mode = isAuthMode(requestedMode) ? requestedMode : 'login';
-  const email = queryValue(query.email, '');
+  const email = requestedMode === 'forgot' || requestedMode === 'reset' ? '' : queryValue(query.email, '');
   const next = queryValue(query.next, '/console');
   const error = errorMessage(queryValue(query.error, ''));
   const notice = noticeMessage(queryValue(query.notice, ''));
@@ -63,7 +67,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             </CardHeader>
             <CardContent className="flex flex-col gap-6">
               <nav aria-label="인증 메뉴" className="flex flex-wrap gap-4 border-b border-border pb-3 text-sm">
-                {modes.map((item) => (
+                {navigationModes.map((item) => (
                   <a
                     aria-current={mode === item ? 'page' : undefined}
                     className={mode === item ? 'font-medium text-foreground underline decoration-primary decoration-2 underline-offset-12' : 'text-muted-foreground hover:text-foreground'}
@@ -129,8 +133,10 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 </form>
               </> : null}
 
+              {mode === 'forgot' || mode === 'reset' ? <PasswordRecoveryForm mode={mode} requestAction={apiAction('/auth/password-reset/request')} completeAction={apiAction('/auth/password-reset/complete')} /> : null}
+
               <footer className="flex flex-col gap-3 border-t border-border pt-5 text-sm text-muted-foreground">
-                {mode === 'login' ? <p>계정이 없으신가요? <a className="font-medium text-foreground underline underline-offset-4" href={authHref('signup', next, email)}>가입 신청</a></p> : <p>이미 계정이 있으신가요? <a className="font-medium text-foreground underline underline-offset-4" href={authHref('login', next, email)}>로그인</a></p>}
+                {mode === 'login' ? <><p>계정이 없으신가요? <a className="font-medium text-foreground underline underline-offset-4" href={authHref('signup', next, email)}>가입 신청</a></p><p><a className="font-medium text-foreground underline underline-offset-4" href={authHref('forgot', next, '')}>비밀번호를 잊으셨나요?</a></p></> : <p>이미 계정이 있으신가요? <a className="font-medium text-foreground underline underline-offset-4" href={authHref('login', next, '')}>로그인</a></p>}
                 <a className="w-fit hover:text-foreground" href={publicHomeHref}>메인으로 돌아가기</a>
               </footer>
             </CardContent>
@@ -142,7 +148,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 }
 
 function isAuthMode(value: string): value is AuthMode {
-  return value === 'login' || value === 'signup' || value === 'verify';
+  return modes.some((mode) => mode === value);
 }
 
 function queryValue(value: string | string[] | undefined, fallback: string): string {
@@ -151,7 +157,7 @@ function queryValue(value: string | string[] | undefined, fallback: string): str
 
 function authHref(mode: AuthMode, next: string, email: string): string {
   const params = new URLSearchParams({ mode, next });
-  if (email) params.set('email', email);
+  if (email && (mode === 'signup' || mode === 'verify')) params.set('email', email);
   return `/login?${params.toString()}`;
 }
 
@@ -166,11 +172,15 @@ function errorMessage(code: string): string {
     github_oauth_state_invalid: 'GitHub 로그인 요청이 만료되었습니다. 다시 시도해 주세요.',
     github_verified_email_required: 'GitHub에서 인증된 이메일을 확인할 수 없습니다.',
     invalid_or_expired_email_verification_code: '인증 코드가 올바르지 않거나 만료되었습니다.',
+    invalid_or_expired_password_reset_code: '재설정 코드가 올바르지 않거나 만료되었습니다. 새 코드를 요청해 다시 시도해 주세요.',
+    password_confirmation_mismatch: '새 비밀번호와 확인 입력이 일치하지 않습니다.',
     request_failed: '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
   };
   return messages[code] || (code ? '요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.' : '');
 }
 
 function noticeMessage(code: string): string {
+  if (code === 'password_reset_requested') return '입력하신 이메일로 계정 존재 여부와 관계없이 안내를 보냈습니다.';
+  if (code === 'password_reset_completed') return '비밀번호를 변경했습니다. 새 비밀번호로 로그인해 주세요.';
   return code === 'saved' ? '요청이 처리되었습니다.' : code ? '요청 결과를 확인해 주세요.' : '';
 }

@@ -37,7 +37,7 @@ const UPSTREAM_INITIAL_RESPONSE_TIMEOUT_MS = 10_000;
 const UPSTREAM_BODY_TIMEOUT_MS = 15_000;
 const STREAM_IDLE_TIMEOUT_MS = 45_000;
 const STREAM_MAX_LIFETIME_MS = 16 * 60_000;
-const PUBLIC_POST_PATHS = new Set(['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend']);
+const PUBLIC_POST_PATHS = new Set(['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend', '/auth/password-reset/request', '/auth/password-reset/complete']);
 const PUBLIC_GET_PATHS = new Set(['/health', '/auth/github/login', '/auth/github/callback']);
 
 type RouteContext = { params: Promise<{ path: string[] }> | { path: string[] } };
@@ -107,6 +107,10 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
       if (isFormSubmission && upstreamMethod === 'POST' && /\/projects\/[^/]+\/services\/[^/]+\/env$/.test(path)) body = environmentPayloadFromForm(body);
       if (isFormSubmission && upstreamMethod === 'POST' && /\/projects\/[^/]+\/services\/[^/]+\/env-file$/.test(path)) body = environmentFilePayloadFromForm(body);
       if (isFormSubmission) body = resourceRecoveryPayloadFromForm(path, upstreamMethod, body);
+      if (isFormSubmission && upstreamMethod === 'POST' && path === '/auth/password-reset/complete') {
+        if (body.confirmPassword !== body.newPassword) return formErrorRedirect(browserRequestUrl, returnPath, 'password_confirmation_mismatch');
+        delete body.confirmPassword;
+      }
     } catch (error) {
       const code = requestBodyErrorCode(error);
       if (isFormSubmission) return formErrorRedirect(browserRequestUrl, returnPath, code);
@@ -187,20 +191,32 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
     if (isFormSubmission) {
       return formErrorRedirect(browserRequestUrl, returnPath, code);
     }
-    return NextResponse.json({ error: code }, { status: upstream.status });
+    const response = NextResponse.json({ error: code }, { status: upstream.status });
+    copyRetryAfterHeader(response, upstream.headers.get('retry-after'));
+    return response;
   }
 
   if (isMutation) {
     const successPath = path === '/auth/signup'
       ? signupVerificationPath(body?.email)
+      : path === '/auth/password-reset/request'
+        ? '/login?mode=reset'
+        : path === '/auth/password-reset/complete'
+          ? '/login?mode=login'
       : returnPath;
+    const successNotice = path === '/auth/password-reset/request'
+      ? 'password_reset_requested'
+      : path === '/auth/password-reset/complete'
+        ? 'password_reset_completed'
+        : 'saved';
     const response = isFormSubmission
-      ? NextResponse.redirect(new URL(withFlashMessage(browserRequestUrl, successPath, 'notice', 'saved'), browserRequestUrl), 303)
+      ? NextResponse.redirect(new URL(withFlashMessage(browserRequestUrl, successPath, 'notice', successNotice), browserRequestUrl), 303)
       : responseStatusAllowsBody(upstream.status)
         ? NextResponse.json(safePayload ?? {}, { status: upstream.status })
         : new NextResponse(null, { status: upstream.status });
     applySessionCookie(response, path, payload);
     response.headers.set('cache-control', 'no-store');
+    copyRetryAfterHeader(response, upstream.headers.get('retry-after'));
     return response;
   }
 
@@ -216,6 +232,10 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
     status: upstream.status,
     headers: { 'content-type': upstreamContentType, 'cache-control': 'no-store' },
   });
+}
+
+function copyRetryAfterHeader(response: NextResponse, value: string | null) {
+  if (value && /^\d{1,4}$/.test(value) && Number(value) >= 1 && Number(value) <= 3600) response.headers.set('retry-after', value);
 }
 
 function formErrorRedirect(requestUrl: string, returnPath: string, code: string) {
