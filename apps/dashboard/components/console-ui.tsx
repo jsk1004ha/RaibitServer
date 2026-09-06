@@ -92,6 +92,7 @@ export async function ConsoleShell({
     { label: '배포', href: `${projectBase}?view=deployments`, group: '현재 프로젝트', keywords: 'deployment release 배포' },
     { label: '리소스', href: `${projectBase}?view=resources`, group: '현재 프로젝트', keywords: 'resource database storage 리소스' },
     { label: '로그', href: `${projectBase}?view=logs`, group: '현재 프로젝트', keywords: 'log runtime 로그' },
+    { label: '도메인', href: `${projectBase}?view=domains`, group: '현재 프로젝트', keywords: 'domain dns tls 도메인' },
     { label: '설정', href: `${projectBase}?view=settings`, group: '현재 프로젝트', keywords: 'settings config 설정' },
   ] : [];
   const searchItems = [

@@ -3,6 +3,7 @@ import {
   FIXED_TIME,
   PUBLIC_SITE_SCENARIOS,
   loginAccounts,
+  resetCustomDomainFixture,
   resetProjectSettingsFixture,
   responseFor,
 } from './data.mjs';
@@ -39,6 +40,7 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === '/__fixture/reset' && request.method === 'POST') {
     resetProjectSettingsFixture();
+    resetCustomDomainFixture();
     return send(response, 200, fixtureState.reset());
   }
   const streamMatch = /^\/api\/services\/([^/]+)\/logs\/stream$/.exec(url.pathname);

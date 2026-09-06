@@ -16,6 +16,23 @@ const project = {
 };
 const initialSettingsProject = Object.freeze({ name: project.name, description: null, updatedAt: FIXED_TIME, deletionRequestedAt: null });
 let settingsProject = initialSettingsProject;
+const initialDomains = Object.freeze([
+  Object.freeze({
+    id: 'dom_fixture_ready', organizationId: project.organizationId, projectId: project.id, serviceId: 'svc_fixture_web', hostname: 'app.fixture.example',
+    status: 'READY', verificationVersion: 1, issuedAt: FIXED_TIME, expiresAt: '2026-09-01T03:00:00.000Z', verifiedAt: FIXED_TIME,
+    verificationRequestedAt: FIXED_TIME, lastCheckedAt: FIXED_TIME, nextCheckAt: null, consecutiveFailures: 0, tlsStatus: 'READY', desiredGeneration: 1,
+    controllerLeaseGeneration: 1, certificateObservedGeneration: 1, routeObservedGeneration: 1, cleanupBarrier: null, deletionRequestedAt: null,
+    actorUserId: 'usr_fixture_admin', lastErrorCode: null, lastErrorMessage: null, createdAt: FIXED_TIME, updatedAt: FIXED_TIME,
+  }),
+  Object.freeze({
+    id: 'dom_fixture_failed', organizationId: project.organizationId, projectId: project.id, serviceId: 'svc_fixture_web', hostname: 'failed.fixture.example',
+    status: 'FAILED', verificationVersion: 1, issuedAt: FIXED_TIME, expiresAt: '2026-09-01T03:00:00.000Z', verifiedAt: null,
+    verificationRequestedAt: FIXED_TIME, lastCheckedAt: FIXED_TIME, nextCheckAt: '2026-08-31T03:05:00.000Z', consecutiveFailures: 1, tlsStatus: 'PENDING', desiredGeneration: 1,
+    controllerLeaseGeneration: 1, certificateObservedGeneration: null, routeObservedGeneration: null, cleanupBarrier: null, deletionRequestedAt: null,
+    actorUserId: 'usr_fixture_admin', lastErrorCode: 'DNS_CHALLENGE_NOT_FOUND', lastErrorMessage: 'sanitized dns check failure', createdAt: FIXED_TIME, updatedAt: FIXED_TIME,
+  }),
+]);
+let customDomains = initialDomains;
 const service = {
   id: 'svc_fixture_web', projectId: project.id, name: 'web', slug: 'web', type: 'web', status: 'running',
   sourceType: 'github', repoUrl: 'https://github.com/raibit/fixture-app', branch: 'main', dockerfilePath: 'Dockerfile', port: 3000,
@@ -138,6 +155,10 @@ export function resetProjectSettingsFixture() {
   settingsProject = initialSettingsProject;
 }
 
+export function resetCustomDomainFixture() {
+  customDomains = initialDomains;
+}
+
 export function responseFor({ token, method, pathname, searchParams, publicSiteScenario = DEFAULT_PUBLIC_SITE_SCENARIO, body = {} }) {
   if (pathname === '/health') return json(200, { status: 'ok', checkedAt: FIXED_TIME });
   if (pathname === '/public/sites') return publicSitesResponse(publicSiteScenario, searchParams);
@@ -164,6 +185,9 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   if (pathname === '/github/installations') return json(200, { installations: state === 'empty' ? [] : [githubInstallation] });
   if (pathname === '/github/installations/9001/repositories') return json(200, { repositories: [githubRepository] });
   if (pathname === `/projects/${project.id}/services`) return json(200, { services: [service, workerService] });
+  if (pathname === `/projects/${project.id}/domains`) return customDomainsResponse({ actor, body, method });
+  const domainRoute = /^\/domains\/([^/]+)(?:\/(rotate|verify))?$/.exec(pathname);
+  if (domainRoute) return customDomainResponse({ actor, body, method, domainId: decodeURIComponent(domainRoute[1]), action: domainRoute[2] || 'status' });
   if (pathname === `/projects/${project.id}/settings/deletion`) return projectDeletionResponse({ actor, body, method });
   if (pathname === `/projects/${project.id}/settings`) return projectSettingsResponse({ actor, body, method });
   if (method === 'POST' && pathname === '/github/repositories/import') return json(201, {
@@ -272,6 +296,83 @@ function serviceReplacementResponse({ body, method }) {
   if (method !== 'POST') return json(405, { error: 'fixture_replacement_method_not_allowed' });
   if (body.expectedUpdatedAt !== FIXED_TIME || body.confirmed !== true || !body.source || typeof body.name !== 'string') return json(409, { error: 'fixture_replacement_stale' });
   return json(201, { impact: 'old_service_preserved', oldServiceId: service.id, service: { ...service, id: 'svc_fixture_replacement', name: body.name, ...body.source } });
+}
+
+function customDomainsResponse({ actor, body, method }) {
+  if (method === 'GET') return json(200, { domains: customDomains });
+  if (method !== 'POST') return json(405, { code: 'DOMAIN_METHOD_NOT_ALLOWED' });
+  if (actor.role !== 'ADMIN') return json(403, { code: 'permission_denied' });
+  if (Object.keys(body).sort().join(',') !== 'hostname,serviceId' || typeof body.serviceId !== 'string' || typeof body.hostname !== 'string') return json(400, { code: 'DOMAIN_HOSTNAME_INVALID' });
+  const hostname = body.hostname.trim().toLowerCase().replace(/\.$/, '');
+  if (!fixtureHostname(hostname)) return json(400, { code: 'DOMAIN_HOSTNAME_INVALID' });
+  if (hostname.endsWith('.raibitserver.app')) return json(400, { code: 'DOMAIN_PLATFORM_ZONE_FORBIDDEN' });
+  if (body.serviceId !== service.id) return json(400, { code: 'DOMAIN_SERVICE_NOT_PUBLIC_WEB' });
+  if (customDomains.some((domain) => domain.hostname === hostname)) return json(409, { code: 'DOMAIN_HOSTNAME_CONFLICT' });
+  const domain = fixtureDomain({ id: `dom_fixture_${customDomains.length + 1}`, serviceId: body.serviceId, hostname, actorUserId: actor.id });
+  customDomains = [...customDomains, domain];
+  return json(201, { domain, challengeToken: 'c'.repeat(43) });
+}
+
+function customDomainResponse({ actor, body, method, domainId, action }) {
+  const domain = customDomains.find((candidate) => candidate.id === domainId);
+  if (!domain) return json(404, { code: 'DOMAIN_NOT_FOUND' });
+  if (action === 'status') {
+    if (method === 'GET') return json(200, domain);
+    if (method === 'DELETE') return deleteFixtureDomain({ actor, body, domain });
+    return json(405, { code: 'DOMAIN_METHOD_NOT_ALLOWED' });
+  }
+  if (action === 'rotate') return rotateFixtureDomain({ actor, body, domain, method });
+  if (action === 'verify') return verifyFixtureDomain({ actor, body, domain, method });
+  return json(404, { code: 'DOMAIN_NOT_FOUND' });
+}
+
+function rotateFixtureDomain({ actor, body, domain, method }) {
+  if (method !== 'POST') return json(405, { code: 'DOMAIN_METHOD_NOT_ALLOWED' });
+  if (actor.role !== 'ADMIN') return json(403, { code: 'permission_denied' });
+  if (Object.keys(body).sort().join(',') !== 'confirmed,expectedVersion' || body.confirmed !== true || !fixtureVersion(body.expectedVersion, domain)) return json(409, { code: 'DOMAIN_VERSION_CONFLICT' });
+  const next = { ...domain, status: 'PENDING_VERIFICATION', verificationVersion: domain.verificationVersion + 1, issuedAt: '2026-08-31T03:00:02.000Z', expiresAt: '2026-09-01T03:00:02.000Z', verifiedAt: null, verificationRequestedAt: null, lastCheckedAt: null, nextCheckAt: null, consecutiveFailures: 0, tlsStatus: 'PENDING', desiredGeneration: domain.desiredGeneration + 1, certificateObservedGeneration: null, routeObservedGeneration: null, cleanupBarrier: { version: domain.verificationVersion, certificateAbsentObservedVersion: null, routeAbsentObservedVersion: null, complete: false }, actorUserId: actor.id, lastErrorCode: null, lastErrorMessage: null, updatedAt: '2026-08-31T03:00:02.000Z' };
+  replaceFixtureDomain(next);
+  return json(202, { domain: next, challengeToken: 'r'.repeat(43) });
+}
+
+function verifyFixtureDomain({ actor, body, domain, method }) {
+  if (method !== 'POST') return json(405, { code: 'DOMAIN_METHOD_NOT_ALLOWED' });
+  if (!['ADMIN', 'USER'].includes(actor.role)) return json(403, { code: 'permission_denied' });
+  if (Object.keys(body).join(',') !== 'expectedVersion' || !fixtureVersion(body.expectedVersion, domain)) return json(409, { code: 'DOMAIN_VERSION_CONFLICT' });
+  if (domain.status === 'DELETING') return json(409, { code: 'DOMAIN_DELETING' });
+  const next = { ...domain, status: 'ROUTING', verifiedAt: '2026-08-31T03:00:03.000Z', verificationRequestedAt: '2026-08-31T03:00:03.000Z', lastCheckedAt: '2026-08-31T03:00:03.000Z', nextCheckAt: '2026-08-31T03:05:03.000Z', tlsStatus: 'PENDING', lastErrorCode: null, lastErrorMessage: null, updatedAt: '2026-08-31T03:00:03.000Z' };
+  replaceFixtureDomain(next);
+  return json(202, next);
+}
+
+function deleteFixtureDomain({ actor, body, domain }) {
+  if (actor.role !== 'ADMIN') return json(403, { code: 'permission_denied' });
+  if (Object.keys(body).join(',') !== 'expectedVersion' || !fixtureVersion(body.expectedVersion, domain)) return json(409, { code: 'DOMAIN_VERSION_CONFLICT' });
+  const next = { ...domain, status: 'DELETING', deletionRequestedAt: '2026-08-31T03:00:04.000Z', cleanupBarrier: { version: domain.verificationVersion, certificateAbsentObservedVersion: null, routeAbsentObservedVersion: null, complete: false }, updatedAt: '2026-08-31T03:00:04.000Z' };
+  replaceFixtureDomain(next);
+  return json(202, next);
+}
+
+function fixtureHostname(hostname) {
+  return hostname.length > 3 && hostname.length <= 253 && hostname.split('.').length > 1 && hostname.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+}
+
+function fixtureVersion(version, domain) {
+  return Number.isInteger(version) && version === domain.verificationVersion;
+}
+
+function fixtureDomain({ id, serviceId, hostname, actorUserId }) {
+  return {
+    id, organizationId: project.organizationId, projectId: project.id, serviceId, hostname, status: 'PENDING_VERIFICATION', verificationVersion: 1,
+    issuedAt: '2026-08-31T03:00:01.000Z', expiresAt: '2026-09-01T03:00:01.000Z', verifiedAt: null, verificationRequestedAt: null,
+    lastCheckedAt: null, nextCheckAt: null, consecutiveFailures: 0, tlsStatus: 'PENDING', desiredGeneration: 1, controllerLeaseGeneration: null,
+    certificateObservedGeneration: null, routeObservedGeneration: null, cleanupBarrier: null, deletionRequestedAt: null, actorUserId, lastErrorCode: null,
+    lastErrorMessage: null, createdAt: '2026-08-31T03:00:01.000Z', updatedAt: '2026-08-31T03:00:01.000Z',
+  };
+}
+
+function replaceFixtureDomain(next) {
+  customDomains = customDomains.map((domain) => domain.id === next.id ? next : domain);
 }
 
 function publicSitesResponse(scenario, searchParams) {

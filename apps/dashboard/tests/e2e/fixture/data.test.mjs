@@ -7,6 +7,7 @@ import {
   TOKENS,
   isPublicSiteScenario,
   resetProjectSettingsFixture,
+  resetCustomDomainFixture,
   responseFor,
 } from './data.mjs';
 import { createFixtureState } from './state.mjs';
@@ -40,6 +41,8 @@ test('Given the populated fixture, when GitHub workflow data loads, then install
   assert.equal(projects.body.projects[0].id, 'prj_fixture_001');
   assert.deepEqual(services.body.services.map(({ id, projectId, branch }) => ({ id, projectId, branch })), [{
     id: 'svc_fixture_web', projectId: 'prj_fixture_001', branch: 'main',
+  }, {
+    id: 'svc_fixture_worker', projectId: 'prj_fixture_001', branch: 'main',
   }]);
 });
 
@@ -121,6 +124,37 @@ test('Given project settings, when a conditional update or deletion request is m
   assert.equal(scheduled.status, 202);
   assert.equal(scheduled.body.scheduled, true);
   resetProjectSettingsFixture();
+});
+
+test('Given custom domains, when a domain is added, verified, rotated, or deleted, then only create and rotate expose one-time tokens and reconciliation remains asynchronous', () => {
+  const listPath = '/projects/prj_fixture_001/domains';
+  resetCustomDomainFixture();
+
+  const listed = request('GET', listPath);
+  const created = request('POST', listPath, TOKENS.admin, { body: { serviceId: 'svc_fixture_web', hostname: 'docs.fixture.example' } });
+  const createdId = created.body.domain.id;
+  const listedAfterCreate = request('GET', listPath);
+  const verified = request('POST', `/domains/${createdId}/verify`, TOKENS.user, { body: { expectedVersion: created.body.domain.verificationVersion } });
+  const rotated = request('POST', `/domains/${createdId}/rotate`, TOKENS.admin, { body: { expectedVersion: verified.body.verificationVersion, confirmed: true } });
+  const deleted = request('DELETE', `/domains/${createdId}`, TOKENS.admin, { body: { expectedVersion: rotated.body.domain.verificationVersion } });
+  const deniedCreate = request('POST', listPath, TOKENS.user, { body: { serviceId: 'svc_fixture_web', hostname: 'denied.fixture.example' } });
+
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.domains[0].status, 'READY');
+  assert.equal(created.status, 201);
+  assert.match(created.body.challengeToken, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal('challengeToken' in listedAfterCreate.body.domains.at(-1), false);
+  assert.equal(verified.status, 202);
+  assert.equal(verified.body.status, 'ROUTING');
+  assert.equal('challengeToken' in verified.body, false);
+  assert.equal(rotated.status, 202);
+  assert.match(rotated.body.challengeToken, /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(rotated.body.challengeToken, created.body.challengeToken);
+  assert.equal(deleted.status, 202);
+  assert.equal(deleted.body.status, 'DELETING');
+  assert.equal(deleted.body.cleanupBarrier.complete, false);
+  assert.equal(deniedCreate.status, 403);
+  resetCustomDomainFixture();
 });
 
 test('Given the fixture-only public state switch, when each allowlisted scenario loads, then public payloads are deterministic and reset-safe', () => {

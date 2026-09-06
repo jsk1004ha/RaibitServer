@@ -1,11 +1,12 @@
 import type { DashboardLoadIssue } from '@/lib/api';
 import type { ResourceAvailability } from '@raibitserver/schemas';
 
-export const projectViews = ['overview', 'services', 'new-service', 'edit-service', 'deployments', 'agent', 'resources', 'new-resource', 'environment', 'logs', 'settings'] as const;
+export const projectViews = ['overview', 'services', 'new-service', 'edit-service', 'deployments', 'agent', 'resources', 'new-resource', 'environment', 'logs', 'domains', 'settings'] as const;
 export type ProjectView = (typeof projectViews)[number];
 
 export type ProjectRecord = Readonly<{
   id?: string;
+  organizationId?: string;
   name?: string;
   slug?: string;
   status?: string;
@@ -48,8 +49,45 @@ export type ServiceRecord = Readonly<{
   startCommand?: string;
   outputDirectory?: string;
   port?: string | number;
+  deletionRequestedAt?: string | null;
   desiredState?: Partial<ServiceRecord>;
   desiredSpec?: Partial<ServiceRecord>;
+}>;
+
+export type ProjectDomainRole = 'OWNER' | 'ADMIN' | 'MAINTAINER' | 'MEMBER' | 'VIEWER' | null;
+
+export type CustomDomainRecord = Readonly<{
+  id: string;
+  organizationId: string;
+  projectId: string;
+  serviceId: string;
+  hostname: string;
+  status: string;
+  verificationVersion: number;
+  issuedAt: string | null;
+  expiresAt: string | null;
+  verifiedAt: string | null;
+  verificationRequestedAt: string | null;
+  lastCheckedAt: string | null;
+  nextCheckAt: string | null;
+  consecutiveFailures: number;
+  tlsStatus: string;
+  desiredGeneration: number;
+  controllerLeaseGeneration: number | null;
+  certificateObservedGeneration: number | null;
+  routeObservedGeneration: number | null;
+  cleanupBarrier: Readonly<{
+    version: number;
+    certificateAbsentObservedVersion: number | null;
+    routeAbsentObservedVersion: number | null;
+    complete: boolean;
+  }> | null;
+  deletionRequestedAt: string | null;
+  actorUserId: string | null;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
 }>;
 
 export type DeploymentRecord = Readonly<{
@@ -116,6 +154,9 @@ export type ProjectHubData = Readonly<{
   base: string;
   deletionPending: boolean;
   deployments: readonly DeploymentRecord[];
+  customDomains: readonly CustomDomainRecord[];
+  customDomainsIssue: DashboardLoadIssue | null;
+  domainRole: ProjectDomainRole;
   editedEnvironment: EnvironmentEntry | null;
   environmentEntries: readonly EnvironmentEntry[];
   environmentService: ServiceRecord | null;

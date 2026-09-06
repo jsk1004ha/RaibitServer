@@ -1,7 +1,7 @@
 import { ConsoleShell } from '../../../../../components/console-ui';
 import { ProjectHub } from '../../../../../components/project-hub/project-hub';
 import { projectView, queryText } from '../../../../../components/project-hub/model';
-import type { EnvironmentEntry, RuntimeLog, ServiceRecord } from '../../../../../components/project-hub/types';
+import type { EnvironmentEntry, ProjectDomainRole, RuntimeLog, ServiceRecord } from '../../../../../components/project-hub/types';
 import { collectLoadIssues, getJson, loadProjectConsole, postJson } from '../../../../../lib/api';
 import { projectMainLink } from '../../../../../lib/project-main-link';
 
@@ -20,6 +20,12 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
   const projectSettings = view === 'settings'
     ? await getJson(`/projects/${encodeURIComponent(projectId)}/settings`, null, state.context)
     : null;
+  const [domains, domainIdentity] = view === 'domains'
+    ? await Promise.all([
+      getJson(`/projects/${encodeURIComponent(projectId)}/domains`, { domains: [] }, state.context),
+      getJson('/auth/me', { user: null, subject: null, memberships: [] }, state.context),
+    ])
+    : [null, null];
   const selectedServiceId = queryText(query.serviceId);
   const selectedService = state.services.find((service: ServiceRecord) => service.id === selectedServiceId) || state.services[0] || null;
   const serviceSettings = selectedService ? { ...selectedService.desiredState, ...selectedService.desiredSpec, ...selectedService } : null;
@@ -56,11 +62,17 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
     baseDomain: process.env.RAIBITSERVER_BASE_DOMAIN || process.env.BASE_DOMAIN,
   });
   const base = `/org/${orgSlug}/projects/${projectId}`;
+  const domainRole = resolveProjectDomainRole(domainIdentity?.body, state.project.organizationId);
   const data = {
     agentPlan: agentPlanResult?.body || null,
     base,
     deletionPending: ['DELETE_REQUESTED', 'DELETING'].includes(String(state.project.status || '').toUpperCase()),
     deployments: state.deployments,
+    customDomains: domains?.ok && Array.isArray(domains.body?.domains) ? domains.body.domains : [],
+    customDomainsIssue: domains && !domains.ok
+      ? { label: '사용자 도메인', message: domains.error || '사용자 도메인을 불러오지 못했습니다.', status: domains.status }
+      : null,
+    domainRole,
     editedEnvironment,
     environmentEntries,
     environmentService,
@@ -89,4 +101,30 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
       <ProjectHub data={data} orgSlug={orgSlug} />
     </ConsoleShell>
   );
+}
+
+function resolveProjectDomainRole(value: unknown, organizationId: string | undefined): ProjectDomainRole {
+  const record = jsonRecord(value);
+  const subject = jsonRecord(record?.subject);
+  const user = jsonRecord(record?.user);
+  const memberships = Array.isArray(record?.memberships) ? record.memberships : [];
+  const membership = memberships.map(jsonRecord).find((candidate) => String(candidate?.organizationId || '') === String(organizationId || ''));
+  const candidates = [
+    subject?.projectRole,
+    subject?.organizationRole,
+    membership?.projectRole,
+    membership?.organizationRole,
+    membership?.role,
+    user?.role,
+    subject?.userRole,
+  ];
+  for (const candidate of candidates) {
+    const role = String(candidate || '').toUpperCase();
+    if (role === 'OWNER' || role === 'ADMIN' || role === 'MAINTAINER' || role === 'MEMBER' || role === 'VIEWER') return role;
+  }
+  return null;
+}
+
+function jsonRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : null;
 }
