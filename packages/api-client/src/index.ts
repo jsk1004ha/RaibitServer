@@ -1,4 +1,4 @@
-import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationInviteAccept, OrganizationInviteCreate, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec, ServiceReplacementInput, ServiceReplacementResult, ServiceSettingsMutation, ServiceSettingsPreview, ServiceSettingsSnapshot } from '@raibitserver/schemas';
+import type { ApiOutput, CustomDomain, CustomDomainChallenge, CustomDomainCreate, CustomDomainMutation, CustomDomainRotate, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationInviteAccept, OrganizationInviteCreate, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec, ServiceReplacementInput, ServiceReplacementResult, ServiceSettingsMutation, ServiceSettingsPreview, ServiceSettingsSnapshot } from '@raibitserver/schemas';
 import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
@@ -113,6 +113,13 @@ export class RAIBITSERVERClient {
   deleteService(serviceId: string): Promise<Record<string, unknown>> {
     return this.request(`/services/${encodeURIComponent(serviceId)}`, { method: 'DELETE' });
   }
+
+  listDomains(projectId: string): Promise<{ readonly domains: readonly CustomDomain[] }> { return this.operations['domains-list']({ path: { projectId }, query: {}, body: {} }); }
+  createDomain(projectId: string, input: CustomDomainCreate): Promise<CustomDomainChallenge> { return this.operations['domains-create']({ path: { projectId }, query: {}, body: input }); }
+  getDomain(domainId: string): Promise<CustomDomain> { return this.operations['domains-status']({ path: { domainId }, query: {}, body: {} }); }
+  rotateDomain(domainId: string, input: CustomDomainRotate): Promise<CustomDomainChallenge> { return this.operations['domains-rotate']({ path: { domainId }, query: {}, body: input }); }
+  verifyDomain(domainId: string, input: CustomDomainMutation): Promise<CustomDomain> { return this.operations['domains-verify']({ path: { domainId }, query: {}, body: input }); }
+  deleteDomain(domainId: string, input: CustomDomainMutation): Promise<CustomDomain> { return this.operations['domains-delete']({ path: { domainId }, query: {}, body: input }); }
 
   createResource(projectId: string, resource: Partial<ResourceSpec> & Record<string, unknown>): Promise<ResourceSpec> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/resources`, { method: 'POST', body: resource });

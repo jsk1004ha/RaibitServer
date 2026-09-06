@@ -23,6 +23,7 @@ export { ServiceSettingsError, assertExpectedServiceVersion, parseServiceReplace
 export { can, assertCan, membershipRoleTransition, visibleEnvironment } from './rbac.ts';
 export { checkQuota, quotaForPlan, usageMetricDefinitions, quotaUsageGauges, quotaWarnings } from './quota.ts';
 export { domainPlanForProject, organizationRouteTenantSegment, resourceConsoleHostname, serviceConsoleHostname, serviceHostname } from './domain-router.ts';
+export * from './domain.ts';
 export { sourceCheckoutPlan } from './source-control.ts';
 export { buildExecutionPlan, buildCachePlan } from './build-executor.ts';
 export { registryPushPlan } from './registry.ts';

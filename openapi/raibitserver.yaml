@@ -1091,6 +1091,190 @@ paths:
       security:
         - bearerAuth: []
       x-permission: service:create
+  /projects/{projectId}/domains:
+    get:
+      operationId: domains-list
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/domains-listResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: domain:read
+    post:
+      operationId: domains-create
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/domains-createBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/domains-createResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: domain:manage
+  /domains/{domainId}:
+    get:
+      operationId: domains-status
+      parameters:
+        - name: domainId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/domains-statusResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: domain:read
+    delete:
+      operationId: domains-delete
+      parameters:
+        - name: domainId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/domains-verifyBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/domains-statusResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: domain:manage
+  /domains/{domainId}/rotate:
+    post:
+      operationId: domains-rotate
+      parameters:
+        - name: domainId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/domains-rotateBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/domains-createResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: domain:manage
+  /domains/{domainId}/verify:
+    post:
+      operationId: domains-verify
+      parameters:
+        - name: domainId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/domains-verifyBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/domains-statusResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: domain:verify
   /projects/{projectId}/services/{serviceId}/deployments:
     get:
       operationId: project-deployments-list
@@ -5936,6 +6120,251 @@ components:
         - name
         - source
       additionalProperties: false
+    domains-listResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        domains:
+          type: array
+          items:
+            $ref: "#/components/schemas/domains-statusResponse"
+      required:
+        - domains
+      additionalProperties: false
+    domains-createResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        domain:
+          $ref: "#/components/schemas/domains-statusResponse"
+        challengeToken:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
+      required:
+        - domain
+        - challengeToken
+      additionalProperties: false
+    domains-createBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        serviceId:
+          type: string
+          minLength: 1
+        hostname:
+          type: string
+          minLength: 1
+          maxLength: 1024
+      required:
+        - serviceId
+        - hostname
+      additionalProperties: false
+    domains-statusResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        organizationId:
+          type: string
+          minLength: 1
+        projectId:
+          type: string
+          minLength: 1
+        serviceId:
+          type: string
+          minLength: 1
+        hostname:
+          type: string
+          minLength: 3
+          maxLength: 253
+        status:
+          type: string
+          enum:
+            - PENDING_VERIFICATION
+            - VERIFIED
+            - ROUTING
+            - READY
+            - FAILED
+            - DELETING
+        verificationVersion:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        issuedAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        expiresAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        verifiedAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        verificationRequestedAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        lastCheckedAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        nextCheckAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        consecutiveFailures:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        tlsStatus:
+          type: string
+          enum:
+            - PENDING
+            - ISSUING
+            - READY
+            - FAILED
+        desiredGeneration:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        controllerLeaseGeneration:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        certificateObservedGeneration:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        routeObservedGeneration:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        cleanupBarrier:
+          anyOf:
+            - type: object
+              properties:
+                version:
+                  type: integer
+                  exclusiveMinimum: 0
+                  maximum: 9007199254740991
+                certificateAbsentObservedVersion:
+                  anyOf:
+                    - type: integer
+                      exclusiveMinimum: 0
+                      maximum: 9007199254740991
+                    - type: "null"
+                routeAbsentObservedVersion:
+                  anyOf:
+                    - type: integer
+                      exclusiveMinimum: 0
+                      maximum: 9007199254740991
+                    - type: "null"
+                complete:
+                  type: boolean
+              required:
+                - version
+                - certificateAbsentObservedVersion
+                - routeAbsentObservedVersion
+                - complete
+              additionalProperties: false
+            - type: "null"
+        deletionRequestedAt:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: "null"
+        actorUserId:
+          type: string
+          minLength: 1
+        lastErrorCode:
+          anyOf:
+            - type: string
+              maxLength: 100
+            - type: "null"
+        lastErrorMessage:
+          anyOf:
+            - type: string
+              maxLength: 500
+            - type: "null"
+        createdAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        updatedAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - id
+        - organizationId
+        - projectId
+        - serviceId
+        - hostname
+        - status
+        - verificationVersion
+        - issuedAt
+        - expiresAt
+        - verifiedAt
+        - verificationRequestedAt
+        - lastCheckedAt
+        - nextCheckAt
+        - consecutiveFailures
+        - tlsStatus
+        - desiredGeneration
+        - controllerLeaseGeneration
+        - certificateObservedGeneration
+        - routeObservedGeneration
+        - cleanupBarrier
+        - deletionRequestedAt
+        - actorUserId
+        - lastErrorCode
+        - lastErrorMessage
+        - createdAt
+        - updatedAt
+      additionalProperties: false
+    domains-rotateBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        confirmed:
+          type: boolean
+          const: true
+      required:
+        - expectedVersion
+        - confirmed
+      additionalProperties: false
+    domains-verifyBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+      required:
+        - expectedVersion
+      additionalProperties: false
     deployments-cancelResponse:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -6813,12 +7242,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a1
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema0"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a1
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema0"
         schema1:
           anyOf:
             - type: string
@@ -6826,12 +7256,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a2
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema1"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a2
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema1"
         schema2:
           anyOf:
             - type: string
@@ -6839,12 +7270,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a3
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema2"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a3
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema2"
         schema3:
           anyOf:
             - type: string
@@ -6852,12 +7284,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a4
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema3"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a4
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema3"
         schema4:
           anyOf:
             - type: string
@@ -6865,12 +7298,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a5
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema4"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a5
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema4"
         schema5:
           anyOf:
             - type: string
@@ -6878,12 +7312,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a6
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema5"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a6
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema5"
         schema6:
           anyOf:
             - type: string
@@ -6891,12 +7326,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a7
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema6"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a7
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema6"
         schema7:
           anyOf:
             - type: string
@@ -6904,12 +7340,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a8
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema7"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a8
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema7"
         schema8:
           anyOf:
             - type: string
@@ -6917,12 +7354,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a9
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema8"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a9
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema8"
         schema9:
           anyOf:
             - type: string
@@ -6930,12 +7368,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a10
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema9"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a10
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema9"
         schema10:
           anyOf:
             - type: string
@@ -6943,12 +7382,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a11
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema10"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a11
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema10"
         schema11:
           anyOf:
             - type: string
@@ -6956,12 +7396,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a12
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema11"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a12
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema11"
         schema12:
           anyOf:
             - type: string
@@ -6969,12 +7410,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a13
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema12"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a13
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema12"
         schema13:
           anyOf:
             - type: string
@@ -6982,12 +7424,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a14
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema13"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a14
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema13"
         schema14:
           anyOf:
             - type: string
@@ -6995,12 +7438,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a15
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema14"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a15
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema14"
         schema15:
           anyOf:
             - type: string
@@ -7008,12 +7452,13 @@ components:
             - type: boolean
             - type: "null"
             - type: array
-              items: &a16
+              items:
                 $ref: "#/components/schemas/__shared#/$defs/schema15"
             - type: object
               propertyNames:
                 type: string
-              additionalProperties: *a16
+              additionalProperties:
+                $ref: "#/components/schemas/__shared#/$defs/schema15"
   securitySchemes:
     bearerAuth:
       type: http

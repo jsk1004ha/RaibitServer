@@ -7,6 +7,7 @@ import { ProjectUpdateSchema, ServiceUpdateSchema, ResourceUpdateSchema } from '
 import { ProjectDeletionConfirmationSchema, ProjectDeletionScheduledSchema, ProjectSettingsUpdateSchema, ProjectSettingsViewSchema } from './project-settings.ts';
 import { OrganizationInviteAcceptSchema, OrganizationInviteAcceptanceSchema, OrganizationInviteCreateSchema, OrganizationInviteIssuedSchema, OrganizationInviteListSchema } from './organization-invite.ts';
 import { ServiceReplacementInputSchema, ServiceReplacementResultSchema, ServiceSettingsMutationSchema, ServiceSettingsPreviewSchema, ServiceSettingsSnapshotSchema } from './service-settings.ts';
+import { CustomDomainChallengeSchema, CustomDomainCreateSchema, CustomDomainListSchema, CustomDomainMutationSchema, CustomDomainRotateSchema, CustomDomainSchema } from './domain.ts';
 
 const id = z.string().min(1);
 const project = z.object({ projectId: id });
@@ -17,6 +18,7 @@ const backup = z.object({ backupId: id });
 const restore = z.object({ restoreId: id });
 const user = z.object({ userId: id });
 const organization = z.object({ organizationId: id });
+const domain = z.object({ domainId: id });
 const scopedService = project.extend({ serviceId: id });
 const orgQuery = z.object({ organizationId: id.optional() });
 const query = z.object({ query: z.string().min(1), confirmed: z.boolean().optional(), limit: z.number().int().max(1000).optional() });
@@ -75,6 +77,12 @@ export const apiOperations = {
   'services-settings-update': operation({ method: 'patch', path: '/services/{serviceId}/settings', status: 200, permission: 'service:update', input: input(service, M.Empty, ServiceSettingsMutationSchema), response: ServiceSettingsSnapshotSchema }),
   'services-replacements-create': operation({ method: 'post', path: '/services/{serviceId}/replacements', status: 201, permission: 'service:create', input: input(service, M.Empty, ServiceReplacementInputSchema), response: ServiceReplacementResultSchema }),
   'services-delete': operation({ method: 'delete', path: '/services/{serviceId}', status: 200, permission: 'project:delete', input: input(service, M.Empty, M.Empty), response: M.Deletion }),
+  'domains-list': operation({ method: 'get', path: '/projects/{projectId}/domains', status: 200, permission: 'domain:read', input: input(project, M.Empty, M.Empty), response: CustomDomainListSchema }),
+  'domains-create': operation({ method: 'post', path: '/projects/{projectId}/domains', status: 201, permission: 'domain:manage', input: input(project, M.Empty, CustomDomainCreateSchema), response: CustomDomainChallengeSchema }),
+  'domains-status': operation({ method: 'get', path: '/domains/{domainId}', status: 200, permission: 'domain:read', input: input(domain, M.Empty, M.Empty), response: CustomDomainSchema }),
+  'domains-rotate': operation({ method: 'post', path: '/domains/{domainId}/rotate', status: 202, permission: 'domain:manage', input: input(domain, M.Empty, CustomDomainRotateSchema), response: CustomDomainChallengeSchema }),
+  'domains-verify': operation({ method: 'post', path: '/domains/{domainId}/verify', status: 202, permission: 'domain:verify', input: input(domain, M.Empty, CustomDomainMutationSchema), response: CustomDomainSchema }),
+  'domains-delete': operation({ method: 'delete', path: '/domains/{domainId}', status: 202, permission: 'domain:manage', input: input(domain, M.Empty, CustomDomainMutationSchema), response: CustomDomainSchema }),
   'project-deployments-list': operation({ method: 'get', path: '/projects/{projectId}/services/{serviceId}/deployments', status: 200, permission: 'project:read', input: input(scopedService, M.PageQuery, M.Empty), response: M.Deployments }),
   'project-deployments-create': operation({ method: 'post', path: '/projects/{projectId}/services/{serviceId}/deployments', status: 202, permission: 'deploy:run', input: input(scopedService, M.Empty, M.DeploymentInput), response: M.DeploymentMutationResult }),
   'deployments-list': operation({ method: 'get', path: '/services/{serviceId}/deployments', status: 200, permission: 'project:read', input: input(service, M.PageQuery, M.Empty), response: M.Deployments }),

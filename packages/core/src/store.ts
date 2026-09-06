@@ -29,6 +29,7 @@ import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureIn
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import { acceptMemoryOrganizationInvite, listMemoryOrganizationInvites, replaceMemoryOrganizationInvite, revokeMemoryOrganizationInviteAfterDeliveryFailure } from './organization-invite-memory.ts';
 import type { OrganizationInviteRecord, ReplaceOrganizationInviteInput } from './organization-invite.ts';
+import { DomainLifecycleError, issueCustomDomain, normalizeCustomHostname, publicCustomDomain, requestCustomDomainCheck, requestCustomDomainDelete, rotateCustomDomain, type CustomDomainRecord } from './domain.ts';
 import {
   boundedActivityRows,
   dateMs,
@@ -1661,6 +1662,57 @@ export class ControlPlaneStore {
     return deepClone(row);
   }
 
+  createCustomDomain(input: Record<string, any>) {
+    const project = this.projects.get(String(input.projectId));
+    const service = this.services.get(String(input.serviceId));
+    if (!project || !service || String(project.organizationId) !== String(input.organizationId) || String(service.projectId) !== String(project.id)) {
+      throw new DomainLifecycleError('DOMAIN_SCOPE_NOT_FOUND', 404);
+    }
+    if (String(service.type).toLowerCase() !== 'web') throw new DomainLifecycleError('DOMAIN_SERVICE_NOT_PUBLIC_WEB', 400);
+    const hostname = normalizeCustomHostname(input.hostname, input.platformZones);
+    if ([...this.domains.values()].some((domain) => String(domain.hostname || domain.domain).toLowerCase() === hostname)) {
+      throw new DomainLifecycleError('DOMAIN_HOSTNAME_CONFLICT', 409);
+    }
+    const issued = issueCustomDomain({
+      id: stableId('dom', hostname), organizationId: project.organizationId, projectId: project.id,
+      serviceId: service.id, hostname, actorUserId: String(input.actorUserId), now: input.now,
+    });
+    this.domains.set(issued.domain.id, issued.domain);
+    this.audit(input.actorUserId, 'domain:create', 'domain', issued.domain.id, publicCustomDomain(issued.domain));
+    return { domain: publicCustomDomain(issued.domain), challengeToken: issued.challengeToken };
+  }
+
+  listCustomDomainsForProject(projectId: string) {
+    return deepClone([...this.domains.values()].filter((domain) => domain.hostname && String(domain.projectId) === String(projectId)).map((domain) => publicCustomDomain(domain)));
+  }
+
+  getCustomDomain(domainId: string) {
+    const domain = this.domains.get(String(domainId));
+    return domain?.hostname ? deepClone(publicCustomDomain(domain)) : null;
+  }
+
+  rotateCustomDomainChallenge(domainId: string, input: Record<string, any>) {
+    const current = this.requireCustomDomain(domainId);
+    const rotated = rotateCustomDomain(current, input.expectedVersion, String(input.actorUserId), input.now);
+    this.domains.set(domainId, rotated.domain);
+    this.audit(input.actorUserId, 'domain:rotate', 'domain', domainId, publicCustomDomain(rotated.domain));
+    return { domain: publicCustomDomain(rotated.domain), challengeToken: rotated.challengeToken };
+  }
+
+  requestCustomDomainVerification(domainId: string, input: Record<string, any>) {
+    const domain = requestCustomDomainCheck(this.requireCustomDomain(domainId), input.expectedVersion, String(input.actorUserId), input.now);
+    this.domains.set(domainId, domain);
+    this.audit(input.actorUserId, 'domain:verify-requested', 'domain', domainId, publicCustomDomain(domain));
+    return publicCustomDomain(domain);
+  }
+
+  requestCustomDomainDeletion(domainId: string, input: Record<string, any>) {
+    const domain = requestCustomDomainDelete(this.requireCustomDomain(domainId), input.expectedVersion, String(input.actorUserId), input.now);
+    this.domains.set(domainId, domain);
+    this.audit(input.actorUserId, 'domain:delete-requested', 'domain', domainId, publicCustomDomain(domain));
+    return publicCustomDomain(domain);
+  }
+
   recordUsage(record: Record<string, any>) {
     const row = { id: stableId('use', record.organizationId, record.metric, Date.now()), ...record, recordedAt: record.recordedAt || nowIso() };
     this.usageRecords.push(row);
@@ -1890,6 +1942,12 @@ export class ControlPlaneStore {
     if (index === -1) throw notFound(`workflow job not found: ${next.id}`);
     this.workflowJobs[index] = next;
     return next;
+  }
+
+  private requireCustomDomain(domainId: string): CustomDomainRecord {
+    const domain = this.domains.get(String(domainId));
+    if (!domain?.hostname) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
+    return domain;
   }
 }
 

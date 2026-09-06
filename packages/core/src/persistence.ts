@@ -35,6 +35,7 @@ import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureIn
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
 import { assertExpectedServiceVersion, parseServiceReplacement, parseServiceSettingsInput, previewServiceSettings, serviceSettingsSnapshot, ServiceSettingsError } from './service-settings.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
+import { DomainLifecycleError, issueCustomDomain, normalizeCustomHostname, publicCustomDomain, requestCustomDomainCheck, requestCustomDomainDelete, rotateCustomDomain, type CustomDomainRecord } from './domain.ts';
 import {
   activityLimit,
   boundedKeysetRows,
@@ -299,6 +300,12 @@ export class InMemoryControlPlaneRepository {
     return deepClone({ users, quotas, auditLogs });
   }
   async listServicesForProject(projectId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.services.values()].filter((service) => String(service.projectId) === String(projectId)), options)); }
+  async createCustomDomain(input: Record<string, any>) { return this.store.createCustomDomain(input); }
+  async listCustomDomainsForProject(projectId: string) { return this.store.listCustomDomainsForProject(projectId); }
+  async getCustomDomain(domainId: string) { return this.store.getCustomDomain(domainId); }
+  async rotateCustomDomainChallenge(domainId: string, input: Record<string, any>) { return this.store.rotateCustomDomainChallenge(domainId, input); }
+  async requestCustomDomainVerification(domainId: string, input: Record<string, any>) { return this.store.requestCustomDomainVerification(domainId, input); }
+  async requestCustomDomainDeletion(domainId: string, input: Record<string, any>) { return this.store.requestCustomDomainDeletion(domainId, input); }
   async listResourcesForProject(projectId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId)), options)); }
   async listDeploymentsForService(serviceId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId)), options)).map(publicDeploymentHealth); }
   async listDeploymentsForProject(projectId: string, options: Record<string, any> = {}) {
@@ -1373,6 +1380,82 @@ export class PrismaControlPlaneRepository {
       const service = await tx.service.create({ data: { projectId: current.projectId, name: replacementInput.name, slug, ...serviceData(replacementInput.source) } });
       await tx.auditLog.create({ data: { actorUserId: options.actorUserId || null, action: 'service:create', targetType: 'service', targetId: service.id, metadata: { projectId: current.projectId, replacementForServiceId: serviceId } } });
       return { impact: 'old_service_preserved', oldServiceId: serviceId, service };
+    });
+  }
+
+  async createCustomDomain(input: Record<string, any>) {
+    try {
+      return await serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+        const [project, service] = await Promise.all([
+          tx.project.findUnique({ where: { id: String(input.projectId) } }),
+          tx.service.findUnique({ where: { id: String(input.serviceId) } }),
+        ]);
+        if (!project || !service || String(project.organizationId) !== String(input.organizationId) || String(service.projectId) !== String(project.id)) {
+          throw new DomainLifecycleError('DOMAIN_SCOPE_NOT_FOUND', 404);
+        }
+        if (String(service.type).toLowerCase() !== 'web') throw new DomainLifecycleError('DOMAIN_SERVICE_NOT_PUBLIC_WEB', 400);
+        const hostname = normalizeCustomHostname(input.hostname, input.platformZones);
+        const issued = issueCustomDomain({
+          id: stableId('dom', hostname), organizationId: project.organizationId, projectId: project.id,
+          serviceId: service.id, hostname, actorUserId: String(input.actorUserId), now: input.now,
+        });
+        const domain = await tx.domain.create({ data: domainPersistenceData(issued.domain) });
+        const view = publicCustomDomain(persistedDomainRecord(domain));
+        await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'domain:create', targetType: 'domain', targetId: domain.id, metadata: view } });
+        return { domain: view, challengeToken: issued.challengeToken };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new DomainLifecycleError('DOMAIN_HOSTNAME_CONFLICT', 409);
+      throw error;
+    }
+  }
+
+  async listCustomDomainsForProject(projectId: string) {
+    const rows = await this.prisma.domain.findMany({ where: { projectId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+    return rows.map((row) => publicCustomDomain(persistedDomainRecord(row)));
+  }
+
+  async getCustomDomain(domainId: string) {
+    const row = await this.prisma.domain.findUnique({ where: { id: domainId } });
+    return row ? publicCustomDomain(persistedDomainRecord(row)) : null;
+  }
+
+  async rotateCustomDomainChallenge(domainId: string, input: Record<string, any>) {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const current = await tx.domain.findUnique({ where: { id: domainId } });
+      if (!current) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
+      const rotated = rotateCustomDomain(persistedDomainRecord(current), input.expectedVersion, String(input.actorUserId), input.now);
+      const changed = await tx.domain.updateMany({ where: { id: domainId, verificationVersion: input.expectedVersion }, data: domainPersistenceUpdate(rotated.domain) });
+      if (changed.count !== 1) throw new DomainLifecycleError('DOMAIN_VERSION_CONFLICT', 409);
+      const view = publicCustomDomain(rotated.domain);
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'domain:rotate', targetType: 'domain', targetId: domainId, metadata: view } });
+      return { domain: view, challengeToken: rotated.challengeToken };
+    });
+  }
+
+  async requestCustomDomainVerification(domainId: string, input: Record<string, any>) {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const current = await tx.domain.findUnique({ where: { id: domainId } });
+      if (!current) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
+      const requested = requestCustomDomainCheck(persistedDomainRecord(current), input.expectedVersion, String(input.actorUserId), input.now);
+      const changed = await tx.domain.updateMany({ where: { id: domainId, verificationVersion: input.expectedVersion }, data: domainPersistenceUpdate(requested) });
+      if (changed.count !== 1) throw new DomainLifecycleError('DOMAIN_VERSION_CONFLICT', 409);
+      const view = publicCustomDomain(requested);
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'domain:verify-requested', targetType: 'domain', targetId: domainId, metadata: view } });
+      return view;
+    });
+  }
+
+  async requestCustomDomainDeletion(domainId: string, input: Record<string, any>) {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      const current = await tx.domain.findUnique({ where: { id: domainId } });
+      if (!current) throw new DomainLifecycleError('DOMAIN_NOT_FOUND', 404);
+      const requested = requestCustomDomainDelete(persistedDomainRecord(current), input.expectedVersion, String(input.actorUserId), input.now);
+      const changed = await tx.domain.updateMany({ where: { id: domainId, verificationVersion: input.expectedVersion }, data: domainPersistenceUpdate(requested) });
+      if (changed.count !== 1) throw new DomainLifecycleError('DOMAIN_VERSION_CONFLICT', 409);
+      const view = publicCustomDomain(requested);
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'domain:delete-requested', targetType: 'domain', targetId: domainId, metadata: view } });
+      return view;
     });
   }
 
@@ -3223,6 +3306,48 @@ function auditActorUserId(value: any) {
   if (!actor) return null;
   if (new Set(['system', 'provider', 'github-app', 'github-webhook', 'github-installation-webhook', 'workflow-worker', 'builder']).has(actor.toLowerCase())) return null;
   return actor;
+}
+
+function persistedDomainRecord(row: Record<string, any>): CustomDomainRecord {
+  return {
+    id: String(row.id), organizationId: String(row.organizationId), projectId: String(row.projectId), serviceId: String(row.serviceId),
+    hostname: String(row.hostname || row.domain), status: row.status, verificationTokenHash: row.verificationTokenHash ?? null,
+    verificationVersion: Number(row.verificationVersion), verifiedAt: isoOrNull(row.verifiedAt), verificationRequestedAt: isoOrNull(row.verificationRequestedAt),
+    lastCheckedAt: isoOrNull(row.lastCheckedAt), nextCheckAt: isoOrNull(row.nextCheckAt), consecutiveFailures: Number(row.consecutiveFailures),
+    tlsStatus: row.tlsStatus, desiredGeneration: Number(row.desiredGeneration), controllerLeaseGeneration: Number(row.controllerLeaseGeneration),
+    certificateObservedGeneration: Number(row.certificateObservedGeneration), routeObservedGeneration: Number(row.routeObservedGeneration),
+    cleanupRequiredForVersion: row.cleanupRequiredForVersion === null ? null : Number(row.cleanupRequiredForVersion),
+    certificateAbsentObservedVersion: row.certificateAbsentObservedVersion === null ? null : Number(row.certificateAbsentObservedVersion),
+    routeAbsentObservedVersion: row.routeAbsentObservedVersion === null ? null : Number(row.routeAbsentObservedVersion),
+    actorUserId: String(row.actorUserId), lastErrorCode: row.lastErrorCode ?? null, lastErrorMessage: row.lastErrorMessage ?? null,
+    issuedAt: isoOrNull(row.issuedAt), expiresAt: isoOrNull(row.expiresAt),
+    deletionRequestedAt: isoOrNull(row.deletionRequestedAt), createdAt: isoOrNull(row.createdAt) || new Date(0).toISOString(), updatedAt: isoOrNull(row.updatedAt) || new Date(0).toISOString(),
+  };
+}
+
+function domainPersistenceData(record: CustomDomainRecord): Record<string, unknown> {
+  const { hostname, ...stored } = record;
+  return {
+    ...stored,
+    domain: hostname, type: 'CUSTOM', verified: record.status === 'READY',
+    issuedAt: dateOrNull(record.issuedAt), expiresAt: dateOrNull(record.expiresAt), verifiedAt: dateOrNull(record.verifiedAt),
+    verificationRequestedAt: dateOrNull(record.verificationRequestedAt), lastCheckedAt: dateOrNull(record.lastCheckedAt), nextCheckAt: dateOrNull(record.nextCheckAt),
+    deletionRequestedAt: dateOrNull(record.deletionRequestedAt), createdAt: new Date(record.createdAt), updatedAt: new Date(record.updatedAt),
+  };
+}
+
+function domainPersistenceUpdate(record: CustomDomainRecord): Record<string, unknown> {
+  const { id: _id, organizationId: _organizationId, projectId: _projectId, serviceId: _serviceId, domain: _domain, createdAt: _createdAt, ...mutable } = domainPersistenceData(record);
+  return mutable;
+}
+
+function isoOrNull(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return value instanceof Date ? value.toISOString() : new Date(String(value)).toISOString();
+}
+
+function dateOrNull(value: string | null): Date | null {
+  return value === null ? null : new Date(value);
 }
 
 async function serializableTransactionWithRetry(prisma: any, work: (tx: any) => Promise<any>, maxAttempts = 3) {

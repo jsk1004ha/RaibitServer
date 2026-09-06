@@ -1,8 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
-import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
+import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, DomainLifecycleError, parseDeploymentOperationBody } from '@raibitserver/core';
 import { projectObservationPayload } from '@raibitserver/core';
 import { ProjectSettingsError } from '@raibitserver/core';
-import { PasswordRecoveryCompleteSchema, PasswordRecoveryRequestSchema, ResourceBackupListSchema, type ProjectDeletionScheduled, type ProjectSettingsUpdate, type ProjectSettingsView, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceReplacementInput, type ServiceSettingsMutation, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
+import { PasswordRecoveryCompleteSchema, PasswordRecoveryRequestSchema, ResourceBackupListSchema, type CustomDomainCreate, type CustomDomainMutation, type CustomDomainRotate, type ProjectDeletionScheduled, type ProjectSettingsUpdate, type ProjectSettingsView, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceReplacementInput, type ServiceSettingsMutation, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, completePasswordRecovery, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requestPasswordRecovery, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
@@ -342,6 +342,73 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     if (isDeletionTombstone(service)) return { deletionRequested: true, status: String(service.status).toUpperCase(), serviceId: service.id || serviceId };
     return { deleted: true, serviceId: service.id || serviceId };
+  }
+
+  async listDomains(projectId: string, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    await assertProjectAccess(repository, projectId, subject);
+    return { domains: await repository.listCustomDomainsForProject(projectId) };
+  }
+
+  async createDomain(projectId: string, input: CustomDomainCreate, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    await assertProjectAccess(repository, projectId, subject);
+    const project = await repository.getProject(projectId);
+    try {
+      return await repository.createCustomDomain({
+        ...input, organizationId: project.organizationId, projectId, actorUserId: subject.id,
+        platformZones: [process.env.RAIBITSERVER_BASE_DOMAIN || 'raibitserver.app'],
+      });
+    } catch (error) {
+      throw nestDomainError(error);
+    }
+  }
+
+  async getDomain(domainId: string, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    return this.assertDomainAccess(repository, domainId, subject);
+  }
+
+  async rotateDomain(domainId: string, input: CustomDomainRotate, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    await this.assertDomainAccess(repository, domainId, subject);
+    try {
+      return await repository.rotateCustomDomainChallenge(domainId, { ...input, actorUserId: subject.id });
+    } catch (error) {
+      throw nestDomainError(error);
+    }
+  }
+
+  async verifyDomain(domainId: string, input: CustomDomainMutation, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    await this.assertDomainAccess(repository, domainId, subject);
+    try {
+      return await repository.requestCustomDomainVerification(domainId, { ...input, actorUserId: subject.id });
+    } catch (error) {
+      throw nestDomainError(error);
+    }
+  }
+
+  async deleteDomain(domainId: string, input: CustomDomainMutation, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    await this.assertDomainAccess(repository, domainId, subject);
+    try {
+      return await repository.requestCustomDomainDeletion(domainId, { ...input, actorUserId: subject.id });
+    } catch (error) {
+      throw nestDomainError(error);
+    }
+  }
+
+  private async assertDomainAccess(repository: InMemoryControlPlaneRepository | PrismaControlPlaneRepository, domainId: string, subject: Record<string, unknown>) {
+    const domain = await repository.getCustomDomain(domainId);
+    if (!domain) throw new NotFoundException('DOMAIN_NOT_FOUND');
+    try {
+      await assertProjectAccess(repository, domain.projectId, subject);
+    } catch (error) {
+      if (error instanceof ForbiddenException || error instanceof NotFoundException) throw new NotFoundException('DOMAIN_NOT_FOUND');
+      throw error;
+    }
+    return domain;
   }
 
   async listResources(projectId: string, subject: Record<string, any>, options: Record<string, any> = {}) {
@@ -1183,6 +1250,11 @@ function nestAuthError(error: any) {
   if (error?.statusCode === 429) return new HttpException(message, 429);
   if (Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode <= 599) return new HttpException(message, error.statusCode);
   return error;
+}
+
+function nestDomainError(error: unknown) {
+  if (error instanceof DomainLifecycleError) return typedOperationException(error.statusCode, error.code, false);
+  throw error;
 }
 
 function parseRecoveryListOptions(input: Record<string, unknown>): ResourceBackupList {
