@@ -21,16 +21,17 @@ export function AccountMenu({ avatarUrl, email, logoutAction, name, organization
   const restoreFocusAfterEscape = useRef(false);
   return <div className="contents" ref={setPortalContainer}><DropdownMenu onOpenChange={(open, eventDetails) => { restoreFocusAfterEscape.current = !open && eventDetails.reason === 'escape-key'; }} onOpenChangeComplete={(open) => {
     if (open || !restoreFocusAfterEscape.current) return;
-    queueMicrotask(() => requestAnimationFrame(() => {
+    // The containing Sheet restores focus in the menu-completion frame.
+    queueMicrotask(() => requestAnimationFrame(() => requestAnimationFrame(() => {
       if (restoreFocusAfterEscape.current) triggerRef.current?.focus({ preventScroll: true });
       restoreFocusAfterEscape.current = false;
-    }));
+    })));
   }}>
     <DropdownMenuTrigger render={<button aria-label="계정 메뉴 열기" className="flex min-w-0 items-center gap-2 rounded-sm px-2 py-1 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/25" ref={triggerRef} type="button" />}>
       <UserAvatar avatarUrl={avatarUrl} email={email} name={name} size="sm" />
       <span className="min-w-0"><span className="block truncate text-xs font-medium text-foreground">{label}</span><span className="block truncate text-xs text-muted-foreground">{email || '이메일 정보 없음'}</span></span>
     </DropdownMenuTrigger>
-    <DropdownMenuContent align="end" className="w-72" portalContainer={portalContainer}>
+    <DropdownMenuContent align="end" className="w-72 max-w-[calc(100vw-4rem)]" portalContainer={portalContainer}>
       <DropdownMenuGroup>
         <DropdownMenuLabel className="space-y-1"><span className="block truncate text-sm text-foreground">{label}</span><span className="block truncate font-normal">{email || '이메일 정보 없음'}</span><span className="block font-normal">{organization} · {role}</span></DropdownMenuLabel>
         <DropdownMenuSeparator />

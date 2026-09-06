@@ -122,6 +122,8 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
       await expectAccessible(userPage);
       await userPage.keyboard.press('Escape');
       await expectReflow(userPage);
+      await userPage.waitForTimeout(700);
+      await expect(accountMenu).toBeFocused();
     }
     await userPage.getByRole('button', { name: '계정 메뉴 열기' }).filter({ visible: true }).click();
     await userPage.getByRole('menuitem', { name: '로그아웃' }).click();
