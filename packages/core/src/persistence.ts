@@ -1569,7 +1569,7 @@ export class PrismaControlPlaneRepository {
       assertMutable(service, 'service');
       await requireMutableProject(tx, service.projectId);
       await enforcePrismaQuotaRequirements(tx, input.requestedByUserId === 'system' ? null : input.requestedByUserId, 'deployment:create', deploymentQuotaRequirements(candidate.deploymentType));
-      const deployment = await tx.deployment.create({ data: candidate });
+      const deployment = await tx.deployment.create({ data: deploymentData({ ...candidate, previewRuntime: candidate.previewRuntime ?? undefined }) });
       const workflowJob = await tx.workflowJob.create({ data: workflowJobData(successorWorkflow(candidate, input)) });
       if (candidate.previewLineageId) await tx.previewLineage.update({ where: { id: candidate.previewLineageId }, data: { candidateDeploymentId: deployment.id, candidateGeneration: candidate.previewGeneration } });
       await tx.deploymentEvent.create({ data: { deploymentId: deployment.id, type: 'deployment.queued', message: 'Immutable deployment operation queued', metadata: { sourceDeploymentId: candidate.sourceDeploymentId } } });

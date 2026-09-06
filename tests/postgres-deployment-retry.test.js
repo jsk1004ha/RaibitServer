@@ -6,6 +6,40 @@ import { createRequire } from 'node:module';
 import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 
 const require = createRequire(import.meta.url);
+
+test('Prisma deployment retry sends SQL NULL preview identity for a production successor', async () => {
+  // Given: a production source whose immutable successor has no preview lineage.
+  const source = {
+    id: 'production-source', serviceId: 'service', projectId: 'project', status: 'BUILD_FAILED',
+    deploymentType: 'production', branch: 'main', commitSha: 'a'.repeat(40), commitHash: 'a'.repeat(40),
+    snapshotVersion: 1, desiredSpecSnapshot: { port: 3000 }, previewLineageId: null, previewGeneration: null, previewRuntime: null,
+  };
+  const deploymentWrites = [];
+  const tx = {
+    $queryRaw: async () => [{ locked: 1 }],
+    service: { findUnique: async () => ({ id: 'service', projectId: 'project', status: 'ACTIVE' }) },
+    project: { findUnique: async () => ({ id: 'project', status: 'ACTIVE' }) },
+    deployment: {
+      findUnique: async ({ where }) => where.serviceId_requestIdempotencyKey ? null : (where.id === source.id ? source : null),
+      findFirst: async () => null,
+      create: async ({ data }) => { deploymentWrites.push(data); return data; },
+    },
+    workflowJob: { create: async ({ data }) => data },
+    deploymentEvent: { create: async ({ data }) => data },
+  };
+  const repository = new PrismaControlPlaneRepository({ ...tx, $transaction: async callback => callback(tx) });
+
+  // When: the durable retry path constructs its Prisma create input.
+  await repository.createDeploymentOperation({ operation: 'retry', sourceDeploymentId: source.id, serviceId: source.serviceId, requestIdempotencyKey: 'production-retry', snapshotVersion: 1, requestedByUserId: 'system' });
+
+  // Then: absence remains SQL NULL (omitted JSON field), never Prisma JsonNull.
+  assert.equal(deploymentWrites.length, 1);
+  assert.equal(deploymentWrites[0].deploymentType, 'production');
+  assert.equal(deploymentWrites[0].previewLineageId, null);
+  assert.equal(deploymentWrites[0].previewGeneration, null);
+  assert.equal(Object.hasOwn(deploymentWrites[0], 'previewRuntime'), false);
+});
+
 test('retry and redeploy immutable lineage / deployment retry adversarial matrix on real PostgreSQL with 20 connections', async t => {
   // Given: a UUID-owned migrated schema and twenty independent database clients.
   assert.equal(typeof PrismaControlPlaneRepository.prototype.createDeploymentOperation, 'function');
