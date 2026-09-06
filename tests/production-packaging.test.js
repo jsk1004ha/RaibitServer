@@ -48,6 +48,11 @@ test('runtime images contain only the executables their production entrypoints r
   assert.match(api, /pkg\.exports=[\s\S]*dist\/index\.js/);
   assert.match(
     api,
+    /COPY packages\/api-client\/package\.json packages\/api-client\/package\.json[\s\S]*RUN pnpm install --frozen-lockfile[\s\S]*COPY packages\/api-client packages\/api-client[\s\S]*RUN pnpm --filter @raibitserver\/api deploy/,
+    'API image must stage its root api-client workspace dependency before deployment',
+  );
+  assert.match(
+    api,
     /COPY --from=build --chown=10001:10001 \/opt\/raibitserver\/api \.\//,
     'API runtime files must be owned by the same non-root UID used by the API and migration workloads',
   );
