@@ -38,7 +38,9 @@ test('real PostgreSQL writes and Nest HTTP JSON/SSE use the same masked bounded 
     assert.equal(stored.length,fixture.cases.length);
     assert.equal(JSON.stringify(stored).includes('FORBIDDEN_'),false);
     assert.equal(JSON.stringify(stored).includes('Rk9SQklEREVO'),false);
-    for (let i=0;i<80;i++) await repository.appendRuntimeLog({serviceId:service.id,sourceInstanceId:'postgres-bound-source',line:'x'.repeat(16000)});
+    const deployment = await repository.prisma.deployment.create({data:{serviceId:service.id,projectId:project.id}});
+    const runtimeSource = {deploymentId:deployment.id,podName:'postgres-bound-pod',sourceInstanceId:'postgres-bound-source',containerName:'app'};
+    for (let i=0;i<80;i++) await repository.appendRuntimeLog({serviceId:service.id,...runtimeSource,line:'x'.repeat(16000)});
     // When authenticated clients query the production routes and read the first complete SSE frame.
     const response = await fetch(runtime.baseUrl+'/services/'+service.id+'/logs?limit=1000',{headers});
     assert.equal(response.status,200);
@@ -63,7 +65,6 @@ test('real PostgreSQL writes and Nest HTTP JSON/SSE use the same masked bounded 
     assert.equal(Buffer.byteLength(sse)<=524288,true);
     assert.equal((json+sse).includes('FORBIDDEN_'),false);
     assert.equal((json+sse).includes('Rk9SQklEREVO'),false);
-    const deployment = await repository.prisma.deployment.create({data:{serviceId:service.id,projectId:project.id}});
     for (let i=0;i<40;i++) {
       await repository.appendBuildLog({deploymentId:deployment.id,line:'x'.repeat(16000)});
       await repository.appendDeploymentEvent({deploymentId:deployment.id,message:'x'.repeat(16000),metadata:{password:'FORBIDDEN_EVENT'}});
