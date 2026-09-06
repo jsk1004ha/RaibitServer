@@ -1,10 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, parseDeploymentOperationBody } from '@raibitserver/core';
 import { projectObservationPayload } from '@raibitserver/core';
-import { ResourceBackupListSchema, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
+import { PasswordRecoveryCompleteSchema, PasswordRecoveryRequestSchema, ResourceBackupListSchema, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
 import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
-import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, completePasswordRecovery, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requestPasswordRecovery, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 import { RecoveryError, ResourceCapabilityUnavailable, ResourceIntentInvalid, publicRecovery, resourceAvailability, resourceStorageMb, can, listCatalog } from '@raibitserver/core';
 
 /**
@@ -23,6 +23,8 @@ function authRateSource(context: Record<string, any> = {}) {
   const forwarded = trustedProxy ? String(headers['x-forwarded-for'] || headers['X-Forwarded-For'] || '').split(',')[0]?.trim() : '';
   return forwarded || request.ip || request.socket?.remoteAddress || request.connection?.remoteAddress || 'unknown';
 }
+
+type PasswordResetContext = Readonly<{ request?: IncomingMessage; response?: import('node:http').ServerResponse }>;
 
 @Injectable()
 export class RAIBITSERVERService implements OnModuleDestroy {
@@ -71,6 +73,35 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       await enforceAuthAbuseLimits(repository, { action: 'email-resend', email, source: authRateSource(context), env: process.env });
       const emailVerification = await resendEmailVerificationCode(repository, input, { jwtSecret, issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', env: process.env });
       return { emailVerification };
+    } catch (error) {
+      throw nestAuthError(error);
+    }
+  }
+
+  async requestPasswordReset(input: Record<string, unknown>, context: PasswordResetContext = {}) {
+    const parsed = PasswordRecoveryRequestSchema.safeParse(input);
+    if (!parsed.success) throw new BadRequestException('password_reset_input_invalid');
+    const repository = await this.repositoryPromise;
+    const jwtSecret = jwtSecretOrThrow();
+    try {
+      await enforceAuthAbuseLimits(repository, { action: 'password-reset', email: parsed.data.email, source: authRateSource(context), env: process.env });
+      return await requestPasswordRecovery(repository, parsed.data, { jwtSecret, env: process.env });
+    } catch (error) {
+      if (error instanceof Error && 'statusCode' in error && error.statusCode === 429) {
+        context.response?.setHeader('Retry-After', String('retryAfterSeconds' in error ? error.retryAfterSeconds : 60));
+      }
+      throw nestAuthError(error);
+    }
+  }
+
+  async completePasswordReset(input: Record<string, unknown>, context: PasswordResetContext = {}) {
+    const parsed = PasswordRecoveryCompleteSchema.safeParse(input);
+    if (!parsed.success) throw new BadRequestException('password_reset_input_invalid');
+    const repository = await this.repositoryPromise;
+    const jwtSecret = jwtSecretOrThrow();
+    try {
+      await enforceAuthAbuseLimits(repository, { action: 'password-reset-complete', email: parsed.data.email, source: authRateSource(context), env: process.env });
+      return await completePasswordRecovery(repository, parsed.data, { jwtSecret, env: process.env });
     } catch (error) {
       throw nestAuthError(error);
     }

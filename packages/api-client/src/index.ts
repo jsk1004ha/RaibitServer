@@ -1,4 +1,4 @@
-import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, ProjectListResponse, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
+import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectListResponse, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
 import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
@@ -40,6 +40,9 @@ export class RAIBITSERVERClient {
     this.token = options.token;
     this.operations = createOperationsClient(options);
   }
+
+  requestPasswordReset(input: PasswordRecoveryRequest): Promise<PasswordRecoveryAccepted> { return this.operations['auth-password-reset-request']({ path: {}, query: {}, body: input }); }
+  completePasswordReset(input: PasswordRecoveryComplete): Promise<PasswordRecoveryCompleted> { return this.operations['auth-password-reset-complete']({ path: {}, query: {}, body: input }); }
 
   withToken(token: string) {
     return new RAIBITSERVERClient({ baseUrl: this.baseUrl, token });

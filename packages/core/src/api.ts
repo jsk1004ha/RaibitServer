@@ -9,6 +9,7 @@ import { authorizeRequest, authorizeSubject, requireAction, requireScope, signJw
 import { organizationScopeFromProjectInput } from './scope.ts';
 import { createSessionToken, normalizeEmail, sessionTtlSeconds, shouldPromoteFirstLogin, verifyPasswordAsync } from './identity.ts';
 import { assertUserEmailVerified, issueSignupEmailVerificationCode, resendEmailVerificationCode, verifyEmailCodeAndCreateSession } from './email-verification.ts';
+import { completePasswordRecovery, PASSWORD_RESET_COOLDOWN_SECONDS, requestPasswordRecovery } from './password-recovery.ts';
 import { runtimeConfigStatus } from './config.ts';
 import { devHeaderAuthAllowed, devTokenAuthAllowed } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
@@ -67,6 +68,22 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         await enforceAuthAbuseLimits(controlPlane.store, { action: 'email-resend', email, source: authRateSource(req), env: process.env });
         const emailVerification = await resendEmailVerificationCode(controlPlane.store, body, { jwtSecret: auth.jwtSecret, issuer: auth.issuer || 'raibitserver', env: process.env });
         return send(res, 200, { emailVerification });
+      }
+      if (method === 'POST' && url.pathname === '/auth/password-reset/request') {
+        const body = await readJson(req);
+        if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
+        const email = normalizeEmail(body.email);
+        await enforceAuthAbuseLimits(controlPlane.store, { action: 'password-reset', email, source: authRateSource(req), env: process.env });
+        const result = await requestPasswordRecovery(controlPlane.store, { email }, { jwtSecret: auth.jwtSecret, env: process.env });
+        res.setHeader('Retry-After', String(PASSWORD_RESET_COOLDOWN_SECONDS));
+        return send(res, 202, result);
+      }
+      if (method === 'POST' && url.pathname === '/auth/password-reset/complete') {
+        const body = await readJson(req);
+        if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
+        const email = normalizeEmail(body.email);
+        await enforceAuthAbuseLimits(controlPlane.store, { action: 'password-reset-complete', email, source: authRateSource(req), env: process.env });
+        return send(res, 200, await completePasswordRecovery(controlPlane.store, { email, code: body.code, newPassword: body.newPassword }, { jwtSecret: auth.jwtSecret, env: process.env }));
       }
       if (method === 'POST' && url.pathname === '/auth/login') {
         const body = await readJson(req);
@@ -821,6 +838,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       if (error instanceof DeploymentActivityResumeTokenError) return send(res, 400, { statusCode: 400, message: error.code, code: error.code, retryable: false, terminal: true, permission: false });
       if (error instanceof DeploymentOperationError) return send(res, error.statusCode, { statusCode: error.statusCode, message: error.message, code: error.code, retryable: error.code === 'ACTIVE_DEPLOYMENT', terminal: error.code !== 'ACTIVE_DEPLOYMENT', permission: false });
       const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+      if (statusCode === 429 && Number.isInteger(error.retryAfterSeconds)) res.setHeader('Retry-After', String(error.retryAfterSeconds));
       const permission = statusCode === 401 || statusCode === 403;
       const retryable = !permission && (statusCode === 408 || statusCode === 429 || statusCode >= 500);
       const message = error.message || 'internal_error';

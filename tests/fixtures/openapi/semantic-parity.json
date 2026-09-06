@@ -6,6 +6,8 @@
     "auth-login": {"email":"parity@example.test","password":"test-password"},
     "auth-email-verify": {"email":"parity@example.test","code":"123456"},
     "auth-email-resend": {"email":"parity@example.test"},
+    "auth-password-reset-request": {"email":"parity@example.test"},
+    "auth-password-reset-complete": {"email":"parity@example.test","code":"123456","newPassword":"test-password"},
     "projects-create": {"name":"Parity"},
     "services-create": {"name":"web"},
     "deployments-status": {"status":"BUILDING"},

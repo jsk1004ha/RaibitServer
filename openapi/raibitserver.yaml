@@ -194,6 +194,62 @@ paths:
                 $ref: "#/components/schemas/ErrorBody"
       security: []
       x-permission: null
+  /auth/password-reset/request:
+    post:
+      operationId: auth-password-reset-request
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth-password-reset-requestBody"
+      responses:
+        "202":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth-password-reset-requestResponse"
+          headers:
+            Retry-After:
+              description: Seconds before another reset email may be requested.
+              schema:
+                type: integer
+                const: 60
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
+  /auth/password-reset/complete:
+    post:
+      operationId: auth-password-reset-complete
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth-password-reset-completeBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth-password-reset-completeResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security: []
+      x-permission: null
   /auth/github/login:
     get:
       operationId: auth-github-login
@@ -4649,6 +4705,57 @@ components:
           pattern: ^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
       required:
         - email
+      additionalProperties: false
+    auth-password-reset-requestResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        accepted:
+          type: boolean
+          const: true
+      required:
+        - accepted
+      additionalProperties: false
+    auth-password-reset-requestBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          pattern: ^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+      required:
+        - email
+      additionalProperties: false
+    auth-password-reset-completeResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        reset:
+          type: boolean
+          const: true
+      required:
+        - reset
+      additionalProperties: false
+    auth-password-reset-completeBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          pattern: ^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+        code:
+          type: string
+          pattern: ^\d{6}$
+        newPassword:
+          type: string
+          minLength: 8
+          maxLength: 1024
+      required:
+        - email
+        - code
+        - newPassword
       additionalProperties: false
     auth-github-loginResponse:
       $schema: https://json-schema.org/draft/2020-12/schema

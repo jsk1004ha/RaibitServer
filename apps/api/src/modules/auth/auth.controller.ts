@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, HttpException, Post, Query, Req, Res } from '@nestjs/common';
-import { publicOAuthError } from '@raibitserver/core';
+import { PASSWORD_RESET_COOLDOWN_SECONDS, publicOAuthError } from '@raibitserver/core';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { AuthService } from './auth.service';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -26,6 +26,19 @@ export class AuthController {
   @Post('email/resend')
   resendEmailVerification(@Body() input: Record<string, any>, @Req() req: any) {
     return this.authService.resendEmailVerification(input, req);
+  }
+
+  @Post('password-reset/request')
+  @HttpCode(202)
+  requestPasswordReset(@Body() input: Record<string, unknown>, @Req() req: IncomingMessage, @Res({ passthrough: true }) response: ServerResponse) {
+    response.setHeader('Retry-After', String(PASSWORD_RESET_COOLDOWN_SECONDS));
+    return this.authService.requestPasswordReset(input, req, response);
+  }
+
+  @Post('password-reset/complete')
+  @HttpCode(200)
+  completePasswordReset(@Body() input: Record<string, unknown>, @Req() req: IncomingMessage) {
+    return this.authService.completePasswordReset(input, req);
   }
 
   @Get('github/login')

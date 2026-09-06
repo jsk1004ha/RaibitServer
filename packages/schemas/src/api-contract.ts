@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DeploymentOperationInputSchema } from './deployment-operation.ts';
 import { ResourceBackupCreateSchema, ResourceBackupDeleteSchema, ResourceBackupListSchema, ResourceBackupListViewSchema, ResourceBackupViewSchema, ResourceRestoreCreateSchema, ResourceRestoreViewSchema } from './resource-recovery.ts';
+import { PasswordRecoveryAcceptedSchema, PasswordRecoveryCompleteSchema, PasswordRecoveryCompletedSchema, PasswordRecoveryRequestSchema } from './password-recovery.ts';
 import * as M from './api-models.ts';
 import { ProjectUpdateSchema, ServiceUpdateSchema, ResourceUpdateSchema } from './desired-state-mutations.ts';
 
@@ -42,6 +43,8 @@ export const apiOperations = {
   'auth-login': operation({ method: 'post', path: '/auth/login', status: 201, permission: null, input: input(M.Empty, M.Empty, M.AuthInput), response: M.Session }),
   'auth-email-verify': operation({ method: 'post', path: '/auth/email/verify', status: 201, permission: null, input: input(M.Empty, M.Empty, z.object({ email: z.email(), code: z.string().min(1) })), response: M.Session }),
   'auth-email-resend': operation({ method: 'post', path: '/auth/email/resend', status: 201, permission: null, input: input(M.Empty, M.Empty, z.object({ email: z.email() })), response: z.object({ emailVerification: M.EmailVerification }) }),
+  'auth-password-reset-request': operation({ method: 'post', path: '/auth/password-reset/request', status: 202, permission: null, input: input(M.Empty, M.Empty, PasswordRecoveryRequestSchema), response: PasswordRecoveryAcceptedSchema }),
+  'auth-password-reset-complete': operation({ method: 'post', path: '/auth/password-reset/complete', status: 200, permission: null, input: input(M.Empty, M.Empty, PasswordRecoveryCompleteSchema), response: PasswordRecoveryCompletedSchema }),
   'auth-github-login': operation({ method: 'get', path: '/auth/github/login', status: 200, permission: null, input: input(M.Empty, GitHubOAuthStartInput, M.Empty), response: GitHubOAuthStartResponse }),
   'auth-github-callback': operation({ method: 'get', path: '/auth/github/callback', status: 200, permission: null, input: input(M.Empty, GitHubOAuthCallbackWire, M.Empty), response: GitHubOAuthCallbackResponse }),
   'auth-me': operation({ method: 'get', path: '/auth/me', status: 200, permission: 'project:read', input: noInput, response: z.object({ user: M.User.nullable(), subject: M.JsonFields, memberships: z.array(M.Membership) }) }),
@@ -149,7 +152,11 @@ export function createOpenApiDocument() {
     const resumableDeploymentActivity = operationId === 'deployments-stream';
     if (resumableServiceLogs || resumableDeploymentActivity) parameters.push({ name: 'Last-Event-ID', in: 'header', required: false, schema: { type: 'string', maxLength: resumableDeploymentActivity ? 4096 : 2048 } });
     const resourceCreate = operationId === 'resources-create';
-    const response = { description: resourceCreate ? 'Resource desired state created; this does not confirm runtime readiness or release support.' : 'Successful response', content: { [stream ? 'text/event-stream' : 'application/json']: { schema: reference(contract.response) } } };
+    const response = {
+      description: resourceCreate ? 'Resource desired state created; this does not confirm runtime readiness or release support.' : 'Successful response',
+      content: { [stream ? 'text/event-stream' : 'application/json']: { schema: reference(contract.response) } },
+      ...(operationId === 'auth-password-reset-request' ? { headers: { 'Retry-After': { description: 'Seconds before another reset email may be requested.', schema: { type: 'integer', const: 60 } } } } : {}),
+    };
     const responses: Record<string, object> = { [contract.status]: response, default: { description: 'Typed error response', content: { 'application/json': { schema: reference(contract.error) } } } };
     if (resourceCreate) responses['400'] = { description: 'Unsupported engine or managed backup/restore request rejected before desired-state persistence.', content: { 'application/json': { schema: reference(contract.error) } } };
     if (operationId.startsWith('resource-backups-') || operationId === 'backup-restores-create' || operationId === 'restores-get') {

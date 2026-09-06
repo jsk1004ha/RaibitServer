@@ -88,6 +88,8 @@ export function createOperationsClient(transport: OperationTransport) {
     'auth-login': bind(apiOperations['auth-login']),
     'auth-email-verify': bind(apiOperations['auth-email-verify']),
     'auth-email-resend': bind(apiOperations['auth-email-resend']),
+    'auth-password-reset-request': bind(apiOperations['auth-password-reset-request']),
+    'auth-password-reset-complete': bind(apiOperations['auth-password-reset-complete']),
     'auth-github-login': bind(apiOperations['auth-github-login']),
     'auth-github-callback': bind(apiOperations['auth-github-callback']),
     'auth-me': bind(apiOperations['auth-me']),

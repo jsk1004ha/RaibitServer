@@ -284,7 +284,7 @@ export async function enforceAuthAbuseLimits(repository: AnyRecord, input: AnyRe
     { key: authRateLimitKey('flow-source', source, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_FLOW_SOURCE_RATE_LIMIT, 60, 1, 100_000), windowMs },
     globalDimension,
   ];
-  if (input.phase !== 'request' && action === 'email-resend' && email) {
+  if (input.phase !== 'request' && ['email-resend', 'password-reset'].includes(action) && email) {
     dimensions.push({
       key: authRateLimitKey('resend-cooldown', email, env),
       limit: 1,

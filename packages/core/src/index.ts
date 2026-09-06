@@ -36,6 +36,7 @@ export { organizationScopeFromProjectInput, projectScopeFromInput } from './scop
 export { signJwtHs256, verifyJwtHs256, authorizeRequest, authorizeSubject, subjectFromRequest, assertCurrentSession, requireAction, requireScope, roleForOrganization } from './auth.ts';
 export { hashPassword, hashPasswordAsync, verifyPassword, verifyPasswordAsync, normalizeEmail, createSessionToken, sessionPayloadForUser, sessionTtlSeconds, personalOrganizationSlug, normalizeAccountType, configuredAdminEmails, signupPolicyForAccount, shouldPromoteFirstLogin } from './identity.ts';
 export { issueSignupEmailVerificationCode, resendEmailVerificationCode, verifyEmailCodeAndCreateSession, assertUserEmailVerified, normalizeEmailVerificationCode, generateEmailVerificationCode, hashEmailVerificationCode, buildEmailVerificationMessage, deliverEmailVerificationMessage, emailVerificationSenderFromEnv, emailVerificationSenderDomainFromEnv } from './email-verification.ts';
+export { requestPasswordRecovery, completePasswordRecovery, PASSWORD_RESET_PURPOSE, PASSWORD_RESET_TTL_SECONDS, PASSWORD_RESET_MAX_ATTEMPTS, PASSWORD_RESET_COOLDOWN_SECONDS } from './password-recovery.ts';
 export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured, parseApiRuntimeConfig, validateApiRuntimeConfig, assertApiRuntimeConfig, devHeaderAuthAllowed, devTokenAuthAllowed } from './config.ts';
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';

@@ -23,6 +23,7 @@ import { canonicalPreviewWebhook, parsePreviewWebhook, PreviewError, previewWebh
 import { createPreviewRuntime, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
+import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import {
   boundedActivityRows,
@@ -1141,6 +1142,54 @@ export class ControlPlaneStore {
     };
   }
 
+  completePasswordRecovery(input: PasswordRecoveryCompletionInput) {
+    const email = String(input.email || '').trim().toLowerCase();
+    const purpose = String(input.purpose || 'password-reset');
+    const now = Number(input.now === undefined ? Date.now() : input.now);
+    const maxAttempts = Math.max(1, Number(input.maxAttempts || 5));
+    const record = [...this.emailVerificationCodes]
+      .filter((candidate) => candidate.email === email && candidate.purpose === purpose && !candidate.consumedAt)
+      .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))[0];
+    if (!record || Date.parse(record.expiresAt || '') <= now || Number(record.attempts || 0) >= maxAttempts) {
+      return { status: 'invalid' };
+    }
+    if (typeof input.verifyCode !== 'function' || input.verifyCode(deepClone(record)) !== true) {
+      record.attempts = Math.min(maxAttempts, Number(record.attempts || 0) + 1);
+      record.updatedAt = new Date(now).toISOString();
+      return { status: 'invalid' };
+    }
+    const payload = record.payload || {};
+    const user = this.users.get(String(payload.userId || ''));
+    if (payload.kind !== purpose || !user || user.email !== email || !passwordRecoveryUserEligible(user, now)) {
+      record.consumedAt = new Date(now).toISOString();
+      record.updatedAt = record.consumedAt;
+      return { status: 'invalid' };
+    }
+    const consumedAt = new Date(now).toISOString();
+    for (const candidate of this.emailVerificationCodes) {
+      if (candidate.email === email && candidate.purpose === purpose && !candidate.consumedAt) {
+        candidate.consumedAt = consumedAt;
+        candidate.updatedAt = consumedAt;
+      }
+    }
+    user.passwordHash = input.passwordHash;
+    user.sessionVersion = Number(user.sessionVersion || 0) + 1;
+    user.updatedAt = consumedAt;
+    this.audit(user.id, 'user.password:reset', 'user', user.id, {});
+    return { status: 'reset', user: redactUser(deepClone(user)), resetAt: consumedAt };
+  }
+
+  failPasswordRecoveryDelivery(input: PasswordRecoveryDeliveryFailureInput) {
+    const record = this.emailVerificationCodes.find((candidate) => candidate.id === String(input.challengeId || ''));
+    if (record && !record.consumedAt) {
+      record.consumedAt = input.failedAt || nowIso();
+      record.updatedAt = record.consumedAt;
+    }
+    return this.audit('system', 'user.password-reset:delivery-failed', 'email-verification-code', String(input.challengeId || 'unknown'), {
+      reasonCode: 'password_reset_delivery_failed',
+    });
+  }
+
   attachGitHubRepositoryToService({ projectId, serviceId, integrationId, repositoryId = null, repoUrl = null, repository = null, branch = null, actorUserId = 'system' }: Record<string, any>) {
     const service = this.services.get(serviceId);
     if (!service) throw notFound(`service not found: ${serviceId}`);
@@ -1749,6 +1798,14 @@ export class ControlPlaneStore {
     this.workflowJobs[index] = next;
     return next;
   }
+}
+
+function passwordRecoveryUserEligible(user: Readonly<Record<string, unknown>>, now: number) {
+  if (!user.passwordHash || !user.emailVerifiedAt || String(user.approvalStatus || 'PENDING').toUpperCase() !== 'APPROVED') return false;
+  if (!user.bannedAt) return true;
+  if (!user.banExpiresAt) return false;
+  const banExpiresAt = new Date(String(user.banExpiresAt)).getTime();
+  return Number.isFinite(banExpiresAt) && banExpiresAt <= now;
 }
 
 function validateRollbackSource(current: Record<string, any>, previous: Record<string, any> | undefined, explicitPreviousDeploymentId: any) {

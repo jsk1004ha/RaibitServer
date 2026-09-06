@@ -28,6 +28,7 @@ import { normalizeAccountType } from './identity.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
 import { parseGitHubRepository } from './github-integration.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
+import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import {
@@ -162,6 +163,8 @@ export class InMemoryControlPlaneRepository {
   async incrementEmailVerificationAttempts(id: string) { return this.store.incrementEmailVerificationAttempts(id); }
   async consumeEmailVerificationCode(id: string, consumedAt?: string) { return this.store.consumeEmailVerificationCode(id, consumedAt); }
   async completeSignupEmailVerification(input: Record<string, any>) { return this.store.completeSignupEmailVerification(input); }
+  async completePasswordRecovery(input: PasswordRecoveryCompletionInput) { return this.store.completePasswordRecovery(input); }
+  async failPasswordRecoveryDelivery(input: PasswordRecoveryDeliveryFailureInput) { return this.store.failPasswordRecoveryDelivery(input); }
   async markUserEmailVerified(userId: string, verifiedAt?: string) { return this.store.markUserEmailVerified(userId, verifiedAt); }
   async recordEmailDelivery(input: Record<string, any>) { return this.store.recordEmailDelivery(input); }
   async findUserByGitHubId(githubId: string) { return this.store.findUserByGitHubId(githubId); }
@@ -711,6 +714,85 @@ export class PrismaControlPlaneRepository {
       if ((error as any)?.code === 'P2002') throw conflictError('signup_identity_already_exists');
       throw error;
     }
+  }
+
+  async completePasswordRecovery(input: PasswordRecoveryCompletionInput) {
+    const email = String(input.email || '').trim().toLowerCase();
+    const purpose = String(input.purpose || 'password-reset');
+    const maxAttempts = Math.max(1, Number(input.maxAttempts || 5));
+    const now = new Date(input.now === undefined ? Date.now() : Number(input.now));
+    try {
+      return await this.prisma.$transaction(async (transaction: Prisma.TransactionClient) => {
+        const record = await transaction.emailVerificationCode.findFirst({
+          where: { email, purpose, consumedAt: null },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (!record || new Date(record.expiresAt).getTime() <= now.getTime() || Number(record.attempts || 0) >= maxAttempts) {
+          return { status: 'invalid' };
+        }
+        const valid = typeof input.verifyCode === 'function' && input.verifyCode(record) === true;
+        if (!valid) {
+          await transaction.emailVerificationCode.updateMany({
+            where: { id: record.id, consumedAt: null, expiresAt: { gt: now }, attempts: { lt: maxAttempts } },
+            data: { attempts: { increment: 1 } },
+          });
+          return { status: 'invalid' };
+        }
+        const payload = passwordRecoveryPayload(record.payload);
+        if (!payload || payload.kind !== purpose) {
+          await transaction.emailVerificationCode.updateMany({ where: { id: record.id, consumedAt: null }, data: { consumedAt: now } });
+          return { status: 'invalid' };
+        }
+        const claimed = await transaction.emailVerificationCode.updateMany({
+          where: { id: record.id, consumedAt: null, expiresAt: { gt: now }, attempts: { lt: maxAttempts } },
+          data: { consumedAt: now },
+        });
+        if (Number(claimed.count || 0) !== 1) return { status: 'invalid' };
+        const updated = await transaction.user.updateMany({
+          where: {
+            id: payload.userId,
+            email,
+            passwordHash: { not: null },
+            emailVerifiedAt: { not: null },
+            approvalStatus: 'APPROVED',
+            OR: [{ bannedAt: null }, { banExpiresAt: { lte: now } }],
+          },
+          data: { passwordHash: input.passwordHash, sessionVersion: { increment: 1 } },
+        });
+        if (Number(updated.count || 0) !== 1) return { status: 'invalid' };
+        await transaction.emailVerificationCode.updateMany({
+          where: { email, purpose, consumedAt: null },
+          data: { consumedAt: now },
+        });
+        await transaction.auditLog.create({
+          data: { actorUserId: payload.userId, action: 'user.password:reset', targetType: 'user', targetId: payload.userId, metadata: {} },
+        });
+        return { status: 'reset', resetAt: now.toISOString() };
+      }, { isolationLevel: 'Serializable' });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') return { status: 'invalid' };
+      throw error;
+    }
+  }
+
+  async failPasswordRecoveryDelivery(input: PasswordRecoveryDeliveryFailureInput) {
+    const challengeId = String(input.challengeId || '');
+    const failedAt = new Date(input.failedAt || Date.now());
+    return this.prisma.$transaction(async (transaction: Prisma.TransactionClient) => {
+      await transaction.emailVerificationCode.updateMany({
+        where: { id: challengeId, consumedAt: null },
+        data: { consumedAt: failedAt },
+      });
+      return transaction.auditLog.create({
+        data: {
+          actorUserId: null,
+          action: 'user.password-reset:delivery-failed',
+          targetType: 'email-verification-code',
+          targetId: challengeId,
+          metadata: { reasonCode: 'password_reset_delivery_failed' },
+        },
+      });
+    });
   }
 
   async markUserEmailVerified(userId: string, verifiedAt = new Date().toISOString()) {
@@ -2155,6 +2237,13 @@ export class PrismaControlPlaneRepository {
     ]);
     return deepClone({ organizations, users: users.map(redactUser), members, projects, services, resources, deployments, auditLogs, usageRecords, workflowJobs, quotas, domains, resourceAttachments, resourceBackups, buildLogs, runtimeLogs, deploymentEvents, environmentVariables: environmentVariables.map(maskEnvRow), githubIntegrations });
   }
+}
+
+function passwordRecoveryPayload(value: unknown): Readonly<{ kind: string; userId: string }> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const kind = Reflect.get(value, 'kind');
+  const userId = Reflect.get(value, 'userId');
+  return typeof kind === 'string' && typeof userId === 'string' ? { kind, userId } : null;
 }
 
 function previewLineageRecord(row: Record<string, any>): PreviewLineageRecord {
