@@ -50,8 +50,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         <p className="text-sm text-brand-surface-foreground/70 break-keep [overflow-wrap:anywhere]">인천과학고 라이빗 호스팅 서비스</p>
       </section>
 
-      <section className="flex min-h-dvh items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
-        <div className="w-full max-w-md">
+      <section className="flex min-h-dvh min-w-0 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+        <div className="w-full min-w-0 max-w-md">
           <a className="mb-8 flex w-fit items-center gap-3 text-sm font-medium lg:hidden" href={publicHomeHref}>
             <Brand height={40} width={40} priority />
             <span>RAIBIT SERVER</span>

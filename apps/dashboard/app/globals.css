@@ -293,7 +293,6 @@
 
 @layer base {
   html {
-    min-width: 320px;
     background: var(--background);
     -webkit-text-size-adjust: 100%;
   }
@@ -363,6 +362,7 @@
 
   .auth-form {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-lg);
   }
 
