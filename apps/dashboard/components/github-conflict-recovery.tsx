@@ -49,10 +49,9 @@ type Props = {
   readonly onCancel: () => void;
   readonly onFocusBranch: () => void;
   readonly onFocusSlug: () => void;
-  readonly catalogHref: (installationId: string) => string;
 };
 
-export function GitHubConflictRecovery({ catalogHref, conflict, onCancel, onFocusBranch, onFocusSlug, projectHrefs }: Props) {
+export function GitHubConflictRecovery({ conflict, onCancel, onFocusBranch, onFocusSlug, projectHrefs }: Props) {
   const recovery = conflict.recovery;
   const projectHref = recovery.projectId ? projectHrefs[recovery.projectId] : undefined;
   return (
@@ -62,14 +61,13 @@ export function GitHubConflictRecovery({ catalogHref, conflict, onCancel, onFocu
         <span>{conflictDescription(conflict.code)}</span>
         {recovery.currentDefaultBranch || recovery.requestedBranch ? <span>현재 기본 브랜치: {recovery.currentDefaultBranch || '확인 필요'} · 요청 브랜치: {recovery.requestedBranch || '확인 필요'}</span> : null}
         {recovery.suggestedSlug ? <span>사용 가능한 이름 제안: {recovery.suggestedSlug}</span> : null}
-        <RecoveryAction catalogHref={catalogHref} onCancel={onCancel} onFocusBranch={onFocusBranch} onFocusSlug={onFocusSlug} projectHref={projectHref} recovery={recovery} />
+        <RecoveryAction onCancel={onCancel} onFocusBranch={onFocusBranch} onFocusSlug={onFocusSlug} projectHref={projectHref} recovery={recovery} />
       </AlertDescription>
     </Alert>
   );
 }
 
-function RecoveryAction({ catalogHref, onCancel, onFocusBranch, onFocusSlug, projectHref, recovery }: Readonly<{
-  catalogHref: (installationId: string) => string;
+function RecoveryAction({ onCancel, onFocusBranch, onFocusSlug, projectHref, recovery }: Readonly<{
   onCancel: () => void;
   onFocusBranch: () => void;
   onFocusSlug: () => void;
@@ -79,9 +77,9 @@ function RecoveryAction({ catalogHref, onCancel, onFocusBranch, onFocusSlug, pro
   if (recovery.action === 'OPEN_EXISTING_PROJECT') return projectHref ? <a data-github-recovery-action="open-project" href={projectHref}>기존 프로젝트 열기</a> : <CancelButton onCancel={onCancel} />;
   if (recovery.action === 'OPEN_EXISTING_SERVICE') return projectHref && recovery.serviceId ? <a data-github-recovery-action="open-service" href={`${projectHref}?view=services&serviceId=${encodeURIComponent(recovery.serviceId)}`}>기존 서비스 열기</a> : <CancelButton onCancel={onCancel} />;
   if (recovery.action === 'CHOOSE_NEW_SLUG') return <Button data-github-recovery-action="choose-new-slug" onClick={onFocusSlug} type="button" variant="outline">새 서비스 슬러그 선택</Button>;
-  if (recovery.action === 'REFRESH_CATALOG') return recovery.installationId ? <a data-github-recovery-action="refresh-catalog" href={catalogHref(recovery.installationId)}>저장소 카탈로그 새로고침</a> : <CancelButton onCancel={onCancel} />;
-  if (recovery.action === 'REATTACH_INSTALLATION') return recovery.installationId ? <a data-github-recovery-action="reattach-installation" href="/github/install">신뢰된 설치 흐름으로 다시 연결</a> : <CancelButton onCancel={onCancel} />;
-  if (recovery.action === 'SELECT_BRANCH') return recovery.repositoryId ? <Button data-github-recovery-action="select-branch" onClick={onFocusBranch} type="button" variant="outline">브랜치 직접 선택</Button> : <CancelButton onCancel={onCancel} />;
+  if (recovery.action === 'REFRESH_CATALOG') return recovery.installationId ? <a data-github-recovery-action="refresh-catalog" href={`/github?installation=${encodeURIComponent(recovery.installationId)}`}>저장소 카탈로그 새로고침</a> : <CancelButton onCancel={onCancel} />;
+  if (recovery.action === 'REATTACH_INSTALLATION') return <a data-github-recovery-action="reattach-installation" href="/github/install">신뢰된 설치 흐름으로 다시 연결</a>;
+  if (recovery.action === 'SELECT_BRANCH') return <Button data-github-recovery-action="select-branch" onClick={onFocusBranch} type="button" variant="outline">브랜치 직접 선택</Button>;
   return <CancelButton onCancel={onCancel} />;
 }
 

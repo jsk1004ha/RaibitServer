@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { cn } from '@/lib/utils';
 import { redirect } from 'next/navigation';
 import { apiAction, loadGitHubConsole } from '../../lib/api';
+import { scopedProjectHrefs } from '../../lib/github-project-link-contract.mjs';
 import { ConsoleShell, LoadErrorSummary, SectionNav } from '../../components/console-ui';
 import { GitHubCatalogRefresh } from '../../components/github-catalog-refresh';
 import { GitHubLifecycleControls, type GitHubLifecycleIntegration, type GitHubLifecycleStatus } from '../../components/github-lifecycle-controls';
@@ -82,8 +83,8 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
   const canAttachRepository = Boolean(firstService?.projectId && firstService?.id && integrationId && repositoryId && sourceAvailable);
   const canSyncRepository = Boolean(selectedRepository?.fullName && sourceAvailable);
   const canRefreshCatalog = Boolean(catalog && selectedIntegration && sourceAvailable && canDisconnectIntegration(selectedIntegration, state.memberships, state.subject));
-  const projectHrefs = projectHrefsFor(state.projects);
-  const catalogHref = (installationId: string) => githubHref({ installationId });
+  const projectHrefs = scopedProjectHrefs({ memberships: state.memberships, projects: state.projects, subject: state.subject });
+  const repositoryDefaultBranches = repositoryDefaultBranchesFor(selectedRepositories);
   const navItems = [
     { id: 'connect', label: 'GitHub 연결', description: 'App 설치', href: '/github?step=connect' },
     { id: 'import', label: '저장소 선택', description: '프로젝트 추가', href: '/github?step=import' },
@@ -132,13 +133,14 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
               <InstallationChooser installations={state.installations} selectedId={selectedInstallation?.installationId} step="import" />
               {catalog && selectedInstallation ? <GitHubRepositoryCatalogView catalog={catalog} canRefresh={canRefreshCatalog} installation={selectedInstallation} integration={selectedIntegration} q={catalogQuery} /> : null}
               {canImportRepository ? (
-                <GitHubSourceMutation action={apiAction('/github/repositories/import', state.context)} catalogHref={catalogHref} formId="import-repository" pendingLabel="저장소를 가져오는 중" projectHrefs={projectHrefs} returnTo="/github?step=attach" submitLabel="가져오기">
+                <GitHubSourceMutation action={apiAction('/github/repositories/import', state.context)} branchInputId="github-import-branch" formId="import-repository" pendingLabel="저장소를 가져오는 중" projectHrefs={projectHrefs} repositoryDefaultBranches={repositoryDefaultBranches} returnTo="/github?step=attach" submitLabel="가져오기">
                   <input type="hidden" name="integrationId" value={integrationId} />{catalog ? <input type="hidden" name="expectedCatalogGeneration" value={catalog.generation} /> : null}
                   <FieldSet><FieldGroup>
                     <Field><FieldLabel htmlFor="github-import-repository">저장소</FieldLabel><select className={selectClassName} id="github-import-repository" name="repositoryId" defaultValue={repositoryId}>{selectedRepositories.filter((repository: GitHubRepository) => repository.accessState !== 'REVOKED').map((repository: GitHubRepository) => <option key={repository.githubRepoId || repository.id} value={repository.githubRepoId || repository.id}>{repository.fullName} · {repository.private ? '비공개' : '공개'}</option>)}</select></Field>
                     <Field><FieldLabel htmlFor="github-import-project">프로젝트</FieldLabel><select className={selectClassName} id="github-import-project" name="projectId" defaultValue={state.projects[0]?.id}>{state.projects.map((project: GitHubProject) => <option key={project.id} value={project.id}>{project.name || project.slug}</option>)}</select></Field>
                     <Field><FieldLabel htmlFor="github-service-name">서비스 이름</FieldLabel><Input id="github-service-name" name="serviceName" placeholder={selectedRepository?.name || 'web'} /><FieldDescription>비우면 저장소 이름을 기준으로 생성됩니다.</FieldDescription></Field>
                     <Field><FieldLabel htmlFor="github-import-service-slug">서비스 슬러그</FieldLabel><Input id="github-import-service-slug" name="serviceSlug" placeholder="선택 사항" /><FieldDescription>자동 이름 변경 없이, 충돌이 발생하면 직접 새 슬러그를 선택합니다.</FieldDescription></Field>
+                    <Field><FieldLabel htmlFor="github-import-branch">브랜치</FieldLabel><Input id="github-import-branch" name="branch" defaultValue={selectedRepository?.defaultBranch || 'main'} /></Field>
                     <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end"><ActionLink className="justify-center sm:mr-auto" href="/github?step=connect">이전</ActionLink></div>
                   </FieldGroup></FieldSet>
                 </GitHubSourceMutation>
@@ -153,7 +155,7 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
             <CardContent className="flex flex-col gap-6">
               <InstallationChooser installations={state.installations} selectedId={selectedInstallation?.installationId} step="attach" />
               {canAttachRepository ? (
-                <GitHubSourceMutation action={apiAction(`/projects/${firstService.projectId}/services/${firstService.id}/github`, state.context)} catalogHref={catalogHref} pendingLabel="서비스 연결 중" projectHrefs={projectHrefs} returnTo="/github?step=sync" submitLabel="연결">
+                <GitHubSourceMutation action={apiAction(`/projects/${firstService.projectId}/services/${firstService.id}/github`, state.context)} branchInputId="github-attach-branch" pendingLabel="서비스 연결 중" projectHrefs={projectHrefs} repositoryDefaultBranches={repositoryDefaultBranches} returnTo="/github?step=sync" submitLabel="연결">
                   <input type="hidden" name="integrationId" value={integrationId} />{catalog ? <input type="hidden" name="expectedCatalogGeneration" value={catalog.generation} /> : null}{selectedRepository?.defaultBranch ? <input type="hidden" name="expectedDefaultBranch" value={selectedRepository.defaultBranch} /> : null}
                   <FieldSet><FieldGroup>
                     <div className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm"><span className="text-muted-foreground">연결 대상</span><p className="mt-1 font-medium text-foreground"><strong>{serviceProject?.name || firstService.projectId}</strong> / {firstService.name || firstService.id}</p></div>
@@ -173,9 +175,10 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
             <CardContent className="flex flex-col gap-6">
               <InstallationChooser installations={state.installations} selectedId={selectedInstallation?.installationId} step="sync" />
               {canSyncRepository ? (
-                <GitHubSourceMutation action={apiAction(`/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync`, state.context)} catalogHref={catalogHref} pendingLabel="저장소 동기화 중" projectHrefs={projectHrefs} returnTo={`/github?step=sync&installation=${encodeURIComponent(selectedInstallation.installationId)}`} submitLabel="동기화">
-                  <input type="hidden" name="integrationId" value={integrationId} />{catalog ? <input type="hidden" name="expectedCatalogGeneration" value={catalog.generation} /> : null}{selectedRepository?.defaultBranch ? <input type="hidden" name="expectedDefaultBranch" value={selectedRepository.defaultBranch} /> : null}<input type="hidden" name="branch" value={selectedRepository?.defaultBranch || ''} />
+                <GitHubSourceMutation action={apiAction(`/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync`, state.context)} branchInputId="github-sync-branch" pendingLabel="저장소 동기화 중" projectHrefs={projectHrefs} repositoryDefaultBranches={repositoryDefaultBranches} returnTo={`/github?step=sync&installation=${encodeURIComponent(selectedInstallation.installationId)}`} submitLabel="동기화">
+                  <input type="hidden" name="integrationId" value={integrationId} />{catalog ? <input type="hidden" name="expectedCatalogGeneration" value={catalog.generation} /> : null}{selectedRepository?.defaultBranch ? <input type="hidden" name="expectedDefaultBranch" value={selectedRepository.defaultBranch} /> : null}<input type="hidden" name="repositoryId" value={repositoryId} />
                   <div className="rounded-md border border-border bg-muted/40 px-4 py-3"><p className="text-xs text-muted-foreground">동기화 대상</p><p className="mt-1 break-all text-sm font-medium text-foreground"><strong>{selectedRepository.fullName}</strong></p></div>
+                  <Field><FieldLabel htmlFor="github-sync-branch">브랜치</FieldLabel><Input id="github-sync-branch" name="branch" defaultValue={selectedRepository?.defaultBranch || 'main'} /></Field>
                   <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><ActionLink className="justify-center sm:mr-auto" href="/github?step=attach">이전</ActionLink></div>
                 </GitHubSourceMutation>
               ) : <EmptyGitHubStep message="동기화할 저장소가 없습니다." />}
@@ -233,13 +236,14 @@ function githubHref({ installationId, q, cursor }: { installationId: string; q?:
   return `/github?${params.toString()}`;
 }
 
-function projectHrefsFor(projects: readonly unknown[]): Readonly<Record<string, string>> {
-  const hrefs: Record<string, string> = {};
-  for (const project of projects) {
-    if (!isRecord(project) || typeof project.id !== 'string' || typeof project.organizationSlug !== 'string') continue;
-    hrefs[project.id] = `/org/${encodeURIComponent(project.organizationSlug)}/projects/${encodeURIComponent(project.id)}`;
+function repositoryDefaultBranchesFor(repositories: readonly GitHubRepository[]): Readonly<Record<string, string>> {
+  const branches: Record<string, string> = {};
+  for (const repository of repositories) {
+    if (!repository.defaultBranch) continue;
+    if (repository.id) branches[repository.id] = repository.defaultBranch;
+    if (repository.githubRepoId) branches[repository.githubRepoId] = repository.defaultBranch;
   }
-  return hrefs;
+  return branches;
 }
 
 function formatCatalogTimestamp(value: string | null): string {
