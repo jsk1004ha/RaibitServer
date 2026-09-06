@@ -27,6 +27,8 @@ import { canonicalPreviewWebhook, parsePreviewObservation, parsePreviewWebhook, 
 import { applyPreviewObservation, assertPreviewRetry, createPreviewRuntime, PREVIEW_APPLY_JOB, PREVIEW_RESOLVER_JOB, previewCloseIntent, resolverJobId, resolverPayload, transitionPreviewLineage, type PreviewLineageRecord } from './preview-lineage.ts';
 import { normalizeAccountType } from './identity.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
+import { PostgresOrganizationInviteRepository } from './organization-invite-postgres.ts';
+import type { ReplaceOrganizationInviteInput } from './organization-invite.ts';
 import { parseGitHubRepository } from './github-integration.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
@@ -173,6 +175,10 @@ export class InMemoryControlPlaneRepository {
   async addMember(input: Record<string, any>) { return this.store.addMember(input); }
   async removeMember(input: Record<string, any>) { return this.store.removeMember(input); }
   async listMembershipsForUser(userId: string) { return this.store.listMembershipsForUser(userId); }
+  async replaceOrganizationInvite(input: ReplaceOrganizationInviteInput) { return this.store.replaceOrganizationInvite(input); }
+  async revokeOrganizationInviteAfterDeliveryFailure(id: string, revokedAt: string) { return this.store.revokeOrganizationInviteAfterDeliveryFailure(id, revokedAt); }
+  async acceptOrganizationInvite(input: { readonly tokenHash: string; readonly userId: string; readonly now: string }) { return this.store.acceptOrganizationInvite(input); }
+  async listOrganizationInvites(input: { readonly organizationId: string; readonly actorUserId: string }) { return this.store.listOrganizationInvites(input); }
   async createProject(input: Record<string, any>) {
     const slug = slugInput(input.slug || input.name);
     const existing = [...this.store.projects.values()].find((project) => String(project.organizationId) === String(input.organizationId) && String(project.slug) === slug);
@@ -878,6 +884,11 @@ export class PrismaControlPlaneRepository {
   async listMembershipsForUser(userId: string) {
     return this.prisma.membership.findMany({ where: { userId } });
   }
+
+  async replaceOrganizationInvite(input: ReplaceOrganizationInviteInput) { return new PostgresOrganizationInviteRepository(this.prisma).replaceOrganizationInvite(input); }
+  async revokeOrganizationInviteAfterDeliveryFailure(id: string, revokedAt: string) { return new PostgresOrganizationInviteRepository(this.prisma).revokeOrganizationInviteAfterDeliveryFailure(id, revokedAt); }
+  async acceptOrganizationInvite(input: { readonly tokenHash: string; readonly userId: string; readonly now: string }) { return new PostgresOrganizationInviteRepository(this.prisma).acceptOrganizationInvite(input); }
+  async listOrganizationInvites(input: { readonly organizationId: string; readonly actorUserId: string }) { return new PostgresOrganizationInviteRepository(this.prisma).listOrganizationInvites(input); }
 
   async createProject(input: Record<string, any>) {
     const slug = input.slug || slugInput(input.name);

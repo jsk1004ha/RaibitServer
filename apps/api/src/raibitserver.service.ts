@@ -7,6 +7,8 @@ import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, completePasswordRecovery, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requestPasswordRecovery, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 import { RecoveryError, ResourceCapabilityUnavailable, ResourceIntentInvalid, publicRecovery, resourceAvailability, resourceStorageMb, can, listCatalog } from '@raibitserver/core';
+import { acceptOrganizationInvite, issueOrganizationInvite, listOrganizationInvites } from '@raibitserver/core';
+import type { OrganizationInviteCreate } from '@raibitserver/schemas';
 
 /**
  * NestJS-facing desired-state service.
@@ -175,6 +177,23 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   async listPublicSites(limit: any = 5) {
     const repository: any = await this.repositoryPromise;
     return repository.listPublicSites ? repository.listPublicSites(limit) : publicSitesFromSnapshot(await repository.snapshot(), limit);
+  }
+
+  async issueOrganizationInvite(organizationId: string, input: OrganizationInviteCreate, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    enforceScope(subject, { organizationId });
+    return repositoryMutation(() => issueOrganizationInvite(repository, { organizationId, email: input.email, role: input.role, actorUserId: String(subject.id) }));
+  }
+
+  async listOrganizationInvites(organizationId: string, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    enforceScope(subject, { organizationId });
+    return repositoryMutation(() => listOrganizationInvites(repository, { organizationId, actorUserId: String(subject.id) }));
+  }
+
+  async acceptOrganizationInvite(token: string, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    return repositoryMutation(() => acceptOrganizationInvite(repository, { token, userId: String(subject.id) }));
   }
 
   async getProject(projectId: string, subject: Record<string, any>) {

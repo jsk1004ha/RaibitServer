@@ -22,6 +22,7 @@ import { boundedKeysetRows, keysetCursorForRows, resourceQuotaMetric, resourceSt
 import { publicSitesFromSnapshot } from './public-sites.ts';
 import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, encodeDeploymentActivityResumeToken, encodeServiceLogResumeToken, DeploymentActivityResumeTokenError } from './sse.ts';
 import { parseProjectDeletionConfirmation, parseProjectSettingsUpdate } from './project-settings.ts';
+import { acceptOrganizationInvite, issueOrganizationInvite, listOrganizationInvites } from './organization-invite.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = {
@@ -231,6 +232,26 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         authorizeRequest(req, 'team:invite', auth);
         const body = await readJson(req);
         return send(res, 201, controlPlane.store.createOrganization(body));
+      }
+      const organizationInvitesMatch = url.pathname.match(/^\/organizations\/([^/]+)\/invites$/);
+      if (organizationInvitesMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'team:invite', auth);
+        const organizationId = decodeURIComponent(organizationInvitesMatch[1]);
+        requireScope(subject, { organizationId });
+        const body = await readJson(req);
+        const result = await issueOrganizationInvite(controlPlane.store, { organizationId, email: body.email, role: body.role, actorUserId: subject.id }, options.organizationInvites || {});
+        return send(res, 201, result);
+      }
+      if (organizationInvitesMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'team:invite', auth);
+        const organizationId = decodeURIComponent(organizationInvitesMatch[1]);
+        requireScope(subject, { organizationId });
+        return send(res, 200, await listOrganizationInvites(controlPlane.store, { organizationId, actorUserId: subject.id }));
+      }
+      if (method === 'POST' && url.pathname === '/organization-invites/accept') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const body = await readJson(req);
+        return send(res, 200, await acceptOrganizationInvite(controlPlane.store, { token: body.token, userId: subject.id }));
       }
       const organizationProjectsMatch = url.pathname.match(/^\/organizations\/([^/]+)\/projects$/);
       if (organizationProjectsMatch && method === 'GET') {

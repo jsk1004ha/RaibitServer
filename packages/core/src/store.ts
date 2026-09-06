@@ -26,6 +26,8 @@ import { nextProjectUpdatedAt, ProjectSettingsError, projectSettingsView, schedu
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug } from './rbac.ts';
+import { acceptMemoryOrganizationInvite, listMemoryOrganizationInvites, replaceMemoryOrganizationInvite, revokeMemoryOrganizationInviteAfterDeliveryFailure } from './organization-invite-memory.ts';
+import type { OrganizationInviteRecord, ReplaceOrganizationInviteInput } from './organization-invite.ts';
 import {
   boundedActivityRows,
   dateMs,
@@ -71,6 +73,7 @@ export class ControlPlaneStore {
   resourceAttachments: any[];
   emailVerificationCodes: any[];
   emailDeliveries: any[];
+  organizationInvites: OrganizationInviteRecord[];
   authRateLimits: Map<string, any>;
   oauthTransactions = new Map<string, OAuthTransactionRecord>();
   previewLineages = new Map<string, any>();
@@ -99,6 +102,7 @@ export class ControlPlaneStore {
     this.resourceAttachments = [];
     this.emailVerificationCodes = [];
     this.emailDeliveries = [];
+    this.organizationInvites = [];
     this.authRateLimits = new Map();
   }
 
@@ -405,6 +409,22 @@ export class ControlPlaneStore {
 
   listMembershipsForUser(userId: string) {
     return deepClone(this.members.filter((member) => String(member.userId) === String(userId)));
+  }
+
+  replaceOrganizationInvite(input: ReplaceOrganizationInviteInput) {
+    return replaceMemoryOrganizationInvite(this, input);
+  }
+
+  revokeOrganizationInviteAfterDeliveryFailure(id: string, revokedAt: string) {
+    return revokeMemoryOrganizationInviteAfterDeliveryFailure(this, id, revokedAt);
+  }
+
+  acceptOrganizationInvite(input: { readonly tokenHash: string; readonly userId: string; readonly now: string }) {
+    return acceptMemoryOrganizationInvite(this, input);
+  }
+
+  listOrganizationInvites(input: { readonly organizationId: string; readonly actorUserId: string }) {
+    return listMemoryOrganizationInvites(this, input);
   }
 
   createProject({ organizationId, name, slug, description = '', status = 'active' }: Record<string, any>) {

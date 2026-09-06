@@ -8,6 +8,8 @@
     "auth-email-resend": {"email":"parity@example.test"},
     "auth-password-reset-request": {"email":"parity@example.test"},
     "auth-password-reset-complete": {"email":"parity@example.test","code":"123456","newPassword":"test-password"},
+    "organizations-invites-post": {"email":"invitee@example.test","role":"DB_ADMIN"},
+    "organization-invites-accept-post": {"token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
     "projects-create": {"name":"Parity"},
     "project-settings-update": {"name":"Parity settings","expectedUpdatedAt":"2026-09-06T00:00:00.000Z"},
     "project-settings-delete": {"confirmed":true},

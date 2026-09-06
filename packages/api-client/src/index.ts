@@ -1,4 +1,4 @@
-import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
+import type { ApiOutput, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationInviteAccept, OrganizationInviteCreate, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec } from '@raibitserver/schemas';
 import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
@@ -64,6 +64,9 @@ export class RAIBITSERVERClient {
 
   listOrganizations(): Promise<Record<string, unknown>> { return this.request('/organizations'); }
   createOrganization(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/organizations', { method: 'POST', body: input }); }
+  listOrganizationInvites(organizationId: string) { return this.operations['organizations-invites']({ path: { organizationId }, query: {}, body: {} }); }
+  issueOrganizationInvite(organizationId: string, body: OrganizationInviteCreate) { return this.operations['organizations-invites-post']({ path: { organizationId }, query: {}, body }); }
+  acceptOrganizationInvite(body: OrganizationInviteAccept) { return this.operations['organization-invites-accept-post']({ path: {}, query: {}, body }); }
 
   listProjects(organizationId?: string, options: PageOptions = {}): Promise<ProjectListResponse | ProjectSpec[]> {
     return this.request(withPageQuery(organizationId ? `/organizations/${encodeURIComponent(organizationId)}/projects` : '/projects', options));
