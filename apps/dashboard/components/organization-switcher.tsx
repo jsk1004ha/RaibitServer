@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDownIcon, UsersIcon } from 'lucide-react';
+import { ChevronDownIcon, PlusIcon, UsersIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -32,10 +32,6 @@ export function OrganizationSwitcher({ currentOrganizationId, memberships }: Org
     ?? currentOrganizationId
     ?? '현재 조직';
 
-  if (!organizations.length) {
-    return <p className="truncate text-sm font-medium text-foreground" title={current}>{current}</p>;
-  }
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button className="h-auto w-full justify-between px-0 py-0 text-left font-medium" size="sm" type="button" variant="ghost" />}>
@@ -49,6 +45,9 @@ export function OrganizationSwitcher({ currentOrganizationId, memberships }: Org
             {membership.role ? <span className="text-xs text-muted-foreground">{membership.role}</span> : null}
           </DropdownMenuItem>
         ))}
+        {!organizations.length ? <p className="px-1.5 py-2 text-sm text-muted-foreground">아직 참여 중인 조직이 없습니다.</p> : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem closeOnClick render={<a href="/organizations/new" />}><PlusIcon />새 조직 만들기</DropdownMenuItem>
         {currentOrganizationId ? <>
           <DropdownMenuSeparator />
           <DropdownMenuItem closeOnClick render={<a href={`/org/${encodeURIComponent(currentOrganizationId)}/members`} />}><UsersIcon />조직 관리</DropdownMenuItem>

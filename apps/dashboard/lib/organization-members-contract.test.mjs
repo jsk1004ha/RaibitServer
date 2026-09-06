@@ -60,3 +60,28 @@ test('invite acceptance clears the token URL, refuses auth-token handoff, and se
   assert.match(acceptance, /초대받은 이메일로 인증된 계정에 로그인한 뒤, 보안을 위해 초대 이메일을 다시 열어 주세요/);
   assert.doesNotMatch(`${acceptance}\n${acceptancePage}`, /localStorage|sessionStorage|returnTo|next=/);
 });
+
+test('approved console users can open the organization creation surface without choosing ownership or roles', async () => {
+  const [switcher, form, pageSource, controlRoute] = await Promise.all([
+    component('organization-switcher.tsx'),
+    component('organization-create-form.tsx'),
+    page('organizations/new/page.tsx'),
+    page('api/control/[...path]/route.ts'),
+  ]);
+
+  assert.match(switcher, /href="\/organizations\/new"/);
+  assert.doesNotMatch(switcher, /role === 'OWNER'|role === 'ADMIN'/);
+  assert.match(form, /apiAction\('\/organizations'\)/);
+  assert.match(form, /body: JSON\.stringify\(\{ name, slug \}\)/);
+  assert.match(form, /organization-name/);
+  assert.match(form, /organization-slug/);
+  assert.match(form, /pattern="\[a-z0-9\]\(\?:\[a-z0-9-\]\*\[a-z0-9\]\)\?"/);
+  assert.match(form, /status === 409/);
+  assert.match(form, /reauthentication-required/);
+  assert.match(form, /requiresReauthentication/);
+  assert.doesNotMatch(form, /owner|membershipId|role:/i);
+  assert.doesNotMatch(pageSource, /^['"]use client['"]/);
+  assert.match(pageSource, /<ConsoleShell active="projects"/);
+  assert.match(controlRoute, /path === '\/organizations' && payload\?\.reauthenticationRequired === true/);
+  assert.match(controlRoute, /response\.cookies\.set\(SESSION_COOKIE_NAME, '', \{ \.\.\.sessionCookieOptions\(\), sameSite: 'lax', maxAge: 0 \}\)/);
+});

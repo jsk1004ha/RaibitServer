@@ -215,6 +215,9 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
         ? NextResponse.json(safePayload ?? {}, { status: upstream.status })
         : new NextResponse(null, { status: upstream.status });
     applySessionCookie(response, path, payload);
+    if (path === '/organizations' && payload?.reauthenticationRequired === true) {
+      response.cookies.set(SESSION_COOKIE_NAME, '', { ...sessionCookieOptions(), sameSite: 'lax', maxAge: 0 });
+    }
     response.headers.set('cache-control', 'no-store');
     copyRetryAfterHeader(response, upstream.headers.get('retry-after'));
     return response;
