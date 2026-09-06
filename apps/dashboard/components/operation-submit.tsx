@@ -13,6 +13,7 @@ type PublicOperationError = Readonly<{
 
 type OperationResult = Readonly<{
   operationId: string;
+  deploymentId?: string;
   status?: string;
   streamHref?: string;
 }>;
@@ -23,7 +24,7 @@ type SubmitState =
   | Readonly<{ kind: 'success'; result: OperationResult }>
   | Readonly<{ kind: 'error'; error: PublicOperationError }>;
 
-type FormValue = string | readonly string[];
+type FormValue = string | number | boolean | readonly (string | number | boolean)[];
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   return isRecord(value) ? value : null;
@@ -59,15 +60,22 @@ function operationResult(payload: unknown): OperationResult | null {
   const statusValue = record?.status ?? record?.state;
   const status = typeof statusValue === 'string' ? safeText(statusValue, '', 80) : undefined;
   const streamHref = typeof record?.streamHref === 'string' ? record.streamHref : undefined;
-  return { operationId, ...(status ? { status } : {}), ...(streamHref ? { streamHref } : {}) };
+  const deployment = asRecord(record?.deployment);
+  const deploymentId = safeText(deployment?.id, '', 200);
+  return { operationId, ...(deploymentId ? { deploymentId } : {}), ...(status ? { status } : {}), ...(streamHref ? { streamHref } : {}) };
 }
 
 function formPayload(formData: FormData): Readonly<Record<string, FormValue>> | null {
   const payload: Record<string, FormValue> = {};
   for (const [key, value] of formData.entries()) {
     if (typeof value !== 'string') return null;
+    const parsed = key === 'confirmed' && value === 'true'
+      ? true
+      : key === 'snapshotVersion' && /^\d+$/.test(value)
+        ? Number(value)
+        : value;
     const previous = payload[key];
-    payload[key] = previous === undefined ? value : Array.isArray(previous) ? [...previous, value] : [previous, value];
+    payload[key] = previous === undefined ? parsed : Array.isArray(previous) ? [...previous, parsed] : [previous, parsed];
   }
   return payload;
 }
@@ -115,6 +123,7 @@ export function OperationSubmit({
 }>) {
   const running = useRef(false);
   const focusOrigin = useRef<HTMLButtonElement | null>(null);
+  const successFeedback = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<SubmitState>({ kind: 'idle' });
   const busy = state.kind === 'pending';
   const streamHref = state.kind === 'success' ? sameOriginStreamHref(state.result.streamHref) : null;
@@ -125,6 +134,11 @@ export function OperationSubmit({
     focusOrigin.current = null;
     if (document.activeElement === document.body && origin.isConnected && !origin.disabled) origin.focus();
   }, [busy]);
+
+  useEffect(() => {
+    if (state.kind !== 'success') return;
+    successFeedback.current?.focus();
+  }, [state]);
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     if (running.current || disabled) {
@@ -170,7 +184,7 @@ export function OperationSubmit({
       {children}
       <div aria-atomic="true" aria-live="polite" className="flex min-w-0 flex-col gap-raibit-sm">
         {busy ? <p role="status" className="text-sm text-muted-foreground">{pendingLabel}</p> : null}
-        {state.kind === 'success' ? <Alert variant="notice"><AlertTitle>작업 요청을 접수했습니다.</AlertTitle><AlertDescription className="break-words [overflow-wrap:anywhere]">작업 ID: <span className="font-mono">{state.result.operationId}</span>{state.result.status ? <span className="block">서버 확인 상태: {state.result.status}</span> : null}{streamHref ? <a className="mt-raibit-xs block w-fit" href={streamHref}>작업 스트림 열기</a> : null}</AlertDescription></Alert> : null}
+        {state.kind === 'success' ? <div ref={successFeedback} tabIndex={-1}><Alert variant="notice"><AlertTitle>작업 요청을 접수했습니다.</AlertTitle><AlertDescription className="break-words [overflow-wrap:anywhere]">작업 ID: <span className="font-mono">{state.result.operationId}</span>{state.result.deploymentId ? <span className="block">새 배포: <a className="font-mono" href={returnTo}>{state.result.deploymentId}</a></span> : null}{state.result.status ? <span className="block">서버 확인 상태: {state.result.status}</span> : null}{streamHref ? <a className="mt-raibit-xs block w-fit" href={streamHref}>작업 스트림 열기</a> : null}</AlertDescription></Alert></div> : null}
         {state.kind === 'error' ? <Alert variant="destructive"><AlertTitle>{state.error.code === 'forbidden' || state.error.code === 'permission_denied' || state.error.code === 'authentication_required' ? '권한 확인 필요' : state.error.retryable ? '다시 시도할 수 있습니다' : '작업 요청을 확인하세요'}</AlertTitle><AlertDescription className="break-words [overflow-wrap:anywhere]">{state.error.message}<span className="block font-mono text-xs">{state.error.code}</span>{state.error.retryable ? <span className="block">현재 상태를 확인한 뒤 다시 시도할 수 있습니다.</span> : null}</AlertDescription></Alert> : null}
       </div>
       <button aria-busy={busy} className={submitClassName} disabled={disabled || busy} type="submit">{busy ? pendingLabel : submitLabel}</button>

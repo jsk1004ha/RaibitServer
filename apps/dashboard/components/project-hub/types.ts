@@ -1,5 +1,6 @@
 import type { DashboardLoadIssue } from '@/lib/api';
 import type { ResourceAvailability } from '@raibitserver/schemas';
+import type { DeploymentHistoryPage } from './deployment-history-model';
 
 export const projectViews = ['overview', 'services', 'new-service', 'edit-service', 'deployments', 'agent', 'resources', 'new-resource', 'environment', 'logs', 'domains', 'settings'] as const;
 export type ProjectView = (typeof projectViews)[number];
@@ -153,6 +154,7 @@ export type ProjectHubData = Readonly<{
   agentPlan: AgentPlan | null;
   base: string;
   deletionPending: boolean;
+  deploymentHistory: DeploymentHistoryPage | null;
   deployments: readonly DeploymentRecord[];
   customDomains: readonly CustomDomainRecord[];
   customDomainsIssue: DashboardLoadIssue | null;

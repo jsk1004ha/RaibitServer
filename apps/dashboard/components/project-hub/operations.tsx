@@ -7,11 +7,13 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { DeploymentHistory } from './deployment-history';
 import { HubEmpty, MetricGrid, Panel, ProjectStatusBadge } from './shared';
 import { LogServiceSelector, RuntimeLogStream } from './runtime-log-stream';
 import type { AgentPlan, ProjectHubData } from './types';
 
 export function DeploymentsView({ data }: Readonly<{ data: ProjectHubData }>) {
+  if (data.deploymentHistory) return <DeploymentHistory base={data.base} history={data.deploymentHistory} services={data.services} />;
   return (
     <Panel title="배포 내역" description="운영 및 미리보기 배포의 로그와 이벤트">
       {data.deployments.length > 0 ? <>

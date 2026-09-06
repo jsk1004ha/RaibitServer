@@ -1,6 +1,7 @@
 import { ConsoleShell } from '../../../../../components/console-ui';
 import { ProjectHub } from '../../../../../components/project-hub/project-hub';
 import { projectView, queryText } from '../../../../../components/project-hub/model';
+import { deploymentHistoryPage } from '../../../../../components/project-hub/deployment-history-model';
 import type { EnvironmentEntry, ProjectDomainRole, RuntimeLog, ServiceRecord } from '../../../../../components/project-hub/types';
 import { collectLoadIssues, getJson, loadProjectConsole, postJson } from '../../../../../lib/api';
 import { projectMainLink } from '../../../../../lib/project-main-link';
@@ -14,6 +15,14 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
   const [{ orgSlug, projectId }, query] = await Promise.all([params, searchParams]);
   const view = projectView(queryText(query.view) || 'overview');
   const state = await loadProjectConsole(projectId);
+  const deploymentHistoryQuery = new URLSearchParams();
+  for (const key of ['serviceId', 'environment', 'status', 'trigger', 'from', 'to', 'cursor', 'limit']) {
+    const value = queryText(query[key]);
+    if (value) deploymentHistoryQuery.set(key, value);
+  }
+  const deploymentHistoryResult = view === 'deployments'
+    ? await getJson(`/projects/${encodeURIComponent(projectId)}/deployments/history${deploymentHistoryQuery.size > 0 ? `?${deploymentHistoryQuery.toString()}` : ''}`, { deployments: [], page: { limit: 25, nextCursor: null }, filters: {} }, state.context)
+    : null;
   const resourceOptions = view === 'new-resource'
     ? await getJson(`/projects/${encodeURIComponent(projectId)}/resources`, { resourceOptions: [] }, state.context)
     : null;
@@ -52,6 +61,7 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
     ...(runtimeLogsResult ? collectLoadIssues([['런타임 로그', runtimeLogsResult]]) : []),
     ...(environment ? collectLoadIssues([['환경 변수', environment]]) : []),
     ...(agentPlanResult ? collectLoadIssues([['AI 배포 계획', agentPlanResult]]) : []),
+    ...(deploymentHistoryResult ? collectLoadIssues([['배포 내역', deploymentHistoryResult]]) : []),
   ];
   const projectName = state.project.name || state.project.slug || projectId;
   const organizationLabel = state.project.organization?.name || state.project.organizationSlug || '내 조직';
@@ -67,6 +77,7 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
     agentPlan: agentPlanResult?.body || null,
     base,
     deletionPending: ['DELETE_REQUESTED', 'DELETING'].includes(String(state.project.status || '').toUpperCase()),
+    deploymentHistory: deploymentHistoryResult ? deploymentHistoryPage(deploymentHistoryResult.body) : null,
     deployments: state.deployments,
     customDomains: domains?.ok && Array.isArray(domains.body?.domains) ? domains.body.domains : [],
     customDomainsIssue: domains && !domains.ok

@@ -201,11 +201,12 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
     fullName: githubRepository.fullName, defaultBranch: githubRepository.defaultBranch, synced: true,
   });
   if (pathname === `/projects/${project.id}/overview`) return json(200, { project, services: [service, workerService], deployments: [deployment], resources: [resource] });
+  if (pathname === `/projects/${project.id}/deployments/history` && method === 'GET') return deploymentHistoryResponse({ actor, searchParams, state });
   if (pathname === `/services/${service.id}/settings`) return serviceSettingsResponse({ body, method });
   if (pathname === `/services/${service.id}/settings/preview`) return serviceSettingsPreviewResponse({ body, method });
   if (pathname === `/services/${service.id}/replacements`) return serviceReplacementResponse({ body, method });
   const deploymentFixture = deploymentFixtureForPath(pathname);
-  if (deploymentFixture) return deploymentResponse({ body, deploymentFixture, method, pathname, state });
+  if (deploymentFixture) return deploymentResponse({ actor, body, deploymentFixture, method, pathname, state });
   if (pathname === `/resources/${resource.id}`) return json(200, resource);
   if (pathname === `/resources/${resource.id}/backups`) return resourceBackupResponse({ body, method, pathname, state });
   if (pathname.startsWith('/backups/')) return resourceBackupResponse({ body, method, pathname, state });
@@ -398,23 +399,64 @@ function deploymentFixtureForPath(pathname) {
   });
 }
 
-function deploymentResponse({ body, deploymentFixture, method, pathname, state }) {
+function deploymentHistoryRow(value, actor) {
+  const action = actor.role === 'ADMIN'
+    ? value.status === 'FAILED'
+      ? { type: 'retry', targetId: value.id, href: `/deployments/${encodeURIComponent(value.id)}/retry`, method: 'POST', confirmationRequired: true, snapshotVersion: 3 }
+      : value.status === 'BUILDING'
+        ? { type: 'cancel', targetId: value.id, href: `/deployments/${encodeURIComponent(value.id)}/cancel`, method: 'POST', confirmationRequired: true, snapshotVersion: 3 }
+        : value.status === 'READY'
+          ? { type: 'rollback', targetId: value.id, href: `/deployments/${encodeURIComponent(value.id)}/rollback`, method: 'POST', confirmationRequired: true, snapshotVersion: 3 }
+          : null
+    : null;
+  return {
+    ...value,
+    service: { id: value.serviceId, name: value.serviceId === workerService.id ? workerService.name : service.name, slug: value.serviceId === workerService.id ? workerService.slug : service.slug },
+    environment: value.deploymentType, trigger: 'push', updatedAt: value.createdAt,
+    source: { commitSha: value.commitSha || null, imageDigest: value.imageDigest || null, snapshotVersion: 3 },
+    lineage: { sourceDeploymentId: null, retryOfDeploymentId: value.status === 'FAILED' ? deployment.id : null, rollbackOfDeploymentId: null, previousDeploymentId: value.status === 'READY' ? failedDeployment.id : null, previewLineageId: null, previewGeneration: null },
+    operation: { requestedByUserId: actor.id, requestIdempotencyKey: `fixture-${value.id}` },
+    health: { rolloutStatus: value.status === 'READY' ? 'ready' : 'pending', publicHealthStatus: value.status === 'READY' ? 'healthy' : 'unknown', healthCheckedAt: value.status === 'READY' ? value.createdAt : null, healthFailureCode: value.errorCode || null, observedGeneration: 3 },
+    recovery: { retryable: value.status === 'FAILED', reason: value.status === 'FAILED' ? null : '서버 상태가 이 복구 요청을 허용하지 않습니다.' },
+    permissions: { execute: actor.role === 'ADMIN' },
+    eligibleAction: action,
+  };
+}
+
+function deploymentHistoryResponse({ actor, searchParams, state }) {
+  const filters = {
+    serviceId: searchParams.get('serviceId'), environment: searchParams.get('environment'), status: searchParams.get('status'), trigger: searchParams.get('trigger'), from: searchParams.get('from'), to: searchParams.get('to'),
+  };
+  const limitValue = Number(searchParams.get('limit'));
+  const limit = Number.isInteger(limitValue) && limitValue >= 1 && limitValue <= 100 ? limitValue : 25;
+  const rows = (state === 'empty' ? [] : deploymentFixtures.map(({ deployment: entry }) => deploymentHistoryRow(entry, actor)))
+    .filter((entry) => (!filters.serviceId || entry.service.id === filters.serviceId) && (!filters.environment || entry.environment === filters.environment) && (!filters.status || entry.status === filters.status) && (!filters.trigger || entry.trigger === filters.trigger) && (!filters.from || entry.createdAt >= filters.from) && (!filters.to || entry.createdAt <= filters.to));
+  const start = searchParams.get('cursor') === 'fixture-history-page-2' ? limit : 0;
+  const deployments = rows.slice(start, start + limit);
+  return json(200, { deployments, page: { limit, nextCursor: start + limit < rows.length ? 'fixture-history-page-2' : null }, filters });
+}
+
+function deploymentResponse({ actor, body, deploymentFixture, method, pathname, state }) {
   const base = `/deployments/${encodeURIComponent(deploymentFixture.deployment.id)}`;
-  if (pathname === base && method === 'GET') return json(200, deploymentFixture.deployment);
+  if (pathname === base && method === 'GET') return json(200, deploymentHistoryRow(deploymentFixture.deployment, actor));
   if (state === 'partial' && (pathname === `${base}/logs` || pathname === `${base}/events`)) return json(503, { error: 'fixture_operation_data_unavailable' });
   if (pathname === `${base}/logs` && method === 'GET') {
     const logs = state === 'empty' ? [] : state === 'long' ? [{ timestamp: FIXED_TIME, line: longUnbrokenLog }, { timestamp: FIXED_TIME, line: hostileLogLine }, { timestamp: FIXED_TIME, line: longKoreanText }] : deploymentFixture.logs;
     return json(200, { logs });
   }
   if (pathname === `${base}/events` && method === 'GET') return json(200, { events: state === 'empty' ? [] : deploymentFixture.events });
+  if (pathname === `${base}/retry` && method === 'POST') {
+    if (typeof body.requestIdempotencyKey !== 'string' || body.snapshotVersion !== 3) return json(400, { error: 'fixture_retry_input_invalid' });
+    return json(202, { operationId: 'op_fixture_retry', status: 'QUEUED', streamHref: `${base}/stream`, deployment: { ...deploymentFixture.deployment, id: 'dep_fixture_retry_successor', status: 'QUEUED' }, workflowJob: {} });
+  }
   if (pathname === `${base}/rollback` && method === 'POST') {
-    if (body.confirmed !== 'true') return json(400, { error: 'fixture_confirmation_required' });
-    return json(202, { operation: 'rollback_requested', deploymentId: deploymentFixture.deployment.id, status: 'QUEUED' });
+    if (body.confirmed !== true) return json(400, { error: 'fixture_confirmation_required' });
+    return json(202, { operationId: 'op_fixture_rollback', status: 'QUEUED', streamHref: `${base}/stream`, deployment: { ...deploymentFixture.deployment, id: 'dep_fixture_rollback_successor', status: 'QUEUED' }, rollbackOfDeploymentId: deploymentFixture.deployment.id, previousDeployment: deploymentFixture.deployment, workflowJob: {} });
   }
   if (pathname === `${base}/cancel` && method === 'POST') {
     const cancellable = new Set(['QUEUED', 'BUILDING', 'IMAGE_READY']);
     if (!cancellable.has(deploymentFixture.deployment.status)) return json(409, { error: 'fixture_cancel_not_allowed' });
-    return json(202, { operation: 'cancel_requested', deploymentId: deploymentFixture.deployment.id, status: 'CANCEL_REQUESTED' });
+    return json(200, { operationId: 'op_fixture_cancel', status: 'CANCEL_REQUESTED', streamHref: `${base}/stream`, deployment: deploymentFixture.deployment });
   }
   return json(405, { error: 'fixture_operation_method_not_allowed' });
 }
