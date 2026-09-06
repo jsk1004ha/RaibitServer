@@ -133,6 +133,7 @@ test('Given each engine, when TS compilers plan it, then unsupported engines rej
 test('Given OpenAPI and CLI help, when inspected as published contracts, then supported engine choices match the matrix', async () => {
   const openapi = parse(await readFile(new URL('../openapi/raibitserver.yaml', import.meta.url), 'utf8'));
   assert.deepEqual(openapi.components.schemas.LocalResourceEngine.enum, supported);
+  assert.deepEqual(openapi.components.schemas['resources-updateBody'].properties.engine.enum, supported);
   assert.equal(openapi['x-resource-capability-source'], 'test-fixtures/contracts/resource-capabilities-v1.json');
   for (const cli of ['src/cli.js', 'apps/cli/src/index.ts']) {
     const result = spawnSync(process.execPath, [cli, 'help'], { cwd: new URL('../', import.meta.url), encoding: 'utf8' });

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ServiceHealthFields, refineServiceHealth } from './deployment-health.ts';
 import { HealthPathError } from '../../core/src/deployment-health.ts';
 import { DesiredStateMutationError, parseServiceMutation } from '../../core/src/desired-state-mutations.ts';
+import { SupportedResourceEngineSchema } from './resource-execution.ts';
 
 const label = z.string().min(1).max(128).regex(/^[^\u0000-\u001f\u007f]+$/);
 const sourcePath = z.string().min(1).max(1024).regex(/^(?![\/\\])(?!.*:)(?!.*(?:^|[\/\\])\.\.(?:[\/\\]|$))[^\u0000-\u001f\u007f]+$/);
@@ -32,7 +33,7 @@ export const ServiceUpdateSchema = z.object({
   }
 });
 export const ResourceUpdateSchema = z.object({
-  name: label.optional(), type: z.string().optional(), engine: z.string().optional(), provider: z.string().optional(), plan: z.string().optional(), region: z.string().optional(), version: z.string().optional(),
+  name: label.optional(), type: z.string().optional(), engine: SupportedResourceEngineSchema.optional(), provider: z.string().optional(), plan: z.string().optional(), region: z.string().optional(), version: z.string().optional(),
   storageMb: z.number().int().positive().optional(), storageGb: z.number().int().positive().optional(),
   databaseName: label.optional(), database: label.optional(), username: label.optional(), bucket: label.optional(), collection: label.optional(), topic: label.optional(),
   desiredSpec: z.record(z.string(), z.unknown()).optional(),

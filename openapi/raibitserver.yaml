@@ -8049,6 +8049,14 @@ components:
           type: string
         engine:
           type: string
+          enum:
+            - postgresql
+            - mysql
+            - mariadb
+            - mongodb
+            - sqlite
+            - redis
+            - valkey
         provider:
           type: string
         plan:
