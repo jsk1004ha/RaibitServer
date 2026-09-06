@@ -30,6 +30,7 @@ export function publicGitHubIntegration(integration: Readonly<Record<string, unk
       ? integration.verifiedAt.toISOString()
       : null;
   return {
+    provider: 'github',
     id: String(integration.id),
     organizationId: String(integration.organizationId),
     accountLogin: typeof integration.accountLogin === 'string' ? integration.accountLogin : null,
