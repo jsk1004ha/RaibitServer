@@ -114,9 +114,11 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
         await userPage.getByRole('button', { name: '콘솔 메뉴 열기' }).click();
       }
       const accountMenu = userPage.getByRole('button', { name: '계정 메뉴 열기' }).filter({ visible: true });
+      await expect(accountMenu).toContainText('user@fixture.test');
       await accountMenu.focus();
       await userPage.keyboard.press('Enter');
-      await expect(userPage.getByText('user@fixture.test', { exact: true }).filter({ visible: true }).first()).toBeVisible();
+      await expect(accountMenu).toHaveAttribute('aria-expanded', 'true');
+      await expect(userPage.getByRole('menuitem', { name: '계정 보안' })).toBeVisible();
       await userPage.keyboard.press('Escape');
       await expectReflow(userPage);
     }
@@ -154,9 +156,10 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
         if (journey.intent === 'authentication-required') {
           const denied = await patchTargetMember(page, { role: 'ADMIN', expectedVersion: 1 });
           expect(denied.status()).toBe(401);
-          expect(await json(denied)).toEqual(journey.role === 'pending' ? { error: 'account_not_approved' } : { error: 'session_expired' });
+          expect(await json(denied)).toEqual(journey.role === 'pending' ? { error: 'account_not_approved' } : { error: 'authentication_required' });
           await page.goto(journey.route, { waitUntil: 'networkidle' });
-          await expectRoute(page, '/login', { error: 'session_expired' });
+          await expectRoute(page, '/login', journey.role === 'pending' ? {} : { error: 'session_expired' });
+          if (journey.role === 'pending') expect(new URL(page.url()).search).toBe('');
           await expect(page.getByRole('heading', { name: '로그인' })).toBeVisible();
           expect(mutationRequests).toEqual([]);
         } else if (journey.intent === 'member-mutation') {
@@ -213,8 +216,8 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
           await expect(page.getByRole('status')).toContainText('새 조직을 만들었습니다.');
           await expect(page.getByRole('link', { name: '다시 로그인하기' })).toBeVisible();
           const denied = await patchTargetMember(page, { role: 'DEVELOPER', expectedVersion: 1 });
-          expect(denied.status()).toBe(403);
-          expect(await json(denied)).toEqual({ error: 'forbidden' });
+          expect(denied.status()).toBe(401);
+          expect(await json(denied)).toEqual({ error: 'authentication_required' });
         }
 
         await expectAccessible(page);

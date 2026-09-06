@@ -1,6 +1,6 @@
 import { LogOutIcon, ShieldCheckIcon } from 'lucide-react';
 import { buttonVariants } from '@/components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { UserAvatar } from './user-avatar';
 
@@ -21,11 +21,13 @@ export function AccountMenu({ avatarUrl, email, logoutAction, name, organization
       <span className="min-w-0"><span className="block truncate text-xs font-medium text-foreground">{label}</span><span className="block truncate text-xs text-muted-foreground">{email || '이메일 정보 없음'}</span></span>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="end" className="w-72">
-      <DropdownMenuLabel className="space-y-1"><span className="block truncate text-sm text-foreground">{label}</span><span className="block truncate font-normal">{email || '이메일 정보 없음'}</span><span className="block font-normal">{organization} · {role}</span></DropdownMenuLabel>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem render={<a href="/account/security" />}><ShieldCheckIcon />계정 보안</DropdownMenuItem>
-      <DropdownMenuSeparator />
-      <form action={logoutAction} method="post"><input name="_returnTo" type="hidden" value="/login" /><button className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'w-full justify-start text-destructive hover:bg-destructive/10 hover:text-destructive')} type="submit"><LogOutIcon />로그아웃</button></form>
+      <DropdownMenuGroup>
+        <DropdownMenuLabel className="space-y-1"><span className="block truncate text-sm text-foreground">{label}</span><span className="block truncate font-normal">{email || '이메일 정보 없음'}</span><span className="block font-normal">{organization} · {role}</span></DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem render={<a href="/account/security" />}><ShieldCheckIcon />계정 보안</DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <form action={logoutAction} method="post"><input name="_returnTo" type="hidden" value="/login" /><button className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'w-full justify-start text-destructive hover:bg-destructive/10 hover:text-destructive')} type="submit"><LogOutIcon />로그아웃</button></form>
+      </DropdownMenuGroup>
     </DropdownMenuContent>
   </DropdownMenu>;
 }
