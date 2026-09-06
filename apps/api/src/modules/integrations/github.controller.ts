@@ -82,6 +82,7 @@ export class GitHubIntegrationController {
 
   @RequirePermission('deploy:run')
   @Post('github/repositories/:repositoryId/sync')
+  @HttpCode(202)
   syncRepository(@Param('repositoryId') repositoryId: string, @Body() input: Record<string, any>, @Req() req: any) {
     return this.githubService.syncGitHubRepository(repositoryId, input || {}, req.raibitSubject);
   }
