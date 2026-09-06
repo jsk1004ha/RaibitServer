@@ -28,7 +28,7 @@ test('Given a clean checkout and no report override, when real Nest parity runs,
       await writeFile(prefix + '.metadata.json', JSON.stringify({ command: process.execPath, args, cwd: sandbox, status: result.status, before: before.stdout, after: after.stdout }, null, 2));
     }
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /checked=74; HTTP=41; cleanup=true/, 'the child must execute real Nest parity, not skip nested tests');
+    assert.match(result.stdout, /checked=109; HTTP=44; cleanup=true/, 'the child must execute real Nest parity, not skip nested tests');
     assert.equal(after.status, 0);
     assert.equal(after.stdout, before.stdout, 'default parity reporting must not create checkout files');
   } finally { await rm(sandbox, { recursive: true, force: true }); }
