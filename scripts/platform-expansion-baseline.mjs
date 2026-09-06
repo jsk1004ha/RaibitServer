@@ -154,38 +154,131 @@ function isCount(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
-async function platformExpansionReportAssertionCount(reportPath) {
+function sameIds(actual, expected) {
+  return actual.length === expected.length && new Set(actual).size === actual.length && actual.every((id) => expected.includes(id));
+}
+
+const task49CoverageBySourceRoot = new Map();
+
+export async function loadTask49Coverage(sourceRoot = SOURCE_ROOT) {
+  const canonicalSourceRoot = await realpath(sourceRoot);
+  const cached = task49CoverageBySourceRoot.get(canonicalSourceRoot);
+  if (cached) return cached;
+  let compiler;
+  let matrixSource;
+  try {
+    compiler = (await import('typescript')).default;
+    matrixSource = await readFile(path.join(canonicalSourceRoot, 'apps/dashboard/tests/e2e/feature-expansion-matrix.ts'), 'utf8');
+  } catch {
+    throw new BaselineError('platform_expansion_matrix_unavailable');
+  }
+  if (!compiler?.transpileModule) throw new BaselineError('platform_expansion_matrix_unavailable');
+  let matrix;
+  try {
+    const output = compiler.transpileModule(matrixSource, { compilerOptions: { module: compiler.ModuleKind.ESNext, target: compiler.ScriptTarget.ES2022 } });
+    matrix = await import(`data:text/javascript;base64,${Buffer.from(output.outputText).toString('base64')}`);
+  } catch {
+    throw new BaselineError('platform_expansion_matrix_invalid');
+  }
+  const executableRows = matrix.PLATFORM_EXPANSION_EXECUTABLE_ROWS;
+  const negativeRows = matrix.PLATFORM_EXPANSION_NEGATIVE_ROWS;
+  if (!Array.isArray(executableRows) || !Array.isArray(negativeRows)) throw new BaselineError('platform_expansion_matrix_invalid');
+  const executableIds = executableRows.map((row) => row?.id);
+  const negativeIds = negativeRows.map((row) => row?.id);
+  if (executableIds.length === 0 || executableIds.some((id) => typeof id !== 'string' || id.length === 0) || new Set(executableIds).size !== executableIds.length || !sameIds(negativeIds, executableIds.filter((id) => negativeIds.includes(id)))) {
+    throw new BaselineError('platform_expansion_matrix_invalid');
+  }
+  const negativeIdSet = new Set(negativeIds);
+  const coverage = Object.freeze({
+    positiveIds: Object.freeze(executableIds.filter((id) => !negativeIdSet.has(id))),
+    negativeIds: Object.freeze(negativeIds),
+  });
+  if (coverage.positiveIds.length === 0 || coverage.negativeIds.length === 0) throw new BaselineError('platform_expansion_matrix_invalid');
+  task49CoverageBySourceRoot.set(canonicalSourceRoot, coverage);
+  return coverage;
+}
+
+async function readEvidenceJson(reportPath, missingCode) {
   let report;
   try {
     const reportStat = await lstat(reportPath);
-    if (!reportStat.isFile() || reportStat.isSymbolicLink()) throw new BaselineError('platform_expansion_report_invalid');
+    if (!reportStat.isFile() || reportStat.isSymbolicLink()) throw new BaselineError(missingCode);
     report = JSON.parse(await readFile(reportPath, 'utf8'));
   } catch (error) {
     if (error instanceof BaselineError) throw error;
-    if (error?.code === 'ENOENT') throw new BaselineError('platform_expansion_report_missing');
+    if (error?.code === 'ENOENT') throw new BaselineError(missingCode);
     throw new BaselineError('platform_expansion_report_invalid');
   }
-  if (!isRecord(report) || report.schema !== 'raibit.task49.v1' || report.kind !== 'positive' || !Array.isArray(report.expectedScenarioIds) || !Array.isArray(report.outcomes) || !isRecord(report.summary)) {
+  return report;
+}
+
+async function validateTask49Report(reportPath, kind, expectedIds) {
+  const report = await readEvidenceJson(reportPath, 'platform_expansion_report_missing');
+  if (!isRecord(report) || report.schema !== 'raibit.task49.v1' || !Array.isArray(report.expectedScenarioIds) || !Array.isArray(report.outcomes) || !isRecord(report.summary)) {
     throw new BaselineError('platform_expansion_report_invalid');
   }
   const expected = report.expectedScenarioIds;
-  if (expected.length === 0 || expected.some((id) => typeof id !== 'string' || id.length === 0) || new Set(expected).size !== expected.length) {
+  if (report.kind !== kind || expected.some((id) => typeof id !== 'string' || id.length === 0) || !sameIds(expected, expectedIds)) {
     throw new BaselineError('platform_expansion_report_invalid');
   }
   const summary = report.summary;
   if (!isCount(summary.expected) || !isCount(summary.passed) || !isCount(summary.failed) || !isCount(summary.skipped) || !isCount(summary.unexpected) || !isCount(summary.flaky)
-    || summary.expected !== expected.length || summary.passed !== expected.length || summary.failed !== 0 || summary.skipped !== 0 || summary.unexpected !== 0 || summary.flaky !== 0) {
+    || summary.expected !== expectedIds.length || summary.passed !== expectedIds.length || summary.failed !== 0 || summary.skipped !== 0 || summary.unexpected !== 0 || summary.flaky !== 0) {
     throw new BaselineError('platform_expansion_report_invalid');
   }
   const outcomes = report.outcomes;
-  if (outcomes.length !== expected.length || outcomes.some((outcome) => !isRecord(outcome) || typeof outcome.id !== 'string' || outcome.status !== 'passed')) {
+  if (outcomes.length !== expectedIds.length || outcomes.some((outcome) => !isRecord(outcome) || typeof outcome.id !== 'string' || outcome.status !== 'passed')) {
     throw new BaselineError('platform_expansion_report_invalid');
   }
   const outcomeIds = outcomes.map((outcome) => outcome.id);
-  if (new Set(outcomeIds).size !== outcomeIds.length || outcomeIds.some((id) => !expected.includes(id))) {
+  if (!sameIds(outcomeIds, expectedIds)) {
     throw new BaselineError('platform_expansion_report_invalid');
   }
-  return expected.length;
+}
+
+function collectPlaywrightSpecs(suites) {
+  if (!Array.isArray(suites)) return null;
+  const specs = [];
+  for (const suite of suites) {
+    if (!isRecord(suite)) return null;
+    if (suite.specs !== undefined) {
+      if (!Array.isArray(suite.specs)) return null;
+      specs.push(...suite.specs);
+    }
+    const nested = collectPlaywrightSpecs(suite.suites ?? []);
+    if (nested === null) return null;
+    specs.push(...nested);
+  }
+  return specs;
+}
+
+async function validatePlaywrightReport(reportPath, coverage) {
+  const report = await readEvidenceJson(reportPath, 'platform_expansion_playwright_report_missing');
+  if (!isRecord(report) || !isRecord(report.stats)) throw new BaselineError('platform_expansion_playwright_report_invalid');
+  const expectedTitles = [
+    ...coverage.positiveIds.map((id) => `@platform-expansion ${id}`),
+    ...coverage.negativeIds.map((id) => `@platform-expansion ${id}`),
+  ];
+  const stats = report.stats;
+  if (!isCount(stats.expected) || !isCount(stats.skipped) || !isCount(stats.unexpected) || !isCount(stats.flaky)
+    || stats.expected !== expectedTitles.length || stats.skipped !== 0 || stats.unexpected !== 0 || stats.flaky !== 0) {
+    throw new BaselineError('platform_expansion_playwright_report_invalid');
+  }
+  const specs = collectPlaywrightSpecs(report.suites);
+  if (specs === null || specs.length !== expectedTitles.length || !sameIds(specs.map((spec) => spec?.title), expectedTitles)) {
+    throw new BaselineError('platform_expansion_playwright_report_invalid');
+  }
+  if (specs.some((spec) => !Array.isArray(spec.tests) || spec.tests.length !== 1 || spec.tests[0]?.results?.length !== 1 || spec.tests[0].results[0]?.status !== 'passed')) {
+    throw new BaselineError('platform_expansion_playwright_report_invalid');
+  }
+}
+
+async function platformExpansionEvidenceAssertionCount(sourceRoot, reportPath, playwrightReportPath) {
+  const coverage = await loadTask49Coverage(sourceRoot);
+  await validateTask49Report(reportPath, 'positive', coverage.positiveIds);
+  await validateTask49Report(path.join(path.dirname(reportPath), 'task-49-platform-expansion-negative-evidence.json'), 'negative', coverage.negativeIds);
+  await validatePlaywrightReport(playwrightReportPath, coverage);
+  return coverage.positiveIds.length + coverage.negativeIds.length;
 }
 
 async function writeJson(target, value) {
@@ -304,15 +397,16 @@ export async function runBaseline(options) {
           const stdout = `${result.stdout ?? ''}`;
           const stderr = `${result.stderr ?? ''}`;
           const assertions = parseAssertions(command.assertion, `${stdout}\n${stderr}`);
-          const platformReportCount = command.id === 'dashboard-platform-e2e' && result.exitCode === 0
-            ? await platformExpansionReportAssertionCount(environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH)
-            : null;
           receipt.exitCode = result.exitCode;
-          receipt.assertionCount = platformReportCount ?? assertions.count;
-          receipt.skippedCount = platformReportCount === null ? assertions.skipped : 0;
+          receipt.assertionCount = assertions.count;
+          receipt.skippedCount = assertions.skipped;
           receipt.stdoutSha256 = digest(stdout);
           receipt.stderrSha256 = digest(stderr);
           await writeFile(path.join(attemptDir, receipt.log), `${stdout}${stderr}`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+          if (command.id === 'dashboard-platform-e2e' && result.exitCode === 0) {
+            receipt.assertionCount = await platformExpansionEvidenceAssertionCount(sourceRoot, environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH, environment.RAIBITSERVER_PLAYWRIGHT_REPORT_PATH);
+            receipt.skippedCount = 0;
+          }
           if (result.exitCode !== 0) failure = { id: command.id, code: 'command_failed', exitCode: result.exitCode || 1 };
           else if (command.id !== 'dashboard-platform-e2e' && command.assertion !== 'command' && assertions.skipped > 0) failure = { id: command.id, code: 'skipped_assertions', exitCode: 1 };
           else if (command.id !== 'dashboard-platform-e2e' && command.assertion !== 'command' && assertions.count === 0) failure = { id: command.id, code: 'empty_assertions', exitCode: 1 };

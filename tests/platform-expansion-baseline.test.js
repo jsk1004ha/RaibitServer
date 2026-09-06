@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { BASELINE_COMMANDS, BaselineError, prepareAttemptDirectory, runBaseline } from '../scripts/platform-expansion-baseline.mjs';
+import { relativeExternalDistDir } from '../apps/dashboard/next.config.mjs';
+import { BASELINE_COMMANDS, BaselineError, loadTask49Coverage, prepareAttemptDirectory, runBaseline } from '../scripts/platform-expansion-baseline.mjs';
 
 const sourceRoot = process.cwd();
 
@@ -23,14 +24,33 @@ function fixtureOutput(command) {
   return `${command.id} completed\n`;
 }
 
-const fixturePlatformReport = () => ({
-  schema: 'raibit.task49.v1', kind: 'positive', expectedScenarioIds: ['fixture-platform-expansion'],
-  outcomes: [{ id: 'fixture-platform-expansion', status: 'passed', api: { status: 200, method: 'GET', path: '/fixture' }, a11y: { violations: 0 } }],
-  summary: { expected: 1, passed: 1, failed: 0, skipped: 0, unexpected: 0, flaky: 0 },
-});
+function reportFor(kind, ids) {
+  return {
+    schema: 'raibit.task49.v1', kind, expectedScenarioIds: ids,
+    outcomes: ids.map((id) => ({ id, status: 'passed', api: { status: 200, method: 'GET', path: '/fixture' }, a11y: { violations: 0 } })),
+    summary: { expected: ids.length, passed: ids.length, failed: 0, skipped: 0, unexpected: 0, flaky: 0 },
+  };
+}
 
-async function writeFixturePlatformReport(environment, report = fixturePlatformReport()) {
-  await writeFile(environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH, JSON.stringify(report));
+function playwrightReport(coverage) {
+  const specs = [
+    ...coverage.positiveIds.map((id) => ({ title: `@platform-expansion ${id}`, tests: [{ results: [{ status: 'passed' }] }] })),
+    ...coverage.negativeIds.map((id) => ({ title: `@platform-expansion ${id}`, tests: [{ results: [{ status: 'passed' }] }] })),
+  ];
+  const expected = specs.length;
+  return { suites: [{ specs }], stats: { expected, skipped: 0, unexpected: 0, flaky: 0 } };
+}
+
+async function writeTask49Evidence(environment, coverage, positive = coverage.positiveIds, negative = coverage.negativeIds) {
+  await Promise.all([
+    writeFile(environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH, JSON.stringify(reportFor('positive', positive))),
+    writeFile(path.join(path.dirname(environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH), 'task-49-platform-expansion-negative-evidence.json'), JSON.stringify(reportFor('negative', negative))),
+    writeFile(environment.RAIBITSERVER_PLAYWRIGHT_REPORT_PATH, JSON.stringify(playwrightReport(coverage))),
+  ]);
+}
+
+async function writeFixturePlatformReport(environment) {
+  await writeTask49Evidence(environment, await loadTask49Coverage(sourceRoot));
 }
 
 function fixtureExecutor(overrides = {}) {
@@ -90,22 +110,30 @@ test('dashboard fixture routes Playwright and Next build artifacts through exter
   assert.match(fixture, /RAIBITSERVER_E2E_FIXTURE_OUTPUT_DIR/);
 });
 
+test('Next distDir resolves approved external paths without a source-tree write', () => {
+  const windowsTarget = 'C:\\evidence root\\한국어 space\\attempt';
+  const windowsDirectory = 'C:\\rw\\dashboard';
+  const windowsRelative = relativeExternalDistDir({ externalDistDir: windowsTarget, dashboardDirectory: windowsDirectory, pathApi: path.win32 });
+  assert.equal(path.win32.resolve(windowsDirectory, windowsRelative), windowsTarget);
+  assert.equal(path.win32.isAbsolute(windowsRelative), false);
+
+  const posixTarget = '/evidence root/한국어 space/attempt';
+  const posixDirectory = '/rw/dashboard';
+  const posixRelative = relativeExternalDistDir({ externalDistDir: posixTarget, dashboardDirectory: posixDirectory, pathApi: path.posix });
+  assert.equal(path.posix.resolve(posixDirectory, posixRelative), posixTarget);
+  assert.equal(path.posix.isAbsolute(posixRelative), false);
+  assert.throws(() => relativeExternalDistDir({ externalDistDir: 'D:\\evidence\\attempt', dashboardDirectory: windowsDirectory, pathApi: path.win32 }), /dashboard_next_dist_dir_unrepresentable/);
+});
+
 test('baseline runner uses the Task49 report for exact scenario IDs and counts', async () => {
+  const coverage = await loadTask49Coverage(sourceRoot);
   const { externalRoot } = await fixtureRoot();
-  const report = {
-    schema: 'raibit.task49.v1', kind: 'positive', expectedScenarioIds: ['login', 'project-settings'],
-    outcomes: [
-      { id: 'login', status: 'passed', api: { status: 200, method: 'GET', path: '/login' }, a11y: { violations: 0 } },
-      { id: 'project-settings', status: 'passed', api: { status: 200, method: 'PATCH', path: '/projects/fixture' }, a11y: { violations: 0 } },
-    ],
-    summary: { expected: 2, passed: 2, failed: 0, skipped: 0, unexpected: 0, flaky: 0 },
-  };
   const result = await runBaseline({
     attemptDir: path.join(externalRoot, 'run'), externalRoot, sourceRoot, runId: 'fixture-run',
     execute: async (command, environment) => {
       if (command.command === 'kind') return { exitCode: 0, stdout: 'other-cluster\n', stderr: '' };
       if (command.id === 'dashboard-platform-e2e') {
-        await writeFile(environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH, JSON.stringify(report));
+        await writeTask49Evidence(environment, coverage);
         return { exitCode: 0, stdout: '1 passed\n', stderr: '' };
       }
       return { exitCode: 0, stdout: fixtureOutput(command), stderr: '' };
@@ -116,21 +144,50 @@ test('baseline runner uses the Task49 report for exact scenario IDs and counts',
   const receipt = result.receipts.find(({ id }) => id === 'dashboard-platform-e2e');
   assert.equal(result.exitCode, 0);
   assert.equal(receipt.status, 'PASS');
-  assert.equal(receipt.assertionCount, 2);
+  assert.equal(receipt.assertionCount, coverage.positiveIds.length + coverage.negativeIds.length);
 });
 
 test('baseline runner rejects a Task49 report with skipped or mismatched outcomes', async () => {
+  const coverage = await loadTask49Coverage(sourceRoot);
   const { externalRoot } = await fixtureRoot();
-  const report = {
-    schema: 'raibit.task49.v1', kind: 'positive', expectedScenarioIds: ['login'],
-    outcomes: [{ id: 'login', status: 'skipped', api: { status: 200, method: 'GET', path: '/login' }, a11y: { violations: 0 } }],
-    summary: { expected: 1, passed: 0, failed: 0, skipped: 1, unexpected: 0, flaky: 0 },
-  };
   const result = await runBaseline({
     attemptDir: path.join(externalRoot, 'run'), externalRoot, sourceRoot, runId: 'fixture-run',
     execute: async (command, environment) => {
       if (command.command === 'kind') return { exitCode: 0, stdout: 'other-cluster\n', stderr: '' };
-      if (command.id === 'dashboard-platform-e2e') await writeFile(environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH, JSON.stringify(report));
+      if (command.id === 'dashboard-platform-e2e') {
+        await writeTask49Evidence(environment, coverage);
+        await writeFile(environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH, JSON.stringify({
+          ...reportFor('positive', coverage.positiveIds),
+          outcomes: [{ id: coverage.positiveIds[0], status: 'skipped', api: { status: 200, method: 'GET', path: '/fixture' }, a11y: { violations: 0 } }],
+          summary: { expected: coverage.positiveIds.length, passed: coverage.positiveIds.length - 1, failed: 0, skipped: 1, unexpected: 0, flaky: 0 },
+        }));
+      }
+      return { exitCode: 0, stdout: fixtureOutput(command), stderr: '' };
+    },
+    probeTool: async () => true,
+    gitFingerprint: fixtureFingerprint,
+  });
+  const receipt = result.receipts.find(({ id }) => id === 'dashboard-platform-e2e');
+  assert.equal(result.exitCode, 1);
+  assert.equal(receipt.reason, 'platform_expansion_report_invalid');
+  assert.match(await readFile(path.join(result.attemptDir, receipt.log), 'utf8'), /3 passed/);
+});
+
+test('baseline runner preserves a failing Task49 command exit code before reading its report', async () => {
+  const result = await fixtureRun({ 'dashboard-platform-e2e': { exitCode: 47, stdout: '', stderr: 'fixture failure' } });
+  const receipt = result.receipts.find(({ id }) => id === 'dashboard-platform-e2e');
+  assert.equal(result.exitCode, 47);
+  assert.equal(receipt.reason, 'command_failed');
+});
+
+test('baseline runner rejects a dropped Task49 positive ID despite a forged matching summary', async () => {
+  const coverage = await loadTask49Coverage(sourceRoot);
+  const { externalRoot } = await fixtureRoot();
+  const result = await runBaseline({
+    attemptDir: path.join(externalRoot, 'run'), externalRoot, sourceRoot, runId: 'fixture-run',
+    execute: async (command, environment) => {
+      if (command.command === 'kind') return { exitCode: 0, stdout: 'other-cluster\n', stderr: '' };
+      if (command.id === 'dashboard-platform-e2e') await writeTask49Evidence(environment, coverage, coverage.positiveIds.slice(1));
       return { exitCode: 0, stdout: fixtureOutput(command), stderr: '' };
     },
     probeTool: async () => true,
@@ -141,11 +198,50 @@ test('baseline runner rejects a Task49 report with skipped or mismatched outcome
   assert.equal(receipt.reason, 'platform_expansion_report_invalid');
 });
 
-test('baseline runner preserves a failing Task49 command exit code before reading its report', async () => {
-  const result = await fixtureRun({ 'dashboard-platform-e2e': { exitCode: 47, stdout: '', stderr: 'fixture failure' } });
+test('baseline runner rejects a skipped Task49 negative report', async () => {
+  const coverage = await loadTask49Coverage(sourceRoot);
+  const { externalRoot } = await fixtureRoot();
+  const result = await runBaseline({
+    attemptDir: path.join(externalRoot, 'run'), externalRoot, sourceRoot, runId: 'fixture-run',
+    execute: async (command, environment) => {
+      if (command.command === 'kind') return { exitCode: 0, stdout: 'other-cluster\n', stderr: '' };
+      if (command.id === 'dashboard-platform-e2e') {
+        await writeTask49Evidence(environment, coverage);
+        await writeFile(path.join(path.dirname(environment.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH), 'task-49-platform-expansion-negative-evidence.json'), JSON.stringify({
+          ...reportFor('negative', coverage.negativeIds), summary: { expected: coverage.negativeIds.length, passed: coverage.negativeIds.length - 1, failed: 0, skipped: 1, unexpected: 0, flaky: 0 },
+        }));
+      }
+      return { exitCode: 0, stdout: fixtureOutput(command), stderr: '' };
+    },
+    probeTool: async () => true,
+    gitFingerprint: fixtureFingerprint,
+  });
   const receipt = result.receipts.find(({ id }) => id === 'dashboard-platform-e2e');
-  assert.equal(result.exitCode, 47);
-  assert.equal(receipt.reason, 'command_failed');
+  assert.equal(result.exitCode, 1);
+  assert.equal(receipt.reason, 'platform_expansion_report_invalid');
+});
+
+test('baseline runner rejects a skipped Playwright matrix report', async () => {
+  const coverage = await loadTask49Coverage(sourceRoot);
+  const { externalRoot } = await fixtureRoot();
+  const result = await runBaseline({
+    attemptDir: path.join(externalRoot, 'run'), externalRoot, sourceRoot, runId: 'fixture-run',
+    execute: async (command, environment) => {
+      if (command.command === 'kind') return { exitCode: 0, stdout: 'other-cluster\n', stderr: '' };
+      if (command.id === 'dashboard-platform-e2e') {
+        await writeTask49Evidence(environment, coverage);
+        const report = playwrightReport(coverage);
+        report.stats.skipped = 1;
+        await writeFile(environment.RAIBITSERVER_PLAYWRIGHT_REPORT_PATH, JSON.stringify(report));
+      }
+      return { exitCode: 0, stdout: fixtureOutput(command), stderr: '' };
+    },
+    probeTool: async () => true,
+    gitFingerprint: fixtureFingerprint,
+  });
+  const receipt = result.receipts.find(({ id }) => id === 'dashboard-platform-e2e');
+  assert.equal(result.exitCode, 1);
+  assert.equal(receipt.reason, 'platform_expansion_playwright_report_invalid');
 });
 
 for (const command of BASELINE_COMMANDS.filter(({ id }) => id.endsWith('-go-test') || id.endsWith('-go-build'))) {
