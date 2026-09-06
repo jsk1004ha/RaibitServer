@@ -31,6 +31,7 @@ import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrgani
 import { PostgresOrganizationInviteRepository } from './organization-invite-postgres.ts';
 import type { ReplaceOrganizationInviteInput } from './organization-invite.ts';
 import { PostgresMembershipTransitionRepository } from './membership-transition-postgres.ts';
+import { assertOrganizationCreatorEligible, OrganizationCreationError, parseAuthenticatedOrganizationCreateInput, type AuthenticatedOrganizationCreateInput } from './organization-creation.ts';
 import { parseGitHubRepository } from './github-integration.ts';
 import { GITHUB_INTEGRATION_STATUS, githubIntegrationStatus, githubServiceSourceState, githubSourceAccess, publicGitHubIntegration } from './github-lifecycle.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
@@ -151,6 +152,7 @@ export class InMemoryControlPlaneRepository {
   }
 
   async createOrganization(input: Record<string, any>) { return this.store.createOrganization(input); }
+  async createOrganizationForUser(input: AuthenticatedOrganizationCreateInput) { return this.store.createOrganizationForUser(input); }
   async findOrganizationBySlug(slug: string) { return this.store.findOrganizationBySlug(slug); }
   async createUser(input: Record<string, any>) { return this.store.createUser(input); }
   async findUserByEmail(email: string) { return this.store.findUserByEmail(email); }
@@ -472,6 +474,38 @@ export class PrismaControlPlaneRepository {
       update: { name: input.name, plan: input.plan || 'free' },
       create: { name: input.name, slug, plan: input.plan || 'free' },
     });
+  }
+
+  async createOrganizationForUser(input: AuthenticatedOrganizationCreateInput) {
+    const parsed = parseAuthenticatedOrganizationCreateInput(input);
+    try {
+      return await this.prisma.$transaction(async (transaction: Prisma.TransactionClient) => {
+        const user = await transaction.user.findUnique({ where: { id: parsed.actorUserId } });
+        assertOrganizationCreatorEligible(user);
+        const existing = await transaction.organization.findUnique({ where: { slug: parsed.slug } });
+        if (existing) throw new OrganizationCreationError('organization_slug_already_exists', 409);
+        const organization = await transaction.organization.create({
+          data: { name: parsed.name, slug: parsed.slug, plan: 'free' },
+        });
+        const membership = await transaction.membership.create({
+          data: { organizationId: organization.id, userId: parsed.actorUserId, role: 'OWNER' },
+        });
+        await transaction.user.update({
+          where: { id: parsed.actorUserId },
+          data: { sessionVersion: { increment: 1 } },
+        });
+        await transaction.auditLog.create({
+          data: { actorUserId: parsed.actorUserId, action: 'organization:create', targetType: 'organization', targetId: organization.id, metadata: { slug: parsed.slug } },
+        });
+        return { organization, membership, reauthenticationRequired: true as const };
+      }, { isolationLevel: 'Serializable' });
+    } catch (error) {
+      if (error instanceof OrganizationCreationError) throw error;
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002') {
+        throw new OrganizationCreationError('organization_slug_already_exists', 409);
+      }
+      throw error;
+    }
   }
 
   async findOrganizationBySlug(slug: string) {

@@ -450,6 +450,32 @@ paths:
                 $ref: "#/components/schemas/ErrorBody"
       security: []
       x-permission: null
+  /organizations:
+    post:
+      operationId: organizations-post
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/organizations-postBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/organizations-postResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
   /organizations/{organizationId}/invites:
     get:
       operationId: organizations-invites
@@ -5713,6 +5739,82 @@ components:
             additionalProperties: false
       required:
         - sites
+      additionalProperties: false
+    organizations-postResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        organization:
+          type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+            name:
+              type: string
+              minLength: 1
+            slug:
+              type: string
+            plan:
+              type: string
+              minLength: 1
+            createdAt:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          required:
+            - id
+            - name
+            - slug
+            - plan
+            - createdAt
+          additionalProperties: {}
+        membership:
+          type: object
+          properties:
+            id:
+              type: string
+              minLength: 1
+            organizationId:
+              type: string
+              minLength: 1
+            userId:
+              type: string
+              minLength: 1
+            role:
+              type: string
+              const: OWNER
+            createdAt:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          required:
+            - organizationId
+            - userId
+            - role
+            - createdAt
+          additionalProperties: {}
+        reauthenticationRequired:
+          type: boolean
+          const: true
+      required:
+        - organization
+        - membership
+        - reauthenticationRequired
+      additionalProperties: false
+    organizations-postBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        slug:
+          type: string
+      required:
+        - name
+        - slug
       additionalProperties: false
     organizations-invitesResponse:
       $schema: https://json-schema.org/draft/2020-12/schema

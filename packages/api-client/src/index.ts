@@ -1,4 +1,4 @@
-import type { ApiOutput, CustomDomain, CustomDomainChallenge, CustomDomainCreate, CustomDomainMutation, CustomDomainRotate, DeploymentHistoryQueryInput, DeploymentHistoryResponse, DeploymentHistoryRow, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationInviteAccept, OrganizationInviteCreate, OrganizationMembershipRoleChange, OrganizationMembershipSnapshot, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec, ServiceReplacementInput, ServiceReplacementResult, ServiceSettingsMutation, ServiceSettingsPreview, ServiceSettingsSnapshot } from '@raibitserver/schemas';
+import type { ApiOutput, CustomDomain, CustomDomainChallenge, CustomDomainCreate, CustomDomainMutation, CustomDomainRotate, DeploymentHistoryQueryInput, DeploymentHistoryResponse, DeploymentHistoryRow, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationCreateRequest, OrganizationCreated, OrganizationInviteAccept, OrganizationInviteCreate, OrganizationMembershipRoleChange, OrganizationMembershipSnapshot, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec, ServiceReplacementInput, ServiceReplacementResult, ServiceSettingsMutation, ServiceSettingsPreview, ServiceSettingsSnapshot } from '@raibitserver/schemas';
 import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
@@ -27,6 +27,7 @@ export type ResourceBackupResult = ApiOutput<'resource-backups-create'>;
 export type ResourceBackupHistory = ApiOutput<'resource-backups-list'>;
 export type ResourceBackupDeletionResult = ApiOutput<'resource-backups-delete'>;
 export type ResourceRestoreResult = ApiOutput<'backup-restores-create'>;
+export type { OrganizationCreateRequest, OrganizationCreated } from '@raibitserver/schemas';
 
 export type PageOptions = { limit?: number; cursor?: string; after?: string };
 
@@ -63,7 +64,7 @@ export class RAIBITSERVERClient {
   }
 
   listOrganizations(): Promise<Record<string, unknown>> { return this.request('/organizations'); }
-  createOrganization(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/organizations', { method: 'POST', body: input }); }
+  createOrganization(input: OrganizationCreateRequest): Promise<OrganizationCreated> { return this.operations['organizations-post']({ path: {}, query: {}, body: input }); }
   listOrganizationInvites(organizationId: string) { return this.operations['organizations-invites']({ path: { organizationId }, query: {}, body: {} }); }
   issueOrganizationInvite(organizationId: string, body: OrganizationInviteCreate) { return this.operations['organizations-invites-post']({ path: { organizationId }, query: {}, body }); }
   acceptOrganizationInvite(body: OrganizationInviteAccept) { return this.operations['organization-invites-accept-post']({ path: {}, query: {}, body }); }

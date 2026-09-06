@@ -27,6 +27,7 @@ import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, encod
 import { parseProjectDeletionConfirmation, parseProjectSettingsUpdate } from './project-settings.ts';
 import { acceptOrganizationInvite, issueOrganizationInvite, listOrganizationInvites } from './organization-invite.ts';
 import { changeOrganizationMembershipRole, leaveOrganization, listOrganizationMembers, removeOrganizationMember, revokeOrganizationInvite } from './membership-transition.ts';
+import { assertInteractiveOrganizationCreator } from './organization-creation.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = {
@@ -233,9 +234,10 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, { organizations });
       }
       if (method === 'POST' && url.pathname === '/organizations') {
-        authorizeRequest(req, 'team:invite', auth);
+        const subject = authorizeAction(req, 'project:read', auth);
         const body = await readJson(req);
-        return send(res, 201, controlPlane.store.createOrganization(body));
+        const actorUserId = assertInteractiveOrganizationCreator(subject);
+        return send(res, 201, controlPlane.store.createOrganizationForUser({ ...body, actorUserId }));
       }
       const organizationInvitesMatch = url.pathname.match(/^\/organizations\/([^/]+)\/invites$/);
       if (organizationInvitesMatch && method === 'POST') {

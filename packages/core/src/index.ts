@@ -65,4 +65,5 @@ export * from './organization-invite.ts';
 export * from './organization-invite-postgres.ts';
 export * from './membership-transition.ts';
 export * from './membership-transition-postgres.ts';
+export * from './organization-creation.ts';
 export { clearObservationProjectionContinuation, createObservationProjectionContinuation, projectObservationPayload, type ObservationProjectionContinuation } from './observability-projection.ts';

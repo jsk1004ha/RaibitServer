@@ -1,7 +1,27 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Req } from '@nestjs/common';
-import { OrganizationInviteAcceptSchema, OrganizationInviteCreateSchema, OrganizationMembershipRoleChangeSchema, OrganizationMembershipSnapshotSchema, type OrganizationInviteAccept, type OrganizationInviteCreate, type OrganizationMembershipRoleChange, type OrganizationMembershipSnapshot } from '@raibitserver/schemas';
+import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Patch, Post, Req } from '@nestjs/common';
+import { OrganizationCreateRequestSchema, OrganizationInviteAcceptSchema, OrganizationInviteCreateSchema, OrganizationMembershipRoleChangeSchema, OrganizationMembershipSnapshotSchema, type OrganizationCreateRequest, type OrganizationInviteAccept, type OrganizationInviteCreate, type OrganizationMembershipRoleChange, type OrganizationMembershipSnapshot } from '@raibitserver/schemas';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { RAIBITSERVERService } from '../../raibitserver.service';
+
+@Controller('organizations')
+export class OrganizationsController {
+  constructor(private readonly controlPlane: RAIBITSERVERService) {}
+
+  @RequirePermission('project:read')
+  @Post()
+  create(@Body() body: unknown, @Req() request: { readonly raibitSubject: Record<string, unknown> }) {
+    return this.controlPlane.createOrganization(parseOrganizationCreateRequest(body), request.raibitSubject);
+  }
+}
+
+function parseOrganizationCreateRequest(input: unknown): OrganizationCreateRequest {
+  const result = OrganizationCreateRequestSchema.safeParse(input);
+  if (result.success) return result.data;
+  const issue = result.error.issues.find((candidate) => candidate.message.startsWith('organization_route_slug_') || candidate.message === 'organization_name_invalid');
+  const hasNameIssue = result.error.issues.some((candidate) => candidate.path[0] === 'name');
+  const code = issue?.message || (hasNameIssue ? 'organization_name_invalid' : 'organization_creation_input_invalid');
+  throw new HttpException({ statusCode: 400, message: code, code, retryable: false, terminal: true, permission: false }, 400);
+}
 
 @Controller('organizations/:organizationId/invites')
 export class OrganizationInvitesController {

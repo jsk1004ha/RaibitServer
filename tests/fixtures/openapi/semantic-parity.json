@@ -11,6 +11,7 @@
     "auth-email-resend": {"email":"parity@example.test"},
     "auth-password-reset-request": {"email":"parity@example.test"},
     "auth-password-reset-complete": {"email":"parity@example.test","code":"123456","newPassword":"test-password"},
+    "organizations-post": {"name":"Parity Organization","slug":"parity-organization"},
     "organizations-invites-post": {"email":"invitee@example.test","role":"DB_ADMIN"},
     "organization-invites-accept-post": {"token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
     "organizations-members-patch": {"role":"MAINTAINER","expectedVersion":1},

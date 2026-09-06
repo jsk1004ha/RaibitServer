@@ -105,6 +105,7 @@ export function createOperationsClient(transport: OperationTransport) {
     'auth-me': bind(apiOperations['auth-me']),
     'auth-logout': bind(apiOperations['auth-logout']),
     'public-sites': bind(apiOperations['public-sites']),
+    'organizations-post': bind(apiOperations['organizations-post']),
     'organizations-invites': bind(apiOperations['organizations-invites']),
     'organizations-invites-post': bind(apiOperations['organizations-invites-post']),
     'organization-invites-accept-post': bind(apiOperations['organization-invites-accept-post']),

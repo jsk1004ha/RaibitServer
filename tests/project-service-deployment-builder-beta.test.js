@@ -13,9 +13,8 @@ test('beta project/service/deployment contract queues supported services and exp
   const { port } = server.address();
 
   try {
-    const org = await request(port, 'POST', '/organizations', { name: 'Beta Org', slug: 'beta-org' });
-    assert.equal(org.statusCode, 201, JSON.stringify(org.body));
-    const project = await request(port, 'POST', `/organizations/${org.body.id}/projects`, { name: 'Beta Project', slug: 'beta-project' });
+    const org = controlPlane.store.createOrganization({ name: 'Beta Org', slug: 'beta-org' });
+    const project = await request(port, 'POST', `/organizations/${org.id}/projects`, { name: 'Beta Project', slug: 'beta-project' });
     assert.equal(project.statusCode, 201, JSON.stringify(project.body));
 
     const serviceTypes = ['web', 'private', 'worker', 'cron', 'job'];

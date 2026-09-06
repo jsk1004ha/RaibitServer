@@ -7,9 +7,9 @@ import type { IncomingMessage } from 'node:http';
 import { consumeGitHubOAuthIdentity, startGitHubOAuth, oauthAttempt, OAuthPublicError } from '@raibitserver/core';
 import { assertCurrentSession, assertEnvironmentWriteAllowed, assertSystemDeploymentActor, authorizeSubject, completePasswordRecovery, createControlPlaneRepository, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, createGitHubAppInstallationPlan, createSessionToken, enforceAuthAbuseLimits, issueSignupEmailVerificationCode, keysetCursorForRows, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, publicSitesFromSnapshot, quotaUsageGauges, quotaWarnings, requestPasswordRecovery, requireScope, resendEmailVerificationCode, resolveGitHubAppInstallationSelection, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, validateServiceSecurity, verifyEmailCodeAndCreateSession, verifyGitHubAppInstallationState, verifyPasswordAsync, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 import { RecoveryError, ResourceCapabilityUnavailable, ResourceIntentInvalid, publicRecovery, resourceAvailability, resourceStorageMb, can, listCatalog } from '@raibitserver/core';
-import { acceptOrganizationInvite, issueOrganizationInvite, listOrganizationInvites } from '@raibitserver/core';
+import { acceptOrganizationInvite, assertInteractiveOrganizationCreator, OrganizationCreationError, issueOrganizationInvite, listOrganizationInvites } from '@raibitserver/core';
 import { changeOrganizationMembershipRole, leaveOrganization, listOrganizationMembers, removeOrganizationMember, revokeOrganizationInvite } from '@raibitserver/core';
-import type { OrganizationInviteCreate, OrganizationMembershipRoleChange, OrganizationMembershipSnapshot } from '@raibitserver/schemas';
+import type { OrganizationCreateRequest, OrganizationInviteCreate, OrganizationMembershipRoleChange, OrganizationMembershipSnapshot } from '@raibitserver/schemas';
 
 /**
  * NestJS-facing desired-state service.
@@ -178,6 +178,12 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   async listPublicSites(limit: any = 5) {
     const repository: any = await this.repositoryPromise;
     return repository.listPublicSites ? repository.listPublicSites(limit) : publicSitesFromSnapshot(await repository.snapshot(), limit);
+  }
+
+  async createOrganization(input: OrganizationCreateRequest, subject: Record<string, unknown>) {
+    const repository = await this.repositoryPromise;
+    const actorUserId = assertInteractiveOrganizationCreator(subject);
+    return repositoryMutation(() => repository.createOrganizationForUser({ ...input, actorUserId }));
   }
 
   async issueOrganizationInvite(organizationId: string, input: OrganizationInviteCreate, subject: Record<string, unknown>) {
@@ -1276,6 +1282,9 @@ async function repositoryMutation<T>(operation: () => T | Promise<T>): Promise<T
 }
 
 function nestAuthError(error: any) {
+  if (error instanceof OrganizationCreationError) {
+    return typedOperationException(error.statusCode, error.code, false, error.statusCode === 401 || error.statusCode === 403);
+  }
   if (error instanceof ProjectSettingsError) return typedOperationException(409, error.code, false);
   if (error instanceof RecoveryError) return new HttpException({ statusCode: error.statusCode, code: error.code, message: error.code }, error.statusCode);
   if (error instanceof DeploymentOperationError) return typedOperationException(error.statusCode, error.code, error.code === 'ACTIVE_DEPLOYMENT');

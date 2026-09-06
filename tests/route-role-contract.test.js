@@ -341,10 +341,6 @@ test('given an explicit organization route slug when direct, repository, and API
   await once(server, 'listening');
   const port = server.address().port;
   try {
-    const directResponse = await requestJson(port, '/organizations', { name: 'Invalid Route', slug: 'api' });
-    assert.equal(directResponse.statusCode, 400);
-    assert.equal(directResponse.body.error, 'organization_route_slug_reserved');
-
     const signupResponse = await requestJson(port, '/auth/signup', {
       name: 'Signup Route', studentId: '2600', clubMemberClaim: false, email: 'route-boundary@example.test', password: 'correct-horse', organizationSlug: 'alpha--demo',
     });

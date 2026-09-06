@@ -20,7 +20,7 @@ test('HTTP API serves health, catalog, and manifest planning', async () => {
     const catalog = await request(port, 'GET', '/catalog');
     assert.equal(catalog.resources.some((resource) => resource.key === 'postgresql'), true);
 
-    const org = await request(port, 'POST', '/organizations', { name: 'GDG Seoul', plan: 'club' });
+    const org = controlPlane.store.createOrganization({ name: 'GDG Seoul', plan: 'club' });
     assert.equal(org.slug, 'gdg-seoul');
 
     const manifest = await request(port, 'POST', '/plan/manifests', {

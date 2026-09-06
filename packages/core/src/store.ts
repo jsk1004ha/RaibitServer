@@ -30,6 +30,7 @@ import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureIn
 import { membershipRoleTransition, normalizeOrganizationRoleForRead, parseOrganizationMembershipRoleForMutation, parseOrganizationRouteSlug, type OrganizationMembershipRole } from './rbac.ts';
 import { acceptMemoryOrganizationInvite, listMemoryOrganizationInvites, replaceMemoryOrganizationInvite, revokeMemoryOrganizationInviteAfterDeliveryFailure } from './organization-invite-memory.ts';
 import type { OrganizationInviteRecord, ReplaceOrganizationInviteInput } from './organization-invite.ts';
+import { assertOrganizationCreatorEligible, OrganizationCreationError, parseAuthenticatedOrganizationCreateInput, type AuthenticatedOrganizationCreateInput } from './organization-creation.ts';
 import { DomainLifecycleError, issueCustomDomain, normalizeCustomHostname, publicCustomDomain, requestCustomDomainCheck, requestCustomDomainDelete, rotateCustomDomain, type CustomDomainRecord } from './domain.ts';
 import { changeMemoryOrganizationMembershipRole, leaveMemoryOrganization, listMemoryOrganizationMembers, removeMemoryOrganizationMember, revokeMemoryOrganizationInvite } from './membership-transition-memory.ts';
 import {
@@ -119,6 +120,36 @@ export class ControlPlaneStore {
     this.organizations.set(org.id, org);
     this.audit('system', 'organization:create', 'organization', org.id, { slug: org.slug, plan });
     return deepClone(org);
+  }
+
+  createOrganizationForUser(input: AuthenticatedOrganizationCreateInput) {
+    const parsed = parseAuthenticatedOrganizationCreateInput(input);
+    const user = this.users.get(parsed.actorUserId);
+    assertOrganizationCreatorEligible(user);
+    if ([...this.organizations.values()].some((organization) => organization.slug === parsed.slug)) {
+      throw new OrganizationCreationError('organization_slug_already_exists', 409);
+    }
+    const organizations = new Map(this.organizations);
+    const members = deepClone(this.members);
+    const auditLogs = deepClone(this.auditLogs);
+    const previousUser = deepClone(user);
+    try {
+      const createdAt = nowIso();
+      const organization = { id: stableId('org', parsed.slug), name: parsed.name, slug: parsed.slug, plan: 'free', createdAt };
+      const membership = { organizationId: organization.id, userId: parsed.actorUserId, role: 'OWNER', createdAt };
+      this.organizations.set(organization.id, organization);
+      this.members.push(membership);
+      user.sessionVersion = Number(user.sessionVersion || 0) + 1;
+      user.updatedAt = createdAt;
+      this.audit(parsed.actorUserId, 'organization:create', 'organization', organization.id, { slug: parsed.slug });
+      return deepClone({ organization, membership, reauthenticationRequired: true as const });
+    } catch (error) {
+      this.organizations = organizations;
+      this.members = members;
+      this.auditLogs = auditLogs;
+      this.users.set(parsed.actorUserId, previousUser);
+      throw error;
+    }
   }
 
   findOrganizationBySlug(slug: string) {

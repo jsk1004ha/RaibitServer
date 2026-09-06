@@ -7,6 +7,7 @@ import * as M from './api-models.ts';
 import { ProjectUpdateSchema, ServiceUpdateSchema, ResourceUpdateSchema } from './desired-state-mutations.ts';
 import { ProjectDeletionConfirmationSchema, ProjectDeletionScheduledSchema, ProjectSettingsUpdateSchema, ProjectSettingsViewSchema } from './project-settings.ts';
 import { OrganizationInviteAcceptSchema, OrganizationInviteAcceptanceSchema, OrganizationInviteCreateSchema, OrganizationInviteIssuedSchema, OrganizationInviteListSchema } from './organization-invite.ts';
+import { OrganizationCreateRequestSchema, OrganizationCreatedSchema } from './organization-create.ts';
 import { ServiceReplacementInputSchema, ServiceReplacementResultSchema, ServiceSettingsMutationSchema, ServiceSettingsPreviewSchema, ServiceSettingsSnapshotSchema } from './service-settings.ts';
 import { CustomDomainChallengeSchema, CustomDomainCreateSchema, CustomDomainListSchema, CustomDomainMutationSchema, CustomDomainRotateSchema, CustomDomainSchema } from './domain.ts';
 import { OrganizationInviteRevokedSchema, OrganizationMemberListSchema, OrganizationMembershipChangedSchema, OrganizationMembershipLeftSchema, OrganizationMembershipRemovedSchema, OrganizationMembershipRoleChangeSchema, OrganizationMembershipSnapshotSchema } from './membership-transition.ts';
@@ -61,6 +62,7 @@ export const apiOperations = {
   'auth-me': operation({ method: 'get', path: '/auth/me', status: 200, permission: 'project:read', input: noInput, response: z.object({ user: M.User.nullable(), subject: M.JsonFields, memberships: z.array(M.Membership) }) }),
   'auth-logout': operation({ method: 'post', path: '/auth/logout', status: 200, permission: 'project:read', input: noInput, response: z.object({ ok: z.literal(true) }) }),
   'public-sites': operation({ method: 'get', path: '/public/sites', status: 200, permission: null, input: input(M.Empty, z.object({ limit: z.number().int().min(0).max(5).optional() }), M.Empty), response: z.object({ sites: z.array(z.object({ id, name: z.string(), owner: z.string(), status: z.literal('LIVE'), url: z.url() })) }) }),
+  'organizations-post': operation({ method: 'post', path: '/organizations', status: 201, permission: 'project:read', input: input(M.Empty, M.Empty, OrganizationCreateRequestSchema), response: OrganizationCreatedSchema }),
   'organizations-invites': operation({ method: 'get', path: '/organizations/{organizationId}/invites', status: 200, permission: 'team:invite', input: input(organization, M.Empty, M.Empty), response: OrganizationInviteListSchema }),
   'organizations-invites-post': operation({ method: 'post', path: '/organizations/{organizationId}/invites', status: 201, permission: 'team:invite', input: input(organization, M.Empty, OrganizationInviteCreateSchema), response: OrganizationInviteIssuedSchema }),
   'organization-invites-accept-post': operation({ method: 'post', path: '/organization-invites/accept', status: 200, permission: 'project:read', input: input(M.Empty, M.Empty, OrganizationInviteAcceptSchema), response: OrganizationInviteAcceptanceSchema }),
