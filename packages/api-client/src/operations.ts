@@ -28,18 +28,23 @@ export function apiOperationError(status: number, value: unknown): ApiOperationE
   return new ApiTerminalError(status, body);
 }
 export type OperationTransport = { readonly baseUrl: string; readonly token?: string };
-export type RequestOptions = { readonly signal?: AbortSignal; readonly headers?: Readonly<Record<string, string>>; readonly lastEventId?: string };
-type WireInput = { readonly path: Readonly<Record<string, string>>; readonly query: Readonly<Record<string, string | number | undefined>>; readonly body: object };
+export type RequestOptions<T = unknown> = {
+  readonly signal?: AbortSignal;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly lastEventId?: string;
+  readonly onStreamEvent?: (value: T, eventId?: string) => void;
+};
+type WireInput = { readonly path: Readonly<Record<string, string>>; readonly query?: Readonly<Record<string, string | number | undefined>>; readonly body?: object };
 type Contract<I extends z.ZodType<WireInput>, O extends z.ZodType> = { readonly method: string; readonly path: string; readonly input: I; readonly response: O; readonly stream?: string };
 const DeploymentActivityStreamCursorSchema = z.string().min(1).max(4_096).regex(/^[^\u0000-\u001f\u007f]+$/);
 
 export function createOperationsClient(transport: OperationTransport) {
   function bind<I extends z.ZodType<WireInput>, O extends z.ZodType>(contract: Contract<I, O>) {
-    return async (input: z.input<I>, options: RequestOptions = {}): Promise<z.output<O>> => {
+    return async (input: z.input<I>, options: RequestOptions<z.output<O>> = {}): Promise<z.output<O>> => {
       const parsed = contract.input.parse(input);
       const path = contract.path.replace(/\{([^}]+)\}/g, (_match, key: string) => encodeURIComponent(parsed.path[key] ?? ''));
       const url = new URL(`${transport.baseUrl.replace(/\/$/, '')}${path}`);
-      for (const [key, value] of Object.entries(parsed.query)) if (value !== undefined) url.searchParams.set(key, String(value));
+      for (const [key, value] of Object.entries(parsed.query ?? {})) if (value !== undefined) url.searchParams.set(key, String(value));
       const headers: Record<string, string> = Object.fromEntries(
         Object.entries(options.headers ?? {}).filter(([key]) => key.toLowerCase() !== 'last-event-id'),
       );
@@ -49,7 +54,7 @@ export function createOperationsClient(transport: OperationTransport) {
         headers['last-event-id'] = cursorSchema.parse(options.lastEventId);
       }
       if (contract.stream) headers.accept = 'text/event-stream';
-      const sendsBody = contract.method !== 'get' && Object.keys(parsed.body).length > 0;
+      const sendsBody = contract.method !== 'get' && Object.keys(parsed.body ?? {}).length > 0;
       if (sendsBody) headers['content-type'] = 'application/json';
       // Native fetch matches the existing client transport; bounded cancellation
       // and typed HTTP errors are enforced here, including open SSE connections.
@@ -74,7 +79,11 @@ export function createOperationsClient(transport: OperationTransport) {
             const lines = frame.split(/\r?\n/);
             if (!lines.some((line) => line === `event: ${contract.stream}`)) continue;
             const data = lines.filter((line) => line.startsWith('data: ')).map((line) => line.slice(6)).join('\n');
-            return contract.response.parse(JSON.parse(data));
+            const value = contract.response.parse(JSON.parse(data));
+            if (!options.onStreamEvent) return value;
+            const rawEventId = lines.find((line) => line.startsWith('id: '))?.slice(4);
+            const eventId = rawEventId === undefined ? undefined : (contract.path === '/deployments/{deploymentId}/stream' ? DeploymentActivityStreamCursorSchema : RuntimeLogStreamCursorSchema).parse(rawEventId);
+            options.onStreamEvent(value, eventId);
           }
         }
       } finally { await reader.cancel(); reader.releaseLock(); }

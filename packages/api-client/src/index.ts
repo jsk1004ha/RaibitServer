@@ -155,12 +155,15 @@ export class RAIBITSERVERClient {
 
   listDeploymentLogs(deploymentId: string, options: PageOptions = {}): Promise<DeploymentLogsResult> { return this.operations['deployments-logs']({ path: { deploymentId }, query: options, body: {} }); }
   listDeploymentEvents(deploymentId: string, options: PageOptions = {}): Promise<DeploymentEventsResult> { return this.operations['deployments-events']({ path: { deploymentId }, query: options, body: {} }); }
-  deploymentActivityStream(deploymentId: string, options: { readonly lastEventId?: string; readonly signal?: AbortSignal } = {}): Promise<DeploymentActivityStreamResult> {
+  deploymentActivityStream(deploymentId: string, options: { readonly lastEventId?: string; readonly signal?: AbortSignal; readonly onStreamEvent?: (value: DeploymentActivityStreamResult, eventId?: string) => void } = {}): Promise<DeploymentActivityStreamResult> {
     return this.operations['deployments-stream']({ path: { deploymentId }, query: {}, body: {} }, options);
   }
   listRuntimeLogs(serviceId: string, options: PageOptions = {}): Promise<Record<string, unknown>> { return this.request(withPageQuery(`/services/${encodeURIComponent(serviceId)}/logs`, options)); }
   runtimeLogStreamUrl(serviceId: string): string {
     return runtimeLogStreamUrl(this.baseUrl, { serviceId });
+  }
+  serviceLogStream(serviceId: string, options: { readonly lastEventId?: string; readonly signal?: AbortSignal; readonly onStreamEvent?: (value: ApiOutput<'services-logs-stream'>, eventId?: string) => void } = {}): Promise<ApiOutput<'services-logs-stream'>> {
+    return this.operations['services-logs-stream']({ path: { serviceId }, query: {}, body: {} }, options);
   }
   getDeployment(deploymentId: string): Promise<DeploymentSpec> { return this.request(`/deployments/${encodeURIComponent(deploymentId)}`); }
   updateDeploymentStatus(deploymentId: string, input: Record<string, unknown>): Promise<DeploymentSpec> {

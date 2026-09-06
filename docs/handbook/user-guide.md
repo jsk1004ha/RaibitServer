@@ -212,6 +212,26 @@ queued → BUILDING → IMAGE_READY → DEPLOYING → READY
 
 `READY`는 현재 Kubernetes rollout 상태입니다. 공개 URL이나 health endpoint가 실제로 2xx인지 보장하지 않으므로 위 검사를 생략하지 않습니다.
 
+### CLI에서 배포와 복구 운영
+
+CLI 수명주기 명령에는 조직과 프로젝트 범위를 항상 지정하고, 서비스 작업에는 서비스 ID를 함께 지정합니다. 자동화에서는 `--json`을 사용합니다.
+
+```sh
+raibitserver deploy retry --organization-id org_id --project-id prj_id --service-id svc_id --deployment-id dep_id --idempotency-key retry-1 --json
+raibitserver services redeploy --organization-id org_id --project-id prj_id --service-id svc_id --idempotency-key redeploy-1 --json
+raibitserver deployments logs --organization-id org_id --project-id prj_id --service-id svc_id --deployment-id dep_id --follow --cursor CURSOR
+raibitserver deployments events --organization-id org_id --project-id prj_id --service-id svc_id --deployment-id dep_id --follow --cursor CURSOR
+raibitserver services logs --organization-id org_id --project-id prj_id --service-id svc_id --follow --cursor CURSOR
+raibitserver resources attach --organization-id org_id --project-id prj_id --resource-id res_id --service-id svc_id
+raibitserver resources backup create --organization-id org_id --project-id prj_id --resource-id res_id --idempotency-key backup-1
+raibitserver resources backup list --organization-id org_id --project-id prj_id --resource-id res_id --cursor CURSOR
+raibitserver resources backup delete --organization-id org_id --project-id prj_id --resource-id res_id --backup-id backup_id --confirm
+raibitserver resources restore create --organization-id org_id --project-id prj_id --resource-id res_id --backup-id backup_id --name restored-db --idempotency-key restore-1
+raibitserver resources restore get --organization-id org_id --project-id prj_id --resource-id res_id --backup-id backup_id --restore-id restore_id
+```
+
+`--follow`는 재개 커서를 `Last-Event-ID`로 보내며 Ctrl-C 시 스트림을 정리합니다. 백업 삭제에는 `--confirm`이 필수입니다. 출력은 connection secret과 backup artifact key를 포함하지 않습니다. 종료 코드는 성공 0, 일반 실패 1, 사용 오류 2, 인증·권한 오류 3, 충돌 4, unavailable·`NOT_RUN` 5입니다.
+
 ## 10. PR 미리보기 배포
 
 현재 별도 hostname과 workload로 격리되는 미리보기 계약은 GitHub PR 번호가 있는 배포에만 적용됩니다.

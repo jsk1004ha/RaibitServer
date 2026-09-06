@@ -109,12 +109,23 @@ raibitserver projects list
 raibitserver projects create --name demo --organization-id org_id
 raibitserver services create --project-id prj_id --name web --source-type image --image registry.example/demo/web@sha256:DIGEST
 raibitserver deploy --service-id svc_id
-raibitserver deployments logs --deployment-id dep_id
-# API: GET /api/deployments/dep_id/stream 또는 /api/services/svc_id/logs/stream (SSE)
+raibitserver deploy retry --organization-id org_id --project-id prj_id --service-id svc_id --deployment-id dep_id --idempotency-key retry-1 --json
+raibitserver services redeploy --organization-id org_id --project-id prj_id --service-id svc_id --idempotency-key redeploy-1 --json
+raibitserver deployments logs --organization-id org_id --project-id prj_id --service-id svc_id --deployment-id dep_id --follow --cursor CURSOR
+raibitserver deployments events --organization-id org_id --project-id prj_id --service-id svc_id --deployment-id dep_id --follow --cursor CURSOR
+raibitserver services logs --organization-id org_id --project-id prj_id --service-id svc_id --follow --cursor CURSOR
 raibitserver resources create --project-id prj_id --engine sqlite --name data
+raibitserver resources attach --organization-id org_id --project-id prj_id --resource-id res_id --service-id svc_id
+raibitserver resources backup create --organization-id org_id --project-id prj_id --resource-id res_id --idempotency-key backup-1
+raibitserver resources backup list --organization-id org_id --project-id prj_id --resource-id res_id --cursor CURSOR
+raibitserver resources backup delete --organization-id org_id --project-id prj_id --resource-id res_id --backup-id backup_id --confirm
+raibitserver resources restore create --organization-id org_id --project-id prj_id --resource-id res_id --backup-id backup_id --name restored-db --idempotency-key restore-1
+raibitserver resources restore get --organization-id org_id --project-id prj_id --resource-id res_id --backup-id backup_id --restore-id restore_id
 raibitserver db query --resource-id res_id --query "SELECT 1"
 raibitserver admin approve --user-id usr_id
 ```
+
+수명주기 명령은 기본적으로 secret 필드를 제외한 표를 출력하고 `--json`에서 안정적인 JSON을 출력합니다. `--follow`는 `--cursor`를 `Last-Event-ID`로 보내며 Ctrl-C 시 연결을 닫습니다. 종료 코드는 성공 0, 일반 실패 1, 사용 오류 2, 인증·권한 오류 3, 충돌 4, unavailable·`NOT_RUN` 5입니다.
 
 CI smoke와 manifest 생성에는 루트 CLI도 사용할 수 있습니다.
 
