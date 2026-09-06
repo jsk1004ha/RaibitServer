@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { validatePlatformExpansionMatrix } from './platform-expansion-report.js';
+import { createOutcomeRecorder, validatePlatformExpansionMatrix } from './platform-expansion-report.js';
 
 const root = path.resolve(import.meta.dirname, '../../../..');
 const source = path.join(root, 'apps/dashboard/tests/e2e/feature-expansion-matrix.ts');
@@ -24,12 +24,21 @@ async function loadMatrix() {
 test('Given the Task49 authored matrix, when its coverage contract is inspected, then every required dimension and source reference is present', async () => {
   const matrix = await loadMatrix();
   const report = validatePlatformExpansionMatrix(matrix.PLATFORM_EXPANSION_MATRIX);
-  assert.deepEqual(report, {
-    expectedScenarioCount: matrix.PLATFORM_EXPANSION_EXECUTABLE_ROWS.length,
-    contractPendingScenarioCount: matrix.PLATFORM_EXPANSION_CONTRACT_PENDING_ROWS.length,
-    delegatedScenarioCount: 2,
-    browserExecution: 'NOT_RUN',
-  });
-  assert.equal(report.expectedScenarioCount, 8);
+  assert.equal(report.expectedScenarioCount, matrix.PLATFORM_EXPANSION_EXECUTABLE_ROWS.length);
+  assert.equal(report.negativeScenarioCount, matrix.PLATFORM_EXPANSION_NEGATIVE_ROWS.length);
   assert.equal(report.contractPendingScenarioCount, 1);
+  assert.equal(report.delegatedScenarioCount, 8);
+  assert.ok(report.expectedScenarioCount > report.negativeScenarioCount);
+});
+
+test('Given planned outcomes, when a recorder sees missing, duplicate, or incomplete evidence, then it rejects the report', async () => {
+  const matrix = await loadMatrix();
+  const row = matrix.PLATFORM_EXPANSION_EXECUTABLE_ROWS.find((candidate) => !candidate.representativeVisual);
+  assert.ok(row);
+  const recorder = createOutcomeRecorder([row], 'positive');
+  assert.throws(() => recorder.finish(), /missing_outcomes/);
+  assert.throws(() => recorder.record(row.id, { status: 'passed', api: null, a11y: 'axe:zero-violations', representativeVisual: false }), /incomplete_outcome/);
+  recorder.record(row.id, { status: 'passed', api: { status: 200, method: 'GET', path: row.route }, a11y: 'axe:zero-violations', representativeVisual: false });
+  assert.throws(() => recorder.record(row.id, { status: 'passed', api: { status: 200, method: 'GET', path: row.route }, a11y: 'axe:zero-violations', representativeVisual: false }), /duplicate_outcome/);
+  assert.deepEqual(recorder.finish().summary, { expected: 1, passed: 1, failed: 0, skipped: 0, unexpected: 0, flaky: 0 });
 });
