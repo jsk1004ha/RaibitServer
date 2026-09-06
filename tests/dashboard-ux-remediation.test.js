@@ -92,7 +92,7 @@ test('authenticated users can clear their dashboard session through the same-ori
 	assert.match(shell, /const logoutAction = apiAction\('\/auth\/logout'\);/);
 	assert.match(shell, /<AccountMenu[\s\S]*?logoutAction=\{logoutAction\}/);
 	assert.match(accountMenu, /<form action=\{logoutAction\} method="post"><input name="_returnTo" type="hidden" value="\/login" \/>/);
-	assert.match(accountMenu, />로그아웃<\/button>/);
+	assert.match(accountMenu, /<DropdownMenuItem nativeButton render=\{<button type="submit" \/>\} variant="destructive"><LogOutIcon \/>로그아웃<\/DropdownMenuItem>/);
 });
 
 test('dashboard request hardening uses the supported Next proxy convention', async () => {

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 const compiledParent = await mkdtemp(join(tmpdir(), 'raibitserver-deployment-agent-'));
@@ -18,6 +18,9 @@ let assessDeploymentService;
 let createDeploymentAgentPlan;
 try {
   await writeFile(join(compiledParent, 'package.json'), '{"type":"module"}\n');
+  const schemasPackage = join(compiledParent, 'node_modules', '@raibitserver', 'schemas');
+  await mkdir(join(compiledParent, 'node_modules', '@raibitserver'), { recursive: true });
+  await symlink(fileURLToPath(new URL('../packages/schemas', import.meta.url)), schemasPackage, 'junction');
   const compiledDirectory = await mkdtemp(join(compiledParent, 'deployment-agent-test-'));
   execFileSync(process.execPath, [
     'node_modules/typescript/lib/tsc.js',

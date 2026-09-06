@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.2
@@ -80,6 +82,23 @@ jobs:
       - run: pnpm prisma:generate
       - run: pnpm exec prisma migrate deploy --schema prisma/schema.prisma
       - run: node --import ./tests/fixtures/resource-runtime.mjs --test tests/postgres-integration.test.js
+      - name: Deployment retry and recovery PostgreSQL boundaries
+        run: |
+          admin_url="$DATABASE_URL"
+          recovery_id="$(node --input-type=module --eval 'import { randomUUID } from "node:crypto"; process.stdout.write(randomUUID().replaceAll("-", ""))')"
+          recovery_db="recovery_$recovery_id"
+          [[ "$recovery_db" =~ ^recovery_[a-f0-9]{32}$ ]]
+          cleanup() {
+            status=$?
+            psql "$admin_url" --set ON_ERROR_STOP=on --command "DROP DATABASE IF EXISTS $recovery_db WITH (FORCE)" || [[ "$status" -ne 0 ]] || exit 1
+            exit "$status"
+          }
+          trap cleanup EXIT
+          psql "$admin_url" --set ON_ERROR_STOP=on --command "CREATE DATABASE $recovery_db"
+          export DATABASE_URL="${admin_url%/*}/$recovery_db"
+          export RAIBITSERVER_TEST_DATABASE_URL="$DATABASE_URL"
+          pnpm exec prisma migrate deploy --schema prisma/schema.prisma
+          RAIBITSERVER_REQUIRE_POSTGRES_TESTS=1 node --import ./tests/fixtures/resource-runtime.mjs --test --test-concurrency=1 tests/postgres-deployment-retry.test.js tests/postgres-resource-recovery.test.js
       - name: Require OAuth transaction PostgreSQL verification
         run: node --test tests/postgres-oauth-transaction.test.js
         env:
@@ -105,7 +124,7 @@ jobs:
         with:
           go-version: '1.26.x'
       - run: |
-          for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester; do
+          for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester services/registry-broker; do
             test -f "$dir/go.mod"
             (cd "$dir" && go test ./... && go build ./...)
           done
