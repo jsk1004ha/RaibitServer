@@ -73,6 +73,8 @@ test('live Helm E2E exercises real images, migrations, API health, and an orches
   // The public API historically writes lowercase lifecycle values. Keeping the
   // live seed lowercase guards the provisioner's case-insensitive claim path.
   assert.match(script, /INSERT INTO "Resource"[\s\S]{0,700}'live-postgresql'[\s\S]{0,300}'provisioning'/);
+  assert.match(script, /--set=provider_image="\$\{POSTGRES_IMAGE\}"/);
+  assert.match(script, /jsonb_build_object\('resourceExecution', jsonb_build_object\('intent', 'live-provision', 'environment', 'local', 'image', :'provider_image'\)\)/);
   assert.match(script, /"storageGb":1/);
   assert.match(script, /get pvc "\$\{PROVIDER_NAME\}-data"[\s\S]{0,180}requests\.storage[\s\S]{0,100}1Gi/);
   assert.match(script, /connectionSecretName/);
