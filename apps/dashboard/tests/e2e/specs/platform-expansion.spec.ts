@@ -126,7 +126,7 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
     else {
       const alert = page.getByRole('alert').filter({ hasText: status === 409 ? '연결 상태가 변경되었습니다.' : '연결을 해제하지 못했습니다.' });
       await expect(alert).toBeVisible();
-      await expect(page.getByRole('status')).not.toContainText('RAIBITSERVER 연결이 해제되었습니다.');
+      await expect(page.getByRole('status').filter({ hasText: 'RAIBITSERVER 연결이 해제되었습니다.' })).toHaveCount(0);
     }
     const after = status === 200 ? null : await apiJson(page, '/api/control/integrations/github');
     const sideEffects = status === 200 ? undefined : unchanged(before, after);
