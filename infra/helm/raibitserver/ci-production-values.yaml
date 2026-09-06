@@ -40,6 +40,9 @@ builder:
     enabled: false
   signing:
     existingSecret: ci-cosign-signing
+  verification:
+    existingSecret: ci-raibitserver-cosign-trust-root-projection
+    key: cosign.pub
 
 orchestrator:
   execute: true
