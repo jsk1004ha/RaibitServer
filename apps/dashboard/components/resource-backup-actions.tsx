@@ -182,7 +182,7 @@ export function ResourceBackupActions({
         <CardContent className="flex min-w-0 flex-col gap-4 pt-6">
           <section aria-atomic="true" aria-live="polite" className="flex min-w-0 flex-col gap-2">
             {state.kind === 'pending' ? <p role="status" className="text-sm text-muted-foreground">복구 작업을 요청하고 있습니다.</p> : null}
-            {state.kind === 'success' ? <Alert variant="notice"><AlertTitle>요청을 접수했습니다.</AlertTitle><AlertDescription>{state.message}</AlertDescription></Alert> : null}
+            {state.kind === 'success' ? <Alert role="status" variant="notice"><AlertTitle>요청을 접수했습니다.</AlertTitle><AlertDescription>{state.message}</AlertDescription></Alert> : null}
             {state.kind === 'error' ? <Alert variant="destructive"><AlertTitle>복구 작업을 요청하지 못했습니다.</AlertTitle><AlertDescription>현재 상태를 확인한 뒤 다시 시도하세요.<span className="block font-mono text-xs">{state.code}</span></AlertDescription></Alert> : null}
           </section>
           {initialLoadFailed ? <Alert><AlertTitle>백업 목록을 일부 불러오지 못했습니다.</AlertTitle><AlertDescription>기존 복구 지점의 상태가 최신이 아닐 수 있습니다. 잠시 후 다시 확인하세요.</AlertDescription></Alert> : null}

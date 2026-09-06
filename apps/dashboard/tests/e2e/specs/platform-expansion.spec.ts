@@ -90,6 +90,7 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
     return record(page, row, testInfo, observation, recorder);
   }
   if (row.driver === 'loading-boundary') {
+    await installSession(page.context(), 'fixture-user-populated');
     const response = await openRow(page, row);
     await expect(page.locator('main#main-content')).toHaveAttribute('aria-busy', 'true');
     return record(page, row, testInfo, await httpObservation(response, { ariaBusy: await page.locator('main#main-content').getAttribute('aria-busy') }), recorder);
@@ -143,7 +144,7 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
     await openRow(page, row);
     const before = await apiJson(page, '/api/control/projects/prj_fixture_001/settings');
     await page.getByRole('button', { name: '삭제 요청' }).click();
-    await page.getByLabel('영향과 복구 절차를 확인했습니다.').check();
+    await page.getByRole('checkbox', { name: '영향과 복구 절차를 확인했습니다.' }).check();
     const responsePromise = page.waitForResponse((candidate) => candidate.url().includes('/settings/deletion') && candidate.request().method() === 'POST');
     await page.getByRole('button', { name: '삭제 요청 등록' }).click();
     const response = await responsePromise;
