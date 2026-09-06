@@ -8,6 +8,7 @@ const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const RUN_ID = /^[1-9][0-9]*$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WORKFLOW = '.github/workflows/production-evidence.yml';
+const UPSTREAM = 'jsk1004ha/RaibitServer';
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const fail = (reason = 'ci_identity_mismatch') => { throw new EvidenceError(reason); };
@@ -23,7 +24,7 @@ export function parseReleaseTag(value) {
 
 export function parseCiExecutionContext(value) {
   const keys = ['repository', 'ref', 'sourceCommitSha', 'runId', 'runAttempt', 'workflowRef', 'workflowSha', 'event'];
-  if (!exact(value, keys) || !REPOSITORY.test(value.repository) || !/^refs\/tags\/raibit-gate-[ab]-/.test(value.ref)
+  if (!exact(value, keys) || !REPOSITORY.test(value.repository) || value.repository !== UPSTREAM || !/^refs\/tags\/raibit-gate-[ab]-/.test(value.ref)
     || !SHA.test(value.sourceCommitSha) || !RUN_ID.test(value.runId) || value.runAttempt !== 1
     || value.workflowRef !== `${value.repository}/${WORKFLOW}@${value.ref}`
     || !SHA.test(value.workflowSha) || value.event !== 'push') fail();
@@ -45,8 +46,9 @@ export async function readCiExecutionContext() {
 }
 
 export function parseCiInvocation(value) {
-  const keys = ['schema', 'repository', 'ref', 'tag', 'nonce', 'candidateSha', 'workflowId', 'blobSha', 'runId', 'runAttempt', 'event', 'createdAt', 'execution'];
-  if (!exact(value, keys) || value.schema !== 'raibitserver.ci-invocation/v1' || value.workflowId !== WORKFLOW
+  const keys = ['schema', 'repository', 'ref', 'tag', 'nonce', 'candidateSha', 'workflowId', 'workflowPath', 'blobSha', 'runId', 'runAttempt', 'event', 'createdAt', 'execution'];
+  if (!exact(value, keys) || value.schema !== 'raibitserver.ci-invocation/v1' || !Number.isSafeInteger(value.workflowId) || value.workflowId <= 0
+    || value.workflowPath !== WORKFLOW
     || !SHA.test(value.candidateSha) || !SHA.test(value.blobSha) || !RUN_ID.test(value.runId)
     || value.runAttempt !== 1 || value.event !== 'push' || Number.isNaN(Date.parse(value.createdAt))) fail();
   const execution = parseCiExecutionContext(value.execution), release = parseReleaseTag(value.tag);
@@ -57,17 +59,17 @@ export function parseCiInvocation(value) {
   return Object.freeze({ ...value, execution });
 }
 
-export async function createCiInvocation({ workflowId = WORKFLOW, blobSha, createdAt, defaultBranchSha = null } = {}) {
+export async function createCiInvocation({ workflowId, workflowPath = WORKFLOW, blobSha, createdAt, defaultBranchSha = null } = {}) {
   const execution = await readCiExecutionContext(), tag = execution.ref.slice(10), release = parseReleaseTag(tag);
   if (!SHA.test(blobSha) || typeof createdAt !== 'string' || Number.isNaN(Date.parse(createdAt))) fail();
   if (release.gate === 'B' && defaultBranchSha?.toLowerCase() !== release.candidateSha) fail('final_source_not_default_head');
   return parseCiInvocation({ schema: 'raibitserver.ci-invocation/v1', repository: execution.repository, ref: execution.ref,
-    tag, nonce: release.nonce, candidateSha: release.candidateSha, workflowId, blobSha: blobSha.toLowerCase(),
+    tag, nonce: release.nonce, candidateSha: release.candidateSha, workflowId, workflowPath, blobSha: blobSha.toLowerCase(),
     runId: execution.runId, runAttempt: execution.runAttempt, event: execution.event, createdAt, execution });
 }
 
 async function cli(args) {
-  const accepted = new Set(['--write', '--blob-sha', '--created-at', '--default-branch-sha']), values = new Map();
+  const accepted = new Set(['--write', '--workflow-id', '--blob-sha', '--created-at', '--default-branch-sha']), values = new Map();
   if (args.length % 2 !== 0) fail('invalid_arguments');
   for (let index = 0; index < args.length; index += 2) {
     if (!accepted.has(args[index]) || values.has(args[index])) fail('invalid_arguments');
@@ -75,7 +77,8 @@ async function cli(args) {
   }
   const output = values.get('--write');
   if (!output || !path.isAbsolute(output)) fail('invalid_arguments');
-  const invocation = await createCiInvocation({ blobSha: values.get('--blob-sha'), createdAt: values.get('--created-at'), defaultBranchSha: values.get('--default-branch-sha') ?? null });
+  const invocation = await createCiInvocation({ workflowId: Number(values.get('--workflow-id')), blobSha: values.get('--blob-sha'),
+    createdAt: values.get('--created-at'), defaultBranchSha: values.get('--default-branch-sha') ?? null });
   await writeFile(output, `${JSON.stringify(invocation)}\n`, { flag: 'wx', mode: 0o600 });
   return invocation;
 }

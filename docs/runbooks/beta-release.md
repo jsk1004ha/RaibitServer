@@ -5,7 +5,8 @@
 Before launching, confirm that the task-28 commit is the clean local `HEAD`, its one open A3 pull
 request targets the repository default branch, and the approved input snapshot is available at
 `<attempt-root>/inputs/approved-draft-input-v1.md`. Provisioning the protected environment,
-reviewers, selected `raibit-gate-a-*` TAG rule, immutable tag ruleset, runner, Kubernetes access,
+reviewers, selected `raibit-gate-a-*` TAG rule, a creation-only ruleset restricted to the approved
+GitHub `User`, a separate non-bypassable update/deletion ruleset, runner, Kubernetes access,
 operator selectors, and referenced Secrets is an external maintainer prerequisite.
 
 Run from the candidate checkout:
@@ -46,8 +47,10 @@ rebase it after evidence collection.
 
 Gate B is allowed only after B3 is merged. The operator must separately provision a selected
 `raibit-gate-b-*` environment TAG rule and matching immutable tag ruleset. The Gate B tag SHA must
-equal the current default-branch head; the workflow rejects a side-branch or merely self-labelled
-tag. Use a new UUID, empty evidence directory, and fresh CI run. The protected job selects
+equal the current default-branch head and exactly one associated merged PR. The protected
+`RAIBITSERVER_FINAL_B3_PR_NUMBER` variable must match that REST-observed PR, so a side-branch or
+merely self-labelled tag is rejected. The environment must also provide
+`RAIBITSERVER_PRODUCTION_DOMAIN_INPUTS_JSON`. Use a new UUID, empty evidence directory, and fresh CI run. The protected job selects
 `profile=final`; it must regenerate lifecycle and custom-domain evidence under one identity and
 must not copy Gate A or earlier domain fragments.
 

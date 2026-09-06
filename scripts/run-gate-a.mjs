@@ -4,9 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseCiInvocation, parseReleaseTag } from './production-evidence/lib/ci-invocation.mjs';
-import { APPROVED_INPUT_SHA256, EvidenceError, OPERATOR_CONTRACT_DIGEST, verifyApprovedSnapshot } from './production-evidence/lib/operator-inputs.mjs';
+import { APPROVED_INPUT_SHA256, digest, EvidenceError, OPERATOR_CONTRACT_DIGEST, verifyApprovedSnapshot } from './production-evidence/lib/operator-inputs.mjs';
 
 const execFileAsync = promisify(execFile);
 const WORKFLOW = '.github/workflows/production-evidence.yml';
@@ -26,14 +26,23 @@ export function parseGateAArguments(args) {
   return Object.freeze({ repo: UPSTREAM, scenario: values.get('--scenario'), attemptDir: path.resolve(values.get('--attempt-dir')) });
 }
 
-export function validateReleasePolicy({ environment, policies, rulesets, actorId }) {
+export function validateReleasePolicy({ environment, policies, rulesets, actor }) {
   if (environment?.deployment_branch_policy?.protected_branches !== false
     || environment.deployment_branch_policy.custom_branch_policies !== true
-    || !policies.some((item) => item.type === 'tag' && item.name === 'raibit-gate-a-*')) fail('environment_policy_mismatch');
+    || policies.length !== 1 || policies[0].type !== 'tag' || policies[0].name !== 'raibit-gate-a-*') fail('environment_policy_mismatch');
   const applicable = rulesets.filter((item) => item.target === 'tag' && item.enforcement === 'active'
-    && item.conditions?.ref_name?.include?.includes('refs/tags/raibit-gate-a-*'));
-  if (applicable.length !== 1 || !['creation', 'update', 'deletion'].every((type) => applicable[0].rules?.some((rule) => rule.type === type))
-    || !applicable[0].bypass_actors?.some((actor) => String(actor.actor_id) === String(actorId) && actor.bypass_mode === 'always')) fail('tag_ruleset_mismatch');
+    && item.conditions?.ref_name?.include?.some((pattern) => ['~ALL', 'refs/tags/*', 'refs/tags/raibit-gate-a-*'].includes(pattern))
+    && !item.conditions.ref_name.exclude?.includes('refs/tags/raibit-gate-a-*'));
+  const actorBypass = (item) => item.bypass_actors?.filter((entry) => entry.actor_type === 'User'
+    && entry.actor_id === actor.id && entry.bypass_mode === 'always') ?? [];
+  const creation = applicable.filter((item) => item.rules?.some(({ type }) => type === 'creation'));
+  const mutation = applicable.filter((item) => item.rules?.some(({ type }) => ['update', 'deletion'].includes(type)));
+  const immutableTypes = new Set(mutation.filter((item) => item.bypass_actors?.length === 0)
+    .flatMap((item) => item.rules.map(({ type }) => type)));
+  if (actor?.type !== 'User' || creation.length !== 1 || actorBypass(creation[0]).length !== 1
+    || creation[0].bypass_actors?.length !== 1 || creation[0].rules.some(({ type }) => ['update', 'deletion'].includes(type))
+    || !immutableTypes.has('update') || !immutableTypes.has('deletion')
+    || mutation.some((item) => item.bypass_actors?.length !== 0)) fail('tag_ruleset_mismatch');
 }
 
 function commandAdapter() {
@@ -64,28 +73,28 @@ export async function runGateA(args, dependencies = {}) {
   const input = parseGateAArguments(args), run = dependencies.run ?? commandAdapter(), now = dependencies.now ?? (() => new Date());
   const uuid = dependencies.uuid ?? randomUUID, sleep = dependencies.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const verifyApproval = dependencies.verifyApprovedSnapshot ?? verifyApprovedSnapshot;
-  const root = dependencies.root ?? path.resolve(new URL('..', import.meta.url).pathname.replace(/^\/(?:([A-Za-z]):)/, '$1:'));
+  const root = dependencies.root ?? path.resolve(fileURLToPath(new URL('..', import.meta.url)));
   const status = await run('git', ['status', '--porcelain=v1'], { cwd: root, reason: 'dirty_candidate' });
   if (status.stdout.trim()) fail('dirty_candidate');
   const candidateSha = (await run('git', ['rev-parse', '--verify', 'HEAD'], { cwd: root, reason: 'candidate_unavailable' })).stdout.trim().toLowerCase();
   if (!/^[a-f0-9]{40}$/.test(candidateSha)) fail('candidate_unavailable');
   await verifyApproval(path.join(path.dirname(input.attemptDir), 'inputs', 'approved-draft-input-v1.md'));
-  const repository = await ghJson(run, ['api', `repos/${input.repo}`], 'repository_unavailable');
-  const actor = await ghJson(run, ['api', 'user'], 'release_identity_unavailable');
+  const repository = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}`], 'repository_unavailable');
+  const actor = await ghJson(run, ['api', '--method', 'GET', 'user'], 'release_identity_unavailable');
   const pulls = await ghJson(run, ['api', '--method', 'GET', '--paginate', '--slurp', `repos/${input.repo}/pulls`, '-f', 'state=open', '-f', 'per_page=100'], 'pull_request_unavailable');
   const flattenedPulls = pulls.flat(), matches = flattenedPulls.filter((item) => item.head?.sha?.toLowerCase() === candidateSha && item.base?.ref === repository.default_branch);
   if (matches.length !== 1) fail('candidate_pull_request_mismatch');
-  const pull = matches[0], environment = await ghJson(run, ['api', `repos/${input.repo}/environments/raibit-production-evidence`], 'environment_policy_unavailable');
-  const policyPages = await ghJson(run, ['api', '--paginate', '--slurp', `repos/${input.repo}/environments/raibit-production-evidence/deployment-branch-policies`, '-f', 'per_page=100'], 'environment_policy_unavailable');
-  const rulesetList = await ghJson(run, ['api', `repos/${input.repo}/rulesets?includes_parents=true`], 'tag_ruleset_unavailable');
-  const rulesets = await Promise.all(rulesetList.map((item) => ghJson(run, ['api', `repos/${input.repo}/rulesets/${item.id}`], 'tag_ruleset_unavailable')));
-  validateReleasePolicy({ environment, policies: policyPages.flatMap((page) => page.branch_policies ?? page), rulesets, actorId: actor.id });
-  const workflow = await ghJson(run, ['api', `repos/${input.repo}/contents/${WORKFLOW}?ref=${candidateSha}`], 'workflow_unavailable');
+  const pull = matches[0], environment = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/environments/raibit-production-evidence`], 'environment_policy_unavailable');
+  const policyPages = await ghJson(run, ['api', '--method', 'GET', '--paginate', '--slurp', `repos/${input.repo}/environments/raibit-production-evidence/deployment-branch-policies`, '-f', 'per_page=100'], 'environment_policy_unavailable');
+  const rulesetList = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/rulesets?includes_parents=true`], 'tag_ruleset_unavailable');
+  const rulesets = await Promise.all(rulesetList.map((item) => ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/rulesets/${item.id}`], 'tag_ruleset_unavailable')));
+  validateReleasePolicy({ environment, policies: policyPages.flatMap((page) => page.branch_policies ?? page), rulesets, actor });
+  const workflow = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/contents/${WORKFLOW}?ref=${candidateSha}`], 'workflow_unavailable');
   if (!/^[a-f0-9]{40}$/.test(workflow.sha)) fail('workflow_unavailable');
   const nonce = uuid().toLowerCase(), tag = `raibit-gate-a-${candidateSha}-${input.scenario}-${nonce}`;
   parseReleaseTag(tag);
   if ((await run('git', ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`], { cwd: root, allowFailure: true })).exitCode === 0) fail('tag_collision');
-  if ((await run('gh', ['api', `repos/${input.repo}/git/ref/tags/${tag}`], { allowFailure: true })).exitCode === 0) fail('tag_collision');
+  if ((await run('gh', ['api', '--method', 'GET', `repos/${input.repo}/git/ref/tags/${tag}`], { allowFailure: true })).exitCode === 0) fail('tag_collision');
   await mkdir(input.attemptDir, { recursive: false, mode: 0o700 });
   const dispatchStartedAt = now().toISOString();
   await run('git', ['push', `https://github.com/${input.repo}.git`, `${candidateSha}:refs/tags/${tag}`], { cwd: root, reason: 'tag_push_failed' });
@@ -95,12 +104,21 @@ export async function runGateA(args, dependencies = {}) {
       '-f', 'event=push', '-f', `head_sha=${candidateSha}`, '-f', `created=>=${dispatchStartedAt}`, '-f', 'per_page=100'], 'run_discovery_failed');
     const matchesForRun = pages.flatMap((page) => page.workflow_runs ?? page).filter((item) => item.head_sha?.toLowerCase() === candidateSha
       && item.path === WORKFLOW && item.repository?.full_name === input.repo && item.display_title === `Gate A | ${tag}`
+      && Number.isSafeInteger(item.workflow_id) && item.workflow_id > 0
       && item.run_attempt === 1 && Date.parse(item.created_at) >= Date.parse(dispatchStartedAt));
     if (matchesForRun.length > 1) fail('ambiguous_workflow_run');
     selected = matchesForRun[0] ?? null;
     if (!selected && attempt < 20) await sleep(15_000);
   }
   if (!selected || !Number.isSafeInteger(selected.id)) fail('run_discovery_timeout');
+  const expectedInvocation = parseCiInvocation({ schema: 'raibitserver.ci-invocation/v1', repository: input.repo,
+    ref: `refs/tags/${tag}`, tag, nonce, candidateSha, workflowId: selected.workflow_id, workflowPath: WORKFLOW,
+    blobSha: workflow.sha, runId: String(selected.id), runAttempt: 1, event: 'push', createdAt: selected.created_at,
+    execution: { repository: input.repo, ref: `refs/tags/${tag}`, sourceCommitSha: candidateSha,
+      runId: String(selected.id), runAttempt: 1, workflowRef: `${input.repo}/${WORKFLOW}@refs/tags/${tag}`,
+      workflowSha: candidateSha, event: 'push' } });
+  const expectedInvocationPath = path.join(input.attemptDir, 'expected-ci-invocation.json');
+  await writeFile(expectedInvocationPath, `${JSON.stringify(expectedInvocation)}\n`, { flag: 'wx', mode: 0o600 });
   const downloadDir = path.join(input.attemptDir, 'task-28-workflow');
   let watch, metadata;
   try {
@@ -108,33 +126,41 @@ export async function runGateA(args, dependencies = {}) {
     if (remainingMs <= 0) fail('run_timeout');
     watch = await run('gh', ['run', 'watch', String(selected.id), '--repo', input.repo, '--exit-status'], { allowFailure: true, timeoutMs: remainingMs });
   } finally {
-    try { metadata = await ghJson(run, ['api', `repos/${input.repo}/actions/runs/${selected.id}`], 'run_metadata_unavailable'); }
+    try { metadata = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/actions/runs/${selected.id}`], 'run_metadata_unavailable'); }
     finally { await run('gh', ['run', 'download', String(selected.id), '--repo', input.repo, '-n', 'production-evidence', '-D', downloadDir], { reason: 'evidence_download_failed' }); }
   }
   if (metadata.id !== selected.id || metadata.head_sha?.toLowerCase() !== candidateSha || metadata.path !== WORKFLOW
-    || metadata.repository?.full_name !== input.repo || metadata.display_title !== `Gate A | ${tag}` || metadata.run_attempt !== 1) fail('ci_identity_mismatch');
+    || metadata.repository?.full_name !== input.repo || metadata.display_title !== `Gate A | ${tag}` || metadata.run_attempt !== 1
+    || metadata.workflow_id !== selected.workflow_id || metadata.created_at !== selected.created_at || metadata.event !== 'push') fail('ci_identity_mismatch');
   const invocationPath = await findFile(downloadDir, 'ci-invocation.json');
   if (!invocationPath) fail('missing_ci_invocation');
   const invocation = parseCiInvocation(JSON.parse(await readFile(invocationPath, 'utf8')));
-  if (invocation.candidateSha !== candidateSha || invocation.tag !== tag || invocation.blobSha !== workflow.sha
-    || invocation.runId !== String(selected.id) || invocation.repository !== input.repo
-    || Date.parse(invocation.createdAt) < Date.parse(dispatchStartedAt) || Date.parse(invocation.createdAt) < Date.parse(selected.created_at)) fail('ci_identity_mismatch');
+  if (digest(invocation) !== digest(expectedInvocation)) fail('ci_identity_mismatch');
   let releaseEligible = false, reason = null;
   if (input.scenario === 'happy') {
     const manifest = await findFile(downloadDir, 'manifest.json');
     if (!manifest || watch.exitCode !== 0) fail('gate_a_failed');
-    await run(process.execPath, [path.join(root, 'scripts/verify-production-evidence.mjs'), '--expected-ci', invocationPath, manifest], { cwd: root, reason: 'gate_a_verification_failed' });
+    await run(process.execPath, [path.join(root, 'scripts/verify-production-evidence.mjs'), '--expected-ci', expectedInvocationPath, manifest], { cwd: root, reason: 'gate_a_verification_failed' });
     releaseEligible = true;
   } else {
     const negative = await findFile(downloadDir, 'preflight.json'), cleanup = await findFile(downloadDir, 'cleanup.json');
     if (!negative || !cleanup) fail('missing_negative_evidence');
+    const jobPages = await ghJson(run, ['api', '--method', 'GET', '--paginate', '--slurp',
+      `repos/${input.repo}/actions/runs/${selected.id}/jobs`, '-f', 'filter=latest', '-f', 'per_page=100'], 'run_jobs_unavailable');
+    const jobs = jobPages.flatMap((page) => page.jobs ?? page), preflightJob = jobs.filter(({ name }) => name === 'Secret-free release identity preflight');
+    const liveJob = jobs.filter(({ name }) => name === 'Protected credentialed evidence');
     const result = JSON.parse(await readFile(negative, 'utf8')), cleaned = JSON.parse(await readFile(cleanup, 'utf8'));
     if (watch.exitCode === 0 || result.status !== 'NOT_RUN' || result.reason !== 'missing_secret_ref' || result.testOnly !== true
-      || result.releaseEligible !== false || cleaned.status !== 'PASS' || cleaned.resourcesCreated !== 0 || cleaned.resourcesRemaining !== 0) fail('negative_evidence_mismatch');
+      || result.releaseEligible !== false || result.ciInvocationSha256 !== digest(expectedInvocation)
+      || cleaned.status !== 'PASS' || cleaned.resourcesCreated !== 0 || cleaned.resourcesRemaining !== 0
+      || cleaned.ciInvocationSha256 !== digest(expectedInvocation)
+      || preflightJob.length !== 1 || preflightJob[0].conclusion !== 'failure'
+      || liveJob.length !== 1 || liveJob[0].conclusion !== 'skipped'
+      || [...preflightJob, ...liveJob].some((job) => job.run_id !== selected.id || job.head_sha?.toLowerCase() !== candidateSha)) fail('negative_evidence_mismatch');
     reason = 'missing_secret_ref';
   }
-  const currentRepository = await ghJson(run, ['api', `repos/${input.repo}`], 'repository_unavailable');
-  const currentPull = await ghJson(run, ['api', `repos/${input.repo}/pulls/${pull.number}`], 'pull_request_unavailable');
+  const currentRepository = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}`], 'repository_unavailable');
+  const currentPull = await ghJson(run, ['api', '--method', 'GET', `repos/${input.repo}/pulls/${pull.number}`], 'pull_request_unavailable');
   if (currentRepository.default_branch !== repository.default_branch || currentPull.state !== 'open'
     || currentPull.head?.sha?.toLowerCase() !== candidateSha || currentPull.base?.ref !== repository.default_branch
     || currentPull.base?.sha !== pull.base.sha) fail('candidate_pull_request_changed');

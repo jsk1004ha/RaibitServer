@@ -6,12 +6,22 @@ import { EvidenceError, APPROVED_INPUT_SHA256, OPERATOR_CONTRACT_DIGEST, loadOpe
 import { parseCiInvocation } from './lib/ci-invocation.mjs';
 
 export { parseOperatorInputs, inputsFromEnvironment };
+export function parseRequiredOperatorInputs(value, contract) {
+  if (Array.isArray(value?.secretRefs) && !value.secretRefs.some(({ role }) => role === 'signing')) {
+    const signing = contract.secretBindings.find(({ role }) => role === 'signing');
+    if (!signing) throw new EvidenceError('operator_contract_digest_mismatch');
+    parseOperatorInputs({ ...value, secretRefs: [...value.secretRefs, { role: signing.role, binding: signing.binding,
+      kind: signing.kind, namespace: 'fixture-system', existingSecret: 'fixture-signing', keys: Object.values(signing.keyFields) }] }, contract);
+    throw new EvidenceError('missing_secret_ref');
+  }
+  return parseOperatorInputs(value, contract);
+}
 export async function preflight(value, options = {}) {
   try {
     const approvalRequested = Object.hasOwn(options, 'approvedInputPath');
     if (approvalRequested && (typeof options.approvedInputPath !== 'string' || !options.approvedInputPath)) throw new EvidenceError('missing_approved_input');
     const contract = approvalRequested ? await verifyApprovedSnapshot(options.approvedInputPath) : await loadOperatorContract();
-    const inputs = parseOperatorInputs(value, contract);
+    const inputs = parseRequiredOperatorInputs(value, contract);
     if (!options.inspectSecretReference) throw new EvidenceError('missing_credentials');
     for (const reference of inputs.secretRefs) {
       // Adapter returns metadata/key availability only; Secret data never enters this contract.
@@ -26,17 +36,21 @@ export async function preflight(value, options = {}) {
 }
 export async function runMissingSigningFixture({ fixture, ciReceipt, attemptDir }) {
   const contract = await loadOperatorContract(), value = await readJson(fixture, 'missing_approved_input');
-  const signing = contract.secretBindings.find(({ role }) => role === 'signing');
-  if (!signing || value.secretRefs?.some(({ role }) => role === 'signing')) throw new EvidenceError('invalid_fixture');
-  parseOperatorInputs({ ...value, secretRefs: [...value.secretRefs, { role: signing.role, binding: signing.binding,
-    kind: signing.kind, namespace: 'fixture-system', existingSecret: 'fixture-signing', keys: Object.values(signing.keyFields) }] }, contract);
+  let observedReason = null;
+  try { parseRequiredOperatorInputs(value, contract); }
+  catch (error) {
+    if (!(error instanceof EvidenceError)) throw error;
+    observedReason = error.reason;
+  }
+  if (observedReason !== 'missing_secret_ref') throw new EvidenceError('invalid_fixture');
   const invocation = parseCiInvocation(await readJson(ciReceipt, 'ci_identity_mismatch'));
   await mkdir(attemptDir, { recursive: false, mode: 0o700 });
-  const result = { schema: 'raibitserver.production-evidence-preflight/v1', status: 'NOT_RUN', reason: 'missing_secret_ref',
+  const result = { schema: 'raibitserver.production-evidence-preflight/v1', status: 'NOT_RUN', reason: observedReason,
     releaseEligible: false, testOnly: true, approvedInputSha256: APPROVED_INPUT_SHA256,
     operatorContractDigest: OPERATOR_CONTRACT_DIGEST, ciInvocationSha256: digest(invocation) };
   const cleanup = { schema: 'raibitserver.production-evidence-preflight-cleanup/v1', status: 'PASS',
-    reason: null, resourcesCreated: 0, resourcesRemaining: 0, testOnly: true };
+    reason: null, resourcesCreated: 0, resourcesRemaining: 0, testOnly: true,
+    ciInvocationSha256: result.ciInvocationSha256 };
   await Promise.all([
     writeFile(path.join(attemptDir, 'preflight.json'), `${JSON.stringify(result)}\n`, { flag: 'wx', mode: 0o600 }),
     writeFile(path.join(attemptDir, 'cleanup.json'), `${JSON.stringify(cleanup)}\n`, { flag: 'wx', mode: 0o600 }),

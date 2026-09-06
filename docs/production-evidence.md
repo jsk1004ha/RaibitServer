@@ -19,15 +19,19 @@ The protected live job is skipped for that route.
 Only the happy route attaches `raibit-production-evidence`. The environment supplies the approved
 input bytes, kubeconfig, normalized Secret-reference metadata, and the eight non-secret selectors.
 The runner validates referenced Kubernetes Secrets by metadata and required key names; it does not
-copy their data into evidence. The existing Helm configuration mounts the approved signing Secret
+copy their data into evidence. The existing Helm configuration is required to mount the approved signing Secret
 at `/var/run/secrets/raibitserver/signing/cosign.key` and the trust Secret at
 `/var/run/secrets/raibitserver/verification/cosign.pub`. `COSIGN_PASSWORD` belongs only to the
-signer child process. Missing bindings or credentials produce `NOT_RUN`; there is no fallback key.
+signer child process. The Actions runner does not mount either key: its protected kubeconfig and
+normalized references drive metadata/key-name preflight, while credentialed evidence must prove the
+builder workload mounts. Missing bindings or credentials produce `NOT_RUN`; there is no fallback key.
+The final profile additionally requires the protected custom-domain extension input file.
 
 The environment must have a selected TAG deployment rule for the invoked gate. Gate A requires
 `raibit-gate-a-*`. Gate B requires a separately provisioned `raibit-gate-b-*` rule; the workflow
 does not widen Gate A policy. Repository tag rulesets must restrict creation to the approved release
-identity and forbid update and deletion. The launcher only reads these settings and never modifies
+identity through a creation-only ruleset. A separate active ruleset must forbid update and deletion
+without bypass actors. The launcher only reads these settings and never modifies
 repository or environment policy.
 
 ## CI invocation receipt
@@ -48,8 +52,11 @@ repository or environment policy.
 }
 ```
 
-Historical verification uses `parseCiExecutionContext(storedReceipt.execution)`. It must not read
-the verifier process's current GitHub environment. Rich verification additionally binds the tag
+The rich receipt also carries the positive numeric REST workflow ID, exact workflow path, candidate
+workflow blob SHA, and REST workflow-run `created_at`. Historical verification uses
+`parseCiExecutionContext(storedReceipt.execution)`. It must not read the verifier process's current
+GitHub environment. The launcher constructs an independent expected receipt from candidate and REST
+metadata before download; the downloaded receipt cannot be its own expectation. Rich verification binds the tag
 nonce, candidate SHA, workflow path/blob SHA, run ID, attempt, and creation time. Distinct final
 runs require distinct independently frozen CI receipts.
 
