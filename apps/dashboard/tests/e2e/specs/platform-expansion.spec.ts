@@ -109,8 +109,9 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
   if (row.driver === 'empty-projects') {
     await installSession(page.context(), 'fixture-user-empty');
     const response = await openRow(page, row);
-    await expect(page.getByRole('heading')).toBeVisible();
-    return record(page, row, testInfo, await httpObservation(response, { heading: await page.getByRole('heading').first().innerText(), projectLinks: await page.getByRole('link').filter({ hasText: '프로젝트' }).count() }), recorder);
+    const pageHeading = page.getByRole('heading', { name: '프로젝트', exact: true });
+    await expect(pageHeading).toBeVisible();
+    return record(page, row, testInfo, await httpObservation(response, { heading: await pageHeading.innerText(), projectLinks: await page.getByRole('link').filter({ hasText: '프로젝트' }).count() }), recorder);
   }
   if (row.driver === 'github-disconnect' || row.driver === 'github-conflict' || row.driver === 'github-retryable') {
     const status = row.driver === 'github-conflict' ? 409 : row.driver === 'github-retryable' ? 503 : 200;
