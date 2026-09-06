@@ -1,4 +1,4 @@
-import { Prisma, type PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { ResourceRecoveryRepository, type RecoveryQuotaPolicy } from './resource-recovery.ts';
 import { MemoryRecoveryTransaction } from './resource-recovery-memory.ts';
 import { PostgresRecoveryTransaction, lockRecoveryDeletion, assertPostgresRecoveryPublished } from './resource-recovery-postgres.ts';
@@ -81,6 +81,11 @@ export type PemContextSource = {
 export type RuntimePemContextSource = Extract<PemContextSource, { readonly kind: 'runtime' }>;
 type BuildPemContextSource = Extract<PemContextSource, { readonly kind: 'build' }>;
 type PemContextQueryRow = { readonly requestId: number; readonly line: string; readonly truncated: boolean };
+
+async function prismaKnownRequestError(error: unknown, code: string) {
+  const { Prisma } = await import('@prisma/client');
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
+}
 
 export const PEM_CONTEXT_LIMITS = {
   sources: 16,
@@ -862,7 +867,7 @@ export class PrismaControlPlaneRepository {
         return { status: 'reset', resetAt: now.toISOString() };
       }, { isolationLevel: 'Serializable' });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') return { status: 'invalid' };
+      if (await prismaKnownRequestError(error, 'P2034')) return { status: 'invalid' };
       throw error;
     }
   }
@@ -1476,7 +1481,7 @@ export class PrismaControlPlaneRepository {
         return { domain: view, challengeToken: issued.challengeToken };
       });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new DomainLifecycleError('DOMAIN_HOSTNAME_CONFLICT', 409);
+      if (await prismaKnownRequestError(error, 'P2002')) throw new DomainLifecycleError('DOMAIN_HOSTNAME_CONFLICT', 409);
       throw error;
     }
   }
@@ -2429,8 +2434,8 @@ export class PrismaControlPlaneRepository {
     const runtimeSources = sources.filter((source): source is RuntimePemContextSource => source.kind === 'runtime');
     const buildSources = sources.filter((source): source is BuildPemContextSource => source.kind === 'build');
     const queryRows: PemContextQueryRow[] = [];
-    if (runtimeSources.length) queryRows.push(...await this.prisma.$queryRaw<PemContextQueryRow[]>(runtimePemContextQuery(runtimeSources)));
-    if (buildSources.length) queryRows.push(...await this.prisma.$queryRaw<PemContextQueryRow[]>(buildPemContextQuery(buildSources)));
+    if (runtimeSources.length) queryRows.push(...await this.prisma.$queryRaw<PemContextQueryRow[]>(await runtimePemContextQuery(runtimeSources)));
+    if (buildSources.length) queryRows.push(...await this.prisma.$queryRaw<PemContextQueryRow[]>(await buildPemContextQuery(buildSources)));
     return pemContextsFromQuery(sources, queryRows);
   }
   async listDeploymentEvents(deploymentId: string, options: Record<string, any> = {}) { return findActivityRows(this.prisma.deploymentEvent, { deploymentId }, options); }
@@ -2693,7 +2698,8 @@ function pemContextSources(rows: readonly ObservationLogRow[]): PemContextSource
   return [...sources.values()];
 }
 
-export function runtimePemContextQuery(sources: readonly RuntimePemContextSource[]) {
+export async function runtimePemContextQuery(sources: readonly RuntimePemContextSource[]) {
+  const { Prisma } = await import('@prisma/client');
   const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.serviceId} AS text), CAST(${source.deploymentId} AS text), CAST(${source.podUid} AS text), CAST(${source.containerName} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
   return Prisma.sql`
     WITH requested("requestId", "serviceId", "deploymentId", "podUid", "containerName", "timestamp", "id") AS MATERIALIZED (VALUES ${Prisma.join(values)})
@@ -2718,7 +2724,8 @@ export function runtimePemContextQuery(sources: readonly RuntimePemContextSource
   `;
 }
 
-function buildPemContextQuery(sources: readonly BuildPemContextSource[]) {
+async function buildPemContextQuery(sources: readonly BuildPemContextSource[]) {
+  const { Prisma } = await import('@prisma/client');
   const values = sources.map((source) => Prisma.sql`(CAST(${source.requestId} AS integer), CAST(${source.deploymentId} AS text), CAST(${source.step} AS text), CAST(${source.timestamp} AS timestamp(3)), CAST(${source.id} AS text))`);
   return Prisma.sql`
     WITH requested("requestId", "deploymentId", "step", "timestamp", "id") AS MATERIALIZED (VALUES ${Prisma.join(values)})

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { Prisma, type PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import { OrganizationInviteError, type OrganizationInviteAcceptance, type OrganizationInviteRecord, type ReplaceOrganizationInviteInput } from './organization-invite.ts';
 import { normalizeOrganizationRoleForRead } from './rbac.ts';
 
@@ -48,7 +48,7 @@ export class PostgresOrganizationInviteRepository {
     });
   }
 
-  acceptOrganizationInvite(input: { readonly tokenHash: string; readonly userId: string; readonly now: string }): Promise<OrganizationInviteAcceptance | null> {
+  async acceptOrganizationInvite(input: { readonly tokenHash: string; readonly userId: string; readonly now: string }): Promise<OrganizationInviteAcceptance | null> {
     return this.prisma.$transaction(async transaction => {
       const invites = await transaction.$queryRawUnsafe<DbInvite[]>(
         'SELECT * FROM "OrganizationInvite" WHERE "tokenHash"=$1 FOR UPDATE', input.tokenHash,
@@ -77,7 +77,7 @@ export class PostgresOrganizationInviteRepository {
       await transaction.user.update({ where: { id: input.userId }, data: { sessionVersion: { increment: 1 } } });
       await transaction.auditLog.create({ data: { actorUserId: input.userId, action: 'organization.invite:accepted', targetType: 'organization-invite', targetId: invite.id, metadata: { organizationId: invite.organizationId, role } } });
       return { status: 'accepted', membership: { organizationId: membership.organizationId, role } };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    }, await readCommittedTransaction());
   }
 
   listOrganizationInvites(input: { readonly organizationId: string; readonly actorUserId: string }): Promise<readonly OrganizationInviteRecord[]> {
@@ -95,4 +95,9 @@ function normalizeDbInvite(row: DbInvite): OrganizationInviteRecord {
   const role = normalizeOrganizationRoleForRead(row.role);
   if (!role) throw new TypeError('Organization invite role is invalid');
   return { ...row, role, expiresAt: row.expiresAt.toISOString(), acceptedAt: row.acceptedAt?.toISOString() ?? null, revokedAt: row.revokedAt?.toISOString() ?? null, createdAt: row.createdAt.toISOString() };
+}
+
+async function readCommittedTransaction() {
+  const { Prisma } = await import('@prisma/client');
+  return { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted };
 }

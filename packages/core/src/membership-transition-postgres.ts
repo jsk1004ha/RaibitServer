@@ -1,4 +1,4 @@
-import { Prisma, type PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { MembershipTransitionError, requireMembershipRemovalAuthority, requireMembershipTransitionAuthority, type OrganizationMemberRecord } from './membership-transition.ts';
 import { normalizeOrganizationRoleForRead, type OrganizationMembershipRole } from './rbac.ts';
 
@@ -24,7 +24,7 @@ export class PostgresMembershipTransitionRepository {
     return members.map(dbMemberView);
   }
 
-  changeOrganizationMembershipRole(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly role: OrganizationMembershipRole; readonly expectedVersion: number }): Promise<OrganizationMemberRecord> {
+  async changeOrganizationMembershipRole(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly role: OrganizationMembershipRole; readonly expectedVersion: number }): Promise<OrganizationMemberRecord> {
     return this.prisma.$transaction(async transaction => {
       await lockOrganization(transaction, input.organizationId);
       const actor = await findActor(transaction, input.organizationId, input.actorUserId);
@@ -45,10 +45,10 @@ export class PostgresMembershipTransitionRepository {
       await transaction.user.update({ where: { id: target.userId }, data: { sessionVersion: { increment: 1 } } });
       await transaction.auditLog.create({ data: { actorUserId: input.actorUserId, action: 'organization.member:role-change', targetType: 'membership', targetId: target.id, metadata: { organizationId: input.organizationId, role: input.role, version: membership.version } } });
       return dbMemberView(membership);
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    }, await readCommittedTransaction());
   }
 
-  removeOrganizationMember(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly expectedVersion: number }): Promise<void> {
+  async removeOrganizationMember(input: { readonly organizationId: string; readonly membershipId: string; readonly actorUserId: string; readonly expectedVersion: number }): Promise<void> {
     return this.prisma.$transaction(async transaction => {
       await lockOrganization(transaction, input.organizationId);
       const actor = await findActor(transaction, input.organizationId, input.actorUserId);
@@ -61,10 +61,10 @@ export class PostgresMembershipTransitionRepository {
       if (removed !== 1) throw new MembershipTransitionError('STALE_MEMBERSHIP', 409);
       await transaction.user.update({ where: { id: target.userId }, data: { sessionVersion: { increment: 1 } } });
       await transaction.auditLog.create({ data: { actorUserId: input.actorUserId, action: 'organization.member:remove', targetType: 'membership', targetId: target.id, metadata: { organizationId: input.organizationId, role: targetRole } } });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    }, await readCommittedTransaction());
   }
 
-  leaveOrganization(input: { readonly organizationId: string; readonly actorUserId: string; readonly expectedVersion: number }): Promise<void> {
+  async leaveOrganization(input: { readonly organizationId: string; readonly actorUserId: string; readonly expectedVersion: number }): Promise<void> {
     return this.prisma.$transaction(async transaction => {
       await lockOrganization(transaction, input.organizationId);
       const target = await findActorMember(transaction, input.organizationId, input.actorUserId);
@@ -75,10 +75,10 @@ export class PostgresMembershipTransitionRepository {
       if (removed !== 1) throw new MembershipTransitionError('STALE_MEMBERSHIP', 409);
       await transaction.user.update({ where: { id: input.actorUserId }, data: { sessionVersion: { increment: 1 } } });
       await transaction.auditLog.create({ data: { actorUserId: input.actorUserId, action: 'organization.member:leave', targetType: 'membership', targetId: target.id, metadata: { organizationId: input.organizationId } } });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    }, await readCommittedTransaction());
   }
 
-  revokeOrganizationInvite(input: { readonly organizationId: string; readonly inviteId: string; readonly actorUserId: string; readonly now: string }): Promise<void> {
+  async revokeOrganizationInvite(input: { readonly organizationId: string; readonly inviteId: string; readonly actorUserId: string; readonly now: string }): Promise<void> {
     return this.prisma.$transaction(async transaction => {
       await lockOrganization(transaction, input.organizationId);
       const actor = await findActor(transaction, input.organizationId, input.actorUserId);
@@ -89,7 +89,7 @@ export class PostgresMembershipTransitionRepository {
       requireMembershipRemovalAuthority(canonicalRole(actor.role), inviteRole);
       await transaction.$executeRawUnsafe('UPDATE "OrganizationInvite" SET "revokedAt"=$2 WHERE "id"=$1', input.inviteId, new Date(input.now));
       await transaction.auditLog.create({ data: { actorUserId: input.actorUserId, action: 'organization.invite:revoked', targetType: 'organization-invite', targetId: input.inviteId, metadata: { organizationId: input.organizationId, role: inviteRole } } });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    }, await readCommittedTransaction());
   }
 }
 
@@ -137,4 +137,9 @@ function canonicalRole(value: unknown): OrganizationMembershipRole {
 
 function ownerCount(transaction: Prisma.TransactionClient, organizationId: string): Promise<number> {
   return transaction.membership.count({ where: { organizationId, role: { in: ['OWNER', 'owner'] } } });
+}
+
+async function readCommittedTransaction() {
+  const { Prisma } = await import('@prisma/client');
+  return { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted };
 }
