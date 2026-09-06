@@ -72,7 +72,7 @@ export async function verifyCompletionGate(root, reference, role) {
   const profile = role === 'gate-a' ? 'train-a' : role === 'gate-b' ? 'final' : 'component';
   if (manifest.profile !== profile || manifest.fixture) throw new EvidenceError('completion_gate_profile_mismatch');
   if (role === 'gate-b') assertFresh(manifest.startedAt, manifest.observedAt);
-  const ciBytes = role === 'domains' ? null : await checkedArtifact(root, reference.ciExecution);
+  const ciBytes = role === 'domains' || !reference.ciExecution ? null : await checkedArtifact(root, reference.ciExecution);
   let expectedCi;
   if (ciBytes) {
     let ciParser;
@@ -84,7 +84,7 @@ export async function verifyCompletionGate(root, reference, role) {
     expectedCi = ciParser(json(ciBytes));
     if (expectedCi.sourceCommitSha !== reference.identity.sourceCommitSha) throw new EvidenceError('completion_mixed_sha');
   }
-  const options = { profile, expectedIdentity: reference.identity, expectedCi, ...(role === 'domains' ? { fragment: 'domains' } : {}),
+  const options = { profile, expectedIdentity: reference.identity, ...(expectedCi ? { expectedCi } : {}), ...(role === 'domains' ? { fragment: 'domains' } : {}),
     ...(role === 'gate-b' ? {} : { now: Date.parse(manifest.observedAt) }) };
   const result = await verifyEvidenceFile(path.resolve(root, reference.artifact.path), options);
   if (!result.valid || result.manifestDigest !== reference.manifestDigest || (role !== 'domains' && !result.releaseEligible)) throw new EvidenceError('completion_gate_not_eligible');

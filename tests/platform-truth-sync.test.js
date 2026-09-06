@@ -17,13 +17,16 @@ test('Given the capability catalog, parsing keeps references separate from compl
   assert.equal(result.tasks.length, 50);
   assert.deepEqual(result.components, ['C1', 'C2', 'C3', 'C4', 'C5', 'C6']);
   assert.equal(result.claim, 'capability-references-only');
-  assert.ok(result.tasks.some(({ pending }) => pending.length > 0));
   assert.equal(Object.hasOwn(result, 'releaseEligible'), false);
 });
 test('Given complete runtime shapes, parsing exact 1-50 and final 1-51 grants no release authority', () => {
   for (const final of [false, true]) {
-    const matrix = parseCompletionAttempt(completionAttempt(final), { final });
+    const input = completionAttempt(final);
+    delete input.gateA.ciExecution;
+    if (input.gateB) delete input.gateB.ciExecution;
+    const matrix = parseCompletionAttempt(input, { final });
     assert.equal(matrix.tasks.length, final ? 51 : 50);
+    assert.equal(Object.hasOwn(matrix.gateA, 'ciExecution'), false);
     assert.equal(Object.hasOwn(matrix, 'releaseEligible'), false);
   }
 });
@@ -71,6 +74,7 @@ test('platform truth drift mutation matrix rejects incomplete reused and mixed f
     ['completion_reused_gate', (m) => { m.gateB.manifestDigest = m.gateA.manifestDigest; }],
     ['completion_reused_gate', (m) => { m.gateB.artifact = m.gateA.artifact; }],
     ['completion_invalid_schema', (m) => { m.prSlices[0].number = 999999; }],
+    ['completion_invalid_schema', (m) => { m.gateB.ciExecution = { ...m.gateB.ciExecution, trusted: true }; }],
   ];
   for (const [reason, mutate] of cases) {
     const value = completionAttempt();
@@ -109,6 +113,31 @@ test('Given a phantom source reference, committed-source verification rejects it
   const value = structuredClone(catalog);
   value.tasks[1].code = ['packages/core/src/completion-phantom.ts'];
   await assert.rejects(verifyCatalogReferences(value), { reason: 'completion_missing_reference' });
+});
+test('Given optional CI expectations, the gate still requires durable authority and rejects malformed or wrong-source CI', async (t) => {
+  // Given: a physical unsigned final manifest and independently supplied CI projections.
+  const root = path.resolve(process.env.RAIBITSERVER_TEST_OUTPUT_DIR ?? tmpdir());
+  const directory = await mkdtemp(path.join(root, 'completion-optional-ci-'));
+  t.after(async () => { assert.equal(path.dirname(directory), root); await rm(directory, { recursive: true }); });
+  const observedAt = new Date().toISOString();
+  const manifest = { profile: 'final', identity: identity(2), startedAt: observedAt, observedAt, fixture: false };
+  const bytes = JSON.stringify(manifest);
+  await writeFile(path.join(directory, 'manifest.json'), bytes);
+  const reference = { artifact: { path: 'manifest.json', sha256: digest(bytes), redacted: true }, identity: manifest.identity, manifestDigest: digest(manifest) };
+  const ci = (sourceCommitSha) => {
+    const repository = 'jsk1004ha/RaibitServer';
+    const ref = `refs/tags/raibit-gate-b-${sourceCommitSha}-00000000-0000-4000-8000-000000000002`;
+    return { repository, ref, sourceCommitSha, runId: '123', runAttempt: 1,
+      workflowRef: `${repository}/.github/workflows/production-evidence.yml@${ref}`, workflowSha: sourceCommitSha, event: 'push' };
+  };
+  const unsigned = process.platform === 'win32' ? 'receipt_platform_not_release_safe' : 'receipt_authority_unavailable';
+  for (const [projection, reason] of [[undefined, unsigned], [ci(FINAL_SHA), unsigned], [{ ...ci(FINAL_SHA), trusted: true }, 'ci_identity_mismatch'], [ci('a'.repeat(40)), 'completion_mixed_sha']]) {
+    const ciBytes = JSON.stringify(projection);
+    if (ciBytes) await writeFile(path.join(directory, 'ci.json'), ciBytes);
+    // When / Then: caller expectations cannot replace authority or broaden the strict CI schema.
+    await assert.rejects(verifyCompletionGate(directory, { ...reference,
+      ...(ciBytes ? { ciExecution: { path: 'ci.json', sha256: digest(ciBytes), redacted: true } } : {}) }, 'gate-b'), { reason });
+  }
 });
 test('Given physical final manifests, stale digest fixture and stale clock cannot pass the real verifier', async (t) => {
   const root = path.resolve(process.env.RAIBITSERVER_TEST_OUTPUT_DIR ?? tmpdir());

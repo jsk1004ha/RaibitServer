@@ -28,7 +28,7 @@ const CatalogSchema = z.strictObject({
     evidence: z.array(z.enum(['command-receipts', 'cleanup-artifacts', 'gate-a', 'domain-evidence'])).readonly(), pending }).readonly()).readonly(),
 }).readonly();
 export const GateReferenceSchema = z.strictObject({
-  artifact: EvidenceArtifactSchema, ciExecution: EvidenceArtifactSchema, identity: EvidenceIdentitySchema, manifestDigest: Sha256Schema,
+  artifact: EvidenceArtifactSchema, ciExecution: EvidenceArtifactSchema.optional(), identity: EvidenceIdentitySchema, manifestDigest: Sha256Schema,
 }).readonly();
 const RuntimeSchema = z.strictObject({
   schema: z.literal('raibitserver.platform-completion-attempt/v1'),

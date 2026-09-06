@@ -610,19 +610,23 @@
       ],
       "prSlice": "A3",
       "code": [
-        "scripts/production-evidence/preflight.mjs"
+        "scripts/run-gate-a.mjs",
+        ".github/workflows/production-evidence.yml",
+        "scripts/production-evidence/preflight.mjs",
+        "scripts/production-evidence/lib/ci-invocation.mjs"
       ],
       "tests": [
-        "tests/production-evidence-contract.test.js"
+        "tests/gate-a-launcher.test.js",
+        "tests/production-evidence-contract.test.js",
+        "test-fixtures/production-evidence/gate-a-run-identity.json",
+        "test-fixtures/production-evidence/gate-a-missing-secret.json"
       ],
       "evidence": [
         "command-receipts",
         "cleanup-artifacts",
         "gate-a"
       ],
-      "pending": [
-        "gate_a_launcher_workflow_source_pending"
-      ]
+      "pending": []
     },
     {
       "id": 29,
@@ -757,6 +761,9 @@
         "packages/core/src/oauth-transaction.ts"
       ],
       "tests": [
+        "tests/identity-organization-matrix.test.js",
+        "apps/dashboard/tests/e2e/identity-organization-matrix.ts",
+        "apps/dashboard/tests/e2e/specs/identity-organization-matrix.spec.ts",
         "tests/oauth-abuse.test.js",
         "tests/membership-transitions.test.js",
         "tests/organization-invite.test.js"
@@ -765,9 +772,7 @@
         "command-receipts",
         "cleanup-artifacts"
       ],
-      "pending": [
-        "identity_organization_full_matrix_reference_pending"
-      ]
+      "pending": []
     },
     {
       "id": 36,
@@ -881,18 +886,25 @@
       ],
       "prSlice": "B2",
       "code": [
-        "packages/core/src/github-integration.ts"
+        "packages/core/src/github-integration.ts",
+        "packages/core/src/github-conflict.ts",
+        "packages/schemas/src/github-conflict.ts",
+        "apps/dashboard/app/github/page.tsx",
+        "apps/dashboard/lib/github-source-mutation-contract.mjs",
+        "apps/dashboard/lib/github-project-link-contract.mjs"
       ],
       "tests": [
-        "tests/github-disconnect.test.js"
+        "tests/github-conflicts.test.js",
+        "apps/dashboard/lib/github-conflict-recovery.test.mjs",
+        "apps/dashboard/lib/github-source-mutation-contract.test.mjs",
+        "apps/dashboard/lib/github-project-link-contract.test.mjs",
+        "apps/dashboard/tests/e2e/specs/github-conflicts.spec.ts"
       ],
       "evidence": [
         "command-receipts",
         "cleanup-artifacts"
       ],
-      "pending": [
-        "task_41_exact_source_pending"
-      ]
+      "pending": []
     },
     {
       "id": 42,
@@ -1004,19 +1016,24 @@
       ],
       "prSlice": "B3",
       "code": [
-        "services/orchestrator/internal/domain/reconciler.go"
+        "scripts/production-evidence/domains.sh",
+        "scripts/production-evidence/lib/cloudflare-domain-evidence.mjs",
+        "scripts/production-evidence/lib/domain-runner.mjs",
+        "scripts/production-evidence/runners/domains.mjs",
+        "scripts/production-evidence/steps/domains.mjs"
       ],
       "tests": [
-        "tests/domain-api.test.js"
+        "tests/domain-security.test.js",
+        "tests/production-domain-evidence.test.js",
+        "test-fixtures/contracts/domain-evidence-inputs-v1.json",
+        "test-fixtures/production-evidence/domain-fault-matrix-v1.json"
       ],
       "evidence": [
         "command-receipts",
         "cleanup-artifacts",
         "domain-evidence"
       ],
-      "pending": [
-        "task_47_exact_source_pending"
-      ]
+      "pending": []
     },
     {
       "id": 48,
@@ -1035,15 +1052,14 @@
       ],
       "tests": [
         "tests/migration-compatibility.test.js",
-        "tests/domain-migration-compatibility.test.js"
+        "tests/domain-migration-compatibility.test.js",
+        "tests/cross-version-rollout.test.js"
       ],
       "evidence": [
         "command-receipts",
         "cleanup-artifacts"
       ],
-      "pending": [
-        "task_48_exact_source_pending"
-      ]
+      "pending": []
     },
     {
       "id": 49,
@@ -1057,18 +1073,22 @@
       ],
       "prSlice": "B3",
       "code": [
-        "apps/dashboard/playwright.config.ts"
+        "apps/dashboard/playwright.config.ts",
+        "apps/dashboard/tests/e2e/feature-expansion-matrix.ts",
+        "apps/dashboard/tests/e2e/platform-expansion-report.js",
+        "apps/dashboard/tests/e2e/platform-expansion-report.d.ts"
       ],
       "tests": [
-        "apps/dashboard/tests/e2e/specs/deployment-history.spec.ts"
+        "apps/dashboard/tests/e2e/feature-expansion-matrix.contract.test.mjs",
+        "apps/dashboard/tests/e2e/specs/platform-expansion.spec.ts",
+        "apps/dashboard/tests/e2e/specs/identity-organization-matrix.spec.ts",
+        "apps/dashboard/tests/e2e/specs/github-conflicts.spec.ts"
       ],
       "evidence": [
         "command-receipts",
         "cleanup-artifacts"
       ],
-      "pending": [
-        "task_49_exact_source_pending"
-      ]
+      "pending": []
     },
     {
       "id": 50,
@@ -1085,20 +1105,27 @@
       "code": [
         "scripts/verify-completion-matrix.mjs",
         "scripts/completion-matrix-contract.mjs",
-        "scripts/verify-platform-expansion-baseline.sh"
+        "scripts/verify-platform-expansion-baseline.sh",
+        "scripts/platform-expansion-baseline.mjs",
+        "scripts/verify-production-evidence.mjs",
+        "scripts/production-evidence/lib/durable-receipt-authority.mjs",
+        "scripts/production-evidence/lib/durable-evidence-files.mjs",
+        "docs/handbook/operator-guide.md",
+        "docs/handbook/user-guide.md",
+        "docs/production-evidence.md",
+        "docs/runbooks/beta-release.md"
       ],
       "tests": [
         "tests/platform-truth-sync.test.js",
-        "tests/platform-expansion-baseline.test.js"
+        "tests/platform-expansion-baseline.test.js",
+        "tests/production-durable-evidence.test.js",
+        "tests/production-final-evidence.test.js"
       ],
       "evidence": [
         "command-receipts",
         "cleanup-artifacts"
       ],
-      "pending": [
-        "final_profile_durable_verifier_source_pending",
-        "operator_user_docs_exact_source_pending"
-      ]
+      "pending": []
     }
   ]
 }
