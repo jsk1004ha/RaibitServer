@@ -4,6 +4,7 @@ export const STEP_BUDGET_MS = Object.freeze({
   'auth-source': 60_000, 'supply-chain': 45 * 60_000, runtime: 13 * 60_000, observability: 5 * 60_000,
   resources: 30 * 60_000, 'backup-sql': 30 * 60_000, 'backup-nosql': 30 * 60_000,
   preview: 10 * 60_000, rollback: 10 * 60_000, cleanup: 30_000,
+  domains: 45 * 60_000,
 });
 
 export async function failedStepReceipt(execution, context, { reason, fixture, status = 'FAIL' }) {
@@ -13,7 +14,8 @@ export async function failedStepReceipt(execution, context, { reason, fixture, s
   for (const id of STEP_ASSERTIONS[request.step]) {
     const component = request.step === 'cleanup' ? 'cleanup'
       : ['provision', 'attach_query', 'backup_checksum', 'isolated_restore', 'resource_delete'].includes(id) ? 'resources'
-        : ['usage_quota_audit', 'trusted_proxy', 'metrics', 'rollback'].includes(id) ? 'operations' : 'lifecycle';
+        : ['usage_quota_audit', 'trusted_proxy', 'metrics', 'rollback'].includes(id) ? 'operations'
+          : request.step === 'domains' ? 'domains' : 'lifecycle';
     const artifact = await context.writeArtifact(component, `${request.step}-${id}-observation.json`,
       { schema: 'raibitserver.production-evidence-step-failure/v1', step: request.step, status, reason, redacted: true });
     artifacts.push(artifact); assertions.push({ id, status, artifactPaths: [artifact.path] });

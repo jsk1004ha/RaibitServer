@@ -141,7 +141,9 @@ test('Given every named production step, When dispatch contracts are enumerated,
 
 test('Given public production arguments, When duplicates, unknowns, or mixed modes appear, Then parsing rejects them before any run', () => {
   const parent = path.resolve('attempt');
-  assert.deepEqual(parseArguments(['--profile', 'train-a', '--scenario', 'happy', '--attempt-dir', parent]), { attemptDir: parent, scenario: 'happy', faultPath: undefined });
+  assert.deepEqual(parseArguments(['--profile', 'train-a', '--scenario', 'happy', '--attempt-dir', parent]), { profile: 'train-a', attemptDir: parent, scenario: 'happy', faultPath: undefined });
+  assert.deepEqual(parseArguments(['--profile', 'final', '--scenario', 'happy', '--attempt-dir', parent]), { profile: 'final', attemptDir: parent, scenario: 'happy', faultPath: undefined });
+  assert.deepEqual(parseArguments(['--profile', 'final', '--attempt-dir', parent]), { profile: 'final', attemptDir: parent, scenario: 'happy', faultPath: undefined });
   for (const args of [
     ['--profile', 'train-a', '--profile', 'train-a', '--scenario', 'happy', '--attempt-dir', parent],
     ['--profile', 'other', '--scenario', 'happy', '--attempt-dir', parent],

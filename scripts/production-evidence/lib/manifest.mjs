@@ -15,7 +15,7 @@ export const REQUIRED_ASSERTIONS = Object.freeze({
 });
 export const STEP_COMPONENT = Object.freeze({
   'auth-source': 'lifecycle', 'supply-chain': 'lifecycle', runtime: 'lifecycle', observability: 'lifecycle',
-  resources: 'resources', 'backup-sql': 'resources', 'backup-nosql': 'resources', preview: 'lifecycle', rollback: 'operations', cleanup: 'operations',
+  resources: 'resources', 'backup-sql': 'resources', 'backup-nosql': 'resources', preview: 'lifecycle', rollback: 'operations', domains: 'domains', cleanup: 'operations',
 });
 const levels = Object.freeze({ local: 'L1', cluster: 'L2', lifecycle: 'L3', resources: 'L3', operations: 'L3', domains: 'L3' });
 const provenance = Object.freeze({ L1: 'local', L2: 'kind', L3: 'credentialed' });
@@ -89,6 +89,12 @@ function verifyBindingGraph(manifest, options, journal) {
   const deployments = ['candidate', 'preview', 'failed', 'rollback'].map((role) => oneBinding(bindings, 'deployment', (binding) => binding.role === role));
   if (new Set(deployments.map(({ deploymentId }) => deploymentId)).size !== deployments.length
     || deployments.some((deployment) => deployment.serviceId !== service.serviceId)) throw new EvidenceError('binding_graph_mismatch');
+  const domainProof = manifest.fragments.find(({ component }) => component === 'domains')?.domainProof;
+  const candidateDeployment = deployments.find(({ role }) => role === 'candidate');
+  if (domainProof && (domainProof.organizationId !== membership.organizationId || domainProof.projectId !== project.projectId
+    || domainProof.serviceId !== service.serviceId || domainProof.deploymentId !== candidateDeployment.deploymentId)) {
+    throw new EvidenceError('binding_graph_mismatch');
+  }
   for (const deployment of deployments) {
     const revision = deployment.role === 'failed' ? failureRevision : deployment.role === 'preview' ? previewRevision : candidateRevision;
     if (deployment.tenantRevisionId !== revision.tenantRevisionId || deployment.tenantCommitSha !== revision.tenantCommitSha
@@ -216,7 +222,7 @@ function uniqueArtifacts(artifacts) {
 
 export function assembleManifest(input) {
   for (const step of input.steps) assertVerifiedStepReceipt(step);
-  const components = ['local', 'cluster', 'lifecycle', 'resources', 'operations'];
+  const components = ['local', 'cluster', 'lifecycle', 'resources', 'operations', ...(input.profile === 'final' ? ['domains'] : [])];
   const fragments = components.map((component) => {
     const foundation = input.foundations[component];
     const assertions = REQUIRED_ASSERTIONS[component].map((id) => {
@@ -243,10 +249,14 @@ export function assembleManifest(input) {
       status: aggregateStatus(assertions.map(({ status }) => status)), assertions, artifacts,
       cleanup: { status: cleanupStatus, assertions: [{ id: 'component_cleanup', status: cleanupStatus, artifactPaths: [input.cleanup.componentArtifacts[component].path] }] } };
     if (input.bindingsDigest) fragment.bindingsDigest = input.bindingsDigest;
+    if (component === 'domains') {
+      const proof = input.steps.find(({ receipt }) => receipt.step === 'domains')?.receipt.domainProof;
+      if (proof) fragment.domainProof = proof;
+    }
     return fragment;
   });
   const cleanupStatus = aggregateStatus([input.cleanup.status, input.cleanup.runArtifact ? 'PASS' : 'NOT_RUN']);
-  return { schema: 'raibitserver.production-evidence/v1', profile: 'train-a', identity: input.identity,
+  return { schema: 'raibitserver.production-evidence/v1', profile: input.profile, identity: input.identity,
     startedAt: input.startedAt, observedAt: input.observedAt,
     status: aggregateStatus([...fragments.map(({ status }) => status), cleanupStatus]), preflight: input.preflight,
     fragments, cleanup: { status: cleanupStatus, assertions: [{ id: 'run_cleanup', status: cleanupStatus, artifactPaths: [input.cleanup.runArtifact.path] }] },

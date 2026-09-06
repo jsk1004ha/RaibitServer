@@ -1,6 +1,6 @@
 import { digest, EvidenceError } from './operator-inputs.mjs';
 import { parseEvidenceBindingEntry } from './binding-journal.mjs';
-import { STEP_NAMES } from './step-contract.mjs';
+import { STEP_NAMES, stepNamesForIdentity } from './step-contract.mjs';
 
 export const PRODUCTION_EVIDENCE_STEP_ORDER = STEP_NAMES;
 export class StateProjectionError extends EvidenceError {
@@ -19,7 +19,8 @@ const exact = (value, keys) => value && typeof value === 'object' && !Array.isAr
 export function deriveProductionEvidenceStepState(input) {
   if (!exact(input, ['step', 'identity', 'fullOperatorInput', 'bootstrap', 'bindingSnapshot', 'bindingEntries', 'committedSteps'])) fail('invalid_arguments');
   const { step, identity, fullOperatorInput, bootstrap, bindingSnapshot, bindingEntries, committedSteps } = input;
-  const index = STEP_NAMES.indexOf(step);
+  const stepNames = stepNamesForIdentity(identity);
+  const index = stepNames.indexOf(step);
   if (index < 0 || !Array.isArray(bindingEntries) || !Array.isArray(committedSteps)) fail('invalid_arguments');
   if (bindingSnapshot.runIdentitySha256 !== digest(identity) || bindingSnapshot.entryCount !== bindingEntries.length
     || bindingSnapshot.entriesSha256 !== digest(bindingEntries)) fail('invalid_journal');
@@ -33,7 +34,7 @@ export function deriveProductionEvidenceStepState(input) {
     graph.set(key, entry.payload);
   }
   for (const [offset, committed] of committedSteps.entries()) {
-    if (committed.step !== STEP_NAMES[offset] || committed.sequence !== offset + 1
+    if (committed.step !== stepNames[offset] || committed.sequence !== offset + 1
       || committed.receipt.step !== committed.step || digest(committed.receipt.identity) !== digest(identity)
       || committed.requestSha256 !== committed.receipt.requestSha256 || !Array.isArray(committed.observations)) fail('invalid_receipt_progression');
   }
@@ -89,7 +90,7 @@ export function deriveProductionEvidenceStepState(input) {
       state = { readyDeploymentId: one('deployment:candidate').deploymentId, previousReadyDigest: runtime.observedDigest,
         namespace: runtime.namespace, deploymentName: runtime.deploymentName }; break;
     }
-    case 'cleanup': state = {}; break;
+    case 'domains': case 'cleanup': state = {}; break;
     default: fail('unknown_step');
   }
   return freeze({ ...common, ...state });

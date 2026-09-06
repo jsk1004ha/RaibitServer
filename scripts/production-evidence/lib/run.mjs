@@ -3,7 +3,7 @@ import path from 'node:path';
 import { EvidenceIdentitySchema, EvidenceFragmentSchema } from '../../../packages/schemas/src/production-evidence.ts';
 import { EvidenceError, digest, assertRedacted, readJson } from './operator-inputs.mjs';
 import { assertFresh } from './manifest.mjs';
-import { parseStepReceipt, STEP_NAMES } from './step-contract.mjs';
+import { parseStepReceipt, stepNamesForIdentity } from './step-contract.mjs';
 export { createRunnerContext } from './runner-context.mjs';
 
 export async function createRun(parent, identity, startedAt = new Date().toISOString()) {
@@ -20,10 +20,10 @@ export async function createRun(parent, identity, startedAt = new Date().toISOSt
   await writeFile(path.join(directory, 'run.json'), JSON.stringify({ schema: 'raibitserver.evidence-run/v1', identity: parsed.data, startedAt }), { flag: 'wx', mode: 0o600 });
   return directory;
 }
-export async function checkRun(directory, manifest) {
+export async function checkRun(directory, manifest, now = Date.now()) {
   const receipt = await readJson(path.join(directory, 'run.json'), 'missing_run');
   if (receipt.schema !== 'raibitserver.evidence-run/v1' || digest(receipt.identity) !== digest(manifest.identity) || receipt.startedAt !== manifest.startedAt || path.basename(directory) !== manifest.identity.runId) throw new EvidenceError('identity_mismatch');
-  assertFresh(receipt.startedAt, manifest.observedAt);
+  assertFresh(receipt.startedAt, manifest.observedAt, now);
 }
 export async function writeFragment(directory, value) {
   assertRedacted(value);
@@ -94,13 +94,13 @@ function verifyCleanupReceipt(value, expected, manifest) {
   if (Date.parse(value.startedAt) < Date.parse(manifest.startedAt) || Date.parse(value.observedAt) > Date.parse(manifest.observedAt)) throw new EvidenceError('stale_state');
 }
 
-export async function verifyRunReceipts(directory, manifest) {
+export async function verifyRunReceipts(directory, manifest, now = Date.now()) {
   const root = await realpath(directory);
   const manifestArtifacts = new Map(manifest.fragments.flatMap(({ artifacts }) => artifacts.map((artifact) => [artifact.path, artifact.sha256])));
   const returnedArtifacts = new Set();
-  for (const step of STEP_NAMES) {
+  for (const step of stepNamesForIdentity(manifest.identity)) {
     const component = ['resources', 'backup-sql', 'backup-nosql'].includes(step) ? 'resources'
-      : step === 'rollback' ? 'operations' : step === 'cleanup' ? 'cleanup' : 'lifecycle';
+      : step === 'rollback' ? 'operations' : step === 'domains' ? 'domains' : step === 'cleanup' ? 'cleanup' : 'lifecycle';
     const relative = step === 'cleanup' ? 'cleanup/cleanup.json' : `artifacts/${component}/${step}.json`;
     let physical;
     try { physical = await physicalArtifact(root, relative); }
@@ -110,7 +110,7 @@ export async function verifyRunReceipts(directory, manifest) {
     }
     const receipt = parseStepReceipt(physical.value);
     if (receipt.step !== step || digest(receipt.identity) !== digest(manifest.identity) || receipt.fixture !== manifest.fixture) throw new EvidenceError('identity_mismatch');
-    assertFresh(receipt.startedAt, receipt.observedAt);
+    assertFresh(receipt.startedAt, receipt.observedAt, now);
     if (Date.parse(receipt.startedAt) < Date.parse(manifest.startedAt) || Date.parse(receipt.observedAt) > Date.parse(manifest.observedAt)) throw new EvidenceError('stale_state');
     if (!manifest.fixture && (receipt.status !== 'PASS' || receipt.assertions.some(({ status }) => status !== 'PASS'))) throw new EvidenceError(receipt.status === 'NOT_RUN' ? 'not_run' : 'assertion_failed');
     if (manifestArtifacts.get(relative) !== physical.sha256) throw new EvidenceError('artifact_digest_mismatch');
@@ -120,7 +120,7 @@ export async function verifyRunReceipts(directory, manifest) {
       if (manifestArtifacts.get(artifact.path) !== artifact.sha256) throw new EvidenceError('artifact_digest_mismatch');
     }
   }
-  for (const component of ['local', 'cluster', 'lifecycle', 'resources', 'operations']) {
+  for (const component of ['local', 'cluster', 'lifecycle', 'resources', 'operations', ...(manifest.profile === 'final' ? ['domains'] : [])]) {
     const relative = `cleanup/${component}.json`;
     const physical = await physicalArtifact(root, relative);
     verifyCleanupReceipt(physical.value, { schema: 'raibitserver.production-evidence-component-cleanup/v1', component, assertion: 'component_cleanup' }, manifest);

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { EvidenceError, loadProductionInputs, readJson } from './operator-inputs.mjs';
 import { parseFaultCase, runProductionEvidence } from './orchestrator.mjs';
+import { loadDomainEvidenceInputs } from './cloudflare-domain-evidence.mjs';
 
 export function parseArguments(args) {
   const accepted = new Set(['--profile', '--scenario', '--fault-matrix', '--attempt-dir']);
@@ -15,12 +16,13 @@ export function parseArguments(args) {
     values.set(flag, value);
   }
   const attemptDir = values.get('--attempt-dir');
-  const scenario = values.get('--scenario');
+  const profile = values.get('--profile');
+  const scenario = values.get('--scenario') ?? (profile === 'final' && values.get('--fault-matrix') === undefined ? 'happy' : undefined);
   const faultPath = values.get('--fault-matrix');
-  if (values.get('--profile') !== 'train-a' || typeof attemptDir !== 'string' || !path.isAbsolute(attemptDir)
+  if (!['train-a', 'final'].includes(profile) || typeof attemptDir !== 'string' || !path.isAbsolute(attemptDir)
     || (scenario === 'happy') === (typeof faultPath === 'string') || (scenario !== undefined && scenario !== 'happy')
     || (faultPath !== undefined && !path.isAbsolute(faultPath))) throw new EvidenceError('invalid_arguments');
-  return { attemptDir, scenario, faultPath };
+  return { profile, attemptDir, scenario, faultPath };
 }
 
 export function parseMatrix(value) {
@@ -33,9 +35,16 @@ export function parseMatrix(value) {
 
 export async function main(args, environment = process.env) {
   if (environment.RAIBITSERVER_PRODUCTION_EVIDENCE !== '1') throw new EvidenceError('production_evidence_not_enabled');
-  const { attemptDir, scenario, faultPath } = parseArguments(args);
+  const { profile, attemptDir, scenario, faultPath } = parseArguments(args);
   const inputs = await loadProductionInputs(attemptDir, environment);
-  const common = { profile: 'train-a', attemptDir, inputs, executeStep: null, clock: { now: () => new Date() }, uuid: randomUUID, fixture: false };
+  let domainInputs;
+  if (profile === 'final') {
+    if (typeof environment.RAIBITSERVER_PRODUCTION_DOMAIN_INPUTS_FILE !== 'string') throw new EvidenceError('domain_provider_contract_unavailable');
+    domainInputs = await loadDomainEvidenceInputs(environment.RAIBITSERVER_PRODUCTION_DOMAIN_INPUTS_FILE,
+      inputs.selectors.RAIBITSERVER_RELEASE_BASE_DOMAIN);
+  }
+  const common = { profile, attemptDir, inputs, executeStep: null, clock: { now: () => new Date() }, uuid: randomUUID, fixture: false,
+    ...(domainInputs ? { domainInputs } : {}) };
   if (scenario === 'happy') {
     const result = await runProductionEvidence({ ...common, scenario: 'happy', faultMatrix: null });
     return { output: result, exitCode: result.verification.releaseEligible ? 0 : 1 };

@@ -17,6 +17,7 @@ const STEP_MODULES = Object.freeze({
   'backup-nosql': './steps/backup-nosql.mjs',
   preview: './steps/preview.mjs',
   rollback: './steps/rollback.mjs',
+  domains: './steps/domains.mjs',
   cleanup: './steps/cleanup.mjs',
 });
 

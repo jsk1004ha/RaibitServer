@@ -3,7 +3,7 @@ import { lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { assertRedacted, digest, EvidenceError } from './operator-inputs.mjs';
 import { exclusiveJournalWrite, journalFiles, journalScope } from './journal-io.mjs';
-import { STEP_NAMES, parseStepReceipt, assertStepReceiptTimeBounds } from './step-contract.mjs';
+import { ALL_STEP_NAMES, parseStepReceipt, assertStepReceiptTimeBounds, stepNamesForIdentity } from './step-contract.mjs';
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const PREPARATION = /^(\d{6})--([a-z-]+)\.json$/;
@@ -12,6 +12,7 @@ const STEP_BUDGET_MS = Object.freeze({
   'auth-source': 60_000, 'supply-chain': 45 * 60_000, runtime: 13 * 60_000, observability: 5 * 60_000,
   resources: 30 * 60_000, 'backup-sql': 30 * 60_000, 'backup-nosql': 30 * 60_000,
   preview: 10 * 60_000, rollback: 10 * 60_000, cleanup: 30_000,
+  domains: 45 * 60_000,
 });
 const exact = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -19,9 +20,9 @@ const samePath = (left, right) => process.platform === 'win32' ? left.toLowerCas
 const fail = (reason) => { throw new EvidenceError(reason); };
 
 export function receiptPath(step) {
-  if (!STEP_NAMES.includes(step)) fail('invalid_step_contract');
+  if (!ALL_STEP_NAMES.includes(step)) fail('invalid_step_contract');
   const component = ['resources', 'backup-sql', 'backup-nosql'].includes(step) ? 'resources'
-    : step === 'rollback' ? 'operations' : step === 'cleanup' ? 'cleanup' : 'lifecycle';
+    : step === 'rollback' ? 'operations' : step === 'domains' ? 'domains' : step === 'cleanup' ? 'cleanup' : 'lifecycle';
   return step === 'cleanup' ? 'cleanup/cleanup.json' : `artifacts/${component}/${step}.json`;
 }
 
@@ -66,10 +67,10 @@ function containsPrivateMarker(value) {
     && Object.entries(value).some(([key, child]) => /private|session|marker/i.test(key) || containsPrivateMarker(child));
 }
 
-function parsePreparation(value, index, previous, identity) {
+function parsePreparation(value, index, previous, identity, stepNames) {
   const keys = ['schema', 'sequence', 'step', 'runIdentitySha256', 'operatorInputFingerprint', 'requestSha256', 'startedAt', 'deadlineAt', 'previousEntrySha256', 'entrySha256'];
   if (!exact(value, keys) || value.schema !== 'raibitserver.production-evidence-receipt-preparation/v1'
-    || value.sequence !== index + 1 || value.step !== STEP_NAMES[index] || value.runIdentitySha256 !== digest(identity)
+    || value.sequence !== index + 1 || value.step !== stepNames[index] || value.runIdentitySha256 !== digest(identity)
     || value.operatorInputFingerprint !== identity.operatorInputFingerprint || !SHA256.test(value.requestSha256)
     || typeof value.startedAt !== 'string' || !Number.isFinite(Date.parse(value.startedAt)) || new Date(value.startedAt).toISOString() !== value.startedAt
     || typeof value.deadlineAt !== 'string' || !Number.isFinite(Date.parse(value.deadlineAt)) || new Date(value.deadlineAt).toISOString() !== value.deadlineAt
@@ -81,10 +82,10 @@ function parsePreparation(value, index, previous, identity) {
   return value;
 }
 
-function parseReceiptEntry(value, index, previous, preparation, identitySha256) {
+function parseReceiptEntry(value, index, previous, preparation, identitySha256, stepNames) {
   const keys = ['schema', 'sequence', 'step', 'runIdentitySha256', 'requestSha256', 'preparationEntrySha256', 'receiptPath', 'receiptSha256', 'previousEntrySha256', 'entrySha256'];
   if (!exact(value, keys) || value.schema !== 'raibitserver.production-evidence-receipt-entry/v1'
-    || value.sequence !== index + 1 || value.step !== STEP_NAMES[index] || value.runIdentitySha256 !== identitySha256
+    || value.sequence !== index + 1 || value.step !== stepNames[index] || value.runIdentitySha256 !== identitySha256
     || value.requestSha256 !== preparation.requestSha256 || value.preparationEntrySha256 !== preparation.entrySha256
     || value.receiptPath !== receiptPath(value.step) || !SHA256.test(value.receiptSha256)
     || value.previousEntrySha256 !== previous) fail('invalid_receipt_journal');
@@ -100,21 +101,22 @@ export async function initializeReceiptDirectories(runDirectory, identity, unsaf
 
 export async function loadReceiptState(runDirectory, identity, unsafeFixture) {
   const identitySha256 = digest(identity);
+  const stepNames = stepNamesForIdentity(identity);
   const preparationsDirectory = (await journalScope(runDirectory, identity, 'receipt-requests', false, unsafeFixture)).directory;
   const receiptsDirectory = (await journalScope(runDirectory, identity, 'receipts', false, unsafeFixture)).directory;
   const [preparationFiles, receiptFiles] = await Promise.all([journalFiles(preparationsDirectory, PREPARATION), journalFiles(receiptsDirectory, RECEIPT)]);
-  if (preparationFiles.length > STEP_NAMES.length || receiptFiles.length > preparationFiles.length
+  if (preparationFiles.length > stepNames.length || receiptFiles.length > preparationFiles.length
     || preparationFiles.length > receiptFiles.length + 1) fail('invalid_receipt_journal');
   let previous = null;
   const preparations = preparationFiles.map(({ name, bytes }, index) => {
-    if (name !== `${String(index + 1).padStart(6, '0')}--${STEP_NAMES[index]}.json`) fail('invalid_receipt_order');
-    const entry = parsePreparation(parseJson(bytes, 'invalid_receipt_journal'), index, previous, identity);
+    if (name !== `${String(index + 1).padStart(6, '0')}--${stepNames[index]}.json`) fail('invalid_receipt_order');
+    const entry = parsePreparation(parseJson(bytes, 'invalid_receipt_journal'), index, previous, identity, stepNames);
     previous = entry.entrySha256; return entry;
   });
   previous = null;
   const entries = receiptFiles.map(({ name, bytes }, index) => {
-    if (name !== `${String(index + 1).padStart(6, '0')}--${STEP_NAMES[index]}.json`) fail('invalid_receipt_order');
-    const entry = parseReceiptEntry(parseJson(bytes, 'invalid_receipt_journal'), index, previous, preparations[index], identitySha256);
+    if (name !== `${String(index + 1).padStart(6, '0')}--${stepNames[index]}.json`) fail('invalid_receipt_order');
+    const entry = parseReceiptEntry(parseJson(bytes, 'invalid_receipt_journal'), index, previous, preparations[index], identitySha256, stepNames);
     previous = entry.entrySha256; return entry;
   });
   const receipts = [];
@@ -128,7 +130,7 @@ export async function loadReceiptState(runDirectory, identity, unsafeFixture) {
       || receipt.requestSha256 !== entry.requestSha256 || digest(receipt.identity) !== identitySha256) fail('identity_mismatch');
     receipts.push({ preparation: preparations[index], entry, receipt, descriptor: { path: entry.receiptPath, sha256: entry.receiptSha256, redacted: true } });
   }
-  for (const [index, step] of STEP_NAMES.entries()) {
+  for (const [index, step] of stepNames.entries()) {
     if ((await exists(runDirectory, receiptPath(step))) !== (index < entries.length)) fail('invalid_receipt_journal');
   }
   return { preparations, entries, receipts };
@@ -151,7 +153,7 @@ export async function verifyCandidateArtifacts(runDirectory, receipt, unsafeFixt
     for (const referencedPath of assertion.artifactPaths) {
     const artifact = descriptors.get(referencedPath);
     if (!artifact || artifact.path === receiptPath(receipt.step)
-      || !/^(?:artifacts\/(?:lifecycle|resources|operations)\/|cleanup\/)[a-z0-9][a-z0-9_-]*\.json$/.test(artifact.path)) fail('invalid_receipt_artifact');
+      || !/^(?:artifacts\/(?:lifecycle|resources|operations|domains)\/|cleanup\/)[a-z0-9][a-z0-9_-]*\.json$/.test(artifact.path)) fail('invalid_receipt_artifact');
     const bytes = await physicalBytes(runDirectory, artifact.path, unsafeFixture, 'missing_receipt_artifact');
     if (bytes.length > 1024 * 1024 || digest(bytes) !== artifact.sha256) fail('receipt_artifact_digest_mismatch');
     const value = parseJson(bytes, 'invalid_receipt_artifact');

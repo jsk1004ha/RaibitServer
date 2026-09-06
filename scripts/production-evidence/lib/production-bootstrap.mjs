@@ -6,6 +6,41 @@ import { digest, EvidenceError } from './operator-inputs.mjs';
 
 const fail = (reason) => { throw new EvidenceError(reason); };
 const DNS = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const REPOSITORY_PAGE_LIMIT = 100;
+
+export async function findProductionFixtureRepository({ installationId, fixtureRepository, controlPlaneJson }) {
+  if (typeof controlPlaneJson !== 'function' || typeof installationId !== 'string' || !installationId
+    || typeof fixtureRepository !== 'string' || !fixtureRepository) fail('private_repository_access_unverified');
+  const cursors = new Set(); const repositoryKeys = new Set(); const matches = [];
+  let cursor = null; let generation = null;
+  for (let pageIndex = 0; pageIndex < REPOSITORY_PAGE_LIMIT; pageIndex++) {
+    const suffix = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
+    const response = await controlPlaneJson({ method: 'GET', path: `/api/github/installations/${encodeURIComponent(installationId)}/repositories${suffix}` });
+    const body = response.body;
+    const validPage = response.statusCode === 200 && body && body.installationId === installationId
+      && Number.isSafeInteger(body.generation) && body.generation >= 0
+      && body.refreshStatus === 'IDLE' && typeof body.lastSuccessfulSyncAt === 'string'
+      && Number.isFinite(Date.parse(body.lastSuccessfulSyncAt)) && body.staleAt === null
+      && Array.isArray(body.repositories) && body.repositories.length <= 50
+      && (body.nextCursor === null || (typeof body.nextCursor === 'string' && body.nextCursor.length > 0 && body.nextCursor.length <= 4096));
+    if (!validPage || (generation !== null && body.generation !== generation)) fail('private_repository_access_unverified');
+    generation ??= body.generation;
+    for (const repository of body.repositories) {
+      const validRepository = repository && repository.installationId === installationId && repository.generation === generation
+        && typeof repository.id === 'string' && repository.id && typeof repository.githubRepoId === 'string' && repository.githubRepoId
+        && typeof repository.fullName === 'string' && typeof repository.normalizedIdentity === 'string'
+        && repository.accessState === 'ACCESSIBLE' && typeof repository.defaultBranch === 'string' && repository.defaultBranch;
+      const key = validRepository ? `${repository.normalizedIdentity}:${repository.githubRepoId}` : '';
+      if (!validRepository || repositoryKeys.has(key)) fail('private_repository_access_unverified');
+      repositoryKeys.add(key);
+      if (repository.fullName === fixtureRepository && repository.private === true) matches.push(repository);
+    }
+    if (body.nextCursor === null) return matches.length === 1 ? matches[0] : fail('private_repository_access_unverified');
+    if (cursors.has(body.nextCursor)) fail('private_repository_access_unverified');
+    cursors.add(body.nextCursor); cursor = body.nextCursor;
+  }
+  fail('private_repository_access_unverified');
+}
 
 export async function createProductionBootstrap({ runDirectory, identity, fullOperatorInput, writer, journalAuthority }) {
   const startedAt = Date.now();
@@ -75,10 +110,8 @@ export async function createProductionBootstrap({ runDirectory, identity, fullOp
     await journalAuthority.appendBinding({ role: 'identity', bindingId: 'membership', createdAt: nextAt(),
       payload: { kind: 'organization-membership', membershipId: membership.id, organizationId: membership.organizationId, userId: membership.userId, role: membership.role } });
     const installationId = selectors.RAIBITSERVER_RELEASE_GITHUB_INSTALLATION_ID;
-    const response = await controlPlaneJson({ method: 'GET', path: `/api/github/installations/${installationId}/repositories` });
-    const repositories = response.body?.repositories?.filter((item) => item.fullName === selectors.RAIBITSERVER_RELEASE_FIXTURE_REPOSITORY && item.private === true) ?? [];
-    if (response.statusCode !== 200 || repositories.length !== 1) fail('private_repository_access_unverified');
-    const source = repositories[0];
+    const source = await findProductionFixtureRepository({ installationId,
+      fixtureRepository: selectors.RAIBITSERVER_RELEASE_FIXTURE_REPOSITORY, controlPlaneJson });
     await journalAuthority.appendBinding({ role: 'source', bindingId: 'repository', createdAt: nextAt(),
       payload: { kind: 'github-repository', repositoryId: source.githubRepoId ?? source.id, repository: source.fullName,
         installationId, branch: source.defaultBranch } });

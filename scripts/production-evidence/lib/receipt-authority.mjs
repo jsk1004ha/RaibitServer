@@ -1,6 +1,6 @@
 import { canonical, digest, EvidenceError, loadOperatorContract, OPERATOR_CONTRACT_DIGEST, parseOperatorInputs } from './operator-inputs.mjs';
 import { assertSafeArtifactWriter } from './safe-artifact-writer.mjs';
-import { parseStepReceipt, parseStepResult, projectStepRequest, STEP_NAMES } from './step-contract.mjs';
+import { parseStepReceipt, parseStepResult, projectStepRequest, stepNamesForIdentity } from './step-contract.mjs';
 import { validateJournalRoot, withJournalTransaction } from './journal-io.mjs';
 import { assertJournalAuthority } from './journal-authority.mjs';
 import { deriveProductionEvidenceStepState } from './state-projection.mjs';
@@ -23,6 +23,7 @@ const STEP_BUDGET_MS = Object.freeze({
   'auth-source': 60_000, 'supply-chain': 45 * 60_000, runtime: 13 * 60_000, observability: 5 * 60_000,
   resources: 30 * 60_000, 'backup-sql': 30 * 60_000, 'backup-nosql': 30 * 60_000,
   preview: 10 * 60_000, rollback: 10 * 60_000, cleanup: 30_000,
+  domains: 45 * 60_000,
 });
 const fail = (reason) => { throw new EvidenceError(reason); };
 const exact = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -82,6 +83,7 @@ async function create(options, unsafeFixture) {
     : ['runDirectory', 'identity', 'fullOperatorInput', 'genuineSafeWriter', 'journalAuthority'];
   if (!exact(options, keys) || (unsafeFixture && typeof options.stateProjector !== 'function')) fail('invalid_receipt_authority');
   const { runDirectory, identity, genuineSafeWriter: writer } = options;
+  const stepNames = stepNamesForIdentity(identity);
   const journalAuthority = assertJournalAuthority(options.journalAuthority);
   const scope = await journalAuthority.bindingSnapshot();
   if (scope.runIdentitySha256 !== digest(identity)) fail('invalid_journal_authority');
@@ -112,14 +114,14 @@ async function create(options, unsafeFixture) {
   }
 
   async function prepareStep(step, timing) {
-    if (!STEP_NAMES.includes(step) || !exact(timing, ['startedAt', 'deadlineAt'])
+    if (!stepNames.includes(step) || !exact(timing, ['startedAt', 'deadlineAt'])
       || !Number.isFinite(Date.parse(timing.startedAt)) || new Date(timing.startedAt).toISOString() !== timing.startedAt
       || !Number.isFinite(Date.parse(timing.deadlineAt)) || new Date(timing.deadlineAt).toISOString() !== timing.deadlineAt
       || Date.parse(timing.deadlineAt) <= Date.parse(timing.startedAt)
       || Date.parse(timing.deadlineAt) - Date.parse(timing.startedAt) > STEP_BUDGET_MS[step]) fail('invalid_arguments');
     const state = await load();
     if (state.preparations.length !== state.entries.length) fail('reused_receipt');
-    if (STEP_NAMES[state.entries.length] !== step) fail('invalid_receipt_order');
+    if (stepNames[state.entries.length] !== step) fail('invalid_receipt_order');
     const bindingSnapshot = await journalAuthority.bindingSnapshot();
     const bindingEntries = await journalAuthority.loadBindings();
     if (bindingSnapshot.runIdentitySha256 !== digest(identity) || bindingSnapshot.entriesSha256 !== digest(bindingEntries)) fail('invalid_journal_authority');
@@ -146,7 +148,7 @@ async function create(options, unsafeFixture) {
       const state = await loadReceiptState(runDirectory, identity, unsafeFixture);
       if (state.preparations.length !== state.entries.length) fail('reused_receipt');
       const sequence = state.entries.length + 1;
-      if (STEP_NAMES[sequence - 1] !== projected.step) fail('invalid_receipt_order');
+      if (stepNames[sequence - 1] !== projected.step) fail('invalid_receipt_order');
       const requestBytes = `${JSON.stringify(canonical(projected))}\n`;
       const unsigned = { schema: 'raibitserver.production-evidence-receipt-preparation/v1', sequence, step: projected.step,
         runIdentitySha256: digest(identity), operatorInputFingerprint: identity.operatorInputFingerprint,
@@ -228,7 +230,8 @@ async function create(options, unsafeFixture) {
       if (receipt.schema !== 'raibitserver.production-evidence-step-receipt/v2'
         || receipt.requestSha256 !== prepared.requestSha256) fail('request_digest_mismatch');
       parseStepResult({ status: receipt.status, reason: receipt.reason, assertions: receipt.assertions,
-        artifacts: receipt.artifacts, cleanupInventory: receipt.cleanupInventory }, prepared.step, metadata.request, await journalAuthority.verifiedBindingSnapshot());
+        artifacts: receipt.artifacts, cleanupInventory: receipt.cleanupInventory,
+        ...(receipt.domainProof ? { domainProof: receipt.domainProof } : {}) }, prepared.step, metadata.request, await journalAuthority.verifiedBindingSnapshot());
       const candidate = immutable({ schema: 'raibitserver.production-evidence-candidate-receipt/v1', receipt });
       candidateValues.set(candidate, { authority, prepared }); metadata.phase = 'candidate'; return candidate;
     },

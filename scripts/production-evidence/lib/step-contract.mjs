@@ -1,6 +1,7 @@
 import path from 'node:path';
 import {
   APPROVED_INPUT_SHA256,
+  DomainEvidenceProofSchema,
   EvidenceArtifactSchema,
   EvidenceIdentitySchema,
   OPERATOR_CONTRACT_DIGEST,
@@ -13,6 +14,13 @@ export const STEP_NAMES = Object.freeze([
   'auth-source', 'supply-chain', 'runtime', 'observability', 'resources',
   'backup-sql', 'backup-nosql', 'preview', 'rollback', 'cleanup',
 ]);
+export const FINAL_STEP_NAMES = Object.freeze([
+  ...STEP_NAMES.slice(0, -1), 'domains', 'cleanup',
+]);
+export const ALL_STEP_NAMES = Object.freeze([...new Set([...STEP_NAMES, ...FINAL_STEP_NAMES])]);
+export function stepNamesForIdentity(identity) {
+  return identity?.domainInputDigest ? FINAL_STEP_NAMES : STEP_NAMES;
+}
 
 export const STEP_ASSERTIONS = Object.freeze({
   'auth-source': ['github_source'],
@@ -25,10 +33,12 @@ export const STEP_ASSERTIONS = Object.freeze({
   preview: ['preview_cleanup'],
   rollback: ['rollback'],
   cleanup: ['component_cleanup', 'run_cleanup'],
+  domains: ['ownership', 'tls_exact_san', 'route', 'revalidation', 'domain_delete'],
 });
 export const STEP_SECRET_ROLES = Object.freeze({
   'auth-source': ['github'], 'supply-chain': ['registry', 'scanner', 'signing', 'trust-root'], runtime: ['runtime', 'database'],
   observability: ['runtime'], resources: [], 'backup-sql': [], 'backup-nosql': [], preview: ['github', 'runtime'], rollback: ['runtime'], cleanup: [],
+  domains: ['runtime'],
 });
 const requestSnapshots = new WeakMap();
 
@@ -153,7 +163,8 @@ export function parseStepRequest(value, expectedStep, verifiedBindingSnapshot = 
   verifiedBindingSnapshot ??= requestSnapshots.get(value);
   const keys = ['schema', 'step', 'identity', 'startedAt', 'deadlineAt', 'runDirectory', 'selectors', 'secretRefs', 'state'];
   if (!hasExactKeys(value, keys) || value.schema !== 'raibitserver.production-evidence-step-request/v1'
-    || !STEP_NAMES.includes(value.step) || !EvidenceIdentitySchema.safeParse(value.identity).success
+    || !ALL_STEP_NAMES.includes(value.step) || !EvidenceIdentitySchema.safeParse(value.identity).success
+    || !stepNamesForIdentity(value.identity).includes(value.step)
     || !validIso(value.startedAt) || !validIso(value.deadlineAt) || !path.isAbsolute(value.runDirectory)
     || !validStrings(value.selectors) || !Array.isArray(value.secretRefs) || !isRecord(value.state)
     || (expectedStep !== undefined && value.step !== expectedStep)) invalidSchema();
@@ -185,7 +196,9 @@ export function projectStepRequest(value, verifiedBindingSnapshot) {
 
 export function parseStepResult(value, step, request, verifiedBindingSnapshot = undefined) {
   verifiedBindingSnapshot ??= requestSnapshots.get(request);
-  if (!hasExactKeys(value, ['status', 'reason', 'assertions', 'artifacts', 'cleanupInventory']) || !isStatus(value.status)
+  const resultKeys = ['status', 'reason', 'assertions', 'artifacts', 'cleanupInventory'];
+  const hasDomainProof = Object.hasOwn(value ?? {}, 'domainProof');
+  if (!hasExactKeys(value, hasDomainProof ? [...resultKeys, 'domainProof'] : resultKeys) || !isStatus(value.status)
     || !(value.reason === null || (typeof value.reason === 'string' && value.reason.length > 0 && value.reason.length <= 256))
     || !Array.isArray(value.assertions) || value.assertions.length === 0 || !value.assertions.every(validAssertion)
     || !Array.isArray(value.artifacts) || value.artifacts.length === 0 || !value.artifacts.every((item) => EvidenceArtifactSchema.safeParse(item).success)
@@ -196,6 +209,11 @@ export function parseStepResult(value, step, request, verifiedBindingSnapshot = 
     || referencedPaths.some((artifactPath) => !artifactPaths.includes(artifactPath))) invalidSchema();
   if (request !== undefined) validateInventoryScope(value.cleanupInventory, request, verifiedBindingSnapshot);
   assertAssertions(step, value.assertions);
+  if (hasDomainProof) {
+    const parsed = DomainEvidenceProofSchema.safeParse(value.domainProof);
+    if (!parsed.success || step !== 'domains' || value.status !== 'PASS'
+      || (request && value.domainProof.domainInputDigest !== request.identity.domainInputDigest)) invalidSchema();
+  } else if (step === 'domains' && value.status === 'PASS') invalidSchema();
   if ((value.status === 'PASS') !== value.assertions.every(({ status }) => status === 'PASS')) invalidSchema();
   if ((value.status === 'PASS') !== (value.reason === null)) invalidSchema();
   return Object.freeze(value);
@@ -204,12 +222,16 @@ export function parseStepResult(value, step, request, verifiedBindingSnapshot = 
 export function parseStepReceipt(value, request = undefined, verifiedBindingSnapshot = undefined) {
   const keys = ['schema', 'step', 'identity', 'startedAt', 'observedAt', 'status', 'reason', 'assertions', 'artifacts', 'cleanupInventory', 'redacted', 'fixture'];
   const version2 = value?.schema === 'raibitserver.production-evidence-step-receipt/v2';
-  if (!hasExactKeys(value, version2 ? [...keys, 'requestSha256'] : keys) || (!version2 && value.schema !== 'raibitserver.production-evidence-step-receipt/v1')
+  const hasDomainProof = Object.hasOwn(value ?? {}, 'domainProof');
+  const receiptKeys = version2 ? [...keys, 'requestSha256'] : keys;
+  if (!hasExactKeys(value, hasDomainProof ? [...receiptKeys, 'domainProof'] : receiptKeys) || (!version2 && value.schema !== 'raibitserver.production-evidence-step-receipt/v1')
     || (version2 && !/^[a-f0-9]{64}$/.test(value.requestSha256))
-    || !STEP_NAMES.includes(value.step) || !EvidenceIdentitySchema.safeParse(value.identity).success
+    || !ALL_STEP_NAMES.includes(value.step) || !EvidenceIdentitySchema.safeParse(value.identity).success
+    || !stepNamesForIdentity(value.identity).includes(value.step)
     || !validIso(value.startedAt) || !validIso(value.observedAt) || value.redacted !== true || typeof value.fixture !== 'boolean') invalidSchema();
+  if (hasDomainProof && value.domainProof.domainInputDigest !== value.identity.domainInputDigest) invalidSchema();
   parseStepResult({ status: value.status, reason: value.reason, assertions: value.assertions,
-    artifacts: value.artifacts, cleanupInventory: value.cleanupInventory }, value.step, request, verifiedBindingSnapshot);
+    artifacts: value.artifacts, cleanupInventory: value.cleanupInventory, ...(hasDomainProof ? { domainProof: value.domainProof } : {}) }, value.step, request, verifiedBindingSnapshot);
   if (request) {
     if (value.step !== request.step || value.startedAt !== request.startedAt || JSON.stringify(value.identity) !== JSON.stringify(request.identity)) invalidSchema();
     assertTimeBounds(value.startedAt, value.observedAt, request.deadlineAt);

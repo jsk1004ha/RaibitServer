@@ -67,7 +67,7 @@ function boundedTimeout(deadlineAt, requested, now) {
 }
 
 function safeRelativeArtifact(component, name) {
-  if (!['local', 'cluster', 'lifecycle', 'resources', 'operations', 'cleanup'].includes(component)
+  if (!['local', 'cluster', 'lifecycle', 'resources', 'operations', 'domains', 'cleanup'].includes(component)
     || !/^[a-z0-9][a-z0-9-]{0,63}\.json$/.test(name)) throw new EvidenceError('invalid_artifact');
   return component === 'cleanup' ? `cleanup/${name}` : `artifacts/${component}/${name}`;
 }

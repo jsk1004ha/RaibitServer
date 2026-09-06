@@ -11,7 +11,7 @@ import { createReceiptAuthority, createReceiptAuthorityFixtureUnsafe } from './r
 import { parseStepResult } from './step-contract.mjs';
 import resourceCapabilities from '../../../packages/schemas/src/resource-capabilities-v1.json' with { type: 'json' };
 import { buildIdentity, executeFoundation, immutableJson, inspectSecretReference } from './orchestrator-io.mjs';
-import { STEP_NAMES } from './step-contract.mjs';
+import { FINAL_STEP_NAMES, STEP_NAMES } from './step-contract.mjs';
 import { STEP_BUDGET_MS } from './step-execution.mjs';
 import { deriveProductionEvidenceStepState } from './state-projection.mjs';
 import { executeStepRequest } from '../run-component.mjs';
@@ -45,9 +45,12 @@ export function parseFaultCase(value) {
 }
 
 function validateOptions(options) {
-  const keys = ['profile', 'scenario', 'faultMatrix', 'attemptDir', 'inputs', 'executeStep', 'clock', 'uuid', 'fixture', ...(Object.hasOwn(options, 'testOnly') ? ['testOnly'] : [])];
+  const keys = ['profile', 'scenario', 'faultMatrix', 'attemptDir', 'inputs', 'executeStep', 'clock', 'uuid', 'fixture',
+    ...(Object.hasOwn(options, 'domainInputs') ? ['domainInputs'] : []), ...(Object.hasOwn(options, 'testOnly') ? ['testOnly'] : [])];
   if (!options || Object.keys(options).length !== keys.length || keys.some((key) => !Object.hasOwn(options, key))
-    || options.profile !== 'train-a'
+    || !['train-a', 'final'].includes(options.profile)
+    || (options.profile === 'final') !== Object.hasOwn(options, 'domainInputs')
+    || (options.profile === 'final' && (!options.domainInputs || typeof options.domainInputs !== 'object' || Array.isArray(options.domainInputs)))
     || !((options.scenario === 'happy' && options.faultMatrix === null) || (options.scenario === null && options.faultMatrix !== null))
     || !path.isAbsolute(options.attemptDir) || typeof options.clock?.now !== 'function' || typeof options.uuid !== 'function'
     || !(options.executeStep === null || typeof options.executeStep === 'function') || typeof options.fixture !== 'boolean') throw new EvidenceError('invalid_arguments');
@@ -76,15 +79,20 @@ function faultForStep(fault, step) {
 export async function runProductionEvidence(options) {
   validateOptions(options);
   const inputs = parseOperatorInputs(options.inputs, await loadOperatorContract());
+  const stepNames = options.profile === 'final' ? FINAL_STEP_NAMES : STEP_NAMES;
   const fixture = options.fixture || options.executeStep !== null;
   await mkdir(options.attemptDir, { recursive: true, mode: 0o700 });
   const runId = options.uuid(), startedAt = iso(options.clock);
   const hardDeadlineAt = new Date(Date.parse(startedAt) + RUN_BUDGET_MS).toISOString();
-  const identity = await buildIdentity({ inputs, runId, root: ROOT, fixture });
+  const baseIdentity = await buildIdentity({ inputs, runId, root: ROOT, fixture });
+  const identity = options.profile === 'final' ? Object.freeze({ ...baseIdentity,
+    environmentFingerprint: digest({ environmentFingerprint: baseIdentity.environmentFingerprint, domainInputDigest: digest(options.domainInputs) }),
+    domainInputDigest: digest(options.domainInputs),
+  }) : baseIdentity;
   const runDirectory = await createRun(options.attemptDir, identity, startedAt);
   await mkdir(path.join(runDirectory, 'work'), { mode: 0o700 });
   const writer = await (fixture ? createUnsafeFixtureArtifactWriter : createSafeArtifactWriter)({ runDirectory,
-    allowedPaths: (relative) => /^(?:(?:artifacts\/(?:local|cluster|lifecycle|resources|operations)|cleanup|bindings|cleanup-intents|receipt-requests|receipts)\/[a-z0-9][a-z0-9_.-]*\.json(?:\.pending|\.commit)?|(?:manifest|local|cluster|lifecycle|resources|operations)\.json)$/.test(relative) });
+    allowedPaths: (relative) => /^(?:(?:artifacts\/(?:local|cluster|lifecycle|resources|operations|domains)|cleanup|bindings|cleanup-intents|receipt-requests|receipts)\/[a-z0-9][a-z0-9_.-]*\.json(?:\.pending|\.commit)?|(?:evidence-seal|manifest|local|cluster|lifecycle|resources|operations|domains)\.json)$/.test(relative) });
   let authority;
   try {
     const journalAuthority = await (fixture ? createJournalAuthorityFixtureUnsafe : createJournalAuthority)({ runDirectory, identity, genuineSafeWriter: writer });
@@ -130,7 +138,7 @@ export async function runProductionEvidence(options) {
       steps.push(committed);
       if (step !== 'cleanup' && committed.receipt.status !== 'PASS') blockingReason ??= committed.receipt.reason;
     };
-    try { for (const step of STEP_NAMES.slice(0, -1)) await execute(step); }
+    try { for (const step of stepNames.slice(0, -1)) await execute(step); }
     finally { await execute('cleanup'); }
     const cleanupStep = steps.at(-1);
     await rm(path.join(runDirectory, 'work'), { recursive: true });
@@ -138,7 +146,7 @@ export async function runProductionEvidence(options) {
       identity, startedAt: cleanupStep.receipt.startedAt, observedAt: iso(options.clock), status: 'PASS', reason: null,
       assertions: [{ id: 'run_cleanup', status: 'PASS' }], redacted: true, fixture });
     const componentArtifacts = {};
-    for (const component of ['local', 'cluster', 'lifecycle', 'resources', 'operations']) componentArtifacts[component] = await writer.writeJson(`cleanup/${component}.json`,
+    for (const component of ['local', 'cluster', 'lifecycle', 'resources', 'operations', ...(options.profile === 'final' ? ['domains'] : [])]) componentArtifacts[component] = await writer.writeJson(`cleanup/${component}.json`,
       { schema: 'raibitserver.production-evidence-component-cleanup/v1', component, identity,
         startedAt: cleanupStep.receipt.startedAt, observedAt: iso(options.clock), status: cleanupStep.receipt.status,
         reason: cleanupStep.receipt.reason, assertions: [{ id: 'component_cleanup', status: cleanupStep.receipt.status }], redacted: true, fixture });
@@ -146,7 +154,7 @@ export async function runProductionEvidence(options) {
     const bindingJournal = await journalAuthority.bindingSnapshot();
     const bindingEntries = await journalAuthority.loadBindings();
     const bindingsDigest = digest(bindingEntries.map(({ payload }) => payload).filter(({ kind }) => !kind.endsWith('-observation')));
-    const manifest = assembleManifest({ identity, startedAt, observedAt, fixture,
+    const manifest = assembleManifest({ profile: options.profile, identity, startedAt, observedAt, fixture,
       preflight: { status: preflightResult.status, approvedInputSha256: identity.approvedInputSha256,
         operatorContractDigest: identity.operatorContractDigest, operatorInputFingerprint: identity.operatorInputFingerprint },
       foundations, steps, ...(bindingJournal.entryCount > 0 ? { bindingJournal, bindingsDigest } : {}),
@@ -162,7 +170,7 @@ export async function runProductionEvidence(options) {
     await writer.writeJson('manifest.json', manifest);
     const manifestPath = path.join(runDirectory, 'manifest.json');
     let verification;
-    try { verification = await verifyEvidenceFile(manifestPath, { now: Date.parse(observedAt), profile: 'train-a', journalAuthority,
+    try { verification = await verifyEvidenceFile(manifestPath, { now: Date.parse(observedAt), profile: options.profile, journalAuthority,
       receiptAuthority: authority, ...(bindingJournal.entryCount > 0 ? { verifiedBindingJournal: await journalAuthority.verifyBindingJournal() } : {}) }); }
     catch (error) { verification = { valid: false, releaseEligible: false, reason: error instanceof EvidenceError ? error.reason : 'evidence_io_failed' }; }
     return { status: manifest.status, reason: verification.valid ? null : fault?.boundary === 'verifier' ? verification.reason
