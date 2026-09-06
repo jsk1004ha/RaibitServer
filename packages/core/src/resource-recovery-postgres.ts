@@ -1,5 +1,5 @@
 import type { RecoveryState, RecoveryTransaction, RecoveryTransactionContext } from './resource-recovery-types.ts';
-import { RecoveryError } from './resource-recovery-provenance.ts';
+import { RecoveryError, recoveryHash } from './resource-recovery-provenance.ts';
 
 export interface RecoverySql {
   $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
@@ -55,10 +55,14 @@ async function persistRecoveryState(tx: RecoverySql, before: RecoveryState, next
   }
   const remaining = new Set(next.pins.map(row => row.id));
   for (const pin of before.pins) if (!remaining.has(pin.id)) await tx.$executeRawUnsafe('DELETE FROM "ResourceRecoveryPin" WHERE id=$1', pin.id);
-  for (const audit of next.auditEvents) await tx.$executeRawUnsafe(
-    'INSERT INTO "AuditLog" ("actorUserId",action,"targetType","targetId",metadata,"createdAt") VALUES ($1,$2,$3,$4,$5::jsonb,$6::timestamp(3))',
-    audit.actorUserId, audit.action, audit.targetType, audit.targetId, JSON.stringify(audit.metadata), audit.createdAt,
-  );
+  for (const audit of next.auditEvents) {
+    const metadata = JSON.stringify(audit.metadata);
+    const identity = [audit.actorUserId, audit.action, audit.targetType, audit.targetId, metadata, audit.createdAt].join('\0');
+    await tx.$executeRawUnsafe(
+      'INSERT INTO "AuditLog" ("id","actorUserId",action,"targetType","targetId",metadata,"createdAt") VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::timestamp(3))',
+      `audit_${recoveryHash(identity).slice(0, 32)}`, audit.actorUserId, audit.action, audit.targetType, audit.targetId, metadata, audit.createdAt,
+    );
+  }
 }
 async function writeRecoveryRow(tx: RecoverySql, table: Table, row: object) {
   const data = { ...row, ...(table === 'Resource' ? { updatedAt: new Date().toISOString() } : {}) };

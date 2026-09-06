@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { can } from '../packages/core/src/rbac.ts';
 import { ResourceRecoveryRepository } from '../packages/core/src/resource-recovery.ts';
 import { MemoryRecoveryTransaction } from '../packages/core/src/resource-recovery-memory.ts';
@@ -267,7 +268,11 @@ test('recovery API core persists the first mutation audit inside the PostgreSQL 
   const result = await repository.createBackup(request('postgres-audit'));
   const audit = writes.find(row => row.query.includes('INSERT INTO "AuditLog"'));
   assert.ok(audit);
-  assert.match(audit.query, /\$6::timestamp\(3\)/);
-  assert.deepEqual(audit.values.slice(0, 4), ['user_a', 'resource.backup:requested', 'resource-backup', result.operation.id]);
-  assert.deepEqual(JSON.parse(audit.values[4]), { engine: 'postgresql', status: 'QUEUED' });
+  const metadata = JSON.stringify({ engine: 'postgresql', status: 'QUEUED' });
+  const identity = ['user_a', 'resource.backup:requested', 'resource-backup', result.operation.id, metadata, result.operation.createdAt].join('\0');
+  assert.match(audit.query, /\("id","actorUserId",action,"targetType","targetId",metadata,"createdAt"\).*\$7::timestamp\(3\)/);
+  assert.equal(audit.values[0], `audit_${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`);
+  assert.deepEqual(audit.values.slice(1, 5), ['user_a', 'resource.backup:requested', 'resource-backup', result.operation.id]);
+  assert.equal(audit.values[5], metadata);
+  assert.equal(audit.values[6], result.operation.createdAt);
 });
