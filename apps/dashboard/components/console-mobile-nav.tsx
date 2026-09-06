@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { Brand } from './brand';
 import { Icon, type IconName } from './icon';
 import { UserAvatar } from './user-avatar';
+import { OrganizationSwitcher, type OrganizationSwitcherMembership } from './organization-switcher';
 
 type MobileNavItem = { readonly id: string; readonly label: string; readonly href: string; readonly icon: IconName };
 
@@ -18,6 +19,8 @@ type ConsoleMobileNavProps = {
   readonly navItems: readonly MobileNavItem[];
   readonly orgLabel: string;
   readonly orgValue: string;
+  readonly organizationMemberships: readonly OrganizationSwitcherMembership[];
+  readonly organizationRouteValue: string;
   readonly projectLabel: string;
   readonly projectValue: string;
   readonly userAvatarUrl?: string;
@@ -25,7 +28,7 @@ type ConsoleMobileNavProps = {
   readonly userName?: string;
 };
 
-export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgLabel, orgValue, projectLabel, projectValue, userAvatarUrl, userEmail, userName }: ConsoleMobileNavProps) {
+export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgLabel, orgValue, organizationMemberships, organizationRouteValue, projectLabel, projectValue, userAvatarUrl, userEmail, userName }: ConsoleMobileNavProps) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -38,7 +41,7 @@ export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgL
         <SheetHeader className="border-b border-border"><SheetTitle>RAIBIT SERVER 콘솔</SheetTitle><SheetDescription>{orgValue} · {projectValue}</SheetDescription></SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
           <div className="flex flex-col gap-3 border-b border-border px-2 pb-4">
-            <div className="min-w-0"><p className="text-xs text-muted-foreground">{orgLabel}</p><p className="truncate text-sm font-medium text-foreground" title={orgValue}>{orgValue}</p></div>
+            <div className="min-w-0"><p className="text-xs text-muted-foreground">{orgLabel}</p><OrganizationSwitcher currentOrganizationId={organizationRouteValue} memberships={organizationMemberships} /></div>
             <div className="min-w-0"><p className="text-xs text-muted-foreground">{projectLabel}</p><p className="truncate text-sm text-foreground" title={projectValue}>{projectValue}</p></div>
           </div>
           <nav className="flex flex-col gap-1 py-3" aria-label="모바일 콘솔 메뉴">

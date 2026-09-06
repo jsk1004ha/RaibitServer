@@ -13,6 +13,7 @@ import { Icon } from './icon';
 import type { IconName } from './icon';
 import { SectionNavigationScroll } from './section-navigation-scroll';
 import { UserAvatar } from './user-avatar';
+import { OrganizationSwitcher, type OrganizationSwitcherMembership } from './organization-switcher';
 
 type JsonCardProps = {
   title: string;
@@ -63,11 +64,16 @@ export async function ConsoleShell({
   const user = me.body?.user;
   const subject = me.body?.subject;
   const isAdmin = me.ok && String(user?.role || subject?.userRole || '').toUpperCase() === 'ADMIN';
-  const resolvedOrgRouteValue = resolveOrganizationRouteValue({
-    requested: orgRouteValue,
-    subject,
-    memberships: me.body?.memberships,
-  });
+  const rawMemberships: unknown[] = Array.isArray(me.body?.memberships) ? me.body.memberships as unknown[] : [];
+  const organizationMemberships: OrganizationSwitcherMembership[] = rawMemberships
+      .filter((membership: unknown): membership is { organizationId?: unknown; role?: unknown } => Boolean(membership) && typeof membership === 'object')
+      .flatMap((membership) => typeof membership.organizationId === 'string' && membership.organizationId.trim()
+        ? [{ organizationId: membership.organizationId, role: typeof membership.role === 'string' ? membership.role : null }]
+        : []);
+  const requestedOrganizationId = typeof orgRouteValue === 'string' ? orgRouteValue.trim() : '';
+  const resolvedOrgRouteValue = organizationMemberships.find((membership) => membership.organizationId === requestedOrganizationId)?.organizationId
+    ?? organizationMemberships[0]?.organizationId
+    ?? resolveOrganizationRouteValue({ subject, memberships: me.body?.memberships });
   const organizationLinks = consoleOrganizationLinks(resolvedOrgRouteValue);
   const navItems: NavItem[] = [
     { id: 'overview', label: '개요', href: '/console', icon: 'squares-2x2' },
@@ -104,7 +110,7 @@ export async function ConsoleShell({
         <div className="flex flex-col gap-3 border-b border-border p-4">
           <div className="min-w-0 rounded-md border border-border bg-background px-3 py-2.5">
             <p className="text-xs text-muted-foreground">{orgLabel}</p>
-            <p className="truncate text-sm font-medium text-foreground" title={orgValue}>{orgValue}</p>
+            <OrganizationSwitcher currentOrganizationId={resolvedOrgRouteValue} memberships={organizationMemberships} />
           </div>
           <div className="min-w-0 px-3 py-1">
             <p className="text-xs text-muted-foreground">{projectLabel}</p>
@@ -135,7 +141,7 @@ export async function ConsoleShell({
         </div>
       </aside>
       <header className="flex min-w-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
-        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} projectLabel={projectLabel} projectValue={projectValue} userAvatarUrl={user?.avatarUrl} userEmail={user?.email || '로그인 사용자'} userName={user?.name} />
+        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} organizationMemberships={organizationMemberships} organizationRouteValue={resolvedOrgRouteValue} projectLabel={projectLabel} projectValue={projectValue} userAvatarUrl={user?.avatarUrl} userEmail={user?.email || '로그인 사용자'} userName={user?.name} />
         <div className="flex shrink-0 items-center gap-2" aria-label="모바일 콘솔 도구">
           <ConsoleSearch compact items={searchItems} />
           <ThemeMenu />
