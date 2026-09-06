@@ -304,6 +304,8 @@
     font-family: var(--font-body-family);
     font-size: 1rem;
     line-height: 1.5;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
   }
