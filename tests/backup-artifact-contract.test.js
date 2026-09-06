@@ -12,6 +12,14 @@ const backupEnvironmentNames = [
   'RAIBITSERVER_PROVISIONER_BACKUP_BUCKET',
   'RAIBITSERVER_PROVISIONER_BACKUP_CONFIG_FILE',
 ];
+const recoveryToolImageSettings = {
+  'provisioner.recoveryToolImages.postgresql': `registry.example.com/raibitserver/recovery/postgresql@sha256:${'11'.repeat(32)}`,
+  'provisioner.recoveryToolImages.mysql': `registry.example.com/raibitserver/recovery/mysql@sha256:${'12'.repeat(32)}`,
+  'provisioner.recoveryToolImages.mariadb': `registry.example.com/raibitserver/recovery/mariadb@sha256:${'13'.repeat(32)}`,
+  'provisioner.recoveryToolImages.mongodb': `registry.example.com/raibitserver/recovery/mongodb@sha256:${'14'.repeat(32)}`,
+  'provisioner.recoveryToolImages.redis': `registry.example.com/raibitserver/recovery/redis@sha256:${'15'.repeat(32)}`,
+  'provisioner.recoveryToolImages.valkey': `registry.example.com/raibitserver/recovery/valkey@sha256:${'16'.repeat(32)}`,
+};
 
 function render(settings = {}) {
   return spawnSync(helm, [
@@ -40,6 +48,7 @@ test('operator backup configuration is disabled by default and securely projects
   // Given: default chart values and a complete, fake same-namespace Secret reference.
   const disabled = render();
   const enabledSettings = {
+    ...recoveryToolImageSettings,
     'provisioner.backups.enabled': 'true',
     'provisioner.backups.endpoint': 'https://s3.example.invalid',
     'provisioner.backups.bucket': 'task23-artifacts',
@@ -103,6 +112,7 @@ test('operator backup configuration is disabled by default and securely projects
 test('operator backup configuration fails Helm rendering when any enabled selector is absent', () => {
   // Given: each enabled rendering omits exactly one required operator-selected field.
   const complete = {
+    ...recoveryToolImageSettings,
     'provisioner.backups.enabled': 'true',
     'provisioner.backups.endpoint': 'https://s3.example.invalid',
     'provisioner.backups.bucket': 'task23-artifacts',
