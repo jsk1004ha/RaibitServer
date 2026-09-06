@@ -5,6 +5,8 @@ import {
   loginAccounts,
   resetCustomDomainFixture,
   resetProjectSettingsFixture,
+  resetResourceRecoveryFixture,
+  resourceRecoveryFixtureSnapshot,
   responseFor,
 } from './data.mjs';
 import { redactFixtureRequestBody } from './redact.mjs';
@@ -32,7 +34,7 @@ const server = createServer(async (request, response) => {
   if (rawBody) {
     try { body = JSON.parse(rawBody); } catch { body = { invalidJson: true }; }
   }
-  if (url.pathname === '/__fixture/state' && request.method === 'GET') return send(response, 200, fixtureState.snapshot());
+  if (url.pathname === '/__fixture/state' && request.method === 'GET') return send(response, 200, { ...fixtureState.snapshot(), resourceRestores: resourceRecoveryFixtureSnapshot() });
   if (url.pathname === '/__fixture/state' && request.method === 'POST') {
     const nextState = fixtureState.selectPublicSiteScenario(body?.publicSiteScenario);
     if (!nextState) return send(response, 400, { error: 'invalid_fixture_public_site_scenario', allowed: PUBLIC_SITE_SCENARIOS });
@@ -41,7 +43,8 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/__fixture/reset' && request.method === 'POST') {
     resetProjectSettingsFixture();
     resetCustomDomainFixture();
-    return send(response, 200, fixtureState.reset());
+    resetResourceRecoveryFixture();
+    return send(response, 200, { ...fixtureState.reset(), resourceRestores: resourceRecoveryFixtureSnapshot() });
   }
   const streamMatch = /^\/api\/services\/([^/]+)\/logs\/stream$/.exec(url.pathname);
   if (streamMatch && request.method === 'GET') return sendRuntimeLogStream(request, response, decodeURIComponent(streamMatch[1]));

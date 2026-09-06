@@ -176,6 +176,25 @@ test('Given custom domains, when a domain is added, verified, rotated, or delete
   resetCustomDomainFixture();
 });
 
+test('Given a ready backup, when a restore is accepted, then fixture readback preserves the operation, target resource, and requested name', async () => {
+  const fixture = await import('./data.mjs');
+  assert.equal(typeof fixture.resetResourceRecoveryFixture, 'function');
+  assert.equal(typeof fixture.resourceRecoveryFixtureSnapshot, 'function');
+  fixture.resetResourceRecoveryFixture();
+
+  const restored = request('POST', '/backups/bak_fixture_ready/restores', TOKENS.admin, {
+    body: { formatVersion: 1, requestIdempotencyKey: 'restore-readback', name: 'task49-restored' },
+  });
+
+  assert.equal(restored.status, 202);
+  assert.deepEqual(fixture.resourceRecoveryFixtureSnapshot(), [{
+    id: 'rst_fixture_requested',
+    targetResourceId: 'res_fixture_restored',
+    requestedName: 'task49-restored',
+    status: 'QUEUED',
+  }]);
+});
+
 test('Given the fixture-only public state switch, when each allowlisted scenario loads, then public payloads are deterministic and reset-safe', () => {
   assert.equal(DEFAULT_PUBLIC_SITE_SCENARIO, 'populated');
   assert.deepEqual(PUBLIC_SITE_SCENARIOS, ['populated', 'empty', 'partial', 'long']);

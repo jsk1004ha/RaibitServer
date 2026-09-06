@@ -33,6 +33,7 @@ const initialDomains = Object.freeze([
   }),
 ]);
 let customDomains = initialDomains;
+let resourceRestores = [];
 const service = {
   id: 'svc_fixture_web', projectId: project.id, name: 'web', slug: 'web', type: 'web', status: 'running',
   sourceType: 'github', repoUrl: 'https://github.com/raibit/fixture-app', branch: 'main', dockerfilePath: 'Dockerfile', port: 3000,
@@ -170,6 +171,14 @@ export function resetProjectSettingsFixture() {
 
 export function resetCustomDomainFixture() {
   customDomains = initialDomains;
+}
+
+export function resetResourceRecoveryFixture() {
+  resourceRestores = [];
+}
+
+export function resourceRecoveryFixtureSnapshot() {
+  return resourceRestores.map((restore) => ({ ...restore }));
 }
 
 export function resetGitHubMutationFixture() {
@@ -581,10 +590,12 @@ function resourceBackupResponse({ body, method, pathname, state }) {
     const backup = resourceBackups.find((candidate) => candidate.id === restoreMatch[1]);
     if (!backup || backup.status !== 'READY' || !backup.recoverable) return json(409, { error: 'fixture_restore_not_available' });
     if (body.formatVersion !== 1 || typeof body.requestIdempotencyKey !== 'string' || typeof body.name !== 'string') return json(400, { error: 'fixture_restore_input_invalid' });
-    return json(202, {
+    const restore = {
       id: 'rst_fixture_requested', organizationId: project.organizationId, projectId: project.id, backupId: backup.id, sourceResourceId: resource.id,
       targetResourceId: 'res_fixture_restored', engine: resource.engine, status: 'QUEUED', createdAt: FIXED_TIME, readyAt: null, errorCode: null,
-    });
+    };
+    resourceRestores = [{ id: restore.id, targetResourceId: restore.targetResourceId, requestedName: body.name, status: restore.status }];
+    return json(202, restore);
   }
   const deleteMatch = /^\/backups\/([^/]+)$/.exec(pathname);
   if (deleteMatch && method === 'DELETE') {

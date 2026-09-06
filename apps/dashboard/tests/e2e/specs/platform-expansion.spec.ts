@@ -4,6 +4,8 @@ import { captureScreenshot, expectAccessible, FIXTURE_ORIGIN, installSession } f
 import { PLATFORM_EXPANSION_EXECUTABLE_ROWS, PLATFORM_EXPANSION_MATRIX, PLATFORM_EXPANSION_NEGATIVE_ROWS, type PlatformExpansionRow } from '../feature-expansion-matrix';
 import { createOutcomeRecorder, validatePlatformExpansionMatrix, writePlatformExpansionReport, type PlatformExpansionObservation, type PlatformExpansionSideEffects } from '../platform-expansion-report.js';
 
+// allow: SIZE_OK — this bounded spec owns one module-scoped recorder lifecycle; splitting drivers would make report finalization order-dependent.
+
 const evidencePath = process.env.RAIBITSERVER_PLATFORM_EXPANSION_REPORT_PATH;
 const negativeIds = new Set(PLATFORM_EXPANSION_NEGATIVE_ROWS.map((row) => row.id));
 const positives = PLATFORM_EXPANSION_EXECUTABLE_ROWS.filter((row) => !negativeIds.has(row.id));
@@ -133,6 +135,7 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
       await expect(page.getByLabel('프로젝트 이름')).toHaveValue('내 로컬 변경');
     }
     const after = await apiJson(page, '/api/control/projects/prj_fixture_001/settings');
+    if (row.driver === 'project-save') expect(after).toMatchObject({ project: { name: 'Task49 변경 프로젝트' } });
     const sideEffects = row.driver === 'project-stale' ? unchanged(before, after) : undefined;
     return record(page, row, testInfo, await httpObservation(response, { persisted: after, draft: await page.getByLabel('프로젝트 이름').inputValue() }, sideEffects, 'combined'), recorder);
   }
@@ -206,11 +209,19 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
     await openRow(page, row);
     await page.getByTestId('backup-row-bak_fixture_ready').getByRole('button', { name: '복구 준비' }).click();
     await page.getByLabel('새 리소스 이름').fill('task49-restored');
-    const responsePromise = page.waitForResponse((candidate) => candidate.url().includes('/backups/bak_fixture_ready/restores') && candidate.request().method() === 'POST');
-    await page.getByRole('button', { name: '복구 요청', exact: true }).click();
-    const response = await responsePromise;
+    const [response] = await Promise.all([
+      page.waitForResponse((candidate) => candidate.url().includes('/backups/bak_fixture_ready/restores') && candidate.request().method() === 'POST'),
+      page.getByRole('button', { name: '복구 요청', exact: true }).click(),
+    ]);
     expect(response.status()).toBe(202);
-    return record(page, row, testInfo, await httpObservation(response, { acceptedRestore: await responseBody(response), requestedName: 'task49-restored' }, undefined, 'fixture'), recorder);
+    const acceptedRestore = await responseBody(response);
+    if (acceptedRestore === null || typeof acceptedRestore !== 'object' || !('id' in acceptedRestore) || typeof acceptedRestore.id !== 'string' || !('targetResourceId' in acceptedRestore) || typeof acceptedRestore.targetResourceId !== 'string') throw new TypeError('platform_expansion_restore_response_invalid');
+    await expect(page.getByRole('status')).toContainText(acceptedRestore.targetResourceId);
+    const stateResponse = await page.request.get(`${FIXTURE_ORIGIN}/__fixture/state`);
+    expect(stateResponse.ok()).toBe(true);
+    const persistedRestore: unknown = await stateResponse.json();
+    expect(persistedRestore).toMatchObject({ resourceRestores: [{ id: acceptedRestore.id, targetResourceId: acceptedRestore.targetResourceId, requestedName: 'task49-restored', status: 'QUEUED' }] });
+    return record(page, row, testInfo, await httpObservation(response, { persistedRestore, statusText: await page.getByRole('status').innerText() }, undefined, 'combined'), recorder);
   }
   if (row.driver === 'custom-domain-create') {
     await openRow(page, row);
@@ -224,6 +235,7 @@ async function runRow(row: PlatformExpansionRow, page: Page, testInfo: TestInfo,
     await page.getByRole('button', { name: 'TXT 값을 확인했습니다' }).click();
     await expect(page.getByText('이번에만 표시하는 DNS TXT 값')).toHaveCount(0);
     const persisted = await apiJson(page, '/api/control/projects/prj_fixture_001/domains');
+    expect(persisted).toMatchObject({ domains: expect.arrayContaining([expect.objectContaining({ hostname: 'task49.fixture.example' })]) });
     return record(page, row, testInfo, await httpObservation(response, { persisted, oneTimeProofVisible: false }, undefined, 'combined'), recorder);
   }
   throw new TypeError('platform_expansion_unknown_driver:' + row.id);
