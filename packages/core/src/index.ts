@@ -50,6 +50,7 @@ export { buildPostgresProviderPlan, buildResourceProviderPlan, provisionPostgres
 export { requireResourceExecution, resourceEnvironment, resourceAvailability, parseResourceIntent, ResourceIntentInvalid } from './resource-execution.ts';
 export { ResourceCapabilityUnavailable } from './resource-capabilities.ts';
 export { parseGitHubRepository, githubIntegrationSummary, githubCloneOptionsFromIntegration, verifyGitHubWebhookSignature, githubWebhookActionPlan, githubWebhookOutboundPlan, githubOAuthLoginPlan, fetchGitHubOAuthIdentity, deterministicGitHubCallbackAllowed, type GitHubOAuthIdentity } from './github-integration.ts';
+export { GitHubSourceConflict } from './github-conflict.ts';
 export { createGitHubAppInstallationPlan, createGitHubAppAuthorizationPlan, createGitHubAppAuthorizationRetryPlan, signGitHubAppInstallationState, verifyGitHubAppInstallationState, resolveGitHubAppInstallationSelection } from './github-app.ts';
 export type { GitHubAppInstallationState, GitHubInstallationRepository } from './github-app.ts';
 export { previewKey, previewWorkloadName, previewRuntimePlan } from './preview-deployments.ts';

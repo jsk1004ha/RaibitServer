@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
-import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, DomainLifecycleError, parseDeploymentHistoryQuery, parseDeploymentOperationBody, roleForOrganization } from '@raibitserver/core';
+import { decodeDeploymentActivityResumeToken, decodeServiceLogResumeToken, DeploymentActivityResumeTokenError, DeploymentOperationError, DomainLifecycleError, GitHubSourceConflict, parseDeploymentHistoryQuery, parseDeploymentOperationBody, roleForOrganization } from '@raibitserver/core';
 import { projectObservationPayload } from '@raibitserver/core';
 import { ProjectSettingsError } from '@raibitserver/core';
 import { PasswordRecoveryCompleteSchema, PasswordRecoveryRequestSchema, ResourceBackupListSchema, type CustomDomainCreate, type CustomDomainMutation, type CustomDomainRotate, type ProjectDeletionScheduled, type ProjectSettingsUpdate, type ProjectSettingsView, type ResourceBackupCreate, type ResourceBackupDelete, type ResourceBackupList, type ResourceRestoreCreate, type ProjectSpec, type ServiceReplacementInput, type ServiceSettingsMutation, type ServiceSpec, type ResourceSpec } from '@raibitserver/schemas';
@@ -1036,7 +1036,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
     await assertServiceInProject(repository, projectId, serviceId);
-    return repository.attachGitHubRepositoryToService({
+    return repositoryMutation(() => repository.attachGitHubRepositoryToService({
       projectId,
       serviceId,
       integrationId: input.integrationId,
@@ -1044,8 +1044,11 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       repository: input.repository,
       repoUrl: input.repoUrl,
       branch: input.branch,
+      expectedDefaultBranch: input.expectedDefaultBranch,
+      expectedCatalogGeneration: input.expectedCatalogGeneration,
+      idempotencyKey: input.idempotencyKey,
       actorUserId: subject.id,
-    });
+    }));
   }
 
   async githubLogin(input: Record<string, unknown>, request: IncomingMessage) {
@@ -1112,7 +1115,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   async importGitHubRepository(input: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, input.projectId, subject);
-    return repository.importGitHubRepository({ ...input, actorUserId: subject.id });
+    return repositoryMutation(() => repository.importGitHubRepository({ ...input, actorUserId: subject.id }));
   }
 
   async syncGitHubRepository(repositoryId: string, input: Record<string, any>, subject: Record<string, any>) {
@@ -1140,13 +1143,13 @@ export class RAIBITSERVERService implements OnModuleDestroy {
         serviceIds: services.map((service: Record<string, any>) => service.id),
       };
     }
-    return repository.syncGitHubRepository({
+    return repositoryMutation(() => repository.syncGitHubRepository({
       ...input,
       repository: repositoryId,
       repositoryId,
       actorUserId: subject.id,
       ...authorizedTargets,
-    });
+    }));
   }
 
   async handleGitHubWebhook(input: Record<string, any>) {
@@ -1291,6 +1294,7 @@ function nestAuthError(error: any) {
     return typedOperationException(error.statusCode, error.code, false, error.statusCode === 401 || error.statusCode === 403);
   }
   if (error instanceof ProjectSettingsError) return typedOperationException(409, error.code, false);
+  if (error instanceof GitHubSourceConflict) return new HttpException({ statusCode: 409, message: error.code, error: error.code, code: error.code, retryable: false, terminal: true, permission: false, recovery: error.recovery }, 409);
   if (error instanceof RecoveryError) return new HttpException({ statusCode: error.statusCode, code: error.code, message: error.code }, error.statusCode);
   if (error instanceof DeploymentOperationError) return typedOperationException(error.statusCode, error.code, error.code === 'ACTIVE_DEPLOYMENT');
   if (error instanceof ResourceCapabilityUnavailable) return new BadRequestException({ ...typedOperationBody(400, error.code, false), reasonCode: error.reasonCode });

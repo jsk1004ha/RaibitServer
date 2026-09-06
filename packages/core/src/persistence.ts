@@ -35,6 +35,7 @@ import { assertOrganizationCreatorEligible, OrganizationCreationError, parseAuth
 import { parseGitHubRepository } from './github-integration.ts';
 import { GITHUB_INTEGRATION_STATUS, githubIntegrationStatus, githubServiceSourceState, githubSourceAccess, publicGitHubIntegration } from './github-lifecycle.ts';
 import { GITHUB_CATALOG_STATUS, catalogError, fetchCompleteGitHubCatalog, pageGitHubCatalog, type GitHubCatalogPageFetcher } from './github-catalog.ts';
+import { githubMutationHash, githubSourceConflict } from './github-conflict.ts';
 import { observationLogSource, persistedRuntimePodUid, type ObservationLogContext } from './observability-projection.ts';
 import type { PasswordRecoveryCompletionInput, PasswordRecoveryDeliveryFailureInput } from './password-recovery.ts';
 import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutation, parseResourceMutation, parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
@@ -1880,13 +1881,19 @@ export class PrismaControlPlaneRepository {
   }
 
   async attachGitHubRepositoryToService(input: Record<string, any>) {
-    return this.prisma.$transaction(async (tx) => {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const serviceRow = await tx.service.findUnique({ where: { id: input.serviceId }, include: { project: true } });
       if (!serviceRow) throw notFoundError(`service not found: ${input.serviceId}`);
       if (String(serviceRow.projectId) !== String(input.projectId)) throw forbiddenError('service does not belong to project');
-      assertServiceReplacement(Boolean(await tx.deployment.findFirst({ where: { serviceId: input.serviceId }, select: { id: true } })));
+      const hasDeployment = Boolean(await tx.deployment.findFirst({ where: { serviceId: input.serviceId }, select: { id: true } }));
       const integration = await requireVerifiedPrismaGitHubIntegration(tx, input.integrationId, serviceRow.project?.organizationId);
       const repo = await resolvePrismaGitHubRepository(tx, integration.installationId, input);
+      const installation = await tx.gitHubInstallation.findUnique({ where: { installationId: String(integration.installationId) } });
+      assertPrismaGitHubSourceReady(integration, installation, repo, input);
+      return prismaGitHubSourceMutation(tx, { ...input, organizationId: serviceRow.project.organizationId, operation: 'attach', payload: { projectId: input.projectId, serviceId: input.serviceId, integrationId: input.integrationId, repositoryId: input.repositoryId, repoUrl: input.repoUrl, repository: input.repository, branch: input.branch, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration } }, async () => {
+      const currentRepositoryId = String(serviceRow.githubRepositoryId || serviceRow.desiredState?.githubRepositoryId || serviceRow.desiredState?.github?.repositoryId || '');
+      if (currentRepositoryId) githubSourceConflict('GITHUB_SERVICE_ALREADY_BOUND', { action: 'OPEN_EXISTING_SERVICE', projectId: input.projectId, serviceId: input.serviceId });
+      assertServiceReplacement(hasDeployment);
       const branch = input.branch || repo.defaultBranch || integration.defaultBranch || 'main';
       const binding = prismaGitHubServiceBinding(integration, repo);
       assertPrismaGitHubBindingImmutable(serviceRow, { repoUrl: repo.repoUrl, githubRepositoryId: repo.githubRepoId, desiredState: binding });
@@ -1898,7 +1905,8 @@ export class PrismaControlPlaneRepository {
       });
       await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:attach-repository', targetType: 'service', targetId: input.serviceId, metadata: { repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId } } });
       return { service, github: { ...binding.github, branch } };
-    }, { isolationLevel: 'Serializable' });
+      });
+    });
   }
 
   async listGitHubInstallations(input: Record<string, any>) {
@@ -1968,13 +1976,17 @@ export class PrismaControlPlaneRepository {
       assertMutable(project, 'project');
       const integration = await requireVerifiedPrismaGitHubIntegration(tx, input.integrationId, project.organizationId);
       const repo = await resolvePrismaGitHubRepository(tx, integration.installationId, input);
+      const installation = await tx.gitHubInstallation.findUnique({ where: { installationId: String(integration.installationId) } });
+      assertPrismaGitHubSourceReady(integration, installation, repo, input);
+      return prismaGitHubSourceMutation(tx, { ...input, organizationId: project.organizationId, operation: 'import', payload: { projectId: input.projectId, integrationId: input.integrationId, repositoryId: input.repositoryId, repository: input.repository, repoUrl: input.repoUrl, branch: input.branch, serviceName: input.serviceName, serviceSlug: input.serviceSlug, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration } }, async () => {
+      const duplicate = await tx.service.findFirst({ where: { githubRepositoryId: String(repo.githubRepoId), project: { organizationId: project.organizationId } } });
+      if (duplicate) githubSourceConflict('GITHUB_DUPLICATE_IMPORT', { action: String(duplicate.projectId) === String(input.projectId) ? 'OPEN_EXISTING_SERVICE' : 'OPEN_EXISTING_PROJECT', projectId: String(duplicate.projectId), ...(String(duplicate.projectId) === String(input.projectId) ? { serviceId: String(duplicate.id) } : {}) });
       const branch = input.branch || repo.defaultBranch || integration.defaultBranch || 'main';
       const binding = prismaGitHubServiceBinding(integration, repo);
       const name = input.serviceName || repo.repo;
-      const slug = slugInput(name);
+      const slug = input.serviceSlug || slugInput(name);
       const existing = await tx.service.findUnique({ where: { projectId_slug: { projectId: input.projectId, slug } } });
-      assertMutable(existing, 'service');
-      assertServiceReplacement(Boolean(existing && await tx.deployment.findFirst({ where: { serviceId: existing.id }, select: { id: true } })));
+      if (existing) githubSourceConflict('GITHUB_PROJECT_SLUG_COLLISION', { action: 'CHOOSE_NEW_SLUG', projectId: input.projectId, suggestedSlug: `${slug}-2` });
       const serviceInput = {
         projectId: input.projectId,
         name,
@@ -1988,13 +2000,10 @@ export class PrismaControlPlaneRepository {
         desiredState: { ...binding, github: { ...binding.github, imported: true } },
       };
       await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'service:create', serviceQuotaRequirements(existing, serviceInput));
-      const service = await tx.service.upsert({
-        where: { projectId_slug: { projectId: input.projectId, slug } },
-        update: serviceData(serviceInput, { allowGitHubBinding: true }),
-        create: { projectId: input.projectId, name, slug, ...serviceData(serviceInput, { allowGitHubBinding: true }) },
-      });
+      const service = await tx.service.create({ data: { projectId: input.projectId, name, slug, ...serviceData(serviceInput, { allowGitHubBinding: true }) } });
       await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:import-repository', targetType: 'project', targetId: input.projectId, metadata: maskSecrets({ repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId }) } });
       return { service, github: { ...binding.github, branch } };
+      });
     });
   }
 
@@ -2009,9 +2018,24 @@ export class PrismaControlPlaneRepository {
     const services = authorizedServiceIds
       ? matchedServices.filter((service: Record<string, any>) => authorizedServiceIds.has(String(service.id)))
       : matchedServices;
-    const workflowJob = await this.enqueueWorkflowJob({ type: 'github-repository-sync', targetType: 'github-repository', targetId: repository, payload: { repository, serviceIds: services.map((service: Record<string, any>) => service.id) } });
-    await this.prisma.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:repository-sync', targetType: 'github-repository', targetId: repository, metadata: maskSecrets({ repository }) } });
-    return { repository, services, workflowJob };
+    if (!services.length) githubSourceConflict('GITHUB_INSTALLATION_MISMATCH', { action: 'CANCEL' });
+    const organizationId = String(services[0].project.organizationId);
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => prismaGitHubSourceMutation(tx, { ...input, organizationId, operation: 'sync', payload: { repository, branch: input.branch, integrationId: input.integrationId, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration, serviceIds: services.map((service: Record<string, any>) => String(service.id)).sort() } }, async () => {
+      const sourceAccess = services.map((service: Record<string, any>) => String(service.desiredState?.sourceAccess || service.desiredState?.github?.sourceAccess || ''));
+      if (sourceAccess.includes('GITHUB_SOURCE_DISCONNECTED')) githubSourceConflict('GITHUB_SOURCE_DISCONNECTED', { action: 'REATTACH_INSTALLATION' });
+      if (sourceAccess.includes('SOURCE_ACCESS_REVOKED')) githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG' });
+      for (const service of services) {
+        const desired = service.desiredState || {};
+        const integrationId = desired.githubIntegrationId || desired.github?.integrationId;
+        const integration = await requireVerifiedPrismaGitHubIntegration(tx, integrationId, service.project.organizationId);
+        const repositoryRecord = await resolvePrismaGitHubRepository(tx, integration.installationId, { repositoryId: service.githubRepositoryId || desired.githubRepositoryId || desired.github?.repositoryId });
+        const installation = await tx.gitHubInstallation.findUnique({ where: { installationId: String(integration.installationId) } });
+        assertPrismaGitHubSourceReady(integration, installation, repositoryRecord, { branch: input.branch || service.branch, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration });
+      }
+      const workflowJob = await tx.workflowJob.create({ data: workflowJobData({ type: 'github-repository-sync', targetType: 'github-repository', targetId: repository, payload: { repository, serviceIds: services.map((service: Record<string, any>) => service.id) } }) });
+      await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:repository-sync', targetType: 'github-repository', targetId: repository, metadata: { serviceIds: services.map((service: Record<string, any>) => String(service.id)) } } });
+      return { repository, services, workflowJob };
+    }));
   }
 
   async handleGitHubWebhook(input: Record<string, any>) {
@@ -3235,7 +3259,7 @@ async function requireVerifiedPrismaGitHubIntegration(db: any, integrationId: an
   const integration = id ? await db.gitHubIntegration.findUnique({ where: { id } }) : null;
   if (!integration) throw notFoundError(`GitHub integration not found: ${id || '<missing>'}`);
   if (String(integration.organizationId) !== String(organizationId)) throw forbiddenError('GitHub integration does not belong to project organization');
-  if (!integration.verifiedAt || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || !integration.installationId) throw forbiddenError('repository attachment requires a verified GitHub App installation');
+  if (!integration.verifiedAt || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || !integration.installationId) githubSourceConflict('GITHUB_SOURCE_DISCONNECTED', { action: 'REATTACH_INSTALLATION' });
   return integration;
 }
 
@@ -3250,9 +3274,37 @@ async function resolvePrismaGitHubRepository(db: any, installationId: any, selec
     const nameMatches = !requestedFullName || requestedFullName === String(candidate.fullName).toLowerCase();
     return idMatches && nameMatches;
   });
-  if (!row) throw forbiddenError('repository is not available to the selected GitHub installation');
+  if (!row) {
+    if (repositoryId && await db.gitHubRepository.findUnique({ where: { githubRepoId: repositoryId } })) githubSourceConflict('GITHUB_INSTALLATION_MISMATCH', { action: 'CANCEL' });
+    githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG', installationId: String(installationId) });
+  }
   const parsed = parseGitHubRepository(row.fullName);
   return { ...row, owner: parsed.owner.toLowerCase(), repo: parsed.repo.toLowerCase(), fullName: parsed.fullName.toLowerCase(), repoUrl: `https://github.com/${parsed.fullName.toLowerCase()}.git` };
+}
+
+function assertPrismaGitHubSourceReady(integration: Record<string, any>, installation: Record<string, any> | null, repository: Record<string, any>, selector: Record<string, any>) {
+  if (installation?.refreshStatus === GITHUB_CATALOG_STATUS.STALE) githubSourceConflict('GITHUB_CATALOG_STALE', { action: 'REFRESH_CATALOG', installationId: String(integration.installationId) });
+  if (selector.expectedCatalogGeneration !== undefined && Number(selector.expectedCatalogGeneration) !== Number(installation?.generation || 0)) githubSourceConflict('GITHUB_CATALOG_STALE', { action: 'REFRESH_CATALOG', installationId: String(integration.installationId) });
+  if (repository.accessState === 'REVOKED' || Number(repository.generation || 0) !== Number(installation?.generation || 0)) githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG', installationId: String(integration.installationId), repositoryId: String(repository.githubRepoId) });
+  const defaultBranch = String(repository.defaultBranch || '');
+  if (!selector.branch && !defaultBranch) githubSourceConflict('GITHUB_DEFAULT_BRANCH_MISSING', { action: 'SELECT_BRANCH', repositoryId: String(repository.githubRepoId) });
+  if (selector.expectedDefaultBranch && String(selector.expectedDefaultBranch) !== defaultBranch) githubSourceConflict('GITHUB_DEFAULT_BRANCH_CHANGED', { action: 'SELECT_BRANCH', repositoryId: String(repository.githubRepoId), currentDefaultBranch: defaultBranch, requestedBranch: String(selector.expectedDefaultBranch) });
+}
+
+async function prismaGitHubSourceMutation(db: any, input: Record<string, any>, execute: () => Promise<Record<string, any>>) {
+  const key = String(input.idempotencyKey || '');
+  if (!key) return execute();
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(key)) throw badRequestError('invalid GitHub idempotency key');
+  const requestHash = githubMutationHash(input.payload);
+  const where = { organizationId_operation_idempotencyKey: { organizationId: String(input.organizationId), operation: String(input.operation), idempotencyKey: key } };
+  const existing = await db.gitHubSourceMutation.findUnique({ where });
+  if (existing) {
+    if (existing.requestHash !== requestHash) githubSourceConflict('GITHUB_IDEMPOTENCY_CONFLICT', { action: 'CANCEL' });
+    return existing.response;
+  }
+  const response = sanitizeJson(await execute());
+  await db.gitHubSourceMutation.create({ data: { id: stableId('ghmut', input.organizationId, input.operation, key), organizationId: String(input.organizationId), operation: String(input.operation), idempotencyKey: key, requestHash, response } });
+  return response;
 }
 
 function prismaGitHubServiceBinding(integration: Record<string, any>, repository: Record<string, any>) {

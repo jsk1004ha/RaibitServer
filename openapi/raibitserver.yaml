@@ -3625,7 +3625,7 @@ paths:
             schema:
               $ref: "#/components/schemas/github-syncBody"
       responses:
-        "201":
+        "202":
           description: Successful response
           content:
             application/json:
@@ -4510,6 +4510,7 @@ components:
     ErrorBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       anyOf:
+        - $ref: "#/components/schemas/GitHubSourceConflictBody"
         - type: object
           properties:
             statusCode:
@@ -4534,6 +4535,8 @@ components:
               type: boolean
             permission:
               type: boolean
+            recovery:
+              $ref: "#/components/schemas/GitHubSourceRecovery"
           required:
             - statusCode
             - message
@@ -4673,6 +4676,95 @@ components:
         - generation
       additionalProperties:
         $ref: "#/components/schemas/JsonValue"
+    GitHubSourceConflictBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        statusCode:
+          type: number
+          const: 409
+        message:
+          $ref: "#/components/schemas/GitHubSourceConflictCode"
+        error:
+          $ref: "#/components/schemas/GitHubSourceConflictCode"
+        code:
+          $ref: "#/components/schemas/GitHubSourceConflictCode"
+        retryable:
+          type: boolean
+          const: false
+        terminal:
+          type: boolean
+          const: true
+        permission:
+          type: boolean
+          const: false
+        recovery:
+          $ref: "#/components/schemas/GitHubSourceRecovery"
+      required:
+        - statusCode
+        - message
+        - error
+        - code
+        - retryable
+        - terminal
+        - permission
+        - recovery
+      additionalProperties: false
+    GitHubSourceConflictCode:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: string
+      enum:
+        - GITHUB_DUPLICATE_IMPORT
+        - GITHUB_PROJECT_SLUG_COLLISION
+        - GITHUB_SERVICE_ALREADY_BOUND
+        - GITHUB_INSTALLATION_MISMATCH
+        - GITHUB_DEFAULT_BRANCH_MISSING
+        - GITHUB_DEFAULT_BRANCH_CHANGED
+        - GITHUB_SOURCE_ACCESS_REVOKED
+        - GITHUB_CATALOG_STALE
+        - GITHUB_SOURCE_DISCONNECTED
+        - GITHUB_IDEMPOTENCY_CONFLICT
+    GitHubSourceRecovery:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        action:
+          $ref: "#/components/schemas/GitHubSourceRecoveryAction"
+        projectId:
+          type: string
+          minLength: 1
+        serviceId:
+          type: string
+          minLength: 1
+        installationId:
+          type: string
+          minLength: 1
+        repositoryId:
+          type: string
+          minLength: 1
+        currentDefaultBranch:
+          type: string
+          minLength: 1
+        requestedBranch:
+          type: string
+          minLength: 1
+        suggestedSlug:
+          type: string
+          minLength: 1
+      required:
+        - action
+      additionalProperties: false
+    GitHubSourceRecoveryAction:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: string
+      enum:
+        - OPEN_EXISTING_PROJECT
+        - OPEN_EXISTING_SERVICE
+        - CHOOSE_NEW_SLUG
+        - REFRESH_CATALOG
+        - REATTACH_INSTALLATION
+        - SELECT_BRANCH
+        - CANCEL
     GithubAttach:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -4685,6 +4777,17 @@ components:
           minLength: 1
         branch:
           type: string
+        expectedDefaultBranch:
+          type: string
+        expectedCatalogGeneration:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9._:-]+$
       required:
         - integrationId
         - repositoryId
@@ -8657,11 +8760,26 @@ components:
           minLength: 1
         branch:
           type: string
+        expectedDefaultBranch:
+          type: string
+        expectedCatalogGeneration:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9._:-]+$
         projectId:
           type: string
           minLength: 1
         serviceName:
           type: string
+        serviceSlug:
+          type: string
+          maxLength: 63
+          pattern: ^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$
       required:
         - integrationId
         - repositoryId
@@ -8693,6 +8811,17 @@ components:
           minLength: 1
         branch:
           type: string
+        expectedDefaultBranch:
+          type: string
+        expectedCatalogGeneration:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9._:-]+$
       additionalProperties: false
     admin-approveBody:
       $schema: https://json-schema.org/draft/2020-12/schema

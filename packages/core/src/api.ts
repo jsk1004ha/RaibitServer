@@ -990,7 +990,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       const permission = statusCode === 401 || statusCode === 403;
       const retryable = !permission && (statusCode === 408 || statusCode === 429 || statusCode >= 500);
       const message = error.message || 'internal_error';
-      return send(res, statusCode, { statusCode, message, error: message, retryable, terminal: !retryable, permission, ...(error.code ? { code: error.code } : {}), ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) });
+      return send(res, statusCode, { statusCode, message, error: message, retryable, terminal: !retryable, permission, ...(error.code ? { code: error.code } : {}), ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}), ...(error.recovery ? { recovery: error.recovery } : {}) });
     }
   };
 }

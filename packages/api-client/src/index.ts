@@ -229,11 +229,11 @@ export class RAIBITSERVERClient {
   refreshGitHubInstallationRepositories(installationId: string, input: ApiInput<'github-repositories-refresh'>['body']): Promise<ApiOutput<'github-repositories-refresh'>> {
     return this.operations['github-repositories-refresh']({ path: { installationId }, query: {}, body: input });
   }
-  attachGitHub(projectId: string, serviceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request(`/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}/github`, { method: 'POST', body: input });
+  attachGitHub(projectId: string, serviceId: string, input: ApiInput<'github-attach'>['body']): Promise<ApiOutput<'github-attach'>> {
+    return this.operations['github-attach']({ path: { projectId, serviceId }, query: {}, body: input });
   }
-  importGitHubRepository(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/github/repositories/import', { method: 'POST', body: input }); }
-  syncGitHubRepository(repositoryId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> { return this.request(`/github/repositories/${encodeURIComponent(repositoryId)}/sync`, { method: 'POST', body: input }); }
+  importGitHubRepository(input: ApiInput<'github-import'>['body']): Promise<ApiOutput<'github-import'>> { return this.operations['github-import']({ path: {}, query: {}, body: input }); }
+  syncGitHubRepository(repositoryId: string, input: ApiInput<'github-sync'>['body'] = {}): Promise<ApiOutput<'github-sync'>> { return this.operations['github-sync']({ path: { repositoryId }, query: {}, body: input }); }
   queryResource(resourceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/query`, { method: 'POST', body: input }); }
   commandResource(resourceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/command`, { method: 'POST', body: input }); }
   browseResource(resourceId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/browse`, { method: 'POST', body: input }); }

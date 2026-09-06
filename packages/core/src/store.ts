@@ -14,6 +14,7 @@ import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts'
 import { githubIntegrationSummary, githubWebhookActionPlan, githubWebhookOutboundPlan, parseGitHubRepository, verifyGitHubWebhookSignature } from './github-integration.ts';
 import { GITHUB_INTEGRATION_STATUS, githubIntegrationStatus, githubServiceSourceState, githubSourceAccess, publicGitHubIntegration } from './github-lifecycle.ts';
 import { GITHUB_CATALOG_STATUS, catalogError, fetchCompleteGitHubCatalog, pageGitHubCatalog, type GitHubCatalogPageFetcher } from './github-catalog.ts';
+import { githubMutationHash, githubSourceConflict } from './github-conflict.ts';
 import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 import { buildResourceProviderPlan, publicResourceProviderPlan } from './resource-providers.ts';
@@ -71,6 +72,7 @@ export class ControlPlaneStore {
   environmentVariables: Map<string, any>;
   githubIntegrations: Map<string, any>;
   githubRepositories: Map<string, any>;
+  githubSourceMutations: Map<string, any>;
   webhookEvents: Map<string, any>;
   buildLogs: any[];
   runtimeLogs: any[];
@@ -101,6 +103,7 @@ export class ControlPlaneStore {
     this.environmentVariables = new Map();
     this.githubIntegrations = new Map();
     this.githubRepositories = new Map();
+    this.githubSourceMutations = new Map();
     this.webhookEvents = new Map();
     this.buildLogs = [];
     this.runtimeLogs = [];
@@ -1406,15 +1409,21 @@ export class ControlPlaneStore {
     });
   }
 
-  attachGitHubRepositoryToService({ projectId, serviceId, integrationId, repositoryId = null, repoUrl = null, repository = null, branch = null, actorUserId = 'system' }: Record<string, any>) {
+  attachGitHubRepositoryToService(input: Record<string, any>) {
+    const { projectId, serviceId, integrationId, repositoryId = null, repoUrl = null, repository = null, branch = null, expectedDefaultBranch = null, expectedCatalogGeneration = null, idempotencyKey = null, actorUserId = 'system' } = input;
     const service = this.services.get(serviceId);
     if (!service) throw notFound(`service not found: ${serviceId}`);
     if (String(service.projectId) !== String(projectId)) throw forbidden('service does not belong to project');
-    assertServiceReplacement([...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId));
+    const hasDeployment = [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId);
     const project = this.projects.get(projectId);
     if (!project) throw notFound(`project not found: ${projectId}`);
     const integration = requireVerifiedGitHubIntegration(this.githubIntegrations, integrationId, project.organizationId);
     const repo = resolveGitHubRepositoryRecord([...this.githubRepositories.values()], integration.installationId, { repositoryId, repoUrl: repoUrl || repository });
+    assertGitHubSourceReady(integration, repo, { branch, expectedDefaultBranch, expectedCatalogGeneration });
+    const operation = () => {
+    const currentRepositoryId = String(service.githubRepositoryId || service.desiredState?.githubRepositoryId || service.desiredState?.github?.repositoryId || '');
+    if (currentRepositoryId) githubSourceConflict('GITHUB_SERVICE_ALREADY_BOUND', { action: 'OPEN_EXISTING_SERVICE', projectId, serviceId });
+    assertServiceReplacement(hasDeployment);
     const resolvedBranch = branch || repo.defaultBranch || integration.defaultBranch || 'main';
     const binding = gitHubServiceBinding(integration, repo);
     const updated = this.updateService(serviceId, {
@@ -1431,6 +1440,8 @@ export class ControlPlaneStore {
     }, { allowDesiredState: true, allowGitHubBinding: true });
     this.audit(actorUserId, 'github:attach-repository', 'service', serviceId, { integrationId: integration.id, installationId: integration.installationId, repositoryId: repo.githubRepoId, repository: repo.fullName, branch: resolvedBranch });
     return { service: updated, github: { ...binding.github, branch: resolvedBranch } };
+    };
+    return this.runGitHubSourceMutation({ organizationId: project.organizationId, operation: 'attach', idempotencyKey, payload: { projectId, serviceId, integrationId, repositoryId, repoUrl, repository, branch, expectedDefaultBranch, expectedCatalogGeneration }, execute: operation });
   }
 
   listGitHubInstallations({ organizationId }: Record<string, any>) {
@@ -1486,16 +1497,26 @@ export class ControlPlaneStore {
     return { refreshed: true, repositoryCount: result.repositoryCount, generation: next.catalogGeneration, refreshStatus: next.refreshStatus, lastSuccessfulSyncAt: next.lastSuccessfulSyncAt, staleAt: next.staleAt };
   }
 
-  importGitHubRepository({ projectId, integrationId = null, repositoryId = null, repository, repoUrl, branch = null, serviceName = null, actorUserId = 'system' }: Record<string, any>) {
+  importGitHubRepository(input: Record<string, any>) {
+    const { projectId, integrationId = null, repositoryId = null, repository, repoUrl, branch = null, serviceName = null, serviceSlug = null, expectedDefaultBranch = null, expectedCatalogGeneration = null, idempotencyKey = null, actorUserId = 'system' } = input;
     const project = this.projects.get(projectId);
     if (!project) throw notFound(`project not found: ${projectId}`);
     const integration = requireVerifiedGitHubIntegration(this.githubIntegrations, integrationId, project.organizationId);
     const repo = resolveGitHubRepositoryRecord([...this.githubRepositories.values()], integration.installationId, { repositoryId, repoUrl: repoUrl || repository });
+    assertGitHubSourceReady(integration, repo, { branch, expectedDefaultBranch, expectedCatalogGeneration });
+    const operation = () => {
+    const duplicate = [...this.services.values()].find(candidate => String(candidate.githubRepositoryId || candidate.desiredState?.githubRepositoryId || candidate.desiredState?.github?.repositoryId || '') === String(repo.githubRepoId) && String(this.projects.get(candidate.projectId)?.organizationId || '') === String(project.organizationId));
+    if (duplicate) githubSourceConflict('GITHUB_DUPLICATE_IMPORT', { action: duplicate.projectId === projectId ? 'OPEN_EXISTING_SERVICE' : 'OPEN_EXISTING_PROJECT', projectId: duplicate.projectId, ...(duplicate.projectId === projectId ? { serviceId: duplicate.id } : {}) });
     const resolvedBranch = branch || repo.defaultBranch || integration.defaultBranch || 'main';
     const binding = gitHubServiceBinding(integration, repo);
+    const name = serviceName || repo.repo;
+    const slug = String(serviceSlug || slugify(name));
+    const collision = [...this.services.values()].find(candidate => String(candidate.projectId) === String(projectId) && String(candidate.slug) === slug);
+    if (collision) githubSourceConflict('GITHUB_PROJECT_SLUG_COLLISION', { action: 'CHOOSE_NEW_SLUG', projectId, suggestedSlug: `${slug}-2` });
     const created = this.createService({
       projectId,
-      name: serviceName || repo.repo,
+      name,
+      slug,
       type: 'web',
       runtimeType: 'container',
       sourceType: 'github',
@@ -1511,18 +1532,51 @@ export class ControlPlaneStore {
     const service = this.updateService(created.id, { desiredState: { ...binding, github: { ...binding.github, imported: true } } }, { allowDesiredState: true, allowGitHubBinding: true });
     this.audit(actorUserId, 'github:import-repository', 'project', projectId, { repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId });
     return { service, github: { ...binding.github, branch: resolvedBranch } };
+    };
+    return this.runGitHubSourceMutation({ organizationId: project.organizationId, operation: 'import', idempotencyKey, payload: { projectId, integrationId, repositoryId, repository, repoUrl, branch, serviceName, serviceSlug, expectedDefaultBranch, expectedCatalogGeneration }, execute: operation });
   }
 
-  syncGitHubRepository({ repositoryId, repository, actorUserId = 'system', organizationId = null, organizationIds = null, serviceIds = null }: Record<string, any>) {
+  syncGitHubRepository(input: Record<string, any>) {
+    const { repositoryId, repository, idempotencyKey = null, actorUserId = 'system', organizationId = null, organizationIds = null, serviceIds = null } = input;
     const normalized = normalizeRepositoryId(repositoryId || repository);
     const matchedServices = this.servicesForGitHubRepository(normalized, { organizationId, organizationIds });
     const authorizedServiceIds = Array.isArray(serviceIds) ? new Set(serviceIds.map(String)) : null;
     const services = authorizedServiceIds
       ? matchedServices.filter((service) => authorizedServiceIds.has(String(service.id)))
       : matchedServices;
+    if (!services.length) githubSourceConflict('GITHUB_INSTALLATION_MISMATCH', { action: 'CANCEL' });
+    const scopedOrganizationId = String(this.projects.get(services[0].projectId)?.organizationId || organizationId || 'system');
+    const operation = () => {
+    const sourceAccess = services.map(service => String(service.desiredState?.sourceAccess || service.desiredState?.github?.sourceAccess || ''));
+    if (sourceAccess.includes('GITHUB_SOURCE_DISCONNECTED')) githubSourceConflict('GITHUB_SOURCE_DISCONNECTED', { action: 'REATTACH_INSTALLATION' });
+    if (sourceAccess.includes('SOURCE_ACCESS_REVOKED')) githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG' });
+    for (const service of services) {
+      const integrationId = service.githubIntegrationId || service.desiredState?.githubIntegrationId || service.desiredState?.github?.integrationId;
+      const integration = requireVerifiedGitHubIntegration(this.githubIntegrations, integrationId, this.projects.get(service.projectId)?.organizationId);
+      const repositoryRecord = resolveGitHubRepositoryRecord([...this.githubRepositories.values()], integration.installationId, { repositoryId: service.githubRepositoryId || service.desiredState?.githubRepositoryId || service.desiredState?.github?.repositoryId });
+      assertGitHubSourceReady(integration, repositoryRecord, { branch: input.branch || service.branch, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration });
+    }
     const workflowJob = this.enqueueWorkflowJob({ type: 'github-repository-sync', targetType: 'github-repository', targetId: normalized, payload: { repository: normalized, serviceIds: services.map((service) => service.id) } });
     this.audit(actorUserId, 'github:repository-sync', 'github-repository', normalized, { serviceIds: services.map((service) => service.id) });
     return { repository: normalized, services: deepClone(services), workflowJob };
+    };
+    return this.runGitHubSourceMutation({ organizationId: scopedOrganizationId, operation: 'sync', idempotencyKey, payload: { repositoryId, repository, branch: input.branch, integrationId: input.integrationId, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration, serviceIds: services.map(service => service.id).sort() }, execute: operation });
+  }
+
+  runGitHubSourceMutation(input: Record<string, any>) {
+    const key = String(input.idempotencyKey || '');
+    if (!key) return input.execute();
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(key)) throw badRequest('invalid GitHub idempotency key');
+    const identity = `${input.organizationId}:${input.operation}:${key}`;
+    const requestHash = githubMutationHash(input.payload);
+    const existing = this.githubSourceMutations.get(identity);
+    if (existing) {
+      if (existing.requestHash !== requestHash) githubSourceConflict('GITHUB_IDEMPOTENCY_CONFLICT', { action: 'CANCEL' });
+      return deepClone(existing.response);
+    }
+    const response = input.execute();
+    this.githubSourceMutations.set(identity, { requestHash, response: deepClone(maskSecrets(response)) });
+    return response;
   }
 
   applyGitHubCatalogWebhook(event: any, payload: Record<string, any> = {}) {
@@ -2329,7 +2383,7 @@ function requireVerifiedGitHubIntegration(integrations: Map<string, any>, integr
   const integration = id ? integrations.get(id) : null;
   if (!integration) throw notFound(`GitHub integration not found: ${id || '<missing>'}`);
   if (String(integration.organizationId) !== String(organizationId)) throw forbidden('GitHub integration does not belong to project organization');
-  if (!integration.verifiedAt || githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || !integration.installationId) throw forbidden('repository attachment requires a verified GitHub App installation');
+  if (githubIntegrationStatus(integration) !== GITHUB_INTEGRATION_STATUS.ACTIVE || !integration.verifiedAt || !integration.installationId) githubSourceConflict('GITHUB_SOURCE_DISCONNECTED', { action: 'REATTACH_INSTALLATION' });
   return integration;
 }
 
@@ -2344,8 +2398,20 @@ function resolveGitHubRepositoryRecord(repositories: any[], installationId: any,
     const nameMatches = !requestedFullName || requestedFullName === String(repository.fullName).toLowerCase();
     return idMatches && nameMatches;
   });
-  if (!record) throw forbidden('repository is not available to the selected GitHub installation');
+  if (!record) {
+    if (repositoryId && repositories.some(repository => String(repository.githubRepoId) === repositoryId || String(repository.id) === repositoryId)) githubSourceConflict('GITHUB_INSTALLATION_MISMATCH', { action: 'CANCEL' });
+    githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG', installationId: String(installationId) });
+  }
   return record;
+}
+
+function assertGitHubSourceReady(integration: Record<string, any>, repository: Record<string, any>, selector: Record<string, any>) {
+  if (integration.refreshStatus === GITHUB_CATALOG_STATUS.STALE) githubSourceConflict('GITHUB_CATALOG_STALE', { action: 'REFRESH_CATALOG', installationId: String(integration.installationId) });
+  if (selector.expectedCatalogGeneration !== null && selector.expectedCatalogGeneration !== undefined && Number(selector.expectedCatalogGeneration) !== Number(integration.catalogGeneration || 0)) githubSourceConflict('GITHUB_CATALOG_STALE', { action: 'REFRESH_CATALOG', installationId: String(integration.installationId) });
+  if (repository.accessState === 'REVOKED' || Number(repository.generation || 0) !== Number(integration.catalogGeneration || 0)) githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG', installationId: String(integration.installationId), repositoryId: String(repository.githubRepoId) });
+  const defaultBranch = String(repository.defaultBranch || '');
+  if (!selector.branch && !defaultBranch) githubSourceConflict('GITHUB_DEFAULT_BRANCH_MISSING', { action: 'SELECT_BRANCH', repositoryId: String(repository.githubRepoId) });
+  if (selector.expectedDefaultBranch && String(selector.expectedDefaultBranch) !== defaultBranch) githubSourceConflict('GITHUB_DEFAULT_BRANCH_CHANGED', { action: 'SELECT_BRANCH', repositoryId: String(repository.githubRepoId), currentDefaultBranch: defaultBranch, requestedBranch: String(selector.expectedDefaultBranch) });
 }
 
 function gitHubServiceBinding(integration: Record<string, any>, repository: Record<string, any>) {

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { GitHubSourceConflictBody, GitHubSourceRecovery } from './github-conflict.ts';
+export { GitHubSourceConflictBody, GitHubSourceConflictCode, GitHubSourceRecovery, GitHubSourceRecoveryAction } from './github-conflict.ts';
 import { ServiceHealthFields, DeploymentHealthFields, refineServiceHealth } from './deployment-health.ts';
 import { DeploymentLineageFields } from './deployment-operation.ts';
 import { DeploymentStatusSchema } from './lifecycle.ts';
@@ -24,7 +26,8 @@ export const QuotaInput = z.strictObject(quotaFields).partial();
 export const Quota = z.strictObject({ ...quotaFields, id, userId: id, createdAt: z.iso.datetime(), updatedAt: z.iso.datetime() });
 export const PageQuery = z.object({ limit: z.number().int().min(1).max(1000).optional(), cursor: z.string().max(1024).optional(), after: z.string().max(1024).optional() }).strict();
 export const ErrorBody = z.union([
-  z.object({ statusCode: z.number().int().min(400).max(599), message: z.union([z.string(), z.array(z.string())]), error: z.string().optional(), code: z.string().optional(), reasonCode: z.string().optional(), retryable: z.boolean().optional(), terminal: z.boolean().optional(), permission: z.boolean().optional() }),
+  GitHubSourceConflictBody,
+  z.object({ statusCode: z.number().int().min(400).max(599), message: z.union([z.string(), z.array(z.string())]), error: z.string().optional(), code: z.string().optional(), reasonCode: z.string().optional(), retryable: z.boolean().optional(), terminal: z.boolean().optional(), permission: z.boolean().optional(), recovery: GitHubSourceRecovery.optional() }),
   z.object({ message: z.string(), plan: JsonFields }),
 ]);
 export const Project = z.object({ id, name: z.string(), organizationId: id, slug: z.string() }).catchall(json);
@@ -82,6 +85,6 @@ export const StatusInput = z.object({ status: DeploymentStatusSchema, imageUrl: 
 export const Confirmation = z.object({ confirmed: z.literal(true) });
 export const AgentInput = z.object({ serviceIds: z.array(id).max(100).optional(), deploymentType: z.enum(['production', 'preview']).optional(), branch: z.string().optional(), commitSha: z.string().optional() });
 export const BrowseInput = z.object({ limit: z.number().int().positive().max(1000).optional(), table: z.string().optional(), collection: z.string().optional(), prefix: z.string().optional(), cursor: z.string().optional() });
-export const GithubAttach = z.object({ integrationId: id, repositoryId: id, branch: z.string().optional() }).strict();
+export const GithubAttach = z.object({ integrationId: id, repositoryId: id, branch: z.string().optional(), expectedDefaultBranch: z.string().optional(), expectedCatalogGeneration: z.number().int().nonnegative().optional(), idempotencyKey: z.string().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/).optional() }).strict();
 export const GithubUrl = z.union([z.object({ provider: z.literal('github'), configured: z.literal(true), installUrl: z.url(), mode: z.literal('github-app-install') }), z.object({ provider: z.literal('github'), authorizationUrl: z.url() }).catchall(json)]);
 export const Deletion = z.union([z.object({ deleted: z.literal(true) }).catchall(json), z.object({ deletionRequested: z.literal(true), status: z.string() }).catchall(json)]);

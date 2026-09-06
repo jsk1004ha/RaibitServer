@@ -609,6 +609,19 @@ model GitHubRepository {
   @@index([installationId, generation, normalizedIdentity, githubRepoId])
 }
 
+model GitHubSourceMutation {
+  id             String   @id
+  organizationId String
+  operation      String
+  idempotencyKey String
+  requestHash    String
+  response       Json
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, operation, idempotencyKey])
+  @@index([organizationId, createdAt])
+}
+
 model GitHubIntegration {
   id               String       @id @default(cuid())
   organizationId   String
