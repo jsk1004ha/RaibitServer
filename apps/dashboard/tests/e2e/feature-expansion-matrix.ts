@@ -45,6 +45,31 @@ const delegatedTask35Rows = [
   { id: 'identity-global-admin-create', role: 'GLOBAL_ADMIN', state: 'success', source: 'global-admin-create' },
 ] as const;
 
+type RoleBrowserJourney = Readonly<{
+  id: string;
+  kind: 'positive' | 'negative';
+  title: string;
+  role: Role;
+  token: string | null;
+  route: '/org/org_fixture_001/members' | '/organizations/new';
+  intent: 'authentication-required' | 'member-mutation' | 'member-denied' | 'tenant-create';
+  nextRole?: 'ADMIN' | 'MAINTAINER';
+  viewport: (typeof PLATFORM_EXPANSION_VIEWPORTS)[number];
+  theme: Theme;
+}>;
+
+export const TASK49_ROLE_BROWSER_JOURNEYS = [
+  { id: 'task49-role-anonymous', kind: 'negative', title: 'identity-role-anonymous cannot mutate organization membership and is asked to sign in', role: 'anonymous', token: null, route: '/org/org_fixture_001/members', intent: 'authentication-required', viewport: PLATFORM_EXPANSION_VIEWPORTS[0], theme: 'light' },
+  { id: 'task49-role-pending', kind: 'negative', title: 'identity-role-pending cannot mutate organization membership before account approval', role: 'pending', token: 'fixture-role-pending', route: '/org/org_fixture_001/members', intent: 'authentication-required', viewport: PLATFORM_EXPANSION_VIEWPORTS[1], theme: 'dark' },
+  { id: 'task49-role-owner', kind: 'positive', title: 'identity-role-OWNER changes a member role and reads back the persisted membership', role: 'OWNER', token: 'fixture-role-owner', route: '/org/org_fixture_001/members', intent: 'member-mutation', nextRole: 'ADMIN', viewport: PLATFORM_EXPANSION_VIEWPORTS[2], theme: 'system' },
+  { id: 'task49-role-admin', kind: 'positive', title: 'identity-role-ADMIN changes a non-owner role and reads back the persisted membership', role: 'ADMIN', token: 'fixture-role-admin', route: '/org/org_fixture_001/members', intent: 'member-mutation', nextRole: 'MAINTAINER', viewport: PLATFORM_EXPANSION_VIEWPORTS[3], theme: 'light' },
+  { id: 'task49-role-maintainer', kind: 'negative', title: 'identity-role-MAINTAINER receives 403, unchanged member readback, and no mutation controls', role: 'MAINTAINER', token: 'fixture-role-maintainer', route: '/org/org_fixture_001/members', intent: 'member-denied', viewport: PLATFORM_EXPANSION_VIEWPORTS[4], theme: 'dark' },
+  { id: 'task49-role-developer', kind: 'negative', title: 'identity-role-DEVELOPER receives 403, unchanged member readback, and no mutation controls', role: 'DEVELOPER', token: 'fixture-role-developer', route: '/org/org_fixture_001/members', intent: 'member-denied', viewport: PLATFORM_EXPANSION_VIEWPORTS[5], theme: 'system' },
+  { id: 'task49-role-db-admin', kind: 'negative', title: 'identity-role-DB_ADMIN receives 403, unchanged member readback, and no mutation controls', role: 'DB_ADMIN', token: 'fixture-role-db-admin', route: '/org/org_fixture_001/members', intent: 'member-denied', viewport: PLATFORM_EXPANSION_VIEWPORTS[0], theme: 'light' },
+  { id: 'task49-role-viewer', kind: 'negative', title: 'identity-role-VIEWER receives 403, unchanged member readback, and no mutation controls', role: 'VIEWER', token: 'fixture-role-viewer', route: '/org/org_fixture_001/members', intent: 'member-denied', viewport: PLATFORM_EXPANSION_VIEWPORTS[1], theme: 'dark' },
+  { id: 'task49-role-global-admin', kind: 'positive', title: 'identity-role-GLOBAL_ADMIN creates a tenant without inheriting organization member authority', role: 'GLOBAL_ADMIN', token: 'fixture-role-global-admin', route: '/organizations/new', intent: 'tenant-create', viewport: PLATFORM_EXPANSION_VIEWPORTS[2], theme: 'system' },
+] as const satisfies readonly RoleBrowserJourney[];
+
 export const PLATFORM_EXPANSION_MATRIX: readonly PlatformExpansionRow[] = [
   ...delegatedTask35Rows.map((row, index) => ({
     ...row, execution: 'delegated-task35' as const, driver: null, actor: null, route: '/org/raibit/members',
@@ -80,6 +105,7 @@ export const PLATFORM_EXPANSION_DELEGATED_TASK41_ROWS = PLATFORM_EXPANSION_MATRI
 export const PLATFORM_EXPANSION_DELEGATED_PLAYWRIGHT_SCENARIOS = [
   { id: 'task35-invite-acceptance', kind: 'positive', title: 'identity-owner-membership trusted invite link completes with keyboard, announcement, redaction, motion, and reflow outcomes' },
   { id: 'task35-account-logout', kind: 'positive', title: 'identity-pending-relogin account identity and logout remain synchronized across desktop and mobile shells' },
+  ...TASK49_ROLE_BROWSER_JOURNEYS.map(({ id, kind, title }) => ({ id, kind, title })),
   { id: 'task41-import-conflict-recovery', kind: 'negative', title: 'github-conflict-recovery-contract import preserves an idempotency key across retry and asks for an explicit new slug' },
   { id: 'task41-attach-conflict-recovery', kind: 'negative', title: 'github-conflict-recovery-contract-attach attach and opaque collisions offer only their typed recovery action' },
 ] as const;
