@@ -267,6 +267,7 @@ test('recovery API core persists the first mutation audit inside the PostgreSQL 
   const result = await repository.createBackup(request('postgres-audit'));
   const audit = writes.find(row => row.query.includes('INSERT INTO "AuditLog"'));
   assert.ok(audit);
+  assert.match(audit.query, /\$6::timestamp\(3\)/);
   assert.deepEqual(audit.values.slice(0, 4), ['user_a', 'resource.backup:requested', 'resource-backup', result.operation.id]);
   assert.deepEqual(JSON.parse(audit.values[4]), { engine: 'postgresql', status: 'QUEUED' });
 });

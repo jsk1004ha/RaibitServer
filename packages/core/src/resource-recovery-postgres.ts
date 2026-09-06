@@ -56,7 +56,7 @@ async function persistRecoveryState(tx: RecoverySql, before: RecoveryState, next
   const remaining = new Set(next.pins.map(row => row.id));
   for (const pin of before.pins) if (!remaining.has(pin.id)) await tx.$executeRawUnsafe('DELETE FROM "ResourceRecoveryPin" WHERE id=$1', pin.id);
   for (const audit of next.auditEvents) await tx.$executeRawUnsafe(
-    'INSERT INTO "AuditLog" ("actorUserId",action,"targetType","targetId",metadata,"createdAt") VALUES ($1,$2,$3,$4,$5::jsonb,$6)',
+    'INSERT INTO "AuditLog" ("actorUserId",action,"targetType","targetId",metadata,"createdAt") VALUES ($1,$2,$3,$4,$5::jsonb,$6::timestamp(3))',
     audit.actorUserId, audit.action, audit.targetType, audit.targetId, JSON.stringify(audit.metadata), audit.createdAt,
   );
 }
