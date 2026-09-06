@@ -77,7 +77,9 @@ test('approved console users can open the organization creation surface without 
   assert.match(form, /organization-slug/);
   assert.match(form, /pattern="\[a-z0-9\]\(\?:\[a-z0-9-\]\*\[a-z0-9\]\)\?"/);
   assert.match(form, /status === 409/);
-  assert.match(form, /reauthentication-required/);
+  assert.match(form, /response\.status === 401 \? \{ kind: 'auth-required' \}/);
+  assert.match(form, /kind: 'created-needs-reauthentication'/);
+  assert.match(form, /새 조직이 만들어지지 않았습니다/);
   assert.match(form, /requiresReauthentication/);
   assert.doesNotMatch(form, /owner|membershipId|role:/i);
   assert.doesNotMatch(pageSource, /^['"]use client['"]/);

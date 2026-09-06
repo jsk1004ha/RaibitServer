@@ -12,7 +12,8 @@ import { apiAction } from '@/lib/api';
 type CreateState =
   | Readonly<{ kind: 'idle' | 'pending' }>
   | Readonly<{ kind: 'error'; message: string }>
-  | Readonly<{ kind: 'reauthentication-required' }>;
+  | Readonly<{ kind: 'auth-required' }>
+  | Readonly<{ kind: 'created-needs-reauthentication' }>;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -61,14 +62,14 @@ export function OrganizationCreateForm() {
       });
       const body = await responsePayload(response);
       if (!response.ok) {
-        setState(response.status === 401 ? { kind: 'reauthentication-required' } : { kind: 'error', message: errorMessage(response.status, body) });
+        setState(response.status === 401 ? { kind: 'auth-required' } : { kind: 'error', message: errorMessage(response.status, body) });
         return;
       }
       if (requiresReauthentication(body)) {
-        setState({ kind: 'reauthentication-required' });
+        setState({ kind: 'created-needs-reauthentication' });
         return;
       }
-      setState({ kind: 'reauthentication-required' });
+      setState({ kind: 'error', message: '조직 생성 결과를 확인하지 못했습니다. 다시 로그인한 뒤 새 조직 목록을 확인해 주세요.' });
     } catch {
       setState({ kind: 'error', message: '제어 영역에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.' });
     }
@@ -80,9 +81,10 @@ export function OrganizationCreateForm() {
       <form onSubmit={createOrganization}>
         <CardContent className="flex flex-col gap-5"><FieldGroup><Field><FieldLabel htmlFor="organization-name">조직 이름</FieldLabel><Input autoComplete="organization" disabled={state.kind === 'pending'} id="organization-name" maxLength={128} name="name" onChange={(event) => setName(event.target.value)} required value={name} /></Field><Field><FieldLabel htmlFor="organization-slug">조직 주소</FieldLabel><Input aria-describedby="organization-slug-description" autoCapitalize="none" autoComplete="off" disabled={state.kind === 'pending'} id="organization-slug" maxLength={63} name="slug" onChange={(event) => setSlug(event.target.value.toLowerCase())} pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" required value={slug} /><FieldDescription id="organization-slug-description">소문자, 숫자, 하이픈만 사용할 수 있습니다. 이미 사용 중인 주소는 선택할 수 없습니다.</FieldDescription></Field></FieldGroup>
           {state.kind === 'error' ? <Alert role="alert" variant="destructive"><AlertTitle>조직을 만들지 못했습니다.</AlertTitle><AlertDescription>{state.message}</AlertDescription></Alert> : null}
-          {state.kind === 'reauthentication-required' ? <Alert role="status" variant="notice"><AlertTitle>새 조직을 만들었습니다.</AlertTitle><AlertDescription>조직 멤버십이 갱신되어 새 세션이 필요합니다. 다시 로그인한 뒤 콘솔에서 새 조직을 확인해 주세요.</AlertDescription></Alert> : null}
+          {state.kind === 'auth-required' ? <Alert role="alert" variant="destructive"><AlertTitle>로그인이 필요합니다.</AlertTitle><AlertDescription>새 조직이 만들어지지 않았습니다. 다시 로그인한 뒤 요청을 다시 시도해 주세요.</AlertDescription></Alert> : null}
+          {state.kind === 'created-needs-reauthentication' ? <Alert role="status" variant="notice"><AlertTitle>새 조직을 만들었습니다.</AlertTitle><AlertDescription>조직 멤버십이 갱신되어 새 세션이 필요합니다. 다시 로그인한 뒤 콘솔에서 새 조직을 확인해 주세요.</AlertDescription></Alert> : null}
         </CardContent>
-        <CardFooter className="flex flex-wrap justify-end gap-2">{state.kind === 'reauthentication-required' ? <Button render={<a href="/login" />}>다시 로그인하기</Button> : <Button disabled={state.kind === 'pending'} type="submit">{state.kind === 'pending' ? <><Spinner data-icon="inline-start" />조직 만드는 중</> : '조직 만들기'}</Button>}</CardFooter>
+        <CardFooter className="flex flex-wrap justify-end gap-2">{state.kind === 'auth-required' || state.kind === 'created-needs-reauthentication' ? <Button render={<a href="/login" />}>다시 로그인하기</Button> : <Button disabled={state.kind === 'pending'} type="submit">{state.kind === 'pending' ? <><Spinner data-icon="inline-start" />조직 만드는 중</> : '조직 만들기'}</Button>}</CardFooter>
       </form>
     </Card>
   );
