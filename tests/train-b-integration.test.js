@@ -3,6 +3,23 @@ import test from 'node:test';
 import { RAIBITSERVERClient } from '@raibitserver/api-client';
 import { hashPassword, signJwtHs256 } from '@raibitserver/core';
 import { bootParityApi } from './fixtures/api-parity-runtime.mjs';
+import { ControlPlaneStore } from '../packages/core/src/store.ts';
+
+test('private email challenge clones preserve verifier fields while GitHub projections remain public', () => {
+  // Given private verifier material and a separate GitHub integration.
+  const store = new ControlPlaneStore();
+  const input = { email: 'private@example.test', codeHash: 'fixture-hash', codeSalt: 'fixture-salt', expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  // When internal auth persistence and public GitHub projection return their records.
+  const challenge = store.createEmailVerificationCode(input);
+  const integration = store.createGitHubIntegration({ organizationId: 'fixture-org', accountLogin: 'fixture-account' });
+  // Then only the private clone carries verifier fields and mutation cannot change persistence.
+  assert.equal(challenge.codeHash, input.codeHash);
+  assert.equal(challenge.codeSalt, input.codeSalt);
+  challenge.codeHash = 'changed-clone';
+  assert.equal(store.emailVerificationCodes[0].codeHash, input.codeHash);
+  assert.equal(Object.hasOwn(integration, 'tokenSecretId'), false);
+  assert.equal(Object.hasOwn(integration, 'codeHash'), false);
+});
 
 test('composed password recovery revokes project settings access until a new login', async (t) => {
   const runtime = await bootParityApi();

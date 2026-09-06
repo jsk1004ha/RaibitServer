@@ -286,7 +286,7 @@ export class ControlPlaneStore {
       updatedAt: nowIso(),
     };
     this.emailVerificationCodes.push(row);
-    return deepClone(publicGitHubIntegration(row));
+    return deepClone(row);
   }
 
   replaceEmailVerificationCode(input: Record<string, any>) {
