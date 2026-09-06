@@ -5,12 +5,12 @@ import { decodeDeploymentRouteSegment, encodeDeploymentRouteSegment } from './de
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-test('deployment operations keep all five URL-addressed views and bounded semantic output', async () => {
+test('deployment operations keep their URL-addressed data views and bounded semantic output', async () => {
   // Given: the deployment detail route is the server-owned operations surface.
   const source = await read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx');
 
   // When: its route and presentation contracts are inspected.
-  const viewUrls = ['overview', 'logs', 'events', 'rollback', 'cancel'];
+  const viewUrls = ['overview', 'logs', 'events'];
 
   // Then: every view is addressable and operational output stays semantic and bounded.
   for (const view of viewUrls) assert.ok(source.includes(`view=${view}`), `missing deployment view=${view}`);
@@ -21,23 +21,22 @@ test('deployment operations keep all five URL-addressed views and bounded semant
   assert.match(source, /focus-visible:ring-ring\/50/);
   assert.doesNotMatch(source, /<LogViewer/);
   assert.match(source, /break-all/);
-  assert.match(source, /QUEUED[\s\S]*BUILDING[\s\S]*IMAGE_READY/);
+  assert.match(source, /history\?\.permissions\.execute && history\.eligibleAction/);
 });
 
-test('deployment mutations preserve exact endpoints, fields, return paths, and confirmation rules', async () => {
-  // Given: rollback and cancellation are native server-posted forms.
-  const [source, operationSubmit] = await Promise.all([
+test('deployment mutations preserve server-selected endpoints, fields, return paths, and confirmation rules', async () => {
+  const [source, operationSubmit, recovery] = await Promise.all([
     read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
     read('../components/operation-submit.tsx'),
+    read('../components/project-hub/deployment-recovery-action.tsx'),
   ]);
 
   // When: their machine-consumed contracts are inspected.
-  // Then: rollback is confirmed, cancellation is status-gated, and no status mutation is exposed.
-  assert.match(source, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/rollback`, context\)/);
-  assert.match(source, /id="rollback-deployment"[\s\S]*name="imageUrl"[\s\S]*name="confirmed"[\s\S]*required/);
-  assert.match(source, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/cancel`, context\)/);
-  assert.match(source, /name="reason"/);
-  assert.match(source, /returnTo=\{`\$\{base\}\?view=overview`\}/);
+  // Then: only a server-eligible action is rendered; rollback remains confirmed and no status mutation is exposed.
+  assert.match(source, /history\?\.permissions\.execute && history\.eligibleAction/);
+  assert.match(source, /<DeploymentRecoveryAction action=\{history\.eligibleAction\}[\s\S]*returnTo=\{`\$\{base\}\?view=overview`\}/);
+  assert.match(recovery, /action=\{`\/api\/control\$\{action\.href\}`\}/);
+  assert.match(recovery, /action\.type === 'rollback' \? <input name="confirmed" type="hidden" value="true"/);
   assert.match(operationSubmit, /<form[\s\S]*action=\{action\}[\s\S]*method="post"/);
   assert.match(operationSubmit, /name="_returnTo"/);
   assert.doesNotMatch(source, /\/deployments\/\$\{(?:deploymentId|encodedDeploymentId)\}\/status/);
@@ -66,8 +65,8 @@ test('deployment route IDs decode at most once and use one canonical encoded pat
     assert.match(source, /const decodedDeploymentId = decodeDeploymentRouteSegment\(deploymentId\)/);
     assert.match(source, /const encodedDeploymentId = encodeDeploymentRouteSegment\(deploymentId\)/);
     assert.match(source, /getJson\(`\/deployments\/\$\{encodedDeploymentId\}`/);
-    assert.match(source, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/rollback`/);
-    assert.match(source, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/cancel`/);
+    assert.match(source, /DeploymentRecoveryAction/);
+    assert.match(source, /history\.eligibleAction/);
     assert.match(source, /deployments\/\$\{encodedDeploymentId\}`/);
     assert.match(source, />\{decodedDeploymentId\}<\/span>/);
     assert.doesNotMatch(source, /deployments\/\$\{deploymentId\}/);

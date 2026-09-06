@@ -5,7 +5,7 @@ import test from 'node:test';
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('operation submit leaf keeps the native form contract while enhancing a single confirmed request', async () => {
-  const source = await read('../components/operation-submit.tsx');
+  const [source, result] = await Promise.all([read('../components/operation-submit.tsx'), read('../lib/operation-result.ts')]);
 
   assert.match(source, /^['"]use client['"]/);
   assert.match(source, /<form[\s\S]*action=\{action\}[\s\S]*method="post"/);
@@ -20,52 +20,47 @@ test('operation submit leaf keeps the native form contract while enhancing a sin
   assert.match(source, /retryable/);
   assert.match(source, /controlPlaneErrorCode/);
   assert.match(source, /status === 401 \|\| status === 403/);
-  assert.match(source, /record\?\.status \?\? record\?\.state/);
+  assert.match(result, /record\?\.status \?\? record\?\.state/);
   assert.match(source, /sameOriginStreamHref/);
   assert.doesNotMatch(source, /QUEUED|READY/);
   assert.doesNotMatch(source, /randomUUID|Math\.random|Date\.now/);
 });
 
 test('operation surfaces compose the enhanced native form for every recovery path', async () => {
-  const [operations, services, deployment, resource] = await Promise.all([
+  const [operations, services, deployment, resource, recovery, history] = await Promise.all([
     read('../components/project-hub/operations.tsx'),
     read('../components/project-hub/services.tsx'),
     read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
     read('../app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../components/project-hub/deployment-recovery-action.tsx'),
+    read('../components/project-hub/deployment-history-model.ts'),
   ]);
-  const all = `${operations}\n${services}\n${deployment}\n${resource}`;
+  const all = `${operations}\n${services}\n${deployment}\n${resource}\n${recovery}`;
 
-  for (const endpoint of ['/deployments', '/retry', '/redeploy', '/cancel', '/rollback', '/preview-cleanup', '/provision', '/attach']) {
+  for (const endpoint of ['/deployments', '/provision', '/attach']) {
     assert.ok(all.includes(endpoint), `missing recovery endpoint ${endpoint}`);
   }
   assert.match(all, /OperationSubmit/);
   assert.match(all, /name="_returnTo"/);
-  assert.match(deployment, /cancellationAllowed/);
-  assert.match(deployment, /rollbackAllowed/);
+  assert.match(deployment, /DeploymentRecoveryAction[\s\S]*history\.eligibleAction/);
   assert.match(deployment, /randomUUID/);
-  assert.match(deployment, /name="requestIdempotencyKey"/);
-  assert.match(deployment, /name="snapshotVersion"/);
-  assert.match(deployment, /previewCleanupAllowed/);
+  assert.match(recovery, /action=\{`\/api\/control\$\{action\.href\}`\}/);
+  assert.match(recovery, /name="requestIdempotencyKey"/);
+  assert.match(recovery, /name="snapshotVersion"/);
+  assert.match(recovery, /action\.type === 'rollback'[\s\S]*name="confirmed"/);
+  assert.match(history, /type: 'retry' \| 'redeploy' \| 'cancel' \| 'rollback'/);
+  assert.match(history, /entry\.method !== 'POST' \|\| entry\.confirmationRequired !== true/);
 });
 
-test('retry and redeploy native forms render independent replay keys for one deployment view', async () => {
-  // Given: the server-owned deployment detail page with both recovery forms.
-  const deployment = await read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx');
-  const retryForm = deployment.match(/<OperationSubmit action=\{apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/retry`[\s\S]*?<\/OperationSubmit>/)?.[0];
-  const redeployForm = deployment.match(/<OperationSubmit action=\{apiAction\(`\/services\/\$\{String\(detail\.serviceId \|\| ''\)\}\/redeploy`[\s\S]*?<\/OperationSubmit>/)?.[0];
+test('server-selected retry and redeploy actions receive fresh keys while every recovery form preserves its server snapshot', async () => {
+  const [deployment, recovery] = await Promise.all([
+    read('../app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
+    read('../components/project-hub/deployment-recovery-action.tsx'),
+  ]);
 
-  // When: the hidden native POST payload fields are inspected.
-  const retryKey = retryForm?.match(/name="requestIdempotencyKey" type="hidden" value=\{([^}]+)\}/)?.[1];
-  const redeployKey = redeployForm?.match(/name="requestIdempotencyKey" type="hidden" value=\{([^}]+)\}/)?.[1];
-
-  // Then: each action references its own server-rendered key, while both carry snapshotVersion.
-  assert.ok(retryKey, 'retry form must submit a requestIdempotencyKey');
-  assert.ok(redeployKey, 'redeploy form must submit a requestIdempotencyKey');
-  assert.notEqual(retryKey, redeployKey, 'retry and redeploy must not reuse one replay key');
-  assert.match(deployment, /const retryRequestIdempotencyKey = snapshotVersion === null \? null : randomUUID\(\);/);
-  assert.match(deployment, /const redeployRequestIdempotencyKey = snapshotVersion === null \? null : randomUUID\(\);/);
-  assert.match(retryForm ?? '', /name="snapshotVersion" type="hidden"/);
-  assert.match(redeployForm ?? '', /name="snapshotVersion" type="hidden"/);
+  assert.match(deployment, /history\.eligibleAction\.type === 'retry' \|\| history\.eligibleAction\.type === 'redeploy' \? randomUUID\(\) : null/);
+  assert.match(recovery, /requiresIdempotencyKey && idempotencyKey !== null[\s\S]*name="requestIdempotencyKey"/);
+  assert.match(recovery, /requiresIdempotencyKey && action\.snapshotVersion !== null[\s\S]*name="snapshotVersion"/);
 });
 
 test('deployment stream preserves hostile text as text and exposes only same-origin operation links', async () => {
