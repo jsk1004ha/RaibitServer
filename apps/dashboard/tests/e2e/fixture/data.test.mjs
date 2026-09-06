@@ -6,6 +6,7 @@ import {
   PUBLIC_SITE_SCENARIOS,
   TOKENS,
   isPublicSiteScenario,
+  resetProjectSettingsFixture,
   responseFor,
 } from './data.mjs';
 import { createFixtureState } from './state.mjs';
@@ -71,6 +72,33 @@ test('Given non-populated sessions, when GitHub data loads, then empty and autho
       defaultBranch: 'main', private: false, installationId: '9001',
     }] },
   });
+});
+
+test('Given project settings, when a conditional update or deletion request is made, then immutable fields remain server-owned and role-gated', () => {
+  const path = '/projects/prj_fixture_001/settings';
+  const deletionPath = `${path}/deletion`;
+  resetProjectSettingsFixture();
+
+  const initial = request('GET', path);
+  const updated = request('PATCH', path, TOKENS.user, { body: { expectedUpdatedAt: initial.body.snapshot.updatedAt, name: '변경된 운영 프로젝트' } });
+  const stale = request('PATCH', path, TOKENS.user, { body: { expectedUpdatedAt: initial.body.snapshot.updatedAt, description: '오래된 설명' } });
+  const forged = request('PATCH', path, TOKENS.user, { body: { expectedUpdatedAt: updated.body.snapshot.updatedAt, slug: 'forged', name: '변경된 운영 프로젝트' } });
+  const deniedDeletion = request('POST', deletionPath, TOKENS.user, { body: { confirmed: true } });
+  const scheduled = request('POST', deletionPath, TOKENS.admin, { body: { confirmed: true } });
+  const repeated = request('POST', deletionPath, TOKENS.admin, { body: { confirmed: true } });
+
+  assert.equal(initial.body.project.slug, 'deterministic-app');
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.project.name, '변경된 운영 프로젝트');
+  assert.equal(updated.body.project.slug, 'deterministic-app');
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error, 'STALE_PROJECT');
+  assert.equal(forged.status, 400);
+  assert.equal(deniedDeletion.status, 403);
+  assert.deepEqual(scheduled.body, repeated.body);
+  assert.equal(scheduled.status, 202);
+  assert.equal(scheduled.body.scheduled, true);
+  resetProjectSettingsFixture();
 });
 
 test('Given the fixture-only public state switch, when each allowlisted scenario loads, then public payloads are deterministic and reset-safe', () => {

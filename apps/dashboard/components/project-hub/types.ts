@@ -13,6 +13,21 @@ export type ProjectRecord = Readonly<{
   organization?: Readonly<{ name?: string; slug?: string }>;
 }>;
 
+export type ProjectSettingsView = Readonly<{
+  project: Readonly<{
+    id: string;
+    organizationId: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    status: string;
+    updatedAt: string;
+    deletionRequestedAt: string | null;
+  }>;
+  snapshot: Readonly<{ updatedAt: string }>;
+  deletionImpact: Readonly<{ services: number; resources: number; previews: number }>;
+}>;
+
 export type ServiceRecord = Readonly<{
   id: string;
   name?: string;
@@ -109,6 +124,8 @@ export type ProjectHubData = Readonly<{
   mainLink: Readonly<{ href: string; label: string }> | null;
   project: ProjectRecord;
   projectId: string;
+  projectSettings: ProjectSettingsView | null;
+  projectSettingsIssue: DashboardLoadIssue | null;
   projectName: string;
   previewDeployments: readonly DeploymentRecord[];
   resources: readonly ResourceRecord[];

@@ -33,7 +33,7 @@ export function ProjectHub({ data, orgSlug }: Readonly<{ data: ProjectHubData; o
         {['resources', 'new-resource'].includes(data.view) ? <ResourcesView data={data} /> : null}
         {data.view === 'environment' ? <EnvironmentView data={data} /> : null}
         {data.view === 'logs' ? <LogsView data={data} /> : null}
-        {data.view === 'settings' ? <SettingsView data={data} orgSlug={orgSlug} /> : null}
+        {data.view === 'settings' ? <SettingsView data={data} issue={data.projectSettingsIssue} orgSlug={orgSlug} settings={data.projectSettings} /> : null}
       </div>
     </section>
   );

@@ -14,6 +14,8 @@ const project = {
   id: 'prj_fixture_001', organizationId: 'org_fixture_001', organizationSlug: 'raibit',
   name: '결정적 운영 프로젝트', slug: 'deterministic-app', status: 'active', serviceCount: 2, resourceCount: 1,
 };
+const initialSettingsProject = Object.freeze({ name: project.name, description: null, updatedAt: FIXED_TIME, deletionRequestedAt: null });
+let settingsProject = initialSettingsProject;
 const service = {
   id: 'svc_fixture_web', projectId: project.id, name: 'web', slug: 'web', type: 'web', status: 'running',
   sourceType: 'github', repoUrl: 'https://github.com/raibit/fixture-app', branch: 'main', dockerfilePath: 'Dockerfile', port: 3000,
@@ -122,6 +124,10 @@ export const loginAccounts = new Map([
   ['long@fixture.test', { password: 'fixture-long-pass', token: TOKENS.long }],
 ]);
 
+export function resetProjectSettingsFixture() {
+  settingsProject = initialSettingsProject;
+}
+
 export function responseFor({ token, method, pathname, searchParams, publicSiteScenario = DEFAULT_PUBLIC_SITE_SCENARIO, body = {} }) {
   if (pathname === '/health') return json(200, { status: 'ok', checkedAt: FIXED_TIME });
   if (pathname === '/public/sites') return publicSitesResponse(publicSiteScenario, searchParams);
@@ -143,6 +149,8 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   if (pathname === '/github/installations') return json(200, { installations: state === 'empty' ? [] : [githubInstallation] });
   if (pathname === '/github/installations/9001/repositories') return json(200, { repositories: [githubRepository] });
   if (pathname === `/projects/${project.id}/services`) return json(200, { services: [service, workerService] });
+  if (pathname === `/projects/${project.id}/settings/deletion`) return projectDeletionResponse({ actor, body, method });
+  if (pathname === `/projects/${project.id}/settings`) return projectSettingsResponse({ actor, body, method });
   if (method === 'POST' && pathname === '/github/repositories/import') return json(201, {
     projectId: project.id, serviceId: service.id, integrationId: githubIntegration.id, repositoryId: githubRepository.id,
   });
@@ -178,6 +186,48 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
 }
 
 function json(status, body) { return { status, body }; }
+
+function projectSettingsResponse({ actor, body, method }) {
+  if (method === 'GET') return json(200, projectSettingsView());
+  if (method !== 'PATCH') return json(405, { error: 'fixture_settings_method_not_allowed' });
+  if (actor.role !== 'ADMIN' && actor.id !== users.user.id) return json(403, { error: 'permission_denied' });
+  const keys = Object.keys(body).sort();
+  if (keys.length < 2 || keys.length > 3 || !keys.includes('expectedUpdatedAt') || keys.some((key) => !['expectedUpdatedAt', 'name', 'description'].includes(key))) return json(400, { error: 'invalid_request_body' });
+  if (typeof body.expectedUpdatedAt !== 'string' || (body.name !== undefined && typeof body.name !== 'string') || (body.description !== undefined && typeof body.description !== 'string')) return json(400, { error: 'invalid_request_body' });
+  if (body.expectedUpdatedAt !== settingsProject.updatedAt) return json(409, { error: 'STALE_PROJECT' });
+  settingsProject = {
+    ...settingsProject,
+    ...(body.name === undefined ? {} : { name: body.name }),
+    ...(body.description === undefined ? {} : { description: body.description }),
+    updatedAt: '2026-08-31T03:00:01.000Z',
+  };
+  return json(200, projectSettingsView());
+}
+
+function projectSettingsView() {
+  return {
+    project: {
+      id: project.id,
+      organizationId: project.organizationId,
+      name: settingsProject.name,
+      slug: project.slug,
+      description: settingsProject.description,
+      status: project.status,
+      updatedAt: settingsProject.updatedAt,
+      deletionRequestedAt: settingsProject.deletionRequestedAt,
+    },
+    snapshot: { updatedAt: settingsProject.updatedAt },
+    deletionImpact: { services: 2, resources: 1, previews: 1 },
+  };
+}
+
+function projectDeletionResponse({ actor, body, method }) {
+  if (method !== 'POST') return json(405, { error: 'fixture_settings_method_not_allowed' });
+  if (actor.role !== 'ADMIN') return json(403, { error: 'permission_denied' });
+  if (Object.keys(body).length !== 1 || body.confirmed !== true) return json(400, { error: 'invalid_request_body' });
+  if (settingsProject.deletionRequestedAt === null) settingsProject = { ...settingsProject, deletionRequestedAt: '2026-08-31T03:00:02.000Z' };
+  return json(202, { projectId: project.id, status: 'DELETE_REQUESTED', deletionRequestedAt: settingsProject.deletionRequestedAt, scheduled: true });
+}
 
 function publicSitesResponse(scenario, searchParams) {
   const limit = searchParams.get('limit');

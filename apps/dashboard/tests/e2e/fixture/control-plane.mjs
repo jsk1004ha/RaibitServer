@@ -3,6 +3,7 @@ import {
   FIXED_TIME,
   PUBLIC_SITE_SCENARIOS,
   loginAccounts,
+  resetProjectSettingsFixture,
   responseFor,
 } from './data.mjs';
 import { redactFixtureRequestBody } from './redact.mjs';
@@ -37,6 +38,7 @@ const server = createServer(async (request, response) => {
     return send(response, 200, nextState);
   }
   if (url.pathname === '/__fixture/reset' && request.method === 'POST') {
+    resetProjectSettingsFixture();
     return send(response, 200, fixtureState.reset());
   }
   const streamMatch = /^\/api\/services\/([^/]+)\/logs\/stream$/.exec(url.pathname);

@@ -17,6 +17,9 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
   const resourceOptions = view === 'new-resource'
     ? await getJson(`/projects/${encodeURIComponent(projectId)}/resources`, { resourceOptions: [] }, state.context)
     : null;
+  const projectSettings = view === 'settings'
+    ? await getJson(`/projects/${encodeURIComponent(projectId)}/settings`, null, state.context)
+    : null;
   const selectedServiceId = queryText(query.serviceId);
   const selectedService = state.services.find((service: ServiceRecord) => service.id === selectedServiceId) || state.services[0] || null;
   const serviceSettings = selectedService ? { ...selectedService.desiredState, ...selectedService.desiredSpec, ...selectedService } : null;
@@ -66,6 +69,10 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
     mainLink,
     project: state.project,
     projectId,
+    projectSettings: projectSettings?.ok ? projectSettings.body : null,
+    projectSettingsIssue: projectSettings && !projectSettings.ok
+      ? { label: '프로젝트 설정', message: projectSettings.error || '프로젝트 설정을 불러오지 못했습니다.', status: projectSettings.status }
+      : null,
     projectName,
     previewDeployments: state.previewDeployments,
     resources: state.resources,
