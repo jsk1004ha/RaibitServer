@@ -119,11 +119,12 @@ test.describe('@platform-expansion @identity-organization-matrix', () => {
       await userPage.keyboard.press('Enter');
       await expect(accountMenu).toHaveAttribute('aria-expanded', 'true');
       await expect(userPage.getByRole('menuitem', { name: '계정 보안' })).toBeVisible();
+      await expectAccessible(userPage);
       await userPage.keyboard.press('Escape');
       await expectReflow(userPage);
     }
     await userPage.getByRole('button', { name: '계정 메뉴 열기' }).filter({ visible: true }).click();
-    await userPage.getByRole('button', { name: '로그아웃' }).click();
+    await userPage.getByRole('menuitem', { name: '로그아웃' }).click();
 
     // Then: the session cookie is gone and the protected account route requires login without exposing claims.
     await expect.poll(async () => (await userPage.context().cookies()).some((cookie) => cookie.name === 'raibitserver_session')).toBe(false);
