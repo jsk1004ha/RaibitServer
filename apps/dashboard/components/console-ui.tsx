@@ -136,9 +136,9 @@ export async function ConsoleShell({
           <AccountMenu avatarUrl={user?.avatarUrl} email={user?.email} logoutAction={logoutAction} name={user?.name} organization={orgValue} role={membershipRole} />
         </div>
       </aside>
-      <header className="flex min-w-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
         <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} organizationMemberships={organizationMemberships} organizationRouteValue={resolvedOrgRouteValue} projectLabel={projectLabel} projectValue={projectValue} role={membershipRole} userAvatarUrl={user?.avatarUrl} userEmail={user?.email || '로그인 사용자'} userName={user?.name} />
-        <div className="flex shrink-0 items-center gap-2" aria-label="모바일 콘솔 도구">
+        <div className="flex shrink-0 items-center gap-2 max-[12rem]:w-full max-[12rem]:justify-end" aria-label="모바일 콘솔 도구">
           <ConsoleSearch compact items={searchItems} />
           <ThemeMenu />
         </div>

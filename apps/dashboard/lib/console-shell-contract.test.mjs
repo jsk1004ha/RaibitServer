@@ -91,7 +91,8 @@ test('console chrome places synchronized theme menus only in its responsive tool
   // Then: each breakpoint has one visible client leaf while the sheet stays navigation-only.
   assert.match(shell, /import \{ ThemeMenu \} from '\.\/theme-menu';/);
   assert.equal(menuInstances.length, 2);
-  assert.match(shell, /<header className="[^"\n]*md:hidden">[\s\S]*?<div className="flex shrink-0 items-center gap-2" aria-label="모바일 콘솔 도구">[\s\S]*?<ConsoleSearch compact items=\{searchItems\} \/>[\s\S]*?<ThemeMenu \/>[\s\S]*?<\/div>[\s\S]*?<\/header>/);
+  assert.match(shell, /<header className="[^"\n]*flex-wrap[^"\n]*md:hidden">[\s\S]*?<div className="flex shrink-0 items-center gap-2[^"\n]*max-\[12rem\]:w-full[^"\n]*" aria-label="모바일 콘솔 도구">[\s\S]*?<ConsoleSearch compact items=\{searchItems\} \/>[\s\S]*?<ThemeMenu \/>[\s\S]*?<\/div>[\s\S]*?<\/header>/);
+  assert.match(mobile, /max-\[12rem\]:w-full[^"\n]*max-\[12rem\]:basis-full/);
   assert.match(shell, /<header className="sticky top-0 z-10 hidden[^"\n]*md:flex">[\s\S]*?<div className="flex items-center gap-2" aria-label="콘솔 도구">[\s\S]*?<ConsoleSearch items=\{searchItems\} \/>[\s\S]*?사용 설명서[\s\S]*?<ThemeMenu \/>[\s\S]*?<\/div>/);
   assert.doesNotMatch(mobile, /ThemeMenu|theme-menu/);
   assert.match(themeMenu, /^['"]use client['"]/);
