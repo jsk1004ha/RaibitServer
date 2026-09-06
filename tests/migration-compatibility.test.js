@@ -12,6 +12,13 @@ import { checkAdditiveSql, checkCrd, checkMigrationContract, digest, projectRoot
 const manifest = JSON.parse(readFileSync(new URL('../prisma/migration-contract.json', import.meta.url), 'utf8'));
 const crds = JSON.parse(readFileSync(new URL('../test-fixtures/contracts/crd-schema-v1.json', import.meta.url), 'utf8'));
 const require = createRequire(import.meta.url);
+const nMinusOneRef = 'ea2b6274f4920d273880ca97201113ce84cf030a';
+
+function gitFile(ref, path) {
+  const result = spawnSync('git', ['show', `${ref}:${path}`], { cwd: projectRoot, encoding: 'utf8' });
+  assert.equal(result.status, 0, `cannot read ${path} from ${ref}: ${result.stderr}`);
+  return result.stdout;
+}
 
 test('deployment lineage nullable uniqueness migration gate', async t => {
   // Given: only a newly added nullable key may constrain existing Deployment rows.
@@ -33,7 +40,7 @@ test('deployment lineage nullable uniqueness migration gate', async t => {
     else assert.throws(() => checkAdditiveSql(sql));
     const root = fixture(child);
     const next = structuredClone(manifest);
-    const id = '000017_lineage_gate_fixture';
+    const id = '999997_lineage_gate_fixture';
     mkdirSync(join(root, 'prisma/migrations', id));
     writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
     next.migrations.push({ id, sha256: digest(sql) });
@@ -66,7 +73,12 @@ test('migration compatibility gate is available before deployment', async () => 
 
 test('checkout has ordered digests and a forward-fix deployment contract', () => {
   // Given the checkout, when checking the migration contract, then all artifacts agree.
-  assert.deepEqual(checkMigrationContract(), { migrations: manifest.migrations.length, applicationCompatibilityFloor: '000008_git_source_binding', rollbackMode: 'forward-fix', crds: 2 });
+  const contract = checkMigrationContract();
+  assert.equal(contract.migrations, manifest.migrations.length);
+  assert.match(contract.migrationDigest, /^[a-f0-9]{64}$/);
+  assert.equal(contract.applicationCompatibilityFloor, '000008_git_source_binding');
+  assert.equal(contract.rollbackMode, 'forward-fix');
+  assert.equal(contract.crds, 2);
 });
 
 test('reject destructive migration matrix before apply', async (t) => {
@@ -118,7 +130,7 @@ test('reject destructive migration matrix before apply', async (t) => {
     await t.test(`appended migration rejected: ${sql}`, (child) => {
       const root = fixture(child);
       const next = structuredClone(manifest);
-      const id = '000017_rejected_fixture';
+      const id = '999998_rejected_fixture';
       mkdirSync(join(root, 'prisma/migrations', id));
       writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
       next.migrations.push({ id, sha256: digest(sql) });
@@ -152,7 +164,7 @@ test('index gate rejects N-1 uniqueness restrictions and unsupported index gramm
     await t.test(sql, (child) => {
       const root = fixture(child);
       const next = structuredClone(manifest);
-      const id = '000017_index_fixture';
+      const id = '999999_index_fixture';
       mkdirSync(join(root, 'prisma/migrations', id));
       writeFileSync(join(root, 'prisma/migrations', id, 'migration.sql'), sql);
       next.migrations.push({ id, sha256: digest(sql) });
@@ -169,7 +181,7 @@ test('index gate preserves additive non-unique indexes and new-table uniqueness'
   checkAdditiveSql('CREATE TABLE "Environments" ("id" TEXT NOT NULL, "name" TEXT NOT NULL DEFAULT \'\', CONSTRAINT "Environments_pkey" PRIMARY KEY ("id"), CONSTRAINT "Environments_name_key" UNIQUE ("name")); CREATE UNIQUE INDEX "Environments_id_name_key" ON "Environments"("id", "name");');
 });
 
-test('fresh install and 000008 upgrade preserve N-1 Prisma readers/writers through forward-fix', { skip: !process.env.RAIBITSERVER_TEST_DATABASE_URL }, async (t) => {
+test('fresh install and 000008 upgrade preserve actual N-1 Prisma readers/writers through forward-fix', { skip: !process.env.RAIBITSERVER_TEST_DATABASE_URL }, async (t) => {
   // Given an explicitly supplied disposable DB, isolate every scenario in owned schemas.
   const { PrismaClient } = await import('@prisma/client');
   const baseUrl = process.env.RAIBITSERVER_TEST_DATABASE_URL;
@@ -204,11 +216,16 @@ test('fresh install and 000008 upgrade preserve N-1 Prisma readers/writers throu
         assert.equal(user.bannedAt, null);
         return;
       }
-      // Generate a real N-1 client from the complete schema minus the exact 000009/10 additions.
-      const previousSchema = readFileSync(join(root, 'prisma/schema.prisma'), 'utf8')
-        .replace('provider = "prisma-client-js"', 'provider = "prisma-client-js"\n  engineType = "binary"\n  output = "./n-minus-one-client"')
-        .replace(/^\s*(studentId|clubMemberClaim|bannedAt|banExpiresAt|banReason|bannedByUserId)\s+.*$/gm, '')
-        .replace(/^\s*@@index\(\[bannedAt, banExpiresAt\]\).*$/gm, '');
+      const previousManifest = JSON.parse(gitFile(nMinusOneRef, 'prisma/migration-contract.json'));
+      for (const entry of previousManifest.migrations.filter((entry) => entry.id > manifest.applicationCompatibilityFloor)) {
+        const source = gitFile(nMinusOneRef, `prisma/migrations/${entry.id}/migration.sql`);
+        const directory = join(migrationRoot, entry.id);
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(directory, 'migration.sql'), source);
+      }
+      runPrisma(['migrate', 'deploy', '--schema', join(root, 'prisma/schema.prisma')], url.href);
+      const previousSchema = gitFile(nMinusOneRef, 'prisma/schema.prisma')
+        .replace('provider = "prisma-client-js"', 'provider = "prisma-client-js"\n  engineType = "binary"\n  output = "./n-minus-one-client"');
       const previousPath = join(root, 'prisma/previous.prisma');
       writeFileSync(previousPath, previousSchema);
       runPrisma(['generate', '--schema', previousPath], url.href);
@@ -216,7 +233,9 @@ test('fresh install and 000008 upgrade preserve N-1 Prisma readers/writers throu
       previous = new PreviousClient({ datasourceUrl: url.href });
       const before = await previous.user.create({ data: { email: `${schema}@example.test`, name: 'N-1 preserved user' } });
       const preHash = digest(JSON.stringify(before));
-      for (const entry of manifest.migrations.filter((entry) => entry.id > manifest.applicationCompatibilityFloor)) cpSync(join(projectRoot, 'prisma/migrations', entry.id), join(migrationRoot, entry.id), { recursive: true });
+      for (const entry of manifest.migrations.filter((entry) => !previousManifest.migrations.some((old) => old.id === entry.id))) {
+        cpSync(join(projectRoot, 'prisma/migrations', entry.id), join(migrationRoot, entry.id), { recursive: true });
+      }
       // When migration deploy runs before the new application, then the old client still reads/writes.
       runPrisma(['migrate', 'deploy', '--schema', join(root, 'prisma/schema.prisma')], url.href);
       const postHash = digest(JSON.stringify(await previous.user.findUniqueOrThrow({ where: { id: before.id } })));
@@ -227,14 +246,14 @@ test('fresh install and 000008 upgrade preserve N-1 Prisma readers/writers throu
       assert.equal(expanded.clubMemberClaim, false);
       const fix = 'ALTER TABLE "User" ADD COLUMN "compatibilityNote" TEXT;';
       checkAdditiveSql(fix);
-      mkdirSync(join(migrationRoot, '000011_forward_fix'));
-      writeFileSync(join(migrationRoot, '000011_forward_fix/migration.sql'), fix);
+      mkdirSync(join(migrationRoot, '999999_forward_fix'));
+      writeFileSync(join(migrationRoot, '999999_forward_fix/migration.sql'), fix);
       runPrisma(['migrate', 'deploy', '--schema', join(root, 'prisma/schema.prisma')], url.href);
       assert.equal(digest(JSON.stringify(await previous.user.findUniqueOrThrow({ where: { id: before.id } }))), preHash);
       assert.equal((await previous.user.update({ where: { id: before.id }, data: { name: 'N-1 writer after forward-fix' } })).name, 'N-1 writer after forward-fix');
       const columns = await current.$queryRawUnsafe(`SELECT column_name FROM information_schema.columns WHERE table_schema = '${schema}' AND table_name = 'User' AND column_name IN ('studentId', 'bannedAt', 'compatibilityNote') ORDER BY column_name`);
       assert.deepEqual(columns.map((row) => row.column_name), ['bannedAt', 'compatibilityNote', 'studentId']);
-      child.diagnostic(JSON.stringify({ scenario: '000008-upgrade-forward-fix', previousSchemaSha256: digest(previousSchema), preHash, postHash, forwardFixHash: preHash }));
+      child.diagnostic(JSON.stringify({ scenario: '000008-upgrade-N-1-forward-fix', nMinusOneRef, previousSchemaSha256: digest(previousSchema), preHash, postHash, forwardFixHash: preHash }));
     });
   }
 });

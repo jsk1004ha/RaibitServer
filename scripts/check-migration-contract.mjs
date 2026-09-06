@@ -7,7 +7,15 @@ import { parse } from 'yaml';
 
 export const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 export const digest = (content) => createHash('sha256').update(content.replaceAll('\r\n', '\n')).digest('hex');
+export const migrationSetDigest = (entries) => digest(`${entries.map((entry) => `${entry.id}:${entry.sha256}`).join('\n')}\n`);
 const reviewedTriggerMigrations = new Set(['000014_resource_recovery', '000015_preview_lineage']);
+const reviewedCompatibilityContracts = new Map([
+  ['000017_github_integration_lifecycle', 'c470f59cd7902fc70306d75d31a230b4c6159d9030147329c66b329324157198'],
+  ['000017_organization_invites', '065527eaa28391ce49cdf3e0a3467e1c4220f61783385f9476f337d0252f630b'],
+  ['000018_github_catalog_generation', 'fc72c579048e9f186ca44992289ad66eae44823a1cda38fcb8f0c253a75b1978'],
+  ['000018_membership_versions', '166ec8f77c0720aa2adc48dae2680be4e4c0b6254b16ff9de716b5945ab1e9fe'],
+  ['202609060001_custom_domain_lifecycle', '44a36e6face136eac2dad193ab2282f5c41f423435de61127c4aba08fb36e6bb'],
+]);
 // Anchor manually reviewed schema DDL that precedes the closed trigger declarations.
 const reviewedTriggerContracts = new Map([
   ['000014_resource_recovery', {
@@ -133,6 +141,11 @@ export function checkReviewedTriggerSql(sql, migrationId) {
   assertSqlTrivia(remaining);
 }
 
+function checkReviewedCompatibilitySql(sql, migrationId) {
+  assert.equal(digest(sql), reviewedCompatibilityContracts.get(migrationId), `reviewed migration changed: ${migrationId}`);
+  assert.doesNotMatch(sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, ' '), /(?:^|;)\s*(?:DELETE|INSERT|DO|GRANT|REVOKE)\b/i, 'reviewed migration became destructive');
+}
+
 // This is deliberately a narrow additive DDL gate, not a general SQL parser.
 // Unsupported statements require compatibility review, never an implicit pass.
 export function checkAdditiveSql(sql) {
@@ -210,7 +223,7 @@ export function checkMigrationContract(root = projectRoot) {
   assert.ok(ids.includes(manifest.applicationCompatibilityFloor) && ids.includes(manifest.historicalThrough), 'historical migrations missing');
   assert.deepEqual(manifest.migrations.map((entry) => entry.id), ids, 'ordered migration IDs must exactly match disk');
   for (const entry of manifest.migrations) {
-    assert.match(entry.id, /^\d{6}_[a-z0-9_]+$/, 'invalid migration ID');
+    assert.match(entry.id, /^(?:\d{6}|\d{12})_[a-z0-9_]+$/, 'invalid migration ID');
     assert.match(entry.sha256 ?? '', /^[a-f0-9]{64}$/, 'missing migration digest');
     const directory = resolve(root, 'prisma/migrations', entry.id);
     assert.deepEqual(readdirSync(directory).sort(), ['migration.sql'], 'down/extra migration files are forbidden');
@@ -219,13 +232,20 @@ export function checkMigrationContract(root = projectRoot) {
     assert.doesNotMatch(sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, ' '), /\b(DROP|TRUNCATE|RENAME)\b/i, 'destructive SQL is forbidden');
     if (entry.id > manifest.historicalThrough) {
       if (reviewedTriggerMigrations.has(entry.id)) checkReviewedTriggerSql(sql, entry.id);
+      else if (reviewedCompatibilityContracts.has(entry.id)) checkReviewedCompatibilitySql(sql, entry.id);
       else checkAdditiveSql(sql);
     }
   }
   const baseline = JSON.parse(readFileSync(resolve(root, 'test-fixtures/contracts/crd-schema-v1.json'), 'utf8'));
   assert.deepEqual(baseline.map((entry) => entry.path), ['infra/k8s/appservice-crd.yaml', 'infra/operators/manageddatabase-crd.yaml'], 'CRD baselines missing');
   for (const entry of baseline) checkCrd(entry.document, parse(readFileSync(resolve(root, entry.path), 'utf8')));
-  return { migrations: ids.length, applicationCompatibilityFloor: manifest.applicationCompatibilityFloor, rollbackMode: manifest.rollbackMode, crds: baseline.length };
+  return {
+    migrations: ids.length,
+    migrationDigest: migrationSetDigest(manifest.migrations),
+    applicationCompatibilityFloor: manifest.applicationCompatibilityFloor,
+    rollbackMode: manifest.rollbackMode,
+    crds: baseline.length,
+  };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

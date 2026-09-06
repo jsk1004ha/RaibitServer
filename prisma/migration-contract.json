@@ -73,6 +73,26 @@
     {
       "id": "000016_pem_context_indexes",
       "sha256": "d6256c4b221ae89f382fc91805a60f71e22138aad08b52e78e543f15e808391f"
+    },
+    {
+      "id": "000017_github_integration_lifecycle",
+      "sha256": "c470f59cd7902fc70306d75d31a230b4c6159d9030147329c66b329324157198"
+    },
+    {
+      "id": "000017_organization_invites",
+      "sha256": "065527eaa28391ce49cdf3e0a3467e1c4220f61783385f9476f337d0252f630b"
+    },
+    {
+      "id": "000018_github_catalog_generation",
+      "sha256": "fc72c579048e9f186ca44992289ad66eae44823a1cda38fcb8f0c253a75b1978"
+    },
+    {
+      "id": "000018_membership_versions",
+      "sha256": "166ec8f77c0720aa2adc48dae2680be4e4c0b6254b16ff9de716b5945ab1e9fe"
+    },
+    {
+      "id": "202609060001_custom_domain_lifecycle",
+      "sha256": "44a36e6face136eac2dad193ab2282f5c41f423435de61127c4aba08fb36e6bb"
     }
   ]
 }
