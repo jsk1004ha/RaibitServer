@@ -15,6 +15,9 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 - **BuildKit 캐시 경로**: builder는 inline cache와 선택적 registry cache(`cache-from/cache-to`) 및 패키지 매니저 cache mount를 계획해 반복 배포 시간을 줄입니다.
 - **관리형 리소스**: PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey는 dedicated-local, SQLite는 로컬 파일 전용입니다. 객체 저장소·Qdrant·NATS 및 나머지 카탈로그 항목은 사유가 표시되는 비활성 `준비 중` 상태입니다. [단일 기능 매트릭스](test-fixtures/contracts/resource-capabilities-v1.json)가 API·UI·컴파일러·Helm을 제어하며, 운영 릴리스와 관리형 백업·복구 지원을 의미하지 않습니다.
 - **서브도메인 라우팅**: 서비스 실행 URL은 조직 slug를 tenant segment로 쓰는 `apps--<org>--<project>.<BASE_DOMAIN>` 형태를 사용하고, preview/console/resource 화면도 같은 flat single-label 규칙을 따릅니다.
+- **계정과 조직 운영**: 비밀번호 재설정은 계정 존재 여부를 숨기는 동일한 202 응답과 일회성 코드로 처리하고, 완료 시 기존 세션을 모두 무효화합니다. 승인된 사용자는 새 조직을 만들 때 그 조직의 `OWNER` 멤버십만 받고 세션을 다시 발급받아야 하며, 초대·역할 변경·제거·탈퇴는 last-owner 및 tenant 경계를 지킵니다.
+- **조건부 설정과 이력 복구**: 프로젝트·서비스 설정은 화면에 렌더된 `updatedAt`을 조건으로 저장하여 stale 변경을 병합하지 않습니다. 배포 이력은 immutable commit/image/snapshot/lineage, public health, actor와 현재 가능한 retry/redeploy/cancel/rollback 한 가지를 서버가 계산해 제공합니다.
+- **사용자 지정 도메인**: generated URL은 항상 유지하면서 사용자 지정 hostname의 일회성 TXT 증명, 세대가 고정된 DNS 확인, 비동기 Ingress/인증서 적용과 정리를 별도 상태로 추적합니다. API의 202 응답이나 DB 상태만으로 DNS·TLS·HTTPS 성공을 주장하지 않습니다.
 - **공통 오류 화면**: 활성 표준 4xx·5xx 38종을 미리보기·오류 backend에서 제공하고, 호스팅 라우팅 404·upstream 500/502/503/504를 같은 RAIBIT 상태 화면으로 안내하되 사용자 앱의 자체 오류 응답은 유지합니다.
 - **검증 가능한 배포 버전**: 공개 `/status`는 현재 실행 중인 Dashboard 이미지에 기록된 GitHub 커밋 SHA를 표시하고 정확한 커밋 페이지로 연결합니다.
 - **승인·쿼터·감사**: 비동아리 사용자는 관리자 승인 후 쿼터 안에서 사용하고, 주요 작업은 감사 로그와 사용량에 반영됩니다.
@@ -44,6 +47,8 @@ RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로�
 프로젝트 PATCH는 이름·설명만 받습니다. 서비스 PATCH는 branch, 소스 내부 경로(rootDirectory/buildContext/dockerfilePath/outputDirectory), install/build/start 명령, port(1–65535), healthCheck.path, CPU·메모리 requests/limits를 받으며 이름·유형은 첫 배포 전만 바꿀 수 있습니다. CPU는 core 또는 millicore, 메모리는 Mi/Gi 양수로 지정하고 request는 limit 이하여야 합니다. 새 값·증가는 인증된 작업자의 숫자 쿼터를 따르며, 쿼터가 없으면 보수적 설정 기본 한도 500m/512Mi를 씁니다. 이는 전역 플랫폼 최대값이 아니며 기존 큰 값의 유지·축소는 허용됩니다. 다른 멤버의 쿼터는 사용하지 않습니다.
 
 조직·slug·ID·소스 바인딩·상태·삭제 필드나 숨겨진 desiredState/desiredSpec을 일반 PATCH로 보내면 요청 전체가 400/409로 거부됩니다. 소스 연결은 검증된 attach/import, 배포된 서비스 교체는 새 서비스 생성으로 분리합니다. READY 리소스의 제자리 수정과 RECONCILING 리소스 수정은 차단합니다. 저장소 Dockerfile은 buildMode 지정으로 우회할 수 없습니다. 이 경계의 로컬 HTTP/manifest 검증은 실환경 배포 성공을 뜻하지 않습니다.
+
+프로젝트 설정 조회는 서비스·리소스·preview 삭제 영향 수를 함께 돌려주며, 삭제는 `{ confirmed: true }`로 별도 요청한 뒤 기존 reconciler가 처리하도록 예약합니다. 서비스 설정은 적용 전 diff/build-plan 미리보기를 제공하고, 이미 배포된 서비스의 불변 이름·유형·소스를 바꿔야 하면 기존 서비스를 보존한 새 replacement 서비스를 명시적으로 만듭니다. 설정 요청 자체는 실행 중인 workload나 과거 deployment snapshot을 수정하지 않습니다.
 
 ## 사전 요구사항
 
@@ -92,7 +97,7 @@ pnpm prisma:validate
 Go가 설치되어 있다면 인프라 서비스도 확인합니다.
 
 ```sh
-for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester; do
+for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester services/registry-broker; do
   (cd "$dir" && go test ./... && go build ./...)
 done
 ```

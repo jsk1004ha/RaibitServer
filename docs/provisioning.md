@@ -18,7 +18,9 @@ CLI: `raibitserver resources provision --resource-id ID --intent preview-plan` �
 
 ## 지원 catalog
 
-지원 여부의 유일한 원본은 `test-fixtures/contracts/resource-capabilities-v1.json`입니다. `local`은 구현된 로컬 기능, `release`는 운영 릴리스 기능이며 현재 release 기능은 모두 false입니다. `planOnly`의 명령 계획과 `liveEvidence: not-recorded`는 실행 성공이 아닙니다. MySQL/MariaDB/MongoDB/Redis/Valkey의 query/schema는 아직 계획 전용이고, 모든 엔진의 관리형 backup/restore는 미제공입니다.
+지원 여부의 유일한 원본은 `test-fixtures/contracts/resource-capabilities-v1.json`입니다. `local`은 구현된 로컬 기능, `release`는 운영 릴리스 기능이며 현재 release 기능은 모두 false입니다. `planOnly`의 명령 계획과 `liveEvidence: not-recorded`는 실행 성공이 아닙니다. MySQL/MariaDB/MongoDB/Redis/Valkey의 query/schema는 아직 계획 전용입니다. 관리형 backup/list/delete와 새 격리 리소스로의 restore API·desired-state lifecycle은 구현되어 있지만, capability catalog의 release backup/restore가 false인 동안 실제 provider 백업 실행이 제공된다고 해석하지 않습니다.
+
+백업 생성은 idempotency key와 format version을 받고 비동기 상태를 기록합니다. 삭제는 명시적 확인이 필요하며, restore는 원본 리소스를 덮어쓰지 않고 이름이 다른 새 target resource를 만듭니다. 공개 응답은 connection secret과 backup artifact key를 반환하지 않습니다. 이 API 계약과 로컬 상태 테스트는 실제 dump, object storage, provider restore 또는 복구 리허설의 live PASS가 아닙니다.
 
 변경 후 `node scripts/generate-resource-capabilities.mjs`로 TypeScript/CLI/Go/Helm 패키지 내부의 복제 파일을 생성하고 `node --test tests/resource-capability-parity.test.js`로 byte/hash drift를 검사합니다. production Helm 패키징은 dedicated-local 지원 6개 엔진의 digest-pinned 이미지를 요구하지만 운영 인증을 부여하지 않습니다.
 

@@ -42,7 +42,7 @@ pnpm e2e:live
 
 ## 현재 포함하지 않는 범위
 
-This gate does not exercise the Go Builder source build, registry push, tenant workload rollout, service URL HTTP 200, runtime log ingestion, or preview cleanup. DB-connected dispatcher와 DB credential이 없는 disposable BuildKit executor의 분리 경로는 chart/code에 구현됐지만 실제 cluster mTLS·NetworkPolicy 증거는 아직 이 gate의 성공 범위에 포함되지 않습니다. Private GitHub source는 Git clone용 exact-repository short-lived token broker가 연결되기 전까지 fail-closed입니다.
+This gate does not exercise the Go Builder source build, registry push, tenant workload rollout, service URL HTTP 200, runtime log ingestion, preview cleanup, or external custom-domain DNS/TLS/HTTPS. DB-connected dispatcher와 DB credential이 없는 disposable BuildKit executor의 분리 경로는 chart/code에 구현됐지만 실제 cluster mTLS·NetworkPolicy 증거는 아직 이 gate의 성공 범위에 포함되지 않습니다. Private GitHub source는 Git clone용 exact-repository short-lived token broker가 연결되기 전까지 fail-closed입니다.
 
 Go Builder의 live 성공 경로는 현재 구조상 외부에서 접근 가능한 non-private OCI registry, registry 인증, fail-closed scanner database, secret-backed signing key와 signature repository를 요구합니다. Builder는 live 모드에서 localhost/private registry, scan 비활성화, signing 비활성화 또는 signing key 누락을 의도적으로 거부합니다. 따라서 kind 내부 임시 registry나 scan/sign stub으로 성공을 꾸미지 않습니다.
 
@@ -101,6 +101,12 @@ An eligible full manifest is a contract decision, not proof that this repository
 has already completed a credentialed release. No L3 execution is claimed by the
 tests. Artifact producers must be trusted and the evidence directory access
 controlled; hashes detect drift, not deliberate fabrication by its owner.
+
+Train A Gate A는 그때의 정확한 후보 SHA와 credentialed lifecycle 증거에만 묶이며
+Train B 구현의 개발 선행 조건일 뿐입니다. 최종 Gate B는 B3가 merge된 뒤 그 최종 SHA에서
+새 run ID와 빈 evidence directory로 `final` profile을 다시 실행해야 생성됩니다. Gate A나
+component/domain receipt를 Gate B 필드에 복사할 수 없으며, Gate B가 아직 없거나 하나라도
+`NOT_RUN`이면 현재 문서·로컬 테스트 상태를 Beta Ready로 표시하지 않습니다.
 
 The committed `test-fixtures/contracts/operator-inputs-v1.json` contains exactly
 the eight approved non-secret selector names and typed reference bindings, never

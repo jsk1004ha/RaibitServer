@@ -15,6 +15,7 @@ RAIBITSERVER 문서는 README를 짧은 진입점으로 유지하고, 세부 설
 | Cloudflare Tunnel로 공개하고 싶다 | [Cloudflare Tunnel 운영](cloudflare-tunnel.md), [Production 배포](../deploy/production/README.md) |
 | 404·5xx 호스팅 오류 화면을 설정하고 싶다 | [호스팅 오류 화면](hosted-error-pages.md) |
 | GitHub 연동과 PR preview를 봐야 한다 | [GitHub App](github-app.md), [Preview Deployment](preview-deployments.md) |
+| 비밀번호·조직·설정·배포 복구·도메인 사용법이 필요하다 | [사용자 설명서](handbook/user-guide.md), [운영자 설명서](handbook/operator-guide.md) |
 | 보안/권한/쿼터를 확인해야 한다 | [보안](security.md), [승인·쿼터](quota.md) |
 | DB와 리소스 동작을 확인해야 한다 | [프로비저닝](provisioning.md), [DB Console](db-console.md) |
 | 베타 출시 가능 여부를 판단해야 한다 | [Closed Beta 기준](beta-criteria.md) |
@@ -26,8 +27,8 @@ RAIBITSERVER 문서는 README를 짧은 진입점으로 유지하고, 세부 설
 | --- | --- | --- |
 | [handbook/README.md](handbook/README.md) | 배포 조건, 사용자·운영자·AI 설명서의 중앙 목차 | 모든 사용자, AI |
 | [handbook/deployment-requirements.md](handbook/deployment-requirements.md) | tenant 앱의 계정·소스·컨테이너·보안·DB 배포 조건 | 앱 개발자, AI |
-| [handbook/user-guide.md](handbook/user-guide.md) | 가입부터 생성·배포·업데이트·삭제까지 웹 콘솔 절차 | 일반 사용자 |
-| [handbook/operator-guide.md](handbook/operator-guide.md) | 승인, 상태, 장애, 리소스, production 운영 절차 | 관리자, 운영자 |
+| [handbook/user-guide.md](handbook/user-guide.md) | 가입·비밀번호 복구·조직·설정·배포 이력·도메인·삭제의 웹 콘솔 절차 | 일반 사용자 |
+| [handbook/operator-guide.md](handbook/operator-guide.md) | 승인, 조직/RBAC, 설정 충돌, 배포 복구, 도메인, 리소스와 production 운영 절차 | 관리자, 운영자 |
 | [handbook/ai-guide.md](handbook/ai-guide.md) | AI의 신뢰 경계, 안전한 API·배포·검증·보고 계약 | AI, AI 사용자 |
 | [getting-started.md](getting-started.md) | 설치, 4단계 프로젝트 생성, 자동 감지, secret, AI 배포, 밴, 자동 업데이트를 화면 순서대로 설명 | 처음 사용하는 사용자, 운영자 |
 | [architecture.md](architecture.md) | TypeScript 제어 평면과 Go reconcilers 구조 설명 | 개발자, 운영자 |

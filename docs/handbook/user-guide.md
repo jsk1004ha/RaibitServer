@@ -21,7 +21,10 @@
 | 이메일 인증 필요 | 6자리 코드 인증 완료 여부 확인 |
 | 승인 대기 | 관리자 승인 상태 확인 |
 | 세션 만료 | 로그인 화면에서 다시 로그인 |
+| 비밀번호를 잊음 | `비밀번호 찾기`에서 이메일을 제출하고 동일한 안내를 확인. 계정 존재 여부는 응답으로 알 수 없음 |
 | 요청 실패 500 | [시스템 상태](https://raibit.kr/status) 확인 후 지원 요청 |
+
+비밀번호 재설정 코드는 10분 동안 최대 5회 확인할 수 있습니다. 완료되면 자동 로그인하지 않고 모든 기존 세션이 종료되므로 새 비밀번호로 다시 로그인합니다. 알 수 없는 이메일, OAuth 전용 계정, 승인되지 않은 계정도 요청 단계에서는 같은 202 안내를 반환합니다.
 
 ## 2. 콘솔 구조
 
@@ -33,10 +36,21 @@
 | 프로젝트 | 프로젝트 목록과 현재 상태 |
 | 프로젝트 만들기 | 4단계 생성 흐름 |
 | GitHub 연결 | App 설치, 저장소 가져오기·연결·동기화 |
+| 조직 전환·멤버 | 권한이 있는 조직 전환, 초대·역할·제거·탈퇴 |
+| 계정 보안 | 현재 계정과 로그인 수단, 비밀번호 재설정 시작 |
 | 사용 안내 | 짧은 기능별 안내 |
 | 관리자 | 가입 승인, 밴, 쿼터. 관리자만 표시 |
 
 상단 검색을 열면 프로젝트, 배포, 리소스와 주요 메뉴를 빠르게 찾을 수 있습니다. 검색 화면은 `Esc`로 닫습니다.
+
+### 조직 만들기와 멤버 관리
+
+이메일 인증과 승인이 끝난 사용자는 조직 전환 메뉴에서 새 조직을 만들 수 있습니다. 생성자는 새 조직의 `OWNER` 멤버십만 받으며, 권한 범위가 바뀌므로 응답의 재인증 안내에 따라 새 세션으로 로그인합니다. 기존 조직의 역할이나 소유권을 새 조직으로 복사하지 않습니다.
+
+- `OWNER`와 `ADMIN`이 초대할 수 있지만 `ADMIN`은 `OWNER`를 초대하거나 지정할 수 없습니다.
+- 초대는 로그인·이메일 인증을 끝낸 뒤 초대 이메일과 정확히 같은 이메일로 수락합니다. 링크를 전달해도 다른 이메일 계정은 수락할 수 없습니다.
+- 역할 변경과 멤버 제거는 화면의 최신 멤버십 snapshot을 조건으로 저장합니다. stale 충돌이 나면 목록을 새로 불러와 다시 판단합니다.
+- 마지막 `OWNER`는 역할을 낮추거나 제거하거나 조직에서 탈퇴할 수 없습니다. 화면에서 버튼이 숨겨져도 최종 권한 검사는 서버가 수행합니다.
 
 ## 3. 저장소를 먼저 준비하기
 
@@ -104,6 +118,10 @@ private 저장소, repository import, push/PR 자동 배포를 사용하려면 G
 
 token, private key, installation ID를 브라우저 폼에 직접 넣지 않습니다. webhook은 서버가 HMAC 서명을 검증하며 검증되지 않은 push/PR 요청은 배포를 만들지 않습니다.
 
+저장소 목록은 검색어와 opaque cursor로 페이지를 이동하며, 마지막 성공 generation과 `IDLE`/`REFRESHING`/`STALE` 상태를 표시합니다. 새로 고침 중 일부 GitHub 페이지가 403/404/429/5xx/timeout이면 불완전한 목록을 게시하지 않고 마지막 성공 목록을 유지합니다. `OWNER`/`ADMIN`의 명시적 새로 고침이 완료된 뒤 generation을 확인합니다.
+
+`RAIBITSERVER 연결 해제`는 GitHub App 자체를 제거하지 않습니다. 확인 후 연결을 끊으면 이후 private source credential 발급과 새 빌드는 차단되지만, 실행 중인 workload와 과거 deployment/image/history는 삭제하지 않습니다. GitHub 설치 제거는 별도의 GitHub 설정에서 수행합니다.
+
 ## 6. 서비스 설정
 
 프로젝트의 `서비스`에서 대상 서비스의 `설정`을 엽니다.
@@ -121,6 +139,10 @@ token, private key, installation ID를 브라우저 폼에 직접 넣지 않습�
 - install/build/start command
 
 현재 콘솔 서비스 설정에서는 tenant health path와 CPU·메모리 값을 직접 편집하지 않습니다. 설정을 바꿨다고 실행 중인 Pod가 자동으로 모두 교체된다고 가정하지 않습니다. 변경 후 새 운영 배포를 요청하고 새 배포 ID를 확인합니다.
+
+프로젝트 설정에서는 이름과 설명만 바꿀 수 있습니다. 프로젝트·서비스 설정 모두 화면이 읽은 `updatedAt` snapshot을 함께 보내며, 다른 사용자가 먼저 저장한 경우 409 stale 충돌로 전체 요청이 거부됩니다. 새 값을 다시 읽고 변경 내용을 비교한 뒤 재시도하며 자동 병합하지 않습니다.
+
+서비스 설정은 저장 전에 diff와 build plan 미리보기를 확인합니다. 이미 배포된 서비스의 이름·유형·source를 바꿔야 하면 in-place 변경 대신 `replacement 서비스 만들기`를 명시적으로 확인합니다. 이 작업은 기존 서비스, 실행 workload와 과거 deployment snapshot을 보존합니다.
 
 ## 7. 환경 변수와 비밀키
 
@@ -212,6 +234,8 @@ queued → BUILDING → IMAGE_READY → DEPLOYING → READY
 
 `READY`는 현재 Kubernetes rollout 상태입니다. 공개 URL이나 health endpoint가 실제로 2xx인지 보장하지 않으므로 위 검사를 생략하지 않습니다.
 
+배포 이력 화면은 service/environment/status/trigger/date 필터와 URL에 저장되는 cursor를 사용합니다. 각 행의 commit SHA, image digest, snapshot version, lineage, 요청자, rollout/public health를 확인하고, 화면이 추측한 상태가 아니라 서버가 반환한 `retry`/`redeploy`/`cancel`/`rollback` 중 한 가지 eligible action만 실행합니다. 권한이 없거나 현재 상태가 바뀌면 action은 표시되지 않거나 충돌하므로 이력을 새로 불러옵니다.
+
 ### CLI에서 배포와 복구 운영
 
 CLI 수명주기 명령에는 조직과 프로젝트 범위를 항상 지정하고, 서비스 작업에는 서비스 ID를 함께 지정합니다. 자동화에서는 `--json`을 사용합니다.
@@ -243,6 +267,17 @@ raibitserver resources restore get --organization-id org_id --project-id prj_id 
 - PR이 닫힌 뒤 cleanup 상태를 확인합니다.
 
 서비스 화면의 수동 `미리보기` 요청처럼 PR 번호가 없는 요청은 현재 운영과 분리된 identity를 보장하지 않습니다. 격리 검증 용도로 사용하지 않습니다. PR 미리보기에도 secret, quota, 보안 정책이 동일하게 적용됩니다.
+
+### Generated URL과 사용자 지정 도메인
+
+generated URL은 조직 slug를 사용하는 `apps--<조직>--<프로젝트>[--<서비스>].<base-domain>` 형식이며 사용자 지정 도메인을 추가하거나 지워도 유지됩니다. 사용자 지정 도메인은 공개 `web` 서비스에 연결하고 다음 순서로 진행합니다.
+
+1. hostname을 추가한 직후 한 번만 표시되는 TXT challenge를 안전하게 복사합니다.
+2. DNS에 `_raibit-challenge.<hostname>` TXT를 등록하고 `확인`을 요청합니다.
+3. `PENDING_VERIFICATION → VERIFIED → ROUTING → READY`와 TLS `PENDING → ISSUING → READY`를 각각 기다립니다.
+4. `READY` 뒤에도 실제 HTTPS, 정확한 SAN, 앱 응답을 직접 확인합니다.
+
+확인 요청의 202 응답은 DNS 또는 TLS 성공이 아닙니다. challenge 회전은 기존 사용자 지정 URL을 끊고 이전 Ingress/Certificate 정리를 관찰한 다음 새 증명을 활성화하므로 명시적 확인이 필요합니다. 그동안 generated URL을 사용합니다. 원본 challenge는 다시 표시되지 않으며 RAIBITSERVER가 외부 DNS 레코드를 대신 수정하지 않습니다.
 
 ## 11. 업데이트
 
@@ -279,7 +314,7 @@ raibitserver resources restore get --organization-id org_id --project-id prj_id 
 - 마지막 정상 image와 commit
 - 복구 담당자와 보존 기간
 
-프로젝트 삭제 요청 후 화면에 `삭제 요청됨` 또는 `DELETING`이 보일 수 있습니다. 워커가 실제 Kubernetes 객체와 provider 리소스를 정리할 때까지 기다립니다.
+프로젝트 설정은 삭제 전에 현재 service/resource/preview 영향 수를 snapshot으로 보여 줍니다. `{ confirmed: true }`에 해당하는 별도 확인을 마친 뒤에만 삭제를 예약하며, 요청 경로에서 동기 삭제하지 않습니다. 화면에 `삭제 요청됨` 또는 `DELETING`이 보이면 워커가 실제 Kubernetes 객체와 provider 리소스를 정리할 때까지 기다립니다. 같은 요청을 반복해 별도 삭제 작업을 만들지 않습니다.
 
 `READY` 관리형 리소스의 엔진이나 credential을 계획 화면에서 강제로 바꾸지 않습니다. 필요한 경우 백업 → 새 리소스 생성 → 데이터 이전 → 서비스 연결 변경 → 검증 → 이전 리소스 삭제 순서를 사용합니다.
 
