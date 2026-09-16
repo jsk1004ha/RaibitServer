@@ -63,7 +63,7 @@ export default function PrivacyPage() {
               </h1>
             </div>
             <div>
-              <p className="text-body-md text-pretty text-secondary-foreground">
+              <p className="break-keep [overflow-wrap:anywhere] text-body-md text-pretty text-secondary-foreground">
                 RAIBIT SERVER는 서비스 운영에 필요한 최소한의 개인정보를
                 처리하고 안전하게 보호합니다.
               </p>
@@ -145,10 +145,10 @@ export default function PrivacyPage() {
                 <p className="mt-raibit-md max-w-4xl text-body-md text-pretty text-secondary-foreground">
                   로그인 상태 유지를 위해{" "}
                   <code className="rounded-xs bg-muted px-raibit-xs py-raibit-xxs font-mono text-caption text-foreground">
-                    raibitserver_session
+                    __Host-raibitserver_session
                   </code>{" "}
                   쿠키를 사용합니다. 이 쿠키는 JavaScript에서 읽을 수 없는
-                  HttpOnly 방식이며, HTTPS 환경에서는 Secure 속성을 사용하고
+                  HttpOnly 방식이며, 항상 Secure 속성을 사용하고
                   SameSite=Lax와 host-only 범위로 설정됩니다. 로그아웃하면 즉시
                   삭제되며 브라우저 설정에서도 쿠키를 삭제할 수 있습니다.
                 </p>

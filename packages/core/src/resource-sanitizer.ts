@@ -1,4 +1,6 @@
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { requireResourceCapability } from './resource-capabilities.ts';
 import { isSecretKey } from './secrets.ts';
 
 const SAFE_RESOURCE_KEYS = new Set([
@@ -90,6 +92,7 @@ export function canonicalizeProviderDesiredSpec(
   input: Record<string, any> = {},
   { baseSpec = {}, rejectUnknown = false }: { baseSpec?: Record<string, any>; rejectUnknown?: boolean } = {},
 ) {
+  if (rejectUnknown && input.engine !== undefined) requireResourceCapability(String(input.engine), 'provision');
   const nested = input.desiredSpec === undefined ? {} : input.desiredSpec;
   if (!isPlainRecord(nested)) throw badResourceRequest('desiredSpec must be an object');
   if (!isPlainRecord(baseSpec)) throw badResourceRequest('stored desiredSpec is invalid');
@@ -155,6 +158,11 @@ export function sanitizeTenantResourceInput(input: Record<string, any> = {}) {
     output[key] = sanitizeResourceValue(value);
   }
   return output;
+}
+
+export function resourceNameFallback(name: unknown): string | undefined {
+  if (typeof name !== 'string' || !name.trim() || /[a-z0-9]/i.test(name)) return undefined;
+  return `resource-${crypto.createHash('sha256').update(name).digest('hex').slice(0, 20)}`;
 }
 
 export function providerOwnedSqlitePath(resourceId: string) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/raibitserver/log-ingester/internal/ingester"
 	"github.com/raibitserver/log-ingester/internal/kube"
+	"github.com/raibitserver/log-ingester/internal/redact"
 	dbstore "github.com/raibitserver/log-ingester/internal/store"
 )
 
@@ -38,12 +39,31 @@ func main() {
 		Retention:      durationEnv("RAIBITSERVER_LOG_RETENTION", 7*24*time.Hour),
 	}, source, state)
 	interval := durationEnv("RAIBITSERVER_INGEST_INTERVAL", 15*time.Second)
+	var lastSuccess time.Time
+	lastLag := 0.0
 	for {
 		result, runErr := worker.RunOnce(ctx, time.Now().UTC())
 		if runErr != nil {
-			fmt.Fprintf(os.Stderr, "log ingestion failed: %v\n", runErr)
+			fmt.Fprintf(os.Stderr, "log ingestion failed: %s\n", redact.Text(runErr.Error()))
 		} else {
 			fmt.Printf("log ingestion pods=%d containers=%d inserted=%d deleted=%d\n", result.Pods, result.Containers, result.Inserted, result.Deleted)
+		}
+		at := time.Now().UTC()
+		if result.Observed {
+			lastSuccess = result.ObservedAt
+			lastLag = result.LagSeconds
+		}
+		present, age := 0, 0.0
+		if !lastSuccess.IsZero() {
+			present = 1
+			age = max(0, at.Sub(lastSuccess).Seconds())
+		}
+		fmt.Printf("raibit_ingestion_observation_present{kind=\"log\"} %d\nraibit_ingestion_lag_seconds{kind=\"log\"} %g\nraibit_ingestion_last_success_age_seconds{kind=\"log\"} %g\n", present, lastLag, age)
+		if result.SourceWindowLimited {
+			fmt.Println("log ingestion reason=source_window_limited")
+		}
+		if result.LegacyRejected > 0 {
+			fmt.Printf("log ingestion reason=unverifiable_legacy_deployment count=%d\n", result.LegacyRejected)
 		}
 		if os.Getenv("RAIBITSERVER_RUN_ONCE") == "1" {
 			if runErr != nil {
@@ -76,6 +96,6 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 }
 
 func fatal(err error) {
-	fmt.Fprintln(os.Stderr, err)
+	fmt.Fprintln(os.Stderr, redact.Text(err.Error()))
 	os.Exit(1)
 }

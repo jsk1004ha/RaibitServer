@@ -6,7 +6,7 @@ export const FIXTURE_ORIGIN = 'http://127.0.0.1:3411';
 export const VIEWPORT_MATRIX = [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }] as const;
 
 export async function installSession(context: BrowserContext, token: string): Promise<void> {
-  await context.addCookies([{ name: 'raibitserver_session', value: token, domain: 'console.localhost', path: '/', httpOnly: true, sameSite: 'Lax' }]);
+  await context.addCookies([{ name: '__Host-raibitserver_session', value: token, domain: 'console.localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
 }
 
 export async function nativeFormData(page: Page, selector: string): Promise<readonly [string, string][]> {
@@ -23,8 +23,9 @@ export async function expectRoute(page: Page, path: string, query: Readonly<Reco
   expect(url.host).toBe('console.localhost:3410');
 }
 
-export async function expectAccessible(page: Page): Promise<void> {
-  const result = await new AxeBuilder({ page }).analyze();
+export async function expectAccessible(page: Page, include?: string): Promise<void> {
+  const builder = new AxeBuilder({ page });
+  const result = await (include ? builder.include(include) : builder).analyze();
   expect(result.violations, JSON.stringify(result.violations, null, 2)).toEqual([]);
 }
 

@@ -24,10 +24,10 @@ export default async function StatusPage() {
             SYSTEM STATUS
           </p>
           <div className="mt-raibit-lg grid gap-raibit-lg border-b border-border pb-raibit-xxl lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-end">
-            <h1 className="max-w-[13ch] text-display-xl font-medium text-balance text-foreground sm:text-display-xxl">
+            <h1 className="break-keep [overflow-wrap:anywhere] max-w-[13ch] text-display-xl font-medium text-balance text-foreground sm:text-display-xxl">
               RAIBIT SERVER 상태
             </h1>
-            <p className="text-body-lg text-pretty text-muted-foreground">
+            <p className="break-keep [overflow-wrap:anywhere] text-body-lg text-pretty text-muted-foreground">
               서비스와 데이터 계층의 실시간 운영 현황을 확인합니다.
             </p>
           </div>

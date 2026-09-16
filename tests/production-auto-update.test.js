@@ -305,14 +305,17 @@ test('registry gateway checker rejects ineffective or overbroad NetworkPolicy fi
     },
   };
 
+  const pythonCommand = spawnSync('python3', ['--version'], { encoding: 'utf8', windowsHide: true }).status === 0
+    ? 'python3'
+    : 'python';
   const runStructuralCheck = (policy) => {
     const policyPath = writeJSON('network-policy', policy);
-    return spawnSync('python3', [
+    return spawnSync(pythonCommand, [
       '-', paths.deployment, paths.service, policyPath, paths.statefulset,
       paths.coredns, paths.corednsCustom, 'raibitserver-system', 'edge-gateway-system',
       'cosign-system', 'policy-controller', 'policy-controller-webhook',
       'ghcr.io/jsk1004ha/raibitserver', 'registry.raibit.kr', 'registry-auth.raibit.kr',
-    ], { input: structuralCheck, encoding: 'utf8' });
+    ], { input: structuralCheck, encoding: 'utf8', windowsHide: true });
   };
 
   const healthy = runStructuralCheck(exactPolicy);

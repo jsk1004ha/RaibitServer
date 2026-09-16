@@ -1,0 +1,301 @@
+{
+  "version": 1,
+  "marker": "****",
+  "maxLineBytes": 16384,
+  "continuation": {
+    "v": 1,
+    "pem": false
+  },
+  "cases": [
+    {
+      "name": "query-value-;",
+      "input": "https://example.test/?token=alpha;AuditSyntheticValue_97531&page=1",
+      "expected": "https://example.test/?token=****&page=1"
+    },
+    {
+      "name": "query-value-,",
+      "input": "https://example.test/?token=alpha,AuditSyntheticValue_97531&page=1",
+      "expected": "https://example.test/?token=****&page=1"
+    },
+    {
+      "name": "query-value-#",
+      "input": "https://example.test/?token=alpha#AuditSyntheticValue_97531&page=1",
+      "expected": "https://example.test/?token=****&page=1"
+    },
+    {
+      "name": "query-value-%3B",
+      "input": "https://example.test/?token=alpha%3BAuditSyntheticValue_97531&page=1",
+      "expected": "https://example.test/?token=****&page=1"
+    },
+    {
+      "name": "query-value-%2C",
+      "input": "https://example.test/?token=alpha%2CAuditSyntheticValue_97531&page=1",
+      "expected": "https://example.test/?token=****&page=1"
+    },
+    {
+      "name": "query-value-%23",
+      "input": "https://example.test/?token=alpha%23AuditSyntheticValue_97531&page=1",
+      "expected": "https://example.test/?token=****&page=1"
+    },
+    {
+      "name": "query-value-%26",
+      "input": "https://example.test/?token=alpha%26AuditSyntheticValue_97531&page=1",
+      "expected": "https://example.test/?token=****&page=1"
+    },
+    {
+      "name": "secret-key---key",
+      "input": "tool --key=AuditSyntheticValue_97531 --verbose",
+      "expected": "tool --key=**** --verbose"
+    },
+    {
+      "name": "secret-key--key",
+      "input": "tool -key=AuditSyntheticValue_97531 --verbose",
+      "expected": "tool -key=**** --verbose"
+    },
+    {
+      "name": "secret-key-KEY",
+      "input": "tool KEY=AuditSyntheticValue_97531 --verbose",
+      "expected": "tool KEY=**** --verbose"
+    },
+    {
+      "name": "secret-key-POSTGRES_PASSWORD",
+      "input": "tool POSTGRES_PASSWORD=AuditSyntheticValue_97531 --verbose",
+      "expected": "tool POSTGRES_PASSWORD=**** --verbose"
+    },
+    {
+      "name": "secret-key-DATABASE_PASSWORD_1",
+      "input": "tool DATABASE_PASSWORD_1=AuditSyntheticValue_97531 --verbose",
+      "expected": "tool DATABASE_PASSWORD_1=**** --verbose"
+    },
+    {
+      "name": "secret-key-APP_CREDENTIAL_SECONDARY",
+      "input": "tool APP_CREDENTIAL_SECONDARY=AuditSyntheticValue_97531 --verbose",
+      "expected": "tool APP_CREDENTIAL_SECONDARY=**** --verbose"
+    },
+    {
+      "name": "serialized-cli-key",
+      "input": "{\"--key\":\"AuditSyntheticValue_97531\"}",
+      "expected": "{\"--key\":\"****\"}"
+    },
+    {
+      "name": "benign-key-neighbors",
+      "input": "keyboard=us monkey=banana KEY_VERSION=2",
+      "expected": "keyboard=us monkey=banana KEY_VERSION=2"
+    },
+    {
+      "name": "assignment",
+      "input": "PASSWORD=FORBIDDEN_ASSIGN ready",
+      "expected": "PASSWORD=**** ready"
+    },
+    {
+      "name": "quoted-json",
+      "input": "{\"password\":\"FORBIDDEN_QUOTED space\",\"ok\":true}",
+      "expected": "{\"password\":\"****\",\"ok\":true}"
+    },
+    {
+      "name": "escaped-json",
+      "input": "{\\\"api_key\\\":\\\"FORBIDDEN_ESCAPED value\\\"}",
+      "expected": "{\\\"api_key\\\":\\\"****\\\"}"
+    },
+    {
+      "name": "bearer",
+      "input": "Authorization: Bearer FORBIDDEN_BEARER",
+      "expected": "Authorization: Bearer ****"
+    },
+    {
+      "name": "basic",
+      "input": "Authorization: Basic Rk9SQklEREVOX0JBU0lD",
+      "expected": "Authorization: Basic ****"
+    },
+    {
+      "name": "cookie",
+      "input": "Cookie: sid=FORBIDDEN_COOKIE; theme=dark",
+      "expected": "Cookie: ****"
+    },
+    {
+      "name": "set-cookie",
+      "input": "Set-Cookie: sid=FORBIDDEN_SETCOOKIE; Secure; HttpOnly",
+      "expected": "Set-Cookie: ****"
+    },
+    {
+      "name": "jwt",
+      "input": "session eyJhbGciOiJIUzI1NiJ9.eyJmb3JiaWRkZW4iOiJKV1QifQ.c2lnbmF0dXJl done",
+      "expected": "session **** done"
+    },
+    {
+      "name": "github-token",
+      "input": "using ghp_FORBIDDEN_GITHUB12345678901234567890",
+      "expected": "using ****"
+    },
+    {
+      "name": "openai-token",
+      "input": "using sk-proj-FORBIDDEN_OPENAI12345678901234567890",
+      "expected": "using ****"
+    },
+    {
+      "name": "credential-url",
+      "input": "connect postgres://alice:FORBIDDEN_URL@db.test/demo",
+      "expected": "connect postgres://****:****@db.test/demo"
+    },
+    {
+      "name": "redis-password-only",
+      "input": "connect redis://:FORBIDDEN_REDIS@cache.test:6379/0",
+      "expected": "connect redis://:****@cache.test:6379/0"
+    },
+    {
+      "name": "token-query-url",
+      "input": "https://host.test/path?token=FORBIDDEN_QUERY&mode=read",
+      "expected": "https://host.test/path?token=****&mode=read"
+    },
+    {
+      "name": "pem-complete",
+      "input": "before -----BEGIN PRIVATE KEY-----\nFORBIDDEN_PEM\n-----END PRIVATE KEY----- after",
+      "expected": "before **** after"
+    },
+    {
+      "name": "harmless",
+      "input": "ready request_id=abc123 monkey=banana keyboard=us path=/healthz",
+      "expected": "ready request_id=abc123 monkey=banana keyboard=us path=/healthz"
+    },
+    {
+      "name": "idempotent",
+      "input": "password=**** Bearer **** redis://:****@cache.test",
+      "expected": "password=**** Bearer **** redis://:****@cache.test"
+    }
+  ],
+  "streams": [
+    {
+      "name": "quoted-restart-\"\\\"\"",
+      "records": [
+        {
+          "input": "POSTGRES_PASSWORD=\"begin",
+          "expected": "POSTGRES_PASSWORD=\"****\"",
+          "pemAfter": false,
+          "quoteAfter": "\""
+        },
+        {
+          "input": "AuditSyntheticValue_97531",
+          "expected": "****",
+          "pemAfter": false,
+          "quoteAfter": "\""
+        },
+        {
+          "input": "end\" ready=true",
+          "expected": "****\" ready=true",
+          "pemAfter": false
+        },
+        {
+          "input": "ready",
+          "expected": "ready",
+          "pemAfter": false
+        }
+      ]
+    },
+    {
+      "name": "quoted-restart-\"'\"",
+      "records": [
+        {
+          "input": "POSTGRES_PASSWORD='begin",
+          "expected": "POSTGRES_PASSWORD='****'",
+          "pemAfter": false,
+          "quoteAfter": "'"
+        },
+        {
+          "input": "AuditSyntheticValue_97531",
+          "expected": "****",
+          "pemAfter": false,
+          "quoteAfter": "'"
+        },
+        {
+          "input": "end' ready=true",
+          "expected": "****' ready=true",
+          "pemAfter": false
+        },
+        {
+          "input": "ready",
+          "expected": "ready",
+          "pemAfter": false
+        }
+      ]
+    },
+    {
+      "name": "quoted-restart-\"\\\\\\\"\"",
+      "records": [
+        {
+          "input": "POSTGRES_PASSWORD=\\\"begin",
+          "expected": "POSTGRES_PASSWORD=\\\"****\\\"",
+          "pemAfter": false,
+          "quoteAfter": "\\\""
+        },
+        {
+          "input": "AuditSyntheticValue_97531",
+          "expected": "****",
+          "pemAfter": false,
+          "quoteAfter": "\\\""
+        },
+        {
+          "input": "end\\\" ready=true",
+          "expected": "****\\\" ready=true",
+          "pemAfter": false
+        },
+        {
+          "input": "ready",
+          "expected": "ready",
+          "pemAfter": false
+        }
+      ]
+    },
+    {
+      "name": "quoted-restart-\"\\\\'\"",
+      "records": [
+        {
+          "input": "POSTGRES_PASSWORD=\\'begin",
+          "expected": "POSTGRES_PASSWORD=\\'****\\'",
+          "pemAfter": false,
+          "quoteAfter": "\\'"
+        },
+        {
+          "input": "AuditSyntheticValue_97531",
+          "expected": "****",
+          "pemAfter": false,
+          "quoteAfter": "\\'"
+        },
+        {
+          "input": "end\\' ready=true",
+          "expected": "****\\' ready=true",
+          "pemAfter": false
+        },
+        {
+          "input": "ready",
+          "expected": "ready",
+          "pemAfter": false
+        }
+      ]
+    },
+    {
+      "name": "pem-restart",
+      "records": [
+        {
+          "input": "before -----BEGIN RSA PRIVATE KEY-----",
+          "expected": "before ****",
+          "pemAfter": true
+        },
+        {
+          "input": "FORBIDDEN_PEM_MIDDLE",
+          "expected": "****",
+          "pemAfter": true
+        },
+        {
+          "input": "-----END RSA PRIVATE KEY----- after",
+          "expected": "**** after",
+          "pemAfter": false
+        },
+        {
+          "input": "ready",
+          "expected": "ready",
+          "pemAfter": false
+        }
+      ]
+    }
+  ]
+}

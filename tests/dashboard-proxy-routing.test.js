@@ -17,6 +17,15 @@ const dashboardRequire = createRequire(new URL('../apps/dashboard/package.json',
 const { NextRequest } = dashboardRequire('next/server');
 const { proxy } = await import('../apps/dashboard/proxy.ts');
 
+test('legacy sibling session cookie cannot authenticate protected dashboard navigation', () => {
+  const response = proxy(new NextRequest('https://console.raibit.kr/console', {
+    headers: { cookie: 'raibitserver_session=attacker-session' },
+  }));
+  assert.equal(response.status, 307);
+  assert.equal(new URL(response.headers.get('location')).pathname, '/login');
+  assert.equal(response.cookies.get('raibitserver_session')?.maxAge, 0);
+});
+
 test('console host requires a session at its root and keeps the public host landing open', { concurrency: false }, () => {
   const originalBasicAuth = process.env.RAIBITSERVER_DASHBOARD_BASIC_AUTH;
   const originalDashboardOrigin = process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
@@ -31,7 +40,7 @@ test('console host requires a session at its root and keeps the public host land
     assert.match(anonymousConsole.headers.get('content-security-policy') || '', /default-src 'self'/);
 
     const authenticatedConsole = proxy(new NextRequest('https://console.raibit.kr/', {
-      headers: { cookie: 'raibitserver_session=signed-session' },
+      headers: { cookie: '__Host-raibitserver_session=signed-session' },
     }));
     assert.equal(authenticatedConsole.status, 307);
     assert.equal(authenticatedConsole.headers.get('location'), 'https://console.raibit.kr/console');
@@ -86,7 +95,7 @@ test('flat console and resource hosts require their own host session on trusted 
       assert.equal(anonymous.headers.get('location'), `https://${host}/login?next=%2Factivity`);
 
       const authenticated = proxy(new NextRequest(`https://${host}/activity`, {
-        headers: { cookie: 'raibitserver_session=signed-session' },
+        headers: { cookie: '__Host-raibitserver_session=signed-session' },
       }));
       assert.equal(authenticated.status, 200, host);
     }

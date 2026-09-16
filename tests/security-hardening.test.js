@@ -287,6 +287,15 @@ test('membership role changes and removals revoke existing sessions', () => {
   const user = store.createUser({ email: 'member@example.com', approvalStatus: 'APPROVED' });
   store.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
 
+  assert.throws(
+    () => store.addMember({ organizationId: organization.id, userId: user.id, role: 'viewer' }),
+    (error) => error.statusCode === 409 && error.message === 'membership_last_owner',
+  );
+  assert.equal(store.findUserById(user.id).sessionVersion, 0);
+  assert.equal(store.listMembershipsForUser(user.id)[0].role, 'owner');
+
+  const secondOwner = store.createUser({ email: 'second-owner@example.com', approvalStatus: 'APPROVED' });
+  store.addMember({ organizationId: organization.id, userId: secondOwner.id, role: 'owner' });
   const ownerToken = createSessionToken(user, store.listMembershipsForUser(user.id), secret);
   store.addMember({ organizationId: organization.id, userId: user.id, role: 'viewer' });
   assert.throws(
@@ -304,6 +313,7 @@ test('membership role changes and removals revoke existing sessions', () => {
     /session has been revoked/,
   );
   assert.equal(store.findUserById(user.id).sessionVersion, 2);
+  assert.deepEqual(store.listMembershipsForUser(secondOwner.id).map(({ role }) => role), ['owner']);
 });
 
 test('an authoritative user lookup rejects legacy sessions for deleted users', () => {
@@ -332,13 +342,30 @@ test('Prisma membership role changes and removals rotate sessionVersion in trans
   let transactionCalls = 0;
   const userUpdates = [];
   const deletedMemberships = [];
+  const memberships = new Map([
+    ['org-a:user-a', { organizationId: 'org-a', userId: 'user-a', role: 'owner' }],
+  ]);
+  const membershipKey = (where) => `${where.organizationId_userId.organizationId}:${where.organizationId_userId.userId}`;
+  const detached = (membership) => membership ? { ...membership } : null;
   const prisma = {
     membership: {
-      findUnique: async () => ({ organizationId: 'org-a', userId: 'user-a', role: 'owner' }),
-      upsert: async () => ({ organizationId: 'org-a', userId: 'user-a', role: 'viewer' }),
+      findUnique: async ({ where }) => detached(memberships.get(membershipKey(where))),
+      count: async ({ where }) => [...memberships.values()].filter((membership) => (
+        membership.organizationId === where.organizationId && where.role.in.includes(membership.role)
+      )).length,
+      upsert: async ({ where, update, create }) => {
+        const key = membershipKey(where);
+        const current = memberships.get(key);
+        const next = current ? { ...current, ...update } : { ...create };
+        memberships.set(key, next);
+        return detached(next);
+      },
       delete: async ({ where }) => {
         deletedMemberships.push(where);
-        return { organizationId: 'org-a', userId: 'user-a', role: 'viewer' };
+        const key = membershipKey(where);
+        const current = memberships.get(key);
+        memberships.delete(key);
+        return detached(current);
       },
     },
     user: {
@@ -354,15 +381,29 @@ test('Prisma membership role changes and removals rotate sessionVersion in trans
   };
   const repo = new PrismaControlPlaneRepository(prisma);
 
-  await repo.addMember({ organizationId: 'org-a', userId: 'user-a', role: 'viewer' });
+  await assert.rejects(
+    () => repo.addMember({ organizationId: 'org-a', userId: 'user-a', role: 'viewer' }),
+    (error) => error.statusCode === 409 && error.message === 'membership_last_owner',
+  );
   assert.equal(transactionCalls, 1);
+  assert.equal(userUpdates.length, 0);
+  assert.equal(memberships.get('org-a:user-a').role, 'owner');
+
+  await repo.addMember({ organizationId: 'org-a', userId: 'user-b', role: 'owner' });
+  assert.equal(transactionCalls, 2);
+
+  await repo.addMember({ organizationId: 'org-a', userId: 'user-a', role: 'viewer' });
+  assert.equal(transactionCalls, 3);
   assert.deepEqual(userUpdates[0], { where: { id: 'user-a' }, data: { sessionVersion: { increment: 1 } } });
+  assert.equal(memberships.get('org-a:user-a').role, 'viewer');
 
   assert.equal(typeof repo.removeMember, 'function');
   await repo.removeMember({ organizationId: 'org-a', userId: 'user-a' });
-  assert.equal(transactionCalls, 2);
+  assert.equal(transactionCalls, 4);
   assert.equal(deletedMemberships.length, 1);
   assert.deepEqual(userUpdates[1], { where: { id: 'user-a' }, data: { sessionVersion: { increment: 1 } } });
+  assert.equal(memberships.has('org-a:user-a'), false);
+  assert.equal(memberships.get('org-a:user-b').role, 'owner');
 });
 
 test('logout rotates the authenticated user session version and rejects token replay', async () => {

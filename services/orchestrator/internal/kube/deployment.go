@@ -43,6 +43,10 @@ type ingressErrorOptions struct {
 }
 
 type AppServiceSpec struct {
+	HealthCheckPath    string            `json:"healthCheckPath,omitempty"`
+	LivenessPath       string            `json:"livenessPath,omitempty"`
+	ReadinessPath      string            `json:"readinessPath,omitempty"`
+	PublicHealthPath   string            `json:"publicHealthPath,omitempty"`
 	Name               string            `json:"name"`
 	Namespace          string            `json:"namespace"`
 	Image              string            `json:"image"`
@@ -65,6 +69,8 @@ type AppServiceSpec struct {
 	BaseServiceName    string            `json:"baseServiceName,omitempty"`
 	PublicEgress       bool              `json:"publicEgress,omitempty"`
 	AllowTenantIngress bool              `json:"allowTenantIngress,omitempty"`
+	PreviewLineageID   string            `json:"previewLineageId,omitempty"`
+	PreviewGeneration  int               `json:"previewGeneration,omitempty"`
 	InvalidReason      string            `json:"-"`
 }
 
@@ -116,6 +122,9 @@ func NewDeploymentPlan(spec AppServiceSpec, options ...DeploymentOptions) Deploy
 	}
 	spec.ServiceType = descriptor.serviceType
 	manifests := compileServiceManifests(spec, descriptor, ingressGatewayNamespace, ingressClassName, ingressErrors)
+	if spec.PreviewLineageID != "" {
+		manifests = previewCandidateManifests(manifests)
+	}
 	return DeploymentPlan{
 		Kind:              descriptor.kind,
 		WorkloadName:      descriptor.name,
@@ -127,11 +136,25 @@ func NewDeploymentPlan(spec AppServiceSpec, options ...DeploymentOptions) Deploy
 	}
 }
 
+func previewCandidateManifests(manifests []map[string]any) []map[string]any {
+	owned := make([]map[string]any, 0, 3)
+	for _, manifest := range manifests {
+		switch manifest["kind"] {
+		case "Deployment", "Service", "Ingress":
+			owned = append(owned, manifest)
+		}
+	}
+	return owned
+}
+
 func unsafeDeploymentPlan(spec AppServiceSpec, err error) DeploymentPlan {
 	return DeploymentPlan{Service: spec, Safe: false, Error: err.Error(), Reconcile: "rejected", Manifests: []map[string]any{}}
 }
 
 func describeWorkload(spec AppServiceSpec) (workloadDescriptor, error) {
+	if err := validateHealthPaths(spec); err != nil {
+		return workloadDescriptor{}, err
+	}
 	if spec.InvalidReason != "" {
 		return workloadDescriptor{}, fmt.Errorf("invalid service runtime configuration: %s", spec.InvalidReason)
 	}
@@ -166,6 +189,10 @@ func describeWorkload(spec AppServiceSpec) (workloadDescriptor, error) {
 }
 
 func SpecFromState(project *store.Project, service *store.Service, deployment *store.Deployment, baseDomain string) AppServiceSpec {
+	runtimeService, snapshotErr := deployment.RuntimeService(service)
+	if snapshotErr != nil {
+		return AppServiceSpec{ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID, InvalidReason: snapshotErr.Error()}
+	}
 	projectSlug := boundedDNSName(firstNonEmpty(project.Slug, project.Name, project.ID, "project"), project.ID, 63)
 	organizationSlug := boundedDNSName(firstNonEmpty(project.OrganizationSlug, project.OrganizationID, "org"), firstNonEmpty(project.OrganizationID, project.OrganizationSlug), 63)
 	serviceName := boundedDNSName(firstNonEmpty(service.Slug, service.Name, service.ID, "service"), service.ID, 63)
@@ -187,6 +214,7 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	serviceRouteLabel := boundedDNSName("apps--"+serviceRouteIdentity, "apps--"+serviceRouteIdentity, 63)
 	host := serviceRouteLabel + "." + domain
 	preview := false
+	var previewRuntime store.PreviewRuntime
 	if deployment.DeploymentType == "preview" && deployment.PullRequestNumber > 0 {
 		preview = true
 		previewKey := "pr-" + strconv.Itoa(deployment.PullRequestNumber)
@@ -196,23 +224,37 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 		serviceName = previewKey + "-" + baseServiceName
 		serviceName = identityDNSName(serviceName, deployment.ID, 63)
 	}
+	if deployment.PreviewLineageID != "" {
+		var runtimeErr error
+		previewRuntime, runtimeErr = store.ParsePreviewRuntime(deployment.PreviewRuntimeJSON, deployment.PreviewLineageID, deployment.ID, deployment.PreviewGeneration)
+		if runtimeErr != nil {
+			return AppServiceSpec{ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID, InvalidReason: runtimeErr.Error()}
+		}
+		preview = true
+		host = previewRuntime.ProbeHost
+		serviceName = previewRuntime.WorkloadName
+		tenantLabel = previewRuntime.Namespace
+	}
 	image, err := ResolveImageReference(firstNonEmpty(deployment.ImageURL, service.ImageURL), deployment.ImageDigest, true)
 	if err != nil {
 		image = firstNonEmpty(deployment.ImageURL, service.ImageURL)
 	}
-	command, commandErr := runtimeStringArray(service, "command")
-	args, argsErr := runtimeStringArray(service, "args")
-	schedule, scheduleErr := runtimeSchedule(service)
-	environment, environmentErr := runtimeEnvironment(service, deployment)
-	secretEnv, secretEnvErr := runtimeSecretEnv(service)
+	command, commandErr := runtimeStringArray(runtimeService, "command")
+	args, argsErr := runtimeStringArray(runtimeService, "args")
+	schedule, scheduleErr := runtimeSchedule(runtimeService)
+	environment, environmentErr := runtimeEnvironment(runtimeService, deployment)
+	secretEnv, secretEnvErr := runtimeSecretEnv(runtimeService)
 	environmentConflictErr := runtimeEnvironmentConflict(environment, secretEnv)
-	invalidReason := firstError(commandErr, argsErr, scheduleErr, environmentErr, secretEnvErr, environmentConflictErr)
+	paths, healthErr := healthPathsFromService(runtimeService)
+	invalidReason := firstError(commandErr, argsErr, scheduleErr, environmentErr, secretEnvErr, environmentConflictErr, healthErr)
 	return AppServiceSpec{
-		Name: serviceName, Namespace: tenantLabel, Image: image, Port: service.Port, Replicas: service.Replicas, Host: host,
+		HealthCheckPath: paths[0], LivenessPath: paths[1], ReadinessPath: paths[2], PublicHealthPath: paths[3],
+		Name: serviceName, Namespace: tenantLabel, Image: image, Port: runtimeService.Port, Replicas: runtimeService.Replicas, Host: host,
 		ProjectID: project.ID, ServiceID: service.ID, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug,
-		ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Command: command, Args: args, Schedule: schedule, Env: environment, SecretEnv: secretEnv,
+		ServiceType: firstNonEmpty(runtimeService.Type, "web"), DeploymentID: deployment.ID, Command: command, Args: args, Schedule: schedule, Env: environment, SecretEnv: secretEnv,
 		Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName,
-		PublicEgress: servicePublicEgress(service), AllowTenantIngress: serviceTenantIngress(service), InvalidReason: invalidReason,
+		PreviewLineageID: deployment.PreviewLineageID, PreviewGeneration: deployment.PreviewGeneration,
+		PublicEgress: servicePublicEgress(runtimeService), AllowTenantIngress: serviceTenantIngress(runtimeService), InvalidReason: invalidReason,
 	}
 }
 
@@ -335,6 +377,10 @@ func workloadLabels(spec AppServiceSpec) map[string]any {
 		labels["raibitserver.io/preview"] = "true"
 		labels["raibitserver.io/pull-request"] = strconv.Itoa(spec.PullRequestNumber)
 		labels["raibitserver.io/base-service"] = spec.BaseServiceName
+		if spec.PreviewLineageID != "" {
+			labels["raibitserver.io/preview-lineage-id"] = spec.PreviewLineageID
+			labels["raibitserver.io/preview-generation"] = strconv.Itoa(spec.PreviewGeneration)
+		}
 	}
 	return labels
 }
@@ -459,65 +505,23 @@ func podTemplate(spec AppServiceSpec, labels map[string]any, restartPolicy strin
 	}
 }
 
-func runtimeContainer(spec AppServiceSpec) map[string]any {
-	container := map[string]any{
-		"name":            spec.Name,
-		"image":           spec.Image,
-		"imagePullPolicy": "IfNotPresent",
-		"resources": map[string]any{
-			"requests": map[string]any{"cpu": "100m", "memory": "128Mi", "ephemeral-storage": "64Mi"},
-			"limits":   map[string]any{"cpu": "500m", "memory": "512Mi", "ephemeral-storage": "256Mi"},
-		},
-		"securityContext": map[string]any{
-			"allowPrivilegeEscalation": false,
-			"readOnlyRootFilesystem":   true,
-			"runAsNonRoot":             true,
-			"capabilities":             map[string]any{"drop": []any{"ALL"}},
-		},
-		"volumeMounts": []any{map[string]any{"name": "tmp", "mountPath": "/tmp"}},
-	}
-	if spec.ServiceType == "web" || spec.ServiceType == "private" {
-		container["ports"] = []any{map[string]any{"name": "http", "containerPort": spec.Port}}
-	}
-	if len(spec.Command) > 0 {
-		container["command"] = spec.Command
-	}
-	if len(spec.Args) > 0 {
-		container["args"] = spec.Args
-	}
-	if len(spec.Env) > 0 || len(spec.SecretEnv) > 0 {
-		env := make([]any, 0, len(spec.Env)+len(spec.SecretEnv))
-		names := make([]string, 0, len(spec.Env))
-		for name := range spec.Env {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			env = append(env, map[string]any{"name": name, "value": spec.Env[name]})
-		}
-		for index := range spec.SecretEnv {
-			env = append(env, spec.SecretEnv[index])
-		}
-		container["env"] = env
-	}
-	return container
-}
-
 func serviceManifest(spec AppServiceSpec, labels map[string]any) map[string]any {
 	return map[string]any{"apiVersion": "v1", "kind": "Service", "metadata": map[string]any{"name": spec.Name, "namespace": spec.Namespace, "labels": labels}, "spec": map[string]any{"type": "ClusterIP", "selector": map[string]any{"app.kubernetes.io/name": spec.Name}, "ports": []any{map[string]any{"name": "http", "port": spec.Port, "targetPort": "http"}}}}
 }
 
 func ingressManifest(spec AppServiceSpec, labels map[string]any, ingressClassName string, ingressErrors ingressErrorOptions) map[string]any {
-	annotations := map[string]any{
-		"raibitserver.io/hostname": spec.Host,
-	}
+	return map[string]any{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": map[string]any{"name": spec.Name, "namespace": spec.Namespace, "labels": labels, "annotations": ingressAnnotations(spec.Host, ingressErrors)}, "spec": map[string]any{"ingressClassName": ingressClassName, "rules": []any{map[string]any{"host": spec.Host, "http": map[string]any{"paths": []any{map[string]any{"path": "/", "pathType": "Prefix", "backend": map[string]any{"service": map[string]any{"name": spec.Name, "port": map[string]any{"number": spec.Port}}}}}}}}}}
+}
+
+func ingressAnnotations(host string, ingressErrors ingressErrorOptions) map[string]any {
+	annotations := map[string]any{"raibitserver.io/hostname": host}
 	if !ingressErrors.disabled {
 		annotations["nginx.ingress.kubernetes.io/custom-http-errors"] = ingressErrors.customHTTPErrors
 	}
 	if !ingressErrors.disabled && ingressErrors.middleware != "" {
 		annotations["traefik.ingress.kubernetes.io/router.middlewares"] = ingressErrors.middleware
 	}
-	return map[string]any{"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": map[string]any{"name": spec.Name, "namespace": spec.Namespace, "labels": labels, "annotations": annotations}, "spec": map[string]any{"ingressClassName": ingressClassName, "rules": []any{map[string]any{"host": spec.Host, "http": map[string]any{"paths": []any{map[string]any{"path": "/", "pathType": "Prefix", "backend": map[string]any{"service": map[string]any{"name": spec.Name, "port": map[string]any{"number": spec.Port}}}}}}}}}}
+	return annotations
 }
 
 func networkPolicyManifest(spec AppServiceSpec, labels map[string]any, ingressGatewayNamespace string) map[string]any {

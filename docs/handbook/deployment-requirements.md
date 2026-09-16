@@ -29,6 +29,8 @@
 
 `PENDING` 사용자는 보호된 콘솔 작업과 프로젝트·서비스·리소스 생성, 운영·미리보기 배포를 수행할 수 없습니다. 관리자 화면은 `ADMIN`만 접근할 수 있습니다.
 
+승인된 사용자는 인증된 대화형 세션에서 새 조직을 만들 수 있으며 생성된 조직에서만 `OWNER`가 됩니다. 조직 생성, 비밀번호 재설정 완료, 역할 변경·제거·탈퇴처럼 scope나 privilege가 바뀌는 작업은 기존 세션을 무효화할 수 있으므로 새 세션으로 다시 로그인합니다. `OWNER`/`ADMIN` 초대, verified-email 수락, serialized 역할 변경과 last-owner 제한은 화면이 아니라 API transaction에서 강제됩니다.
+
 ### 일반 사용자 기본 쿼터
 
 아래 값은 승인된 `NON_CLUB` 계정의 현재 기본값입니다. 운영자가 사용자별로 변경할 수 있으며 `CLUB_MEMBER`도 hard safety cap과 보안 정책은 계속 적용됩니다.
@@ -250,6 +252,10 @@ PGPASSWORD
 - 앱은 DB, registry, Kubernetes API를 public internet에 직접 노출하지 않습니다.
 - public URL 뒤에 reverse proxy가 있으므로 host와 HTTPS 처리 시 trusted proxy 정책을 명확히 설정합니다.
 
+사용자 지정 도메인은 IP, wildcard, single-label, 플랫폼 소유 zone을 허용하지 않으며 공개 `web` 서비스와 같은 조직·프로젝트 범위여야 합니다. 생성/회전 시 24시간 유효한 32-byte challenge가 한 번만 노출되고 `_raibit-challenge.<hostname>`의 정확한 TXT 값을 DNS에서 확인합니다. `OWNER`/`ADMIN`은 생성·회전·삭제, `MAINTAINER`는 확인 요청, 다른 프로젝트 읽기 역할은 상태 조회만 할 수 있습니다.
+
+DNS 확인은 API의 비동기 요청이며 `PENDING_VERIFICATION → VERIFIED → ROUTING → READY`와 TLS `PENDING → ISSUING → READY`를 분리해 관찰합니다. `READY`는 controller가 service route와 exact SAN certificate를 확인한 상태지만 외부 resolver·edge·앱 HTTPS까지 별도로 점검해야 합니다. 회전·삭제는 이전 세대 Ingress/Certificate의 부재가 확인될 때까지 cleanup pending이며 generated URL을 삭제하지 않습니다.
+
 실제 운영 hostname은 콘솔의 배포 결과를 사용합니다. URL을 문자열 조합으로 추측하지 않습니다.
 
 ## 10. 배포 상태 해석
@@ -267,6 +273,8 @@ PGPASSWORD
 
 `QUEUED`, `BUILDING`, `IMAGE_READY`만 취소할 수 있습니다. `READY` 이후 문제가 있으면 이전 `READY` 이미지로 확인된 롤백을 사용하거나 새 수정 배포를 만듭니다.
 
+배포 이력 조회는 service/environment/status/trigger/from/to 필터, 최대 100개의 stable keyset page와 tenant/filter에 서명된 opaque cursor를 사용합니다. 이력 행의 commit/image/snapshot/lineage/actor/health는 수정 대상이 아니며, 현재 상태와 권한에서 가능한 retry/redeploy/cancel/rollback 한 가지만 서버가 제공합니다. retry/redeploy는 기존 행을 덮어쓰지 않고 idempotency key로 새 successor를 만듭니다.
+
 ## 11. 업데이트와 삭제
 
 ### 업데이트
@@ -278,13 +286,18 @@ PGPASSWORD
 5. 배포의 commit SHA가 의도한 commit과 같은지 확인합니다.
 6. 기존 DB 데이터가 유지되는지 포함해 smoke test합니다.
 
+프로젝트 설정은 name/description만, 서비스 설정은 허용된 branch/source-internal path/command/port/resource 필드만 변경합니다. 둘 다 조회 snapshot의 `updatedAt`을 필수 조건으로 보내며 stale conflict는 변경 없는 409입니다. 서비스 설정은 diff/build-plan을 먼저 계산하고, 배포된 서비스의 이름·유형·source 교체는 기존 서비스를 보존하는 명시적 replacement로 처리합니다. 일반 PATCH로 slug, 조직, 상태, 삭제 필드나 과거 deployment snapshot을 바꿀 수 없습니다.
+
 ### 삭제
 
 - 프로젝트 삭제는 서비스, 배포, 리소스에 영향을 줄 수 있습니다.
+- 프로젝트 설정에서 service/resource/preview 영향 수를 확인하고 별도 `{ confirmed: true }` 요청으로 삭제 reconciliation을 한 번만 예약합니다.
 - 관리형 리소스 삭제 전 백업과 보존 정책을 확인합니다.
 - `READY` 리소스는 in-place 엔진 변경이나 재프로비저닝 대신 삭제 후 재생성이 필요할 수 있습니다.
 - 삭제 요청 후 `DELETE_REQUESTED`, `DELETING` 같은 상태를 거쳐 실제 리소스가 정리될 수 있습니다.
 - 이름이 사라졌다는 이유만으로 PVC, Secret, provider primitive까지 정리됐다고 가정하지 않습니다.
+
+삭제 API는 장기 실행 cleanup을 동기 수행하지 않습니다. 현재 workload와 immutable deployment snapshot은 기존 reconciler가 상태를 전이하고 실제 객체를 정리할 때까지 보존합니다.
 
 ## 12. 배포 전 복사해서 쓰는 체크리스트
 

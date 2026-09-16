@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestDomainControllerSettingsFromEnvironment(t *testing.T) {
+	// Given
+	t.Setenv("RAIBITSERVER_DOMAIN_CLUSTER_ISSUER", "letsencrypt-production")
+	t.Setenv("RAIBITSERVER_DOMAIN_RETRY_SECONDS", "17")
+
+	// When
+	cfg := FromEnv()
+
+	// Then
+	if cfg.DomainClusterIssuer != "letsencrypt-production" || cfg.DomainRetryAfter.Seconds() != 17 {
+		t.Fatalf("domain controller settings = %#v", cfg)
+	}
+}
+
 func TestIngressGatewayNamespaceFromEnvironment(t *testing.T) {
 	t.Setenv("RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE", "")
 	if got := FromEnv().IngressGatewayNamespace; got != "ingress-nginx" {

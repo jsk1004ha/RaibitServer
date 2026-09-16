@@ -6,6 +6,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/raibitserver/metrics-ingester/internal/identity"
 )
 
 func TestParseKubernetesQuantity(t *testing.T) {
@@ -13,8 +15,14 @@ func TestParseKubernetesQuantity(t *testing.T) {
 		value string
 		want  float64
 	}{
-		{"250m", .25}, {"1000000n", .001}, {"1500u", .0015}, {"1", 1},
-		{"1Ki", 1024}, {"2Mi", 2 * 1024 * 1024}, {"1.5Gi", 1.5 * 1024 * 1024 * 1024}, {"3M", 3_000_000},
+		{"250m", .25},
+		{"1000000n", .001},
+		{"1500u", .0015},
+		{"1", 1},
+		{"1Ki", 1024},
+		{"2Mi", 2 * 1024 * 1024},
+		{"1.5Gi", 1.5 * 1024 * 1024 * 1024},
+		{"3M", 3_000_000},
 	}
 	for _, tc := range tests {
 		got, err := ParseQuantity(tc.value)
@@ -87,7 +95,17 @@ func TestRunOnceEnforcesGlobalSampleBudgetAcrossPods(t *testing.T) {
 	}
 }
 
-type fakeSource struct{ pods []PodMetrics }
+type fakeSource struct {
+	pods []PodMetrics
+	deny bool
+}
+
+func (f *fakeSource) Verify(_ context.Context, pod PodMetrics, _ identity.Scope) (VerifiedPod, error) {
+	if f.deny {
+		return VerifiedPod{}, identity.ErrIdentity
+	}
+	return VerifiedPod{UID: pod.UID, CreatedAt: pod.Timestamp.Add(-time.Hour)}, nil
+}
 
 func (f *fakeSource) ListPodMetrics(_ context.Context, _ string, limit int) ([]PodMetrics, string, error) {
 	if limit <= 0 || limit >= len(f.pods) {
@@ -103,13 +121,25 @@ type fakeStore struct {
 	insertCalls     int
 }
 
-func (f *fakeStore) Insert(_ context.Context, records []Record) (int, error) {
+func (f *fakeStore) Resolve(_ context.Context, id string) (identity.Scope, error) {
+	return identity.Scope{ServiceID: "svc-1", DeploymentID: id, ContainerName: "app"}, nil
+}
+
+func (f *fakeStore) Insert(_ context.Context, batch Batch) (Persisted, error) {
 	f.insertCalls++
 	if f.insertErr != nil {
-		return 0, f.insertErr
+		return Persisted{}, f.insertErr
+	}
+	records := batch.Records
+	if len(records) > batch.Limit {
+		records = records[:batch.Limit]
 	}
 	f.records = append(f.records, records...)
-	return len(records), nil
+	result := Persisted{Inserted: len(records)}
+	if len(records) > 0 {
+		result.Newest = records[0].Timestamp
+	}
+	return result, nil
 }
 
 func (f *fakeStore) DeleteOlderThan(_ context.Context, before time.Time) (int64, error) {

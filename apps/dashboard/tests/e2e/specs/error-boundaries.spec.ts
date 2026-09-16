@@ -20,7 +20,7 @@ async function openGlobalErrorFixture(
   request: import('@playwright/test').APIRequestContext,
 ): Promise<void> {
   const arm = await request.get(`${LOOPBACK_ORIGIN}/errors/fixtures/global-error/arm`, {
-    headers: { cookie: 'raibitserver_session=fixture-user-populated', host: new URL(DASHBOARD_ORIGIN).host },
+    headers: { cookie: '__Host-raibitserver_session=fixture-user-populated', host: new URL(DASHBOARD_ORIGIN).host },
     maxRedirects: 0,
   });
   expect(arm.status()).toBe(307);

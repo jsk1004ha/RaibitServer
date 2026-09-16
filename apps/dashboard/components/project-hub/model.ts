@@ -22,6 +22,7 @@ export function projectNavigation(base: string) {
     { id: 'resources', label: '리소스', description: '데이터 계층', href: `${base}?view=resources` },
     { id: 'environment', label: '환경 변수', description: '비밀키 관리', href: `${base}?view=environment` },
     { id: 'logs', label: '로그', description: '실행 기록', href: `${base}?view=logs` },
+    { id: 'domains', label: '도메인', description: '생성 URL·사용자 도메인', href: `${base}?view=domains` },
     { id: 'settings', label: '설정', description: '프로젝트 관리', href: `${base}?view=settings` },
   ] as const;
 }

@@ -45,6 +45,12 @@ spec:
               value: {{ .Values.dashboard.consoleUrl | quote }}
             - name: RAIBITSERVER_BASE_DOMAIN
               value: {{ .Values.ingress.hosts.public | quote }}
+            - name: RAIBITSERVER_OAUTH_RELAY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.runtimeSecrets.existingSecret | quote }}
+                  key: RAIBITSERVER_OAUTH_RELAY_SECRET
+                  optional: true
           ports:
             - { name: http, containerPort: {{ .Values.dashboard.port }}, protocol: TCP }
           startupProbe:

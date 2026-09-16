@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "lineageId": "lineage-1",
+  "deploymentId": "deployment-1",
+  "baseDomain": "raibitserver.app",
+  "hashInputUtf8Hex": "7261696269747365727665722e707265766965772d70726f62652f7631006c696e656167652d31006465706c6f796d656e742d31",
+  "sha256": "d1c4b98e598159ae3a83ace52e085caad7abb4dfacc055f3f62a3f9e1611aea1",
+  "probeHost": "preview--probe-d1c4b98e598159ae3a83ace52e085caa.raibitserver.app",
+  "stableHost": "preview--pr-42--club--demo.raibitserver.app"
+}

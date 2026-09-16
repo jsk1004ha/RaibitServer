@@ -8,11 +8,14 @@ RUN apt-get update && \
 RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/package.json
+COPY packages/api-client/package.json packages/api-client/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/schemas/package.json packages/schemas/package.json
 COPY packages/config/package.json packages/config/package.json
+COPY scripts/build-cli-runtime.mjs scripts/build-cli-runtime.mjs
 RUN pnpm install --frozen-lockfile
 COPY apps/api apps/api
+COPY packages/api-client packages/api-client
 COPY packages/core packages/core
 COPY packages/schemas packages/schemas
 COPY packages/config packages/config
@@ -25,6 +28,7 @@ RUN pnpm --filter @raibitserver/api exec tsc -p ../../packages/core/tsconfig.jso
     --rootDir ../../packages/core/src --outDir /opt/raibitserver/core-runtime \
     --rewriteRelativeImportExtensions true
 RUN pnpm --filter @raibitserver/api deploy --legacy --prod /opt/raibitserver/api
+RUN node scripts/build-cli-runtime.mjs --schemas-only /opt/raibitserver/api
 RUN cp -R /workspace/prisma /opt/raibitserver/api/prisma && \
     cd /opt/raibitserver/api && \
     DATABASE_URL=postgresql://raibitserver:raibitserver@localhost:5432/raibitserver \

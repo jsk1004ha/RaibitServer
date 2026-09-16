@@ -127,7 +127,12 @@ test('quota denial remains authoritative when the audit sink is unavailable', as
 
 test('Nest write paths delegate quota enforcement to the atomic repository mutation', async () => {
   const source = await readFile(new URL('../apps/api/src/raibitserver.service.ts', import.meta.url), 'utf8');
-  assert.doesNotMatch(source, /repository\.enforceUserCan/);
+  for (const method of ['createProject', 'addService', 'addResource', 'createDeployment', 'importGitHubRepository']) {
+    const start = source.indexOf(`async ${method}(`);
+    const end = source.indexOf('\n  async ', start + 8);
+    assert.ok(start >= 0, `${method} must remain an explicit Nest write path`);
+    assert.doesNotMatch(source.slice(start, end < 0 ? source.length : end), /repository\.enforceUserCan/, `${method} must not perform a quota precheck outside its repository mutation`);
+  }
   assert.match(source, /const desiredProject = \{[\s\S]*?actorUserId:\s*subject\.id[\s\S]*?writeDesiredProject\(desiredProject\)/);
   assert.match(source, /createService\(\{[\s\S]*?actorUserId:\s*subject\.id/);
   assert.match(source, /createResource\(\{[\s\S]*?actorUserId:\s*subject\.id/);

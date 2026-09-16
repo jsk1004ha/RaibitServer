@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import ts from 'typescript';
+import { RESOURCE_CAPABILITIES } from '../packages/core/src/resource-capabilities.ts';
 
 // allow: SIZE_OK — this is the plan-required route/form behavior ledger, not one production unit.
 const read = (path) => fs.readFile(new URL(path, import.meta.url), 'utf8');
@@ -19,8 +22,9 @@ test('approved RAIBIT visual contract identifies the redesign and its target sur
 });
 
 test('native POST contracts preserve return targets, override fields, and confirmations', async () => {
-  const [shell, login, projectRoute, projectServices, projectOperations, projectSettings, projectEnvironment, deployment, resource, github] = await Promise.all([
+  const [shell, accountMenu, login, projectRoute, projectServices, projectOperations, projectSettings, projectEnvironment, deployment, deploymentRecovery, resource, resourceQuery, github, githubMutation] = await Promise.all([
     read('../apps/dashboard/components/console-ui.tsx'),
+    read('../apps/dashboard/components/account-menu.tsx'),
     read('../apps/dashboard/app/login/page.tsx'),
     read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
     read('../apps/dashboard/components/project-hub/services.tsx'),
@@ -28,29 +32,39 @@ test('native POST contracts preserve return targets, override fields, and confir
     read('../apps/dashboard/components/project-hub/settings.tsx'),
     read('../apps/dashboard/components/project-hub/environment.tsx'),
     read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx'),
+    read('../apps/dashboard/components/project-hub/deployment-recovery-action.tsx'),
     read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../apps/dashboard/components/resource-query-console.tsx'),
     read('../apps/dashboard/app/github/page.tsx'),
+    read('../apps/dashboard/components/github-source-mutation.tsx'),
   ]);
   const project = [projectRoute, projectServices, projectOperations, projectSettings, projectEnvironment].join('\n');
-  assert.match(shell, /method="post"\s+action=\{apiAction\('\/auth\/logout'\)\}[\s\S]*?name="_returnTo"\s+value="\/login"/);
+  assert.match(shell, /const logoutAction = apiAction\('\/auth\/logout'\);[\s\S]*?<AccountMenu[\s\S]*?logoutAction=\{logoutAction\}/);
+  assert.match(accountMenu, /<form action=\{logoutAction\} method="post"><input name="_returnTo" type="hidden" value="\/login" \/>/);
   for (const marker of [
     'name="_returnTo" type="hidden" value={next}',
     'name="_returnTo" type="hidden" value="/login?mode=verify"',
   ]) assert.ok(login.includes(marker), `${marker} auth return target missing`);
   for (const marker of [
     'name="_returnTo" type="hidden" value={`${data.base}?view=services`}', 'name="deploymentType" type="hidden" value="production"',
-    'name="deploymentType" type="hidden" value="preview"', 'name="_method" type="hidden" value="PATCH"', 'name="_method" type="hidden" value="DELETE"',
-    'name="_returnTo" type="hidden" value={`/org/${orgSlug}/projects`}', 'name="_confirmProject"',
+    'name="deploymentType" type="hidden" value="preview"',
   ]) assert.ok(project.includes(marker), `${marker} project mutation contract missing`);
-  assert.match(deployment, /apiAction\(`\/deployments\/\$\{encodedDeploymentId\}\/rollback`[\s\S]*?name="_returnTo" value=\{`\$\{base\}\?view=overview`\}[\s\S]*?name="confirmed" value="true" required/);
+  assert.match(projectSettings, /id="project-delete-confirmed"[\s\S]*?disabled=\{!deleteConfirmed \|\| deletion\.kind === 'pending'\}/);
+  assert.match(projectSettings, /settings\/deletion[\s\S]*?JSON\.stringify\(\{ confirmed: true \}\)/);
+  assert.doesNotMatch(projectSettings, /name="_confirmProject"/);
+  assert.match(deployment, /<DeploymentRecoveryAction action=\{history\.eligibleAction\}[\s\S]*?returnTo=\{`\$\{base\}\?view=overview`\}/);
+  assert.match(deploymentRecovery, /action=\{`\/api\/control\$\{action\.href\}`\}[\s\S]*?name="requestIdempotencyKey"[\s\S]*?name="snapshotVersion"[\s\S]*?action\.type === 'rollback'[\s\S]*?name="confirmed"/);
+  assert.ok(resource.includes('returnTo={`${base}?view=query`}'), 'query return target wiring missing');
+  assert.ok(resourceQuery.includes('<input name="_returnTo" type="hidden" value={returnTo} />'), 'query fallback return target missing');
   for (const marker of [
-    'name="_returnTo" value={`${base}?view=query`}', 'name="_returnTo" value={`${base}?view=provider`}',
-    'name="confirmed" value="true"', 'name="dryRun" value="true"', 'name="serviceId"', 'name="envPrefix"',
+    'name="_returnTo" value={`${base}?view=provider`}',
+    'name="confirmed" value="true"', 'ResourceProvisionActions', 'name="serviceId"', 'name="envPrefix"',
   ]) assert.ok(resource.includes(marker), `${marker} resource mutation contract missing`);
   for (const marker of [
-    'name="_returnTo" value="/github?step=attach"', 'name="_returnTo" value="/github?step=sync"',
+    'returnTo="/github?step=attach"', 'returnTo="/github?step=sync"',
     'selectedRepository.fullName', 'encodeURIComponent(selectedRepository.fullName)',
   ]) assert.ok(github.includes(marker), `${marker} GitHub mutation contract missing`);
+  assert.match(githubMutation, /<input name="_returnTo" type="hidden" value=\{returnTo\} \/>/);
 });
 
 test('dashboard shell is Korean-first, server-first, and keeps route navigation typed', async () => {
@@ -80,8 +94,9 @@ test('shared dashboard primitives keep localized deterministic route and securit
     ['../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx', 'projects'],
     ['../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx', 'projects'],
   ];
-  const [shell, ...callers] = await Promise.all([
+  const [shell, accountMenu, ...callers] = await Promise.all([
     read('../apps/dashboard/components/console-ui.tsx'),
+    read('../apps/dashboard/components/account-menu.tsx'),
     ...callerContracts.map(([path]) => read(path)),
   ]);
 
@@ -110,8 +125,9 @@ test('shared dashboard primitives keep localized deterministic route and securit
     assert.ok(callers[index].includes(`<ConsoleShell active="${active}"`), `${path} must use active id ${active}`);
   }
 
-  assert.match(shell, /method="post"\s+action=\{apiAction\('\/auth\/logout'\)\}/);
-  assert.match(shell, /name="_returnTo"\s+value="\/login"/);
+  assert.match(shell, /const logoutAction = apiAction\('\/auth\/logout'\);/);
+  assert.match(shell, /<AccountMenu[\s\S]*?logoutAction=\{logoutAction\}/);
+  assert.match(accountMenu, /<form action=\{logoutAction\} method="post"><input name="_returnTo" type="hidden" value="\/login" \/>/);
   assert.match(shell, /ConsoleMobileNav/);
   assert.match(shell, /ConsoleSearch/);
 });
@@ -210,11 +226,11 @@ test('public landing keeps the introduction focused and exposes an auto-refreshi
   assert.ok(privacy.includes('ishsraibit@gmail.com'));
   assert.ok(footer.includes('href="/support"'));
   assert.ok(footer.includes('href="/status"'));
-  assert.ok(footer.includes('System Status'));
+  assert.ok(footer.includes('운영 현황'));
   assert.ok(footer.includes('https://github.com/jsk1004ha/RaibitServer'));
   assert.ok(footer.includes('href="/contributors"'));
   assert.ok(footer.includes('href="/privacy"'));
-  assert.ok(footer.includes('Privacy Policy'));
+  assert.ok(footer.includes('개인정보 처리방침'));
   assert.ok(footer.includes('© 2026 Raibit, ISHS.'));
 });
 
@@ -299,16 +315,18 @@ test('project workflows preserve their server-orchestrated actions after feature
     '/projects/${data.projectId}/services',
     '/projects/${data.projectId}/resources',
     '/projects/${data.projectId}/services/${service.id}/deployments',
-    '/services/${service?.id}',
+    '/services/${service.id}/settings',
     '/projects/${data.projectId}',
   ]) {
     assert.ok(projectDetail.includes(action), `${action} project form action missing`);
   }
-  assert.ok(projectDetail.includes('name="_method" type="hidden" value="PATCH"'));
-  assert.ok(projectDetail.includes('name="_method" type="hidden" value="DELETE"'));
-  assert.ok(projectDetail.includes('name="_confirmProject"'));
-  assert.ok(projectDetail.includes('설정 저장'));
-  assert.ok(projectDetail.includes('프로젝트 삭제'));
+  assert.ok(projectDetail.includes('method: \'PATCH\''));
+  assert.ok(projectDetail.includes('method: \'POST\''));
+  assert.ok(settings.includes('id="project-delete-confirmed"'));
+  assert.ok(settings.includes('JSON.stringify({ confirmed: true })'));
+  assert.ok(!settings.includes('name="_confirmProject"'));
+  assert.ok(settings.includes('변경 사항 저장'));
+  assert.ok(settings.includes('프로젝트 삭제'));
   assert.ok(projectDetail.includes('name="deploymentType" type="hidden" value="production"'));
   assert.ok(projectDetail.includes('name="deploymentType" type="hidden" value="preview"'));
   assert.ok(projectDetail.includes('href={`${data.base}/deployments/${deployment.id}`}'));
@@ -370,7 +388,7 @@ test('project workflow controls derive tenant scope server-side and expose acces
   assert.ok(wizard.includes('id="project-organization" value={orgSlug} readOnly aria-describedby="organization-scope-note"'));
   assert.ok(wizard.includes('로그인 권한으로 확인'));
   assert.doesNotMatch(wizard, /<input[^>]*name="organizationId"/);
-  assert.match(wizard, /<ol[^>]*>/);
+  assert.match(wizard, /<SectionNavigationScroll as="ol"[^>]*>/);
   assert.ok(wizard.includes('hidden={step !== 0}'));
   assert.ok(wizard.includes('hidden={step !== 3}'));
   assert.ok(wizard.includes('disabled={index > step}'));
@@ -388,10 +406,36 @@ test('project workflow controls derive tenant scope server-side and expose acces
   for (const option of [
     "['web', '웹']", "['private', '비공개 서비스']",
     "['worker', '워커']", "['cron', '예약 작업']",
-    "['job', '일회성 작업']", "['object-storage', '객체 저장소']",
+    "['job', '일회성 작업']",
   ]) {
     assert.ok(projectFeatures.includes(option), `${option} localized enum label missing`);
   }
+  const dashboardRequire = createRequire(new URL('../apps/dashboard/package.json', import.meta.url));
+  const React = dashboardRequire('react');
+  const { renderToStaticMarkup } = dashboardRequire('react-dom/server');
+  const ast = ts.createSourceFile('operations.tsx', operations, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let projection;
+  function visit(node) {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(ast) === 'Select') {
+      projection = node.children.find(child => ts.isJsxExpression(child) && child.expression?.getText(ast).startsWith('RESOURCE_CAPABILITIES.map'))?.expression.getText(ast);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert.ok(projection, 'resource selector must have a generated option projection');
+  const compiled = ts.transpileModule(`const result = (${projection});`, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const renderOptions = new Function('React', 'RESOURCE_CAPABILITIES', 'liveEngines', `${compiled}\nreturn result;`);
+  const options = renderOptions(React, RESOURCE_CAPABILITIES, new Set(RESOURCE_CAPABILITIES.filter(entry => entry.local.provision).map(entry => entry.engine)));
+  const releaseOptions = renderOptions(React, RESOURCE_CAPABILITIES, new Set());
+  assert.ok(releaseOptions.every(option => option.props.disabled), 'server-unavailable engines must all remain disabled');
+  assert.match(operations, /entry\.live && entry\.permitted/);
+  assert.deepEqual(options.map(option => option.props.value), RESOURCE_CAPABILITIES.map(entry => entry.engine));
+  for (const option of options) {
+    const supported = ['postgresql', 'mysql', 'mariadb', 'mongodb', 'sqlite', 'redis', 'valkey'].includes(option.props.value);
+    assert.equal(option.props.disabled, !supported, option.props.value);
+    assert.ok(renderToStaticMarkup(option).includes(supported ? '로컬 전용' : '준비 중'));
+  }
+  assert.match(renderToStaticMarkup(options.find(option => option.props.value === 'object-storage')), /객체 저장소 · 준비 중/);
 });
 
 test('deployment detail awaits route params and keeps operational controls on a compact Korean surface', async () => {
@@ -409,33 +453,36 @@ test('deployment detail awaits route params and keeps operational controls on a 
     'getJson(`/deployments/${encodedDeploymentId}`',
     'getJson(`/deployments/${encodedDeploymentId}/logs`',
     'getJson(`/deployments/${encodedDeploymentId}/events`',
-    'apiAction(`/deployments/${encodedDeploymentId}/rollback`, context)',
-    'apiAction(`/deployments/${encodedDeploymentId}/cancel`, context)',
   ]) {
     assert.ok(deployment.includes(apiMarker), `${apiMarker} deployment operation missing`);
   }
+  const deploymentRecovery = await read('../apps/dashboard/components/project-hub/deployment-recovery-action.tsx');
+  assert.ok(deployment.includes('DeploymentRecoveryAction'));
+  assert.ok(deploymentRecovery.includes('action={`/api/control${action.href}`}'));
+  assert.ok(deploymentRecovery.includes('name="requestIdempotencyKey"'));
+  assert.ok(deploymentRecovery.includes('name="snapshotVersion"'));
+  assert.ok(deploymentRecovery.includes('name="confirmed"'));
   assert.match(deployment, /const base = `\/org\/\$\{orgSlug\}\/projects\/\$\{projectId\}\/deployments\/\$\{encodedDeploymentId\}`;/);
   assert.match(deployment, /배포 ID · <span[^>]*>\{decodedDeploymentId\}<\/span>/);
   assert.doesNotMatch(deployment, /(?:getJson|apiAction)\(`\/deployments\/\$\{deploymentId\}/);
   assert.doesNotMatch(deployment, /deployments\/\$\{encodeURIComponent\(deploymentId\)\}/);
   assert.doesNotMatch(deployment, /encodeURIComponent\(encodeDeploymentRouteSegment\(/);
   for (const marker of [
-    '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트', '롤백 확인', '배포 취소',
-    '배포 목록', '롤백', '상태는 빌더와 오케스트레이터가 갱신합니다.', 'detail.errorCode', 'detail.errorMessage', 'SectionNav', "view === 'logs'", "view === 'events'",
+    '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트',
+    '배포 목록', '상태는 빌더와 오케스트레이터가 갱신합니다.', 'detail.errorCode', 'detail.errorMessage', 'SectionNav', "view === 'logs'", "view === 'events'",
   ]) {
     assert.ok(deployment.includes(marker), `${marker} deployment marker missing`);
   }
-  for (const field of ['imageUrl', 'reason']) {
-    assert.ok(deployment.includes(`name="${field}"`), `${field} deployment field missing`);
-  }
+  for (const action of ['retry', 'redeploy', 'cancel', 'rollback']) assert.ok(deploymentRecovery.includes(action), `${action} recovery action missing`);
+  assert.doesNotMatch(deployment, /name="(?:imageUrl|reason)"|id="rollback-deployment"/);
   assert.ok(!deployment.includes('apiAction(`/deployments/${deploymentId}/status`, context)'), 'tenant dashboard must not expose the system-owned status mutation');
   for (const field of ['status', 'imageDigest', 'errorMessage']) assert.ok(!deployment.includes(`name="${field}"`), `${field} system-owned field must be read-only`);
   assert.ok(deployment.includes("view === 'events'"));
   assert.doesNotMatch(deployment, />실시간</);
-  assert.ok(deployment.includes('id="rollback-deployment"'));
   assert.match(deployment, /function DeploymentStream\(\{ rows, field, label, empty \}/);
   assert.match(deployment, /role="log"\s+tabIndex=\{0\}/);
-  assert.match(deployment, /bg-\[var\(--canvas-night\)\]\s+text-background\s+focus-visible:outline-none\s+focus-visible:ring-3/);
+  assert.match(deployment, /className="log-viewer[^\"]*focus-visible:outline-none[^\"]*focus-visible:ring-3/);
+  assert.match(deployment, /text-inverse-foreground/);
   assert.match(deployment, /font-mono\s+text-xs/);
   assert.match(deployment, /break-all\s+whitespace-pre-wrap/);
   assert.match(deployment, /<DeploymentStream rows=\{logs\.body\?\.logs \|\| \[\]\} field="line" label="마스킹된 빌드 로그"/);
@@ -445,7 +492,12 @@ test('deployment detail awaits route params and keeps operational controls on a 
 });
 
 test('resource console awaits route params and links localized tabs to real operational sections', async () => {
-  const resource = await read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx');
+  const [resource, queryConsole, backupActions] = await Promise.all([
+    read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx'),
+    read('../apps/dashboard/components/resource-query-console.tsx'),
+    read('../apps/dashboard/components/resource-backup-actions.tsx'),
+  ]);
+  const resourceContract = `${resource}\n${queryConsole}`;
 
   assert.match(resource, /params:\s*Promise<\{\s*orgSlug:\s*string;\s*projectId:\s*string;\s*resourceId:\s*string\s*\}>/);
   assert.ok(resource.includes('const [{ orgSlug, projectId, resourceId }, queryParams] = await Promise.all([params, searchParams]);'));
@@ -476,24 +528,34 @@ test('resource console awaits route params and links localized tabs to real oper
   }
   for (const marker of [
     '리소스 콘솔', '쿼리 실행', '공급자 명령 실행',
-    '계획 만들기', '서비스에 연결', 'provider-owned-secret',
+    'ResourceProvisionActions', '서비스에 연결', 'provider-owned-secret',
   ]) {
     assert.ok(resource.includes(marker), `${marker} resource marker missing`);
   }
-  for (const field of ['query', 'command', 'confirmed', 'dryRun', 'serviceId', 'envPrefix']) {
-    assert.ok(resource.includes(`name="${field}"`), `${field} resource field missing`);
+  assert.ok(resource.includes('<ResourceQueryConsole action={apiAction(`/resources/${resourceId}/console/query`, state.context)}'));
+  const [provisioning, operationResult] = await Promise.all([
+    read('../apps/dashboard/components/resource-provision-actions.tsx'),
+    read('../apps/dashboard/lib/operation-result.ts'),
+  ]);
+  for (const marker of ['계획 미리보기', '실제 실행 요청', 'preview-plan', 'live-provision', 'ResourceAvailabilitySchema.safeParse', 'successKind="resource-plan"']) assert.ok(provisioning.includes(marker), marker);
+  for (const marker of ['ResourceProvisionResultSchema', "successKind !== 'resource-plan'", "parsed.data.intent === 'preview-plan'"]) assert.ok(operationResult.includes(marker), marker);
+  assert.doesNotMatch(resource, /name="dryRun"/);
+  for (const field of ['query', 'command', 'confirmed', 'serviceId', 'envPrefix']) {
+    assert.ok(resourceContract.includes(`name="${field}"`), `${field} resource field missing`);
   }
-  assert.equal(resource.match(/name="confirmed"/g)?.length, 2);
+  assert.equal(resourceContract.match(/name="confirmed"/g)?.length, 2);
+  assert.match(queryConsole, /fetch\(action,[\s\S]*?body: JSON\.stringify\(\{ confirmed, query \}\)/);
+  assert.match(queryConsole, /<section aria-label="쿼리 결과"/);
 
   assert.match(resource, /id="provider-command"[\s\S]*?<button[^>]*type="submit"[^>]*>공급자 명령 실행<\/button>/);
 
-  const backupSection = resource.match(/\{view === 'backups' \? <section[\s\S]*?<\/section> : null\}/)?.[0];
-  assert.ok(backupSection, 'independent backup empty state missing');
-  assert.ok(backupSection.includes('복구 지점 준비 중'));
-  assert.doesNotMatch(backupSection, /\/provision|apiAction\(/);
-  assert.doesNotMatch(resource, /<form[^>]*id="backups"/);
-  assert.match(resource, /<form id="provisioning"[^>]*action=\{apiAction\(`\/resources\/\$\{resourceId\}\/provision`/);
-  assert.ok(resource.includes('<h2>프로비저닝</h2>'));
+  assert.match(resource, /<ResourceBackupActions createAction=\{apiAction\(`\/resources\/\$\{resourceId\}\/backups`[\s\S]*?returnTo=\{`\$\{base\}\?view=backups`\}/);
+  assert.match(backupActions, /\{backups\.length === 0 \? <Empty>[\s\S]*?복구 지점이 없습니다\./);
+  assert.match(backupActions, /name="requestIdempotencyKey"[\s\S]*?name="formatVersion"/);
+  assert.match(backupActions, /body: JSON\.stringify\(\{ confirmed: true \}\)/);
+  assert.match(resource, /<ResourceProvisionActions action=\{apiAction\(`\/resources\/\$\{resourceId\}\/provision`/);
+  assert.match(provisioning, /id="provisioning"/);
+  assert.ok(provisioning.includes('<h2>프로비저닝</h2>'));
   for (const marker of ['MetricStrip', 'resource-overview-grid', '리소스 정보', '빠른 시작', '보안 연결', '/guide?topic=resources']) {
     assert.ok(resource.includes(marker), `${marker} beginner resource overview marker missing`);
   }
@@ -564,7 +626,10 @@ test('primary dashboard pages expose Korean visible headings', async () => {
 });
 
 test('GitHub console keeps integration contracts behind a Korean workflow', async () => {
-  const github = await read('../apps/dashboard/app/github/page.tsx');
+  const [github, githubMutation] = await Promise.all([
+    read('../apps/dashboard/app/github/page.tsx'),
+    read('../apps/dashboard/components/github-source-mutation.tsx'),
+  ]);
 
   assert.ok(github.includes('<ConsoleShell active="github"'));
   assert.doesNotMatch(github, /components\/icon/);
@@ -584,10 +649,11 @@ test('GitHub console keeps integration contracts behind a Korean workflow', asyn
   assert.ok(github.includes('`/projects/${firstService.projectId}/services/${firstService.id}/github`'), 'attach action must pair a service with its own project');
   assert.ok(!github.includes('`/projects/${firstProject.id}/services/${firstService.id}/github`'), 'attach action must not cross-pair independent project and service rows');
   assert.ok(github.includes('canAttachRepository ? ('));
-  assert.match(github, /<button[^>]*type="submit"[^>]*>연결<\/button>/);
+  assert.match(githubMutation, /<Button aria-busy=\{busy\} disabled=\{disabled \|\| busy\} type="submit">/);
+  assert.ok(github.includes('submitLabel="연결"'));
   assert.ok(github.includes('연결할 서비스와 저장소가 필요합니다.'));
   assert.ok(github.includes('canSyncRepository ? ('));
-  assert.match(github, /<button[^>]*type="submit"[^>]*>동기화<\/button>/);
+  assert.ok(github.includes('submitLabel="동기화"'));
   assert.ok(github.includes('동기화할 저장소가 없습니다.'));
   assert.ok(!github.includes("'/projects/project-id/services/service-id/github'"));
   assert.ok(!github.includes("'/github/repositories/owner%2Frepo/sync'"));
@@ -630,25 +696,29 @@ test('admin console focuses on signup identity review and approval actions', asy
 });
 
 test('login keeps each auth activity focused and uses the same-origin control BFF', async () => {
-  const [login, api] = await Promise.all([
+  const [login, api, apiAction] = await Promise.all([
     read('../apps/dashboard/app/login/page.tsx'),
     read('../apps/dashboard/lib/api.ts'),
+    read('../apps/dashboard/lib/api-action.ts'),
   ]);
 
   assert.doesNotMatch(login, /dashboardApiContext/);
   for (const endpoint of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend']) {
     assert.ok(login.includes(`apiAction('${endpoint}')`), `${endpoint} same-origin form action missing`);
   }
-  assert.ok(api.includes('return `/api/control'));
+  assert.ok(api.includes("export { apiAction } from './api-action'"));
+  assert.ok(apiAction.includes('return `/api/control'));
   assert.doesNotMatch(login, /\/api\/(?:session|control-plane)/);
   for (const field of ['name', 'studentId', 'clubMemberClaim', 'email', 'password', 'code']) {
     assert.ok(login.includes(`name="${field}"`), `${field} auth field missing`);
   }
   assert.ok(!login.includes('name="organizationSlug"'), 'signup should not ask users to create a workspace');
-  assert.ok(login.includes("const modes = ['login', 'signup', 'verify'] as const"));
+  assert.ok(login.includes("const modes = ['login', 'signup', 'verify', 'forgot', 'reset'] as const"));
+  assert.ok(login.includes("const navigationModes = ['login', 'signup', 'verify'] as const"));
   assert.ok(login.includes("mode === 'login' ? <form"));
   assert.ok(login.includes("mode === 'signup' ? <form"));
   assert.ok(login.includes("mode === 'verify' ? <>"));
+  assert.ok(login.includes("mode === 'forgot' || mode === 'reset' ? <PasswordRecoveryForm"));
   assert.ok(login.includes('관리자 확인을 위해 정확한 정보를 입력해 주세요.'));
   assert.ok(login.includes('name="password" type="password" autoComplete="current-password"'));
   assert.ok(login.includes('name="password" type="password" autoComplete="new-password"'));

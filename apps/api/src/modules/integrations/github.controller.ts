@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Param, Post, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { GitHubIntegrationService } from './github.service';
 
@@ -36,6 +36,13 @@ export class GitHubIntegrationController {
     return this.githubService.connectGitHub(input, req.raibitSubject);
   }
 
+  @RequirePermission('github:disconnect')
+  @Post('organizations/:organizationId/integrations/github/:integrationId/disconnect')
+  @HttpCode(200)
+  disconnect(@Param('organizationId') organizationId: string, @Param('integrationId') integrationId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.githubService.disconnectGitHubIntegration(organizationId, integrationId, input, req.raibitSubject);
+  }
+
   @RequirePermission('project:read')
   @Get('integrations/github')
   list(@Query('organizationId') organizationId: string, @Req() req: any) {
@@ -50,8 +57,15 @@ export class GitHubIntegrationController {
 
   @RequirePermission('project:read')
   @Get('github/installations/:installationId/repositories')
-  repositories(@Param('installationId') installationId: string, @Req() req: any) {
-    return this.githubService.listGitHubInstallationRepositories(installationId, req.raibitSubject);
+  repositories(@Param('installationId') installationId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.githubService.listGitHubInstallationRepositories(installationId, query, req.raibitSubject);
+  }
+
+  @RequirePermission('github:refresh')
+  @Post('github/installations/:installationId/repositories/refresh')
+  @HttpCode(200)
+  refreshRepositories(@Param('installationId') installationId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.githubService.refreshGitHubInstallationRepositories(installationId, input, req.raibitSubject);
   }
 
   @Post('github/webhooks')
@@ -68,6 +82,7 @@ export class GitHubIntegrationController {
 
   @RequirePermission('deploy:run')
   @Post('github/repositories/:repositoryId/sync')
+  @HttpCode(202)
   syncRepository(@Param('repositoryId') repositoryId: string, @Body() input: Record<string, any>, @Req() req: any) {
     return this.githubService.syncGitHubRepository(repositoryId, input || {}, req.raibitSubject);
   }

@@ -1,12 +1,16 @@
+import { GitBranch } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert';
-import { Button } from '../../components/ui/button';
+import { Button, buttonVariants } from '../../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader } from '../../components/ui/card';
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '../../components/ui/field';
 import { Input } from '../../components/ui/input';
 import { Brand } from '../../components/brand';
+import { PasswordRecoveryForm } from '../../components/password-recovery-form';
+import { ThemeMenu } from '../../components/theme-menu';
 import { apiAction } from '../../lib/api';
 
-const modes = ['login', 'signup', 'verify'] as const;
+const modes = ['login', 'signup', 'verify', 'forgot', 'reset'] as const;
+const navigationModes = ['login', 'signup', 'verify'] as const;
 
 type AuthMode = typeof modes[number];
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -16,13 +20,15 @@ const authCopy: Record<AuthMode, Readonly<{ eyebrow: string; title: string; desc
   login: { eyebrow: 'RAIBIT ACCOUNT', title: '콘솔에 로그인', description: '프로젝트와 배포 현황을 계속 관리하세요.' },
   signup: { eyebrow: 'JOIN RAIBIT', title: '가입 신청', description: '관리자 확인을 위해 정확한 정보를 입력해 주세요.' },
   verify: { eyebrow: 'VERIFY EMAIL', title: '이메일 인증', description: '이메일로 받은 6자리 코드를 입력해 주세요.' },
+  forgot: { eyebrow: 'PASSWORD RECOVERY', title: '비밀번호 재설정', description: '비밀번호 재설정이 가능한 계정이면 입력한 이메일로 코드를 보내드립니다.' },
+  reset: { eyebrow: 'RESET PASSWORD', title: '새 비밀번호 설정', description: '이메일과 재설정 코드를 입력해 새 비밀번호를 설정하세요.' },
 };
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const query = await searchParams;
   const requestedMode = queryValue(query.mode, 'login');
   const mode = isAuthMode(requestedMode) ? requestedMode : 'login';
-  const email = queryValue(query.email, '');
+  const email = requestedMode === 'forgot' || requestedMode === 'reset' ? '' : queryValue(query.email, '');
   const next = queryValue(query.next, '/console');
   const error = errorMessage(queryValue(query.error, ''));
   const notice = noticeMessage(queryValue(query.notice, ''));
@@ -32,25 +38,28 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
   return (
     <main id="main-content" className="grid min-h-dvh bg-background lg:grid-cols-2">
-      <section className="hidden min-h-dvh flex-col justify-between bg-primary px-10 py-10 text-primary-foreground lg:flex">
+      <section className="hidden min-h-dvh flex-col justify-between bg-brand-surface px-10 py-10 text-brand-surface-foreground lg:flex">
         <a className="flex w-fit items-center gap-3 text-sm font-medium" href={publicHomeHref}>
           <Brand height={44} width={44} priority />
           <span>RAIBIT SERVER</span>
         </a>
         <div className="max-w-md">
-          <p className="text-xs font-medium text-primary-foreground/70">DEPLOYMENT PLATFORM</p>
-          <p className="mt-4 text-3xl leading-tight font-medium text-balance">동아리의 프로젝트를 한곳에서 배포하고 운영하세요.</p>
+          <p className="text-xs font-medium text-brand-surface-foreground/70">DEPLOYMENT PLATFORM</p>
+          <p className="mt-4 text-3xl leading-tight font-medium text-balance break-keep [overflow-wrap:anywhere]">동아리의 프로젝트를 한곳에서 배포하고 운영하세요.</p>
         </div>
-        <p className="text-sm text-primary-foreground/70">인천과학고 라이빗 호스팅 서비스</p>
+        <p className="text-sm text-brand-surface-foreground/70 break-keep [overflow-wrap:anywhere]">인천과학고 라이빗 호스팅 서비스</p>
       </section>
 
-      <section className="flex min-h-dvh items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
-        <div className="w-full max-w-md">
+      <section className="flex min-h-dvh min-w-0 items-center justify-center px-4 py-8 sm:px-6 lg:px-12">
+        <div className="w-full min-w-0 max-w-md">
           <a className="mb-8 flex w-fit items-center gap-3 text-sm font-medium lg:hidden" href={publicHomeHref}>
             <Brand height={40} width={40} priority />
             <span>RAIBIT SERVER</span>
           </a>
           <Card>
+            <div data-slot="theme-utility" className="flex justify-end px-(--card-spacing)">
+              <ThemeMenu />
+            </div>
             <CardHeader>
               <p className="text-xs font-medium text-muted-foreground">{copy.eyebrow}</p>
               <h1 className="text-2xl tracking-tight">{copy.title}</h1>
@@ -58,7 +67,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             </CardHeader>
             <CardContent className="flex flex-col gap-6">
               <nav aria-label="인증 메뉴" className="flex flex-wrap gap-4 border-b border-border pb-3 text-sm">
-                {modes.map((item) => (
+                {navigationModes.map((item) => (
                   <a
                     aria-current={mode === item ? 'page' : undefined}
                     className={mode === item ? 'font-medium text-foreground underline decoration-primary decoration-2 underline-offset-12' : 'text-muted-foreground hover:text-foreground'}
@@ -80,6 +89,11 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                   <Field><FieldLabel htmlFor="login-password">비밀번호</FieldLabel><Input aria-describedby={messageId} id="login-password" name="password" type="password" autoComplete="current-password" required /></Field>
                   <Button type="submit">콘솔에 로그인</Button>
                 </FieldGroup>
+                <div aria-hidden="true" className="flex items-center gap-3 text-xs text-muted-foreground"><span className="h-px flex-1 bg-border" /><span>또는</span><span className="h-px flex-1 bg-border" /></div>
+                <div className="flex flex-col gap-2">
+                  <a className={buttonVariants({ variant: 'outline', className: 'w-full' })} href={apiAction('/auth/github/login')}><GitBranch aria-hidden="true" />GitHub로 로그인</a>
+                  <p className="text-xs leading-relaxed text-muted-foreground break-keep">가입 승인된 계정과 GitHub의 인증 이메일이 같으면 프로필 사진도 함께 연결됩니다.</p>
+                </div>
               </form> : null}
 
               {mode === 'signup' ? <form method="post" action={apiAction('/auth/signup')} className="auth-form">
@@ -119,8 +133,10 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 </form>
               </> : null}
 
+              {mode === 'forgot' || mode === 'reset' ? <PasswordRecoveryForm mode={mode} requestAction={apiAction('/auth/password-reset/request')} completeAction={apiAction('/auth/password-reset/complete')} /> : null}
+
               <footer className="flex flex-col gap-3 border-t border-border pt-5 text-sm text-muted-foreground">
-                {mode === 'login' ? <p>계정이 없으신가요? <a className="font-medium text-foreground underline underline-offset-4" href={authHref('signup', next, email)}>가입 신청</a></p> : <p>이미 계정이 있으신가요? <a className="font-medium text-foreground underline underline-offset-4" href={authHref('login', next, email)}>로그인</a></p>}
+                {mode === 'login' ? <><p>계정이 없으신가요? <a className="font-medium text-foreground underline underline-offset-4" href={authHref('signup', next, email)}>가입 신청</a></p><p><a className="font-medium text-foreground underline underline-offset-4" href={authHref('forgot', next, '')}>비밀번호를 잊으셨나요?</a></p></> : <p>이미 계정이 있으신가요? <a className="font-medium text-foreground underline underline-offset-4" href={authHref('login', next, '')}>로그인</a></p>}
                 <a className="w-fit hover:text-foreground" href={publicHomeHref}>메인으로 돌아가기</a>
               </footer>
             </CardContent>
@@ -132,7 +148,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 }
 
 function isAuthMode(value: string): value is AuthMode {
-  return value === 'login' || value === 'signup' || value === 'verify';
+  return modes.some((mode) => mode === value);
 }
 
 function queryValue(value: string | string[] | undefined, fallback: string): string {
@@ -141,7 +157,7 @@ function queryValue(value: string | string[] | undefined, fallback: string): str
 
 function authHref(mode: AuthMode, next: string, email: string): string {
   const params = new URLSearchParams({ mode, next });
-  if (email) params.set('email', email);
+  if (email && (mode === 'signup' || mode === 'verify')) params.set('email', email);
   return `/login?${params.toString()}`;
 }
 
@@ -150,12 +166,22 @@ function errorMessage(code: string): string {
     invalid_credentials: '이메일 또는 비밀번호를 확인해 주세요.',
     email_not_verified: '먼저 이메일 인증을 완료해 주세요.',
     session_expired: '세션이 만료되었습니다. 다시 로그인해 주세요.',
+    session_reauthentication_required: '계정 또는 조직 권한이 변경되어 다시 로그인해야 합니다.',
+    github_account_not_registered: 'GitHub 인증 이메일과 일치하는 승인 계정을 찾지 못했습니다.',
+    github_oauth_denied: 'GitHub 로그인이 취소되었습니다.',
+    github_oauth_not_configured: 'GitHub 로그인이 아직 설정되지 않았습니다.',
+    github_oauth_state_invalid: 'GitHub 로그인 요청이 만료되었습니다. 다시 시도해 주세요.',
+    github_verified_email_required: 'GitHub에서 인증된 이메일을 확인할 수 없습니다.',
     invalid_or_expired_email_verification_code: '인증 코드가 올바르지 않거나 만료되었습니다.',
+    invalid_or_expired_password_reset_code: '재설정 코드가 올바르지 않거나 만료되었습니다. 새 코드를 요청해 다시 시도해 주세요.',
+    password_confirmation_mismatch: '새 비밀번호와 확인 입력이 일치하지 않습니다.',
     request_failed: '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
   };
   return messages[code] || (code ? '요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.' : '');
 }
 
 function noticeMessage(code: string): string {
+  if (code === 'password_reset_requested') return '비밀번호 재설정이 가능한 계정이면 입력한 이메일로 코드를 보내드립니다.';
+  if (code === 'password_reset_completed') return '비밀번호를 변경했습니다. 새 비밀번호로 로그인해 주세요.';
   return code === 'saved' ? '요청이 처리되었습니다.' : code ? '요청 결과를 확인해 주세요.' : '';
 }

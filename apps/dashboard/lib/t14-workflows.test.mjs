@@ -3,11 +3,12 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const githubPageUrl = new URL('../app/github/page.tsx', import.meta.url);
+const githubMutationUrl = new URL('../components/github-source-mutation.tsx', import.meta.url);
 const adminPageUrl = new URL('../app/admin/page.tsx', import.meta.url);
 const e2eSpecUrl = new URL('../tests/e2e/specs/t14-github-admin.spec.ts', import.meta.url);
 
 test('Given the GitHub workflow page, when its forms are inspected, then every step preserves its native mutation contract', async () => {
-  const source = await readFile(githubPageUrl, 'utf8');
+  const [source, mutation] = await Promise.all([readFile(githubPageUrl, 'utf8'), readFile(githubMutationUrl, 'utf8')]);
 
   for (const contract of [
     ['import', '/github/repositories/import', ['_returnTo', 'integrationId', 'repositoryId', 'projectId', 'serviceName']],
@@ -16,11 +17,12 @@ test('Given the GitHub workflow page, when its forms are inspected, then every s
   ]) {
     const [label, endpoint, fields] = contract;
     assert.ok(source.includes(endpoint), `${label} endpoint is missing`);
-    for (const field of fields) assert.match(source, new RegExp(`name=["']${field}["']`), `${label}.${field} is missing`);
+    for (const field of fields) assert.match(`${source}\n${mutation}`, new RegExp(`name=["']${field}["']`), `${label}.${field} is missing`);
   }
 
   assert.match(source, /const selectedInstallation = state\.installations\.find[\s\S]*\|\| state\.installations\[0\]/);
-  assert.match(source, /const selectedRepository = selectedRepositories\[0\]/);
+  assert.match(source, /const selectedRepository = selectedRepositories\.find\(\(repository: GitHubRepository\) => repository\.accessState !== 'REVOKED'\)/);
+  assert.match(mutation, /<input name="_returnTo" type="hidden" value=\{returnTo\} \/>/);
   assert.doesNotMatch(source, /name=["'](?:token|installationId|repoUrl)["']/);
 });
 

@@ -17,7 +17,7 @@
     "build": "turbo build",
     "lint": "git diff --check && node scripts/check-structure.js",
     "typecheck": "tsc -p packages/core/tsconfig.json --noEmit && pnpm --filter @raibitserver/api typecheck && pnpm --filter @raibitserver/cli typecheck && pnpm --filter @raibitserver/dashboard typecheck",
-    "test": "node --test",
+    "test": "node --import ./tests/fixtures/resource-runtime.mjs --test",
     "check:structure": "node scripts/check-structure.js",
     "start:prototype-api": "node src/server.js",
     "cli": "node src/cli.js",
@@ -42,11 +42,16 @@
     "raibitserver-prototype": "src/cli.js"
   },
   "devDependencies": {
+    "@nestjs/common": "11.1.21",
+    "@nestjs/core": "11.1.21",
     "turbo": "2.9.14",
     "typescript": "6.0.3",
     "prisma": "6.19.0",
     "@prisma/client": "6.19.0",
+    "@raibitserver/api-client": "workspace:*",
+    "@raibitserver/core": "workspace:*",
     "yaml": "2.9.0",
+    "zod": "4.4.3",
     "@types/node": "25.9.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3"

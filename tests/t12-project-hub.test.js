@@ -30,22 +30,27 @@ test('project detail remains a server loader for every durable URL view', async 
   assert.match(source, /view=edit-service&serviceId=/);
 });
 
-test('project hub preserves native mutation payloads and destructive confirmation', async () => {
+test('project hub preserves native mutation payloads and explicit destructive confirmation', async () => {
   // Given the complete project hub source.
   const source = await projectHubSource();
 
-  // When native form contracts are inspected.
-  const requiredMarkers = ['name="_returnTo"', 'name="_confirmProject"', '/deployment-agent/apply', '/env-file'];
+  // When native form contracts and the deletion dialog are inspected.
+  const requiredMarkers = ['name="_returnTo"', '/deployment-agent/apply', '/env-file'];
 
-  // Then the payload ledger and exact project-name guard remain present.
+  // Then native payloads remain intact and deletion requires explicit confirmation.
   for (const marker of requiredMarkers) assert.ok(source.includes(marker), `${marker} is missing`);
-  assert.match(source, /name="_method"[^>]+value="PATCH"/);
-  assert.match(source, /name="_method"[^>]+value="DELETE"/);
+  assert.match(source, /method: 'PATCH'/);
+  assert.match(source, /method: 'POST'/);
   assert.match(source, /name="deploymentType"[^>]+value="production"/);
   assert.match(source, /name="deploymentType"[^>]+value="preview"/);
-  assert.match(source, /pattern=\{exactPattern\(data\.projectName\)\}/);
+  assert.match(source, /영향과 복구 절차를 확인했습니다\./);
   assert.match(source, /editedEnvironment\?\.isSecret \? ''/);
   assert.match(source, /disabled=\{!plan\.canApply\}/);
+  assert.match(source, /id="project-delete-confirmed"/);
+  assert.match(source, /disabled=\{!deleteConfirmed \|\| deletion\.kind === 'pending'\}/);
+  assert.match(source, /settings\/deletion/);
+  assert.match(source, /JSON\.stringify\(\{ confirmed: true \}\)/);
+  assert.doesNotMatch(source, /name="_confirmProject"/);
 });
 
 test('project hub exposes explicit empty, partial-error, and long-log surfaces', async () => {
@@ -110,9 +115,9 @@ test('project navigation reveals the active tab after direct mobile navigation',
 
   // When the isolated scroll leaf hydrates, then the server-rendered current item is centered without a vertical page jump.
   assert.doesNotMatch(navigation, /['"]use client['"]/);
-  assert.match(navigation, /<SectionNavigationScroll current=\{current\}>/);
+  assert.match(navigation, /<SectionNavigationScroll current=\{current\}[^>]*>/);
   assert.match(scroll, /^'use client';/);
-  assert.match(scroll, /querySelector<HTMLElement>\('\[aria-current="page"\]'\)/);
+  assert.match(scroll, /querySelector<HTMLElement>\('\[aria-current\]'\)/);
   assert.match(scroll, /scrollIntoView\(\{ block: 'nearest', inline: 'center' \}\)/);
 });
 

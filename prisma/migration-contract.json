@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "applicationCompatibilityFloor": "000008_git_source_binding",
+  "historicalThrough": "000010_user_bans",
+  "rollbackMode": "forward-fix",
+  "deploymentOrder": [
+    "migrate",
+    "readers",
+    "writers"
+  ],
+  "digestEncoding": "sha256-utf8-lf",
+  "migrations": [
+    {
+      "id": "000001_init",
+      "sha256": "e288632183f0d89c223a7ca2b06ff9b03c5a7d2a932d3784def41edac5326c7c"
+    },
+    {
+      "id": "000002_email_verification",
+      "sha256": "ec490442d6babb10f33fb3ecc61a77bacf57aec8d608fd725c5a6be19936ca50"
+    },
+    {
+      "id": "000003_auth_session_security",
+      "sha256": "2440287ee4abf949d60e6f3cbe0c3d01c8e3e12c2416ee4fa6a5758f42ef5628"
+    },
+    {
+      "id": "000004_deletion_lifecycle",
+      "sha256": "531891748c2f8161ecacbcd3054793a279721dabf8eeefa2208e738543181279"
+    },
+    {
+      "id": "000005_deployment_claim_lease",
+      "sha256": "ec2619bd9c613bb706b8c770d842ef2e11840e67b51a29797385819edd528348"
+    },
+    {
+      "id": "000006_observability_ingestion",
+      "sha256": "d084db034d8a0377ab8931bc8def838522fe1f964059d8974dbbefeaef01d9a3"
+    },
+    {
+      "id": "000007_performance_boundaries",
+      "sha256": "95a7e701d4dc468d1de94be6aac75939641b2ac586cb9ad70e82c6f5937c02bd"
+    },
+    {
+      "id": "000008_git_source_binding",
+      "sha256": "441c0b0a724b47c3824eae3f7e985210a35e17c878aa2a7f01431c768365c4c0"
+    },
+    {
+      "id": "000009_user_student_identity_and_club_claim",
+      "sha256": "0dc7868564b76ad982a3ea8eabfb9417e4c9b42eb3aae78e2c533304ba560d81"
+    },
+    {
+      "id": "000010_user_bans",
+      "sha256": "6256cfeb157622c42185f8bef86c1d8cb1db56361b9c3f8a9fc65e2f3b08cd05"
+    },
+    {
+      "id": "000011_oauth_transactions",
+      "sha256": "49d1eceacdb848782fe663a0c39cd82eefe3b21453eac6ae338d7babdfb1f893"
+    },
+    {
+      "id": "000012_deployment_lineage",
+      "sha256": "742aac0d4305b53862ebda29c61ae55a2e4684675ca3a7cd1753bc950395e2da"
+    },
+    {
+      "id": "000013_deployment_health",
+      "sha256": "08c518a7f618a55d885958e81bef5e9b92a1003489f6dd730c5d2018b32cbe4b"
+    },
+    {
+      "id": "000014_resource_recovery",
+      "sha256": "b2e611fbbe6d6d66e9c04b6c4cbf3000a4af1c83ec7d4be1f986d3c2de0a38ac"
+    },
+    {
+      "id": "000015_preview_lineage",
+      "sha256": "1cc33de5d47030b3643e7bc26fb4870c32d28d468e6962a1f43fdd2745ec756d"
+    },
+    {
+      "id": "000016_pem_context_indexes",
+      "sha256": "d6256c4b221ae89f382fc91805a60f71e22138aad08b52e78e543f15e808391f"
+    },
+    {
+      "id": "000017_github_integration_lifecycle",
+      "sha256": "c470f59cd7902fc70306d75d31a230b4c6159d9030147329c66b329324157198"
+    },
+    {
+      "id": "000017_organization_invites",
+      "sha256": "065527eaa28391ce49cdf3e0a3467e1c4220f61783385f9476f337d0252f630b"
+    },
+    {
+      "id": "000018_github_catalog_generation",
+      "sha256": "fc72c579048e9f186ca44992289ad66eae44823a1cda38fcb8f0c253a75b1978"
+    },
+    {
+      "id": "000018_membership_versions",
+      "sha256": "166ec8f77c0720aa2adc48dae2680be4e4c0b6254b16ff9de716b5945ab1e9fe"
+    },
+    {
+      "id": "000019_github_source_mutation_idempotency",
+      "sha256": "771d79c2bb5ac0dcb1d6a467c89ee7f67abea552e91b902fe67e293c977bb9e5"
+    },
+    {
+      "id": "202609060001_custom_domain_lifecycle",
+      "sha256": "44a36e6face136eac2dad193ab2282f5c41f423435de61127c4aba08fb36e6bb"
+    }
+  ]
+}

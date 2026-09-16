@@ -13,9 +13,8 @@ test('beta project/service/deployment contract queues supported services and exp
   const { port } = server.address();
 
   try {
-    const org = await request(port, 'POST', '/organizations', { name: 'Beta Org', slug: 'beta-org' });
-    assert.equal(org.statusCode, 201, JSON.stringify(org.body));
-    const project = await request(port, 'POST', `/organizations/${org.body.id}/projects`, { name: 'Beta Project', slug: 'beta-project' });
+    const org = controlPlane.store.createOrganization({ name: 'Beta Org', slug: 'beta-org' });
+    const project = await request(port, 'POST', `/organizations/${org.id}/projects`, { name: 'Beta Project', slug: 'beta-project' });
     assert.equal(project.statusCode, 201, JSON.stringify(project.body));
 
     const serviceTypes = ['web', 'private', 'worker', 'cron', 'job'];
@@ -80,7 +79,8 @@ test('beta project/service/deployment contract queues supported services and exp
     const deployment = queuedDeployments[0];
     controlPlane.store.appendBuildLog({ deploymentId: deployment.id, step: 'clone', line: 'git clone completed' });
     controlPlane.store.appendBuildLog({ deploymentId: deployment.id, step: 'build', line: 'docker buildx build --push completed' });
-    controlPlane.store.appendRuntimeLog({ serviceId: dockerfile.id, deploymentId: deployment.id, podName: 'beta-pod', containerName: 'app', line: 'GET /health 200' });
+    const runtimeEvidence = controlPlane.store.appendRuntimeLog({ serviceId: dockerfile.id, deploymentId: deployment.id, podName: 'beta-pod', sourceInstanceId: 'beta-pod-incarnation', containerName: 'app', line: 'GET /health 200' });
+    assert.equal(typeof runtimeEvidence.podUid, 'string');
     controlPlane.store.appendDeploymentEvent({ deploymentId: deployment.id, type: 'rollout.ready', message: 'Kubernetes rollout ready' });
 
     const logs = await request(port, 'GET', `/deployments/${deployment.id}/logs`);

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { ResourceSpec } from '@raibitserver/schemas';
+import type { ResourceBackupCreate, ResourceBackupDelete, ResourceRestoreCreate, ResourceSpec } from '@raibitserver/schemas';
 import { RAIBITSERVERService } from '../../raibitserver.service';
 
 @Injectable()
@@ -13,6 +13,11 @@ export class ResourcesService {
   deleteResource(resourceId: string, subject: Record<string, any>) { return this.controlPlane.deleteResource(resourceId, subject); }
   attachResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.attachResource(resourceId, input, subject); }
   provisionResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.provisionResource(resourceId, input, subject); }
+  createResourceBackup(resourceId: string, input: ResourceBackupCreate, subject: Record<string, any>) { return this.controlPlane.createResourceBackup(resourceId, input, subject); }
+  listResourceBackups(resourceId: string, input: Record<string, unknown>, subject: Record<string, any>) { return this.controlPlane.listResourceBackups(resourceId, input, subject); }
+  deleteResourceBackup(backupId: string, input: ResourceBackupDelete, subject: Record<string, any>) { return this.controlPlane.deleteResourceBackup(backupId, input, subject); }
+  createBackupRestore(backupId: string, input: ResourceRestoreCreate, subject: Record<string, any>) { return this.controlPlane.createBackupRestore(backupId, input, subject); }
+  getRecoveryRestore(restoreId: string, subject: Record<string, any>) { return this.controlPlane.getRecoveryRestore(restoreId, subject); }
   resourceConsoleView(resourceId: string, view: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.resourceConsoleView(resourceId, view, input, subject); }
   queryResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.queryResource(resourceId, input, subject); }
   commandResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.commandResource(resourceId, input, subject); }

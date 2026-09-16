@@ -73,6 +73,8 @@ orchestrator:
   replicas: 1
   execute: false
   reconcileIntervalSeconds: 5
+  domainClusterIssuer: ""
+  domainRetrySeconds: 300
 builder:
   # Local/default installs keep external build infrastructure disabled. A
   # production release must set this to exactly 1; dispatcher sessions are
@@ -181,6 +183,12 @@ builder:
     existingSecret: ""
     keyKey: cosign.key
     passwordKey: cosign.password
+  verification:
+    # Local public-key Secret projection; must contain the same approved public
+    # trust key as security.imageVerification.trustRoot. No private key here.
+    # Empty reuses that trustRoot only when its namespace is the release namespace.
+    existingSecret: ""
+    key: cosign.pub
   nodeSelector:
     raibitserver.io/workload: build
   tolerations:
@@ -193,8 +201,15 @@ provisioner:
   execute: false
   reconcileIntervalSeconds: 5
   healthIntervalSeconds: 300
-  # Production requires every catalog provider image to be an immutable
-  # repository@sha256:digest reference. Empty defaults keep local dry-run usable.
+  backups:
+    enabled: false
+    endpoint: ""
+    bucket: ""
+    existingSecret: ""
+    secretKey: ""
+  # Production packaging requires images only for dedicated-local engines in
+  # files/resource-capabilities-v1.json. This is not release readiness evidence.
+  # Unsupported minio/qdrant/nats may stay empty. SQLite is local-file only.
   providerImages:
     postgresql: ""
     mysql: ""
@@ -205,6 +220,13 @@ provisioner:
     minio: ""
     qdrant: ""
     nats: ""
+  recoveryToolImages:
+    postgresql: ""
+    mysql: ""
+    mariadb: ""
+    mongodb: ""
+    redis: ""
+    valkey: ""
 observability:
   logIngester:
     enabled: false

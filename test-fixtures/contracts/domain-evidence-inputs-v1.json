@@ -1,0 +1,19 @@
+{
+  "schema": "raibitserver.production-domain-inputs/v1",
+  "approvedInputSha256": "0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2",
+  "provider": "cloudflare",
+  "fields": [
+    "fixtureZone",
+    "zoneId",
+    "expectedClusterIssuer",
+    "hostname",
+    "projectId",
+    "serviceId",
+    "deploymentId",
+    "generatedFallbackUrl",
+    "expectedResponseMarkerSha256",
+    "tokenSecretRef"
+  ],
+  "apiOrigin": "https://api.cloudflare.com",
+  "allowedRecordType": "TXT"
+}

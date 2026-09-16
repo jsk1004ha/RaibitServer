@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.2
@@ -22,6 +24,8 @@ jobs:
           node-version: '24'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Verify committed operator-input contract (no local approval files)
+        run: node scripts/production-evidence/preflight.mjs --contract
       - run: pnpm test
       - run: pnpm typecheck
       - run: node scripts/check-structure.js
@@ -39,6 +43,27 @@ jobs:
       - run: node src/cli.js provision-plan examples/project.json >/tmp/raibitserver-provision-plan.json
       - run: node src/cli.js k8s-apply examples/project.json >/tmp/raibitserver-k8s-apply.json
       - run: pnpm e2e:dry
+
+  session-cookie-browser:
+    name: Session cookies / HTTPS browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: apps/dashboard
+      - name: Reject sibling-domain session injection over HTTPS
+        run: node --test apps/dashboard/tests/e2e/specs/pr17-session-cookie-browser.spec.mjs
+        env:
+          RAIBIT_PR17_HEADLESS: '1'
 
   postgres-integration:
     name: PostgreSQL / Prisma integration
@@ -77,10 +102,49 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm prisma:generate
       - run: pnpm exec prisma migrate deploy --schema prisma/schema.prisma
-      - run: node --test tests/postgres-integration.test.js
+      - run: node --import ./tests/fixtures/resource-runtime.mjs --test tests/postgres-integration.test.js
+      - name: Deployment retry and recovery PostgreSQL boundaries
+        run: |
+          admin_url="$DATABASE_URL"
+          recovery_id="$(node --input-type=module --eval 'import { randomUUID } from "node:crypto"; process.stdout.write(randomUUID().replaceAll("-", ""))')"
+          recovery_db="recovery_$recovery_id"
+          [[ "$recovery_db" =~ ^recovery_[a-f0-9]{32}$ ]]
+          cleanup() {
+            status=$?
+            psql "$admin_url" --set ON_ERROR_STOP=on --command "DROP DATABASE IF EXISTS $recovery_db WITH (FORCE)" || [[ "$status" -ne 0 ]] || exit 1
+            exit "$status"
+          }
+          trap cleanup EXIT
+          psql "$admin_url" --set ON_ERROR_STOP=on --command "CREATE DATABASE $recovery_db"
+          export DATABASE_URL="${admin_url%/*}/$recovery_db"
+          export RAIBITSERVER_TEST_DATABASE_URL="$DATABASE_URL"
+          pnpm exec prisma migrate deploy --schema prisma/schema.prisma
+          RAIBITSERVER_REQUIRE_POSTGRES_TESTS=1 node --import ./tests/fixtures/resource-runtime.mjs --test --test-concurrency=1 tests/postgres-deployment-retry.test.js tests/postgres-resource-recovery.test.js
+      - name: Require OAuth transaction PostgreSQL verification
+        run: node --test tests/postgres-oauth-transaction.test.js
+        env:
+          RAIBITSERVER_REQUIRE_POSTGRES_TESTS: '1'
+      - name: Require log redaction storage and restart verification
+        run: |
+          node --import ./tests/fixtures/resource-runtime.mjs --test tests/postgres-observability-redaction-writes.test.js
+          binary_dir="$(mktemp -d)"
+          trap 'rm -f "$binary_dir/log-ingester"; rmdir "$binary_dir"' EXIT
+          (cd services/log-ingester && go build -o "$binary_dir/log-ingester" ./cmd/log-ingester)
+          export RAIBITSERVER_TEST_BINARY="$binary_dir/log-ingester"
+          (cd services/log-ingester && go test -race -count=1 ./internal/redact ./internal/ingester ./internal/store)
+        env:
+          RAIBITSERVER_REQUIRE_POSTGRES_TESTS: '1'
+      - name: Resource capability and preview/live PostgreSQL boundary
+        run: node --import ./tests/fixtures/resource-runtime.mjs --test tests/resource-capability-boundary.test.js
+        env:
+          RAIBITSERVER_REQUIRE_POSTGRES_TESTS: '1'
       - run: (cd services/builder && go test -count=1 -run '^TestPostgres' ./internal/controlplane)
       - run: (cd services/orchestrator && go test -count=1 -run '^TestPostgres' ./internal/store)
       - run: (cd services/provisioner && go test -count=1 -run '^TestPostgres' ./internal/reconciler)
+      - name: Resource capability atomic claim boundary
+        run: (cd services/provisioner && go test -count=1 -run '^TestResourceCapabilityClaim$' ./internal/store)
+        env:
+          RAIBITSERVER_REQUIRE_POSTGRES_TESTS: '1'
 
   go:
     name: Go services
@@ -91,7 +155,7 @@ jobs:
         with:
           go-version: '1.26.x'
       - run: |
-          for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester; do
+          for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester services/registry-broker; do
             test -f "$dir/go.mod"
             (cd "$dir" && go test ./... && go build ./...)
           done
@@ -124,6 +188,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.2
@@ -137,6 +204,36 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: node -e "import('yaml').then(({default:YAML})=>{const fs=require('node:fs'); YAML.parse(fs.readFileSync('openapi/raibitserver.yaml','utf8')); for (const f of ['infra/k8s/appservice-crd.yaml','infra/operators/manageddatabase-crd.yaml','infra/operators/managedresources-crd.yaml']) { const docs=YAML.parseAllDocuments(fs.readFileSync(f,'utf8')); for (const doc of docs) { if (doc.errors.length) throw doc.errors[0]; } } console.log('yaml-ok')})"
       - run: sh scripts/verify-helm.sh
+
+  recovery-native-api:
+    name: Recovery admission / native TTL API
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.34.3
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.2.3
+      - name: Install pinned kind
+        run: go install sigs.k8s.io/kind@v0.31.0
+      - name: Verify recovery admission against native Kubernetes APIs
+        env:
+          RAIBITSERVER_RECOVERY_NATIVE_EVIDENCE_DIR: ${{ github.workspace }}/.omo/evidence/pr17-review-followup/runtime/native-kind-v1.34.3-${{ github.run_id }}-${{ github.run_attempt }}
+        run: PATH="$(go env GOPATH)/bin:$PATH" bash scripts/verify-recovery-native-api.sh
+      - name: Upload native recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr17-recovery-native-api
+          path: .omo/evidence/pr17-review-followup/runtime/native-kind-v1.34.3-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 14
 
   live-helm-e2e:
     name: kind / Helm live production path

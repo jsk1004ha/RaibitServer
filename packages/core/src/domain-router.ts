@@ -11,6 +11,7 @@ type AnyRecord = Record<string, any>;
 // ten digits keeps preview patterns and runtime hostnames identical after
 // replacing {number}.
 const MAX_PREVIEW_ROUTE_IDENTITY_LENGTH = 39;
+export const MAX_GENERATED_ROUTE_LABEL_LENGTH = 63;
 
 export const SUBDOMAIN_ZONES = Object.freeze({
   DASHBOARD: 'app',
@@ -25,7 +26,7 @@ export const SUBDOMAIN_ZONES = Object.freeze({
 });
 
 export function tenantProjectLabel(organizationSlug: any, projectSlug: any, stableIdentity?: any) {
-  return boundedDnsLabel(tenantRouteIdentity(organizationSlug, projectSlug), 63, stableIdentity);
+  return boundedDnsLabel(tenantRouteIdentity(organizationSlug, projectSlug), MAX_GENERATED_ROUTE_LABEL_LENGTH, stableIdentity);
 }
 
 export function serviceHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'web', baseDomain = DEFAULT_DOMAIN, customDomain = null, preview = null }: AnyRecord = {}) {
@@ -121,8 +122,12 @@ function zonedRouteLabel(zone: string, routeIdentity: string) {
   return boundedDnsLabel(`${zone}--${routeIdentity}`);
 }
 
+export function organizationRouteTenantSegment(organizationSlug: any) {
+  return normalizeRoutePart(organizationSlug);
+}
+
 function tenantRouteIdentity(organizationSlug: any, projectSlug: any) {
-  return `${normalizeRoutePart(organizationSlug)}--${normalizeRoutePart(projectSlug)}`;
+  return `${organizationRouteTenantSegment(organizationSlug)}--${normalizeRoutePart(projectSlug)}`;
 }
 
 function serviceRouteIdentity(organizationSlug: any, projectSlug: any, serviceName: any) {

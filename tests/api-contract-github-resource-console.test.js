@@ -85,27 +85,22 @@ test('GitHub App contract endpoints import/list/sync and webhook push/PR flows',
     const bad = await webhook(server.port, 'push', 'delivery-bad-1', pushPayload, 'wrong-secret');
     assert.equal(bad.statusCode, 401);
 
-    for (const [action, delivery, sha] of [['opened', 'delivery-pr-opened', 'b'.repeat(40)], ['synchronize', 'delivery-pr-sync', 'c'.repeat(40)], ['reopened', 'delivery-pr-reopened', 'd'.repeat(40)]]) {
+    for (const [action, delivery, sha] of [['opened', '00000000-0000-4000-8000-000000000001', 'b'.repeat(40)], ['synchronize', '00000000-0000-4000-8000-000000000002', 'c'.repeat(40)], ['reopened', '00000000-0000-4000-8000-000000000003', 'd'.repeat(40)]]) {
       const pr = await webhook(server.port, 'pull_request', delivery, prPayload(action, sha));
       assert.equal(pr.statusCode, 202);
       assert.equal(pr.body.actions[0].type, 'preview-deployment-enqueued');
-      assert.match(pr.body.actions[0].previewUrl, /^https:\/\/preview--pr-7--github-org--github-project\.raibitserver\.app$/);
-      assert.match(pr.body.actions[0].previewWorkloadName, /^pr-7-web-[a-f0-9]{12}$/);
-      assert.equal(pr.body.outbound.commitStatus.targetUrl, pr.body.actions[0].previewUrl);
-      assert.equal(pr.body.outbound.pullRequestComment.pullRequestNumber, 7);
+      const deployment = controlPlane.store.deployments.get(pr.body.actions[0].deploymentId);
+      assert.match(deployment.previewUrl, /^https:\/\/preview--pr-7--[a-z0-9-]+--[a-z0-9-]+\.raibitserver\.app$/);
       const job = controlPlane.store.workflowJobs.find((item) => item.id === pr.body.actions[0].workflowJobId);
-      assert.equal(job.payload.kubernetes.workloadName, pr.body.actions[0].previewWorkloadName);
-      assert.equal(job.payload.kubernetes.labels['raibitserver.io/preview'], 'true');
+      assert.equal(job.type, 'preview-deploy');
+      assert.match(job.payload.runtime.workloadName, /^pr-7-[a-z0-9-]+-[a-f0-9]{12}$/);
+      assert.equal(job.payload.runtime.stableHost, new URL(deployment.previewUrl).hostname);
     }
 
-    const closed = await webhook(server.port, 'pull_request', 'delivery-pr-closed', prPayload('closed', 'e'.repeat(40)));
+    const closed = await webhook(server.port, 'pull_request', '00000000-0000-4000-8000-000000000004', prPayload('closed', 'd'.repeat(40)));
     assert.equal(closed.statusCode, 202);
-    assert.equal(closed.body.actions[0].type, 'preview-cleanup-enqueued');
-    assert.equal(controlPlane.store.workflowJobs.some((job) => job.type === 'preview-cleanup'), true);
-    assert.equal([...controlPlane.store.deployments.values()].some((deployment) => deployment.status === 'PREVIEW_CLEANUP_REQUESTED'), true);
-    const cleanupJob = controlPlane.store.workflowJobs.find((job) => job.type === 'preview-cleanup');
-    assert.equal(cleanupJob.payload.kubernetes.workloadName, 'pr-7-web');
-    assert.match(JSON.stringify(controlPlane.store.deploymentEvents), /preview\.cleanup\.requested/);
+    assert.equal(closed.body.actions[0].type, 'preview-cleanup-requested');
+    assert.equal([...controlPlane.store.deployments.values()].filter((deployment) => deployment.deploymentType === 'preview').every((deployment) => deployment.status === 'PREVIEW_CLEANUP_REQUESTED'), true);
     assert.equal(service.id, controlPlane.store.servicesForGitHubRepository('alice/web')[0].id);
   } finally {
     server.close();
@@ -147,14 +142,14 @@ test('GitHub installation repositories and sync are scoped to the caller organiz
     assert.deepEqual(cross.body.repositories, []);
 
     const crossSync = await request(server.port, 'POST', '/github/repositories/bob%2Fsecret/sync', {}, tokenA);
-    assert.equal(crossSync.statusCode, 202);
-    assert.deepEqual(crossSync.body.services, []);
+    assert.equal(crossSync.statusCode, 409);
+    assert.equal(crossSync.body.code, 'GITHUB_INSTALLATION_MISMATCH');
   } finally {
     server.close();
   }
 });
 
-test('GitHub repository sync authorizes every matched service organization before enqueueing', async () => {
+test('GitHub repository sync authorizes every matched service organization before resolving its source', async () => {
   const jwtSecret = 'github-target-role-secret-at-least-32-chars';
   const controlPlane = new RAIBITSERVERControlPlane();
   const orgA = controlPlane.store.createOrganization({ name: 'Owner Org', slug: 'github-owner-org' });
@@ -183,8 +178,9 @@ test('GitHub repository sync authorizes every matched service organization befor
 
     const globalAdmin = signJwtHs256({ sub: 'global-admin', role: 'owner', global: true }, jwtSecret, { issuer: 'raibitserver' });
     const allowed = await request(server.port, 'POST', '/github/repositories/shared%2Fapp/sync', {}, globalAdmin);
-    assert.equal(allowed.statusCode, 202);
-    assert.deepEqual(allowed.body.workflowJob.payload.serviceIds.sort(), [serviceA.id, serviceB.id].sort());
+    assert.equal(allowed.statusCode, 404);
+    assert.match(allowed.body.error, /GitHub integration not found/);
+    assert.equal(controlPlane.store.workflowJobs.length, jobsBefore);
   } finally {
     server.close();
   }
@@ -212,9 +208,8 @@ test('GitHub repository sync treats the path repository as authoritative', async
   }, jwtSecret, { issuer: 'raibitserver' });
   try {
     const response = await request(server.port, 'POST', '/github/repositories/innocent%2Frepo/sync', { repository: 'shared/path-target' }, token);
-    assert.equal(response.statusCode, 202);
-    assert.equal(response.body.repository, 'innocent/repo');
-    assert.deepEqual(response.body.workflowJob.payload.serviceIds, []);
+    assert.equal(response.statusCode, 409);
+    assert.equal(response.body.code, 'GITHUB_INSTALLATION_MISMATCH');
   } finally {
     server.close();
   }
@@ -227,7 +222,11 @@ test('GitHub repository sync enqueues only the service set authorized before the
   const orgB = controlPlane.store.createOrganization({ name: 'Late Viewer Org', slug: 'github-late-viewer-org' });
   const projectA = controlPlane.store.createProject({ organizationId: orgA.id, name: 'Authorized Project', slug: 'github-authorized-project' });
   const projectB = controlPlane.store.createProject({ organizationId: orgB.id, name: 'Late Viewer Project', slug: 'github-late-viewer-project' });
-  const authorizedService = controlPlane.store.createService({ projectId: projectA.id, name: 'authorized-web', sourceType: 'github', repoUrl: 'https://github.com/shared/race.git' });
+  const integration = controlPlane.store.createGitHubIntegration({ organizationId: orgA.id, accountLogin: 'shared', installationId: 'race-installation' });
+  controlPlane.store.verifyGitHubIntegration({ integrationId: integration.id, installationId: 'race-installation', accountLogin: 'shared' });
+  const repository = controlPlane.store.registerGitHubRepository({ installationId: 'race-installation', githubRepoId: 'race-repository', fullName: 'shared/race', private: false });
+  const pendingService = controlPlane.store.createService({ projectId: projectA.id, name: 'authorized-web', sourceType: 'image', imageUrl: 'registry.example/authorized@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
+  const authorizedService = controlPlane.store.attachGitHubRepositoryToService({ projectId: projectA.id, serviceId: pendingService.id, integrationId: integration.id, repositoryId: repository.githubRepoId }).service;
   const user = controlPlane.store.createUser({ email: 'github-race@example.com', approvalStatus: 'APPROVED' });
   controlPlane.store.addMember({ organizationId: orgA.id, userId: user.id, role: 'OWNER' });
   controlPlane.store.addMember({ organizationId: orgB.id, userId: user.id, role: 'VIEWER' });
@@ -281,12 +280,14 @@ test('GitHub webhook rejects requests when webhook secret is not configured', as
 });
 
 function prPayload(action, sha) {
+  const second = { opened: 1, synchronize: 2, reopened: 3, closed: 4 }[action];
   return {
     action,
     number: 7,
+    ...(action === 'synchronize' ? { before: 'b'.repeat(40) } : {}),
     installation: { id: 900 },
     repository: { id: 101, full_name: 'alice/web', default_branch: 'main' },
-    pull_request: { number: 7, head: { ref: 'feature/demo', sha } },
+    pull_request: { number: 7, state: action === 'closed' ? 'closed' : 'open', updated_at: `2026-09-07T00:00:0${second}.000Z`, head: { ref: 'feature/demo', sha }, base: { ref: 'main' } },
   };
 }
 

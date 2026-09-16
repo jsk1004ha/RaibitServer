@@ -450,39 +450,17 @@ func TestUnknownServiceTypeFailsWithoutApplyingKubernetesObjects(t *testing.T) {
 	}
 }
 
-func TestRunOnceCleansPreviewDeployment(t *testing.T) {
+func TestLegacyPreviewCleanupFailsClosedWithoutPersistedOwnership(t *testing.T) {
 	stateFile := writeState(t, map[string]any{
 		"projects":    []any{map[string]any{"id": "prj_1", "organizationId": "org_1", "name": "Demo", "slug": "demo"}},
 		"services":    []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "web", "slug": "web", "type": "web", "port": 8080}},
 		"deployments": []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "PREVIEW_CLEANUP_REQUESTED", "deploymentType": "preview", "pullRequestNumber": 42, "imageUrl": "registry.local/demo/web:pr42"}},
 	})
 	runner := &fakeRunner{}
-	r := NewServiceReconcilerWithStore(Config{DryRun: true, OutputDir: t.TempDir(), BaseDomain: "test.local"}, store.NewFileStore(stateFile), runner)
+	r := NewServiceReconcilerWithStore(Config{OutputDir: t.TempDir(), BaseDomain: "test.local"}, store.NewFileStore(stateFile), runner)
 	result, err := r.RunOnceResult(context.Background())
-	if err != nil {
-		t.Fatalf("cleanup failed: %v", err)
-	}
-	if result.Status != store.DeploymentStatusCleanedUp || !strings.Contains(strings.Join(result.Commands, "\n"), "kubectl delete") {
-		t.Fatalf("unexpected cleanup result: %#v", result)
-	}
-	manifest, err := os.ReadFile(result.ManifestFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(manifest), "pr-42-web") || !strings.Contains(string(manifest), "preview--pr-42--org-1--demo.test.local") || !strings.Contains(string(manifest), "raibitserver.io/preview") {
-		t.Fatalf("preview cleanup manifest must target isolated preview workload: %s", string(manifest))
-	}
-	if strings.Contains(string(manifest), `"kind": "Namespace"`) {
-		t.Fatalf("preview cleanup must never delete the shared project namespace: %s", string(manifest))
-	}
-	for _, forbidden := range []string{`"name": "web"`, `"name": "org-1--demo"`} {
-		if strings.Contains(string(manifest), forbidden) {
-			t.Fatalf("preview cleanup must contain only exact preview resource identities, found %s in %s", forbidden, string(manifest))
-		}
-	}
-	deployment := firstByID(t, readState(t, stateFile), "deployments", "dep_1")
-	if deployment["status"] != store.DeploymentStatusCleanedUp {
-		t.Fatalf("deployment not cleaned up: %#v", deployment)
+	if !errors.Is(err, store.ErrPreviewContract) || result.Status == store.DeploymentStatusCleanedUp || len(runner.commands) != 0 {
+		t.Fatalf("legacy cleanup mutated Kubernetes: result=%#v commands=%#v err=%v", result, runner.commands, err)
 	}
 }
 
@@ -505,21 +483,11 @@ func TestOldPreviewCleanupCannotTargetNewerDeploymentForSamePR(t *testing.T) {
 			map[string]any{"id": newDeployment.ID, "serviceId": service.ID, "projectId": project.ID, "status": store.DeploymentStatusReady, "deploymentType": "preview", "pullRequestNumber": 42, "imageUrl": newDeployment.ImageURL},
 		},
 	})
-	r := NewServiceReconcilerWithStore(Config{DryRun: true, OutputDir: t.TempDir(), BaseDomain: "test.local"}, store.NewFileStore(stateFile), &fakeRunner{})
+	runner := &fakeRunner{}
+	r := NewServiceReconcilerWithStore(Config{OutputDir: t.TempDir(), BaseDomain: "test.local"}, store.NewFileStore(stateFile), runner)
 	result, err := r.RunOnceResult(context.Background())
-	if err != nil {
-		t.Fatalf("old preview cleanup failed: %v", err)
-	}
-	payload, err := os.ReadFile(result.ManifestFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(payload)
-	if !strings.Contains(text, oldPlan.WorkloadName) || strings.Contains(text, newPlan.WorkloadName) {
-		t.Fatalf("old cleanup manifest must not target newer preview objects: old=%q new=%q manifest=%s", oldPlan.WorkloadName, newPlan.WorkloadName, text)
-	}
-	if strings.Contains(strings.Join(result.Commands, "\n"), newPlan.WorkloadName) {
-		t.Fatalf("old cleanup command unexpectedly targets newer preview name: %#v", result.Commands)
+	if !errors.Is(err, store.ErrPreviewContract) || len(runner.commands) != 0 || result.Status == store.DeploymentStatusCleanedUp {
+		t.Fatalf("legacy cleanup should fail closed: result=%#v commands=%#v err=%v", result, runner.commands, err)
 	}
 }
 

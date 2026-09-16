@@ -80,7 +80,9 @@ test('PostgreSQL provider dry-run keeps the resource provisioning and does not r
   const store = new ControlPlaneStore();
   const resource = store.createResource({ projectId: 'prj_1', name: 'pg-provider', engine: 'postgresql', provider: 'postgresql-direct', databaseName: 'appdb', username: 'app_user' });
   const originalSecretName = resource.connectionSecretName;
-  const provisioned = await store.provisionResourceProvider({ resourceId: resource.id, dryRun: true, actorUserId: 'provider-test', password: 'provider-secret-password' });
+  const before = store.snapshot();
+  const provisioned = await store.provisionResourceProvider({ resourceId: resource.id, intent: 'preview-plan', actorUserId: 'provider-test' });
+  assert.deepEqual(store.snapshot(), before);
   assert.equal(provisioned.resource.status, 'provisioning');
   assert.equal(provisioned.resource.connectionSecretName, originalSecretName);
   assert.equal(provisioned.result.dryRun, true);

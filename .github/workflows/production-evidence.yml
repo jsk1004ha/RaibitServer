@@ -1,0 +1,209 @@
+name: Production evidence
+run-name: ${{ startsWith(github.ref_name, 'raibit-gate-a-') && format('Gate A | {0}', github.ref_name) || format('Gate B | {0}', github.ref_name) }}
+
+on:
+  push:
+    tags:
+      - raibit-gate-a-*
+      - raibit-gate-b-*
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  preflight:
+    name: Secret-free release identity preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      gate: ${{ steps.release.outputs.gate }}
+      profile: ${{ steps.release.outputs.profile }}
+      scenario: ${{ steps.release.outputs.scenario }}
+      merged_pr: ${{ steps.identity.outputs.merged_pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: release
+        name: Validate tag and committed contract
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFile } from 'node:fs/promises';
+          import { parseReleaseTag } from './scripts/production-evidence/lib/ci-invocation.mjs';
+          import { loadOperatorContract } from './scripts/production-evidence/lib/operator-inputs.mjs';
+          const release = parseReleaseTag(process.env.RELEASE_TAG);
+          await loadOperatorContract();
+          await appendFile(process.env.GITHUB_OUTPUT, `gate=${release.gate}\nprofile=${release.profile}\nscenario=${release.scenario}\n`);
+          NODE
+      - name: Resolve immutable workflow identity
+        id: identity
+        env:
+          GATE: ${{ steps.release.outputs.gate }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          blob_sha="$(git rev-parse "HEAD:.github/workflows/production-evidence.yml")"
+          workflow_id="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)"
+          run_created_at="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
+          default_sha=""
+          merged_pr=""
+          if [ "$GATE" = "B" ]; then
+            default_branch="$(gh api --method GET "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+            default_sha="$(gh api --method GET "repos/$GITHUB_REPOSITORY/git/ref/heads/$default_branch" --jq .object.sha)"
+            gh api --method GET "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" > "$RUNNER_TEMP/associated-pulls.json"
+            merged_pr="$(node --input-type=module - "$RUNNER_TEMP/associated-pulls.json" "$GITHUB_SHA" "$default_branch" <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const pulls = JSON.parse(await readFile(process.argv[2], 'utf8'));
+          const matches = pulls.filter((pull) => pull.merged_at && pull.merge_commit_sha === process.argv[3] && pull.base?.ref === process.argv[4]);
+          if (matches.length !== 1) process.exit(1);
+          process.stdout.write(String(matches[0].number));
+          NODE
+            )"
+          fi
+          printf 'blob_sha=%s\nworkflow_id=%s\nrun_created_at=%s\ndefault_sha=%s\nmerged_pr=%s\n' \
+            "$blob_sha" "$workflow_id" "$run_created_at" "$default_sha" "$merged_pr" >> "$GITHUB_OUTPUT"
+      - name: Record actual CI invocation
+        run: |
+          mkdir -p "$RUNNER_TEMP/raibit-release"
+          node scripts/production-evidence/lib/ci-invocation.mjs \
+            --write "$RUNNER_TEMP/raibit-release/ci-invocation.json" \
+            --workflow-id "${{ steps.identity.outputs.workflow_id }}" \
+            --blob-sha "${{ steps.identity.outputs.blob_sha }}" \
+            --created-at "${{ steps.identity.outputs.run_created_at }}" \
+            --default-branch-sha "${{ steps.identity.outputs.default_sha }}"
+      - name: Exercise missing signing reference
+        if: steps.release.outputs.scenario == 'missing-secret'
+        run: |
+          node scripts/production-evidence/preflight.mjs \
+            --profile train-a \
+            --fixture "$GITHUB_WORKSPACE/test-fixtures/production-evidence/gate-a-missing-secret.json" \
+            --ci-receipt "$RUNNER_TEMP/raibit-release/ci-invocation.json" \
+            --attempt-dir "$RUNNER_TEMP/raibit-release/evidence"
+      - name: Stage happy-path invocation
+        if: steps.release.outputs.scenario == 'happy'
+        run: |
+          mkdir -p "$RUNNER_TEMP/raibit-release/preflight"
+          cp "$RUNNER_TEMP/raibit-release/ci-invocation.json" "$RUNNER_TEMP/raibit-release/preflight/ci-invocation.json"
+      - uses: actions/upload-artifact@v4
+        if: steps.release.outputs.scenario == 'happy'
+        with:
+          name: production-evidence-invocation
+          path: ${{ runner.temp }}/raibit-release/preflight/ci-invocation.json
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.release.outputs.scenario == 'missing-secret'
+        with:
+          name: production-evidence
+          path: ${{ runner.temp }}/raibit-release
+          retention-days: 14
+          if-no-files-found: error
+
+  live-evidence:
+    name: Protected credentialed evidence
+    needs: preflight
+    if: needs.preflight.result == 'success' && needs.preflight.outputs.scenario == 'happy'
+    environment: raibit-production-evidence
+    runs-on: ${{ fromJSON(vars.RAIBITSERVER_PRODUCTION_RUNNER_LABELS) }}
+    timeout-minutes: 240
+    env:
+      RAIBITSERVER_PRODUCTION_EVIDENCE: '1'
+      RAIBITSERVER_RELEASE_KUBE_CONTEXT: ${{ vars.RAIBITSERVER_RELEASE_KUBE_CONTEXT }}
+      RAIBITSERVER_RELEASE_NAMESPACE_PREFIX: ${{ vars.RAIBITSERVER_RELEASE_NAMESPACE_PREFIX }}
+      RAIBITSERVER_RELEASE_BASE_DOMAIN: ${{ vars.RAIBITSERVER_RELEASE_BASE_DOMAIN }}
+      RAIBITSERVER_RELEASE_REGISTRY_REPOSITORY: ${{ vars.RAIBITSERVER_RELEASE_REGISTRY_REPOSITORY }}
+      RAIBITSERVER_RELEASE_FIXTURE_REPOSITORY: ${{ vars.RAIBITSERVER_RELEASE_FIXTURE_REPOSITORY }}
+      RAIBITSERVER_RELEASE_GITHUB_INSTALLATION_ID: ${{ vars.RAIBITSERVER_RELEASE_GITHUB_INSTALLATION_ID }}
+      RAIBITSERVER_RELEASE_BACKUP_ENDPOINT: ${{ vars.RAIBITSERVER_RELEASE_BACKUP_ENDPOINT }}
+      RAIBITSERVER_RELEASE_BACKUP_BUCKET: ${{ vars.RAIBITSERVER_RELEASE_BACKUP_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: production-evidence-invocation
+          path: ${{ runner.temp }}/raibit-release
+      - name: Bind final profile to recorded merged B3
+        if: needs.preflight.outputs.profile == 'final'
+        env:
+          EXPECTED_B3_PR: ${{ vars.RAIBITSERVER_FINAL_B3_PR_NUMBER }}
+          OBSERVED_B3_PR: ${{ needs.preflight.outputs.merged_pr }}
+        run: test -n "$EXPECTED_B3_PR" && test "$EXPECTED_B3_PR" = "$OBSERVED_B3_PR"
+      - name: Materialize protected operator bindings
+        env:
+          APPROVED_INPUT: ${{ secrets.RAIBITSERVER_APPROVED_INPUT_V1 }}
+          KUBECONFIG_B64: ${{ secrets.RAIBITSERVER_PRODUCTION_KUBECONFIG_B64 }}
+          SECRET_REFS: ${{ secrets.RAIBITSERVER_PRODUCTION_SECRET_REFS_JSON }}
+          DOMAIN_INPUTS: ${{ secrets.RAIBITSERVER_PRODUCTION_DOMAIN_INPUTS_JSON }}
+          PROFILE: ${{ needs.preflight.outputs.profile }}
+        run: |
+          test -n "$APPROVED_INPUT" && test -n "$KUBECONFIG_B64" && test -n "$SECRET_REFS"
+          if [ "$PROFILE" = "final" ]; then test -n "$DOMAIN_INPUTS"; fi
+          mkdir -p "$RUNNER_TEMP/raibit-release/inputs" "$RUNNER_TEMP/raibit-release/private"
+          printf '%s' "$APPROVED_INPUT" > "$RUNNER_TEMP/raibit-release/inputs/approved-draft-input-v1.md"
+          printf '%s' "$KUBECONFIG_B64" | base64 --decode > "$RUNNER_TEMP/raibit-release/private/kubeconfig"
+          printf '%s' "$SECRET_REFS" > "$RUNNER_TEMP/raibit-release/private/secret-refs.json"
+          if [ "$PROFILE" = "final" ]; then printf '%s' "$DOMAIN_INPUTS" > "$RUNNER_TEMP/raibit-release/private/domain-inputs.json"; fi
+          chmod 600 "$RUNNER_TEMP/raibit-release/private/"*
+      - name: Verify protected Secret references without reading values
+        env:
+          KUBECONFIG: ${{ runner.temp }}/raibit-release/private/kubeconfig
+          APPROVED_INPUT_PATH: ${{ runner.temp }}/raibit-release/inputs/approved-draft-input-v1.md
+          SECRET_REFS_PATH: ${{ runner.temp }}/raibit-release/private/secret-refs.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          import { preflight } from './scripts/production-evidence/preflight.mjs';
+          import { inspectSecretReference } from './scripts/production-evidence/lib/orchestrator-io.mjs';
+          import { inputsFromEnvironment, loadOperatorContract } from './scripts/production-evidence/lib/operator-inputs.mjs';
+          const contract = await loadOperatorContract();
+          const refs = JSON.parse(await readFile(process.env.SECRET_REFS_PATH, 'utf8'));
+          const inputs = inputsFromEnvironment(process.env, refs, contract);
+          const result = await preflight(inputs, { approvedInputPath: process.env.APPROVED_INPUT_PATH,
+            inspectSecretReference: (reference) => inspectSecretReference(reference, inputs, process.cwd()) });
+          if (result.status !== 'PASS') throw new Error(result.reason);
+          NODE
+      - name: Run exact protected profile
+        env:
+          KUBECONFIG: ${{ runner.temp }}/raibit-release/private/kubeconfig
+          RAIBITSERVER_PRODUCTION_EVIDENCE_SECRET_REFS_FILE: ${{ runner.temp }}/raibit-release/private/secret-refs.json
+          RAIBITSERVER_PRODUCTION_DOMAIN_INPUTS_FILE: ${{ runner.temp }}/raibit-release/private/domain-inputs.json
+        run: |
+          bash scripts/production-evidence-e2e.sh --profile "${{ needs.preflight.outputs.profile }}" --scenario happy --attempt-dir "$RUNNER_TEMP/raibit-release/evidence"
+      - name: Remove protected temporary inputs
+        if: always()
+        run: |
+          rm -f -- "$RUNNER_TEMP/raibit-release/private/kubeconfig" \
+            "$RUNNER_TEMP/raibit-release/private/secret-refs.json" \
+            "$RUNNER_TEMP/raibit-release/private/domain-inputs.json" \
+            "$RUNNER_TEMP/raibit-release/inputs/approved-draft-input-v1.md"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-evidence
+          path: |
+            ${{ runner.temp }}/raibit-release/evidence
+            ${{ runner.temp }}/raibit-release/ci-invocation.json
+          retention-days: 14
+          if-no-files-found: error

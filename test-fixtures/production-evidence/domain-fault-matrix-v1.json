@@ -1,0 +1,12 @@
+{
+  "schema": "raibitserver.production-domain-fault-matrix/v1",
+  "cases": [
+    { "id": "duplicate-hostname-race", "expectedReason": "duplicate_hostname_race_blocked" },
+    { "id": "cross-tenant-claim", "expectedReason": "cross_tenant_claim_blocked" },
+    { "id": "token-theft-replay", "expectedReason": "token_replay_blocked" },
+    { "id": "dns-rebinding", "expectedReason": "dns_rebinding_blocked" },
+    { "id": "stale-controller", "expectedReason": "stale_controller_blocked" },
+    { "id": "wrong-backend", "expectedReason": "wrong_backend_blocked" },
+    { "id": "cleanup-failure", "expectedReason": "cleanup_failed" }
+  ]
+}

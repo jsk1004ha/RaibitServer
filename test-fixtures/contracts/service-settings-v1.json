@@ -1,0 +1,20 @@
+{
+  "version": "service-settings/v1",
+  "bounds": { "cpuMillicores": 500, "memoryMiB": 512, "portMin": 1, "portMax": 65535 },
+  "boundsSource": "Conservative settings fallback from ControlPlaneStore.setQuota NON_CLUB defaults; authenticated actor quota overrides fallback. Existing higher quantities may remain or decrease. Not a global platform maximum.",
+  "editable": {
+    "branch": "release/task12",
+    "rootDirectory": "apps/api",
+    "buildContext": ".",
+    "dockerfilePath": "apps/api/Dockerfile",
+    "installCommand": "pnpm install --frozen-lockfile",
+    "buildCommand": "pnpm build:release",
+    "startCommand": "node dist/server.js",
+    "outputDirectory": "dist",
+    "port": 4200,
+    "healthCheck": { "path": "/health/ready" },
+    "resources": { "requests": { "cpu": "200m", "memory": "256Mi" }, "limits": { "cpu": "500m", "memory": "512Mi" } }
+  },
+  "files": { "apps/api/Dockerfile": "FROM node:24-alpine", "apps/api/package.json": "{\"dependencies\":{\"next\":\"latest\"}}" },
+  "serviceTypes": ["web", "private", "worker", "cron", "job"]
+}

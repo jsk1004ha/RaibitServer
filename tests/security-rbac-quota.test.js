@@ -99,7 +99,7 @@ test('secret-looking log values are masked', () => {
   assert.match(line, /TOKEN=\*\*\*\*/);
   const structured = sanitizeLogRecord({ message: 'Bearer ghp_private', nested: { password: 'top-secret', line: 'api_key=raw-key' } });
   assert.equal(structured.message, 'Bearer ****');
-  assert.equal(structured.nested.password, 'to****et');
+  assert.equal(structured.nested.password, '****');
   assert.equal(structured.nested.line, 'api_key=****');
 });
 

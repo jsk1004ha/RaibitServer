@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -62,8 +63,8 @@ func TestReadLogsConsumesOversizedLinesAndRejectsPartialTrailingRecords(t *testi
 	defer server.Close()
 	client := &Client{baseURL: server.URL, staticToken: "test-token", http: server.Client()}
 	entries, err := client.ReadLogs(context.Background(), ingester.Pod{Namespace: "ns", Name: "pod"}, "app", time.Time{}, 256*1024)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ingester.ErrSourceWindowLimited) {
+		t.Fatalf("incomplete source window was not classified: %v", err)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected one complete log record, got %#v", entries)

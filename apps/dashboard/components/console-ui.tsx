@@ -6,10 +6,15 @@ import { consoleOrganizationLinks, resolveOrganizationRouteValue } from '../lib/
 import { cn } from '../lib/utils';
 import { ConsoleSearch } from './console-search';
 import { ConsoleMobileNav } from './console-mobile-nav';
+import { ThemeMenu } from './theme-menu';
 import { Brand } from './brand';
 import { FlashBanner } from './flash-banner';
 import { Icon } from './icon';
 import type { IconName } from './icon';
+import { SectionNavigationScroll } from './section-navigation-scroll';
+import { UserAvatar } from './user-avatar';
+import { AccountMenu } from './account-menu';
+import { OrganizationSwitcher, type OrganizationSwitcherMembership } from './organization-switcher';
 
 type JsonCardProps = {
   title: string;
@@ -60,12 +65,18 @@ export async function ConsoleShell({
   const user = me.body?.user;
   const subject = me.body?.subject;
   const isAdmin = me.ok && String(user?.role || subject?.userRole || '').toUpperCase() === 'ADMIN';
-  const resolvedOrgRouteValue = resolveOrganizationRouteValue({
-    requested: orgRouteValue,
-    subject,
-    memberships: me.body?.memberships,
-  });
+  const rawMemberships: unknown[] = Array.isArray(me.body?.memberships) ? me.body.memberships as unknown[] : [];
+  const organizationMemberships: OrganizationSwitcherMembership[] = rawMemberships
+      .filter((membership: unknown): membership is { organizationId?: unknown; role?: unknown } => Boolean(membership) && typeof membership === 'object')
+      .flatMap((membership) => typeof membership.organizationId === 'string' && membership.organizationId.trim()
+        ? [{ organizationId: membership.organizationId, role: typeof membership.role === 'string' ? membership.role : null }]
+        : []);
+  const requestedOrganizationId = typeof orgRouteValue === 'string' ? orgRouteValue.trim() : '';
+  const resolvedOrgRouteValue = organizationMemberships.find((membership) => membership.organizationId === requestedOrganizationId)?.organizationId
+    ?? organizationMemberships[0]?.organizationId
+    ?? resolveOrganizationRouteValue({ subject, memberships: me.body?.memberships });
   const organizationLinks = consoleOrganizationLinks(resolvedOrgRouteValue);
+  const membershipRole = organizationMemberships.find((membership) => membership.organizationId === resolvedOrgRouteValue)?.role || '권한 확인 중';
   const navItems: NavItem[] = [
     { id: 'overview', label: '개요', href: '/console', icon: 'squares-2x2' },
     { id: 'projects', label: '프로젝트', href: organizationLinks.projects, icon: 'folder' },
@@ -83,6 +94,7 @@ export async function ConsoleShell({
     { label: '배포', href: `${projectBase}?view=deployments`, group: '현재 프로젝트', keywords: 'deployment release 배포' },
     { label: '리소스', href: `${projectBase}?view=resources`, group: '현재 프로젝트', keywords: 'resource database storage 리소스' },
     { label: '로그', href: `${projectBase}?view=logs`, group: '현재 프로젝트', keywords: 'log runtime 로그' },
+    { label: '도메인', href: `${projectBase}?view=domains`, group: '현재 프로젝트', keywords: 'domain dns tls 도메인' },
     { label: '설정', href: `${projectBase}?view=settings`, group: '현재 프로젝트', keywords: 'settings config 설정' },
   ] : [];
   const searchItems = [
@@ -101,7 +113,7 @@ export async function ConsoleShell({
         <div className="flex flex-col gap-3 border-b border-border p-4">
           <div className="min-w-0 rounded-md border border-border bg-background px-3 py-2.5">
             <p className="text-xs text-muted-foreground">{orgLabel}</p>
-            <p className="truncate text-sm font-medium text-foreground" title={orgValue}>{orgValue}</p>
+            <OrganizationSwitcher currentOrganizationId={resolvedOrgRouteValue} memberships={organizationMemberships} />
           </div>
           <div className="min-w-0 px-3 py-1">
             <p className="text-xs text-muted-foreground">{projectLabel}</p>
@@ -121,13 +133,15 @@ export async function ConsoleShell({
           })}
         </nav>
         <div className="border-t border-border p-3">
-          <p className="truncate px-2 pb-2 text-xs text-muted-foreground" title={user?.email || '로그인 사용자'}>{user?.email || '로그인 사용자'}</p>
-          <form method="post" action={apiAction('/auth/logout')}><input type="hidden" name="_returnTo" value="/login" /><button className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'w-full justify-start')} type="submit">로그아웃</button></form>
+          <AccountMenu avatarUrl={user?.avatarUrl} email={user?.email} logoutAction={logoutAction} name={user?.name} organization={orgValue} role={membershipRole} />
         </div>
       </aside>
-      <header className="flex min-w-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
-        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} projectLabel={projectLabel} projectValue={projectValue} userEmail={user?.email || '로그인 사용자'} />
-        <ConsoleSearch compact items={searchItems} />
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
+        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} organizationMemberships={organizationMemberships} organizationRouteValue={resolvedOrgRouteValue} projectLabel={projectLabel} projectValue={projectValue} role={membershipRole} userAvatarUrl={user?.avatarUrl} userEmail={user?.email || '로그인 사용자'} userName={user?.name} />
+        <div className="flex shrink-0 items-center gap-2 max-[12rem]:w-full max-[12rem]:justify-end" aria-label="모바일 콘솔 도구">
+          <ConsoleSearch compact items={searchItems} />
+          <ThemeMenu />
+        </div>
       </header>
       <main id="main-content" className="min-h-0 min-w-0 overflow-y-auto overscroll-y-contain md:col-start-2 md:row-start-1">
         <header className="sticky top-0 z-10 hidden min-h-16 items-center justify-between gap-4 border-b border-border bg-background/95 px-6 supports-backdrop-filter:backdrop-blur-sm md:flex">
@@ -138,6 +152,7 @@ export async function ConsoleShell({
           <div className="flex items-center gap-2" aria-label="콘솔 도구">
             <ConsoleSearch items={searchItems} />
             <a className={buttonVariants({ variant: active === 'guide' ? 'secondary' : 'ghost', size: 'sm' })} href="/guide"><Icon name="command-line" /><span>사용 설명서</span></a>
+            <ThemeMenu />
           </div>
         </header>
         <div className="px-4 pt-3 md:px-6"><Suspense fallback={null}><FlashBanner /></Suspense></div>
@@ -149,11 +164,13 @@ export async function ConsoleShell({
 
 export function SectionNav({ items, current, label, variant = 'tabs' }: { items: SectionNavItem[]; current: string; label: string; variant?: 'tabs' | 'steps' }) {
   return (
-    <nav className={`section-nav section-nav-${variant}`} aria-label={label}>
-      {items.map((item, index) => {
-        const active = item.id === current;
-        return <a key={item.id} className={`section-nav-item ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} aria-label={item.description ? `${item.label}: ${item.description}` : item.label} href={item.href}>{variant === 'steps' ? <span className="section-nav-index">{index + 1}</span> : null}<span><strong>{item.label}</strong>{item.description ? <small>{item.description}</small> : null}</span></a>;
-      })}
+    <nav className="min-w-0" aria-label={label}>
+      <SectionNavigationScroll className="mb-raibit-xl" current={current} viewportClassName={`section-nav section-nav-${variant}`}>
+        {items.map((item, index) => {
+          const active = item.id === current;
+          return <a key={item.id} className={`section-nav-item ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} aria-label={item.description ? `${item.label}: ${item.description}` : item.label} href={item.href}>{variant === 'steps' ? <span className="section-nav-index">{index + 1}</span> : null}<span><strong>{item.label}</strong>{item.description ? <small>{item.description}</small> : null}</span></a>;
+        })}
+      </SectionNavigationScroll>
     </nav>
   );
 }

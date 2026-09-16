@@ -80,6 +80,13 @@ raibitserver admin quota --user-id <USER_ID> --maxProjects 3
 
 CLI token과 사용자 ID를 shell history나 공유 로그에 남기지 않도록 운영 환경을 구성합니다.
 
+### 비밀번호 복구와 조직 멤버십
+
+- 비밀번호 재설정 요청은 존재하지 않거나 사용할 수 없는 계정에도 같은 202 body와 timing envelope를 유지합니다. delivery 실패를 사용자에게 계정 존재 신호로 바꾸지 말고 운영 경보에서 확인합니다.
+- 재설정 완료는 비밀번호를 교체하고 `sessionVersion`을 증가시켜 기존 세션을 모두 폐기하며 자동 로그인하지 않습니다. raw code, password, 계정 존재 여부를 audit/log에 남기지 않습니다.
+- 승인·이메일 인증·밴 해제 상태의 대화형 사용자만 새 조직을 만들 수 있습니다. 생성 transaction은 새 조직과 그 사용자의 `OWNER` 멤버십 하나를 만들고 세션을 무효화하므로 재로그인이 필요합니다.
+- 초대 수락은 create-only이며 기존 멤버의 역할을 upsert하지 않습니다. 조직 row를 잠근 역할 변경·제거·탈퇴 경로가 마지막 `OWNER`를 보존하고, 권한 변경 시 영향받은 사용자의 세션을 무효화합니다.
+
 ## 4. 배포 파이프라인 관찰
 
 ```text
@@ -95,6 +102,10 @@ API desired state
 ```
 
 API request path에서 builder나 Kubernetes rollout을 직접 수행하지 않습니다. 대기 상태가 길면 API를 반복 호출해 중복 배포를 만들기 전에 workflow job과 worker log를 확인합니다. Tenant deployment의 `READY`는 앱 HTTP health를 보장하지 않으므로 public smoke test를 별도로 수행합니다.
+
+배포 이력은 immutable commit SHA, image digest, snapshot version, lineage와 요청자/idempotency, rollout/public health를 함께 보존합니다. retry/redeploy는 실패 행을 초기화하지 않고 새 successor와 job을 만들며, cancel/rollback을 포함한 현재 가능한 작업은 서버 상태와 역할로 계산한 한 가지 action만 신뢰합니다. 동일 idempotency key의 재시도 결과와 operation stream URL을 확인합니다.
+
+프로젝트·서비스 설정 변경은 렌더된 `updatedAt`을 조건으로 수행합니다. `STALE_PROJECT` 또는 service stale 충돌은 자동 병합하지 말고 최신 snapshot과 diff/build plan을 다시 확인합니다. 이미 배포된 서비스의 immutable identity/source 변경은 기존 서비스를 보존하는 replacement 생성 경로만 사용합니다.
 
 ### 상태별 담당 영역
 
@@ -236,9 +247,20 @@ journalctl -u raibitserver-auto-update.service -f
 
 ### 프로젝트·서비스
 
+- 프로젝트 설정의 service/resource/preview 영향 수와 최신 snapshot을 확인하고 별도 destructive confirmation으로 한 번만 예약합니다.
 - 삭제 요청이 들어오면 새 deployment claim을 막습니다.
 - 실행 중인 workload, Ingress, Service, Secret reference를 정리합니다.
 - 최종 상태와 실패 event를 control-plane에 남깁니다.
+
+API 요청 성공은 동기 삭제 완료가 아닙니다. `DELETE_REQUESTED`/`DELETING`, reconciler claim과 실제 Kubernetes/provider cleanup을 순서대로 확인하며 과거 deployment snapshot이나 현재 workload를 요청 경로에서 수정하지 않습니다.
+
+### 사용자 지정 도메인
+
+- `OWNER`/`ADMIN`만 생성·회전·삭제하고 `MAINTAINER`는 조회와 DNS 확인 요청까지만 수행합니다.
+- 32-byte challenge는 create/rotate 응답에서 한 번만 노출되고 저장소에는 hash만 남습니다. raw TXT token을 로그나 티켓에 남기지 않습니다.
+- DNS 확인 요청은 reconciliation을 예약할 뿐이며 outbound DNS, Ingress, Certificate 작업을 API 요청 안에서 수행하지 않습니다.
+- `VERIFIED → ROUTING → READY`와 TLS `PENDING → ISSUING → READY`, 정확한 hostname SAN과 외부 HTTPS를 각각 확인합니다.
+- 회전·삭제는 이전 version의 Ingress와 Certificate 부재를 fenced generation으로 관찰하기 전 완료로 처리하지 않습니다. generated URL은 그대로 유지합니다.
 
 ### 리소스
 
@@ -280,3 +302,5 @@ Secret 노출 가능성이 있으면 로그를 더 넓게 공유하기 전에 to
 - runtime log·metric 수집 여부
 - 실행한 테스트와 결과
 - 남은 위험과 후속 작업
+
+로컬 Node/Go 테스트, disposable kind `pnpm e2e:live`의 Helm reconciliation, credentialed Train A와 최종 B3 SHA의 Gate B는 서로 다른 증거입니다. 한 단계의 PASS를 다른 단계의 근거로 복사하지 않습니다. 현재 SHA에서 실제 DNS/TLS/HTTPS, GitHub provider, PostgreSQL race 또는 브라우저 검증을 실행하지 않았다면 `NOT_RUN`으로 기록하고 Beta Ready로 표시하지 않습니다.

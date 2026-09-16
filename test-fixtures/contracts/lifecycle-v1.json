@@ -1,0 +1,454 @@
+{
+  "version": 1,
+  "semantics": {
+    "terminal": "The current operation or observation has completed; explicit retry, cleanup, rotation and recheck transitions can leave terminal states.",
+    "sameState": "Idempotent no-op for known canonical states only."
+  },
+  "machines": {
+    "deployment": {
+      "initial": "queued",
+      "states": {
+        "queued": {
+          "terminal": false,
+          "next": [
+            "BUILDING",
+            "CANCELLED",
+            "FAILED"
+          ]
+        },
+        "BUILDING": {
+          "terminal": false,
+          "next": [
+            "IMAGE_READY",
+            "BUILD_FAILED",
+            "FAILED",
+            "CANCELLED"
+          ]
+        },
+        "IMAGE_READY": {
+          "terminal": false,
+          "next": [
+            "DEPLOYING",
+            "READY",
+            "FAILED",
+            "CANCELLED"
+          ]
+        },
+        "DEPLOYING": {
+          "terminal": false,
+          "next": [
+            "READY",
+            "FAILED",
+            "CLEANED_UP"
+          ]
+        },
+        "READY": {
+          "terminal": true,
+          "next": [
+            "PREVIEW_CLEANUP_REQUESTED",
+            "ROLLBACK_REQUESTED"
+          ]
+        },
+        "BUILD_FAILED": {
+          "terminal": true,
+          "next": [
+            "BUILDING",
+            "PREVIEW_CLEANUP_REQUESTED"
+          ]
+        },
+        "FAILED": {
+          "terminal": true,
+          "next": [
+            "BUILDING",
+            "PREVIEW_CLEANUP_REQUESTED",
+            "ROLLBACK_REQUESTED"
+          ]
+        },
+        "CANCELLED": {
+          "terminal": true,
+          "next": [
+            "PREVIEW_CLEANUP_REQUESTED"
+          ]
+        },
+        "PREVIEW_CLEANUP_REQUESTED": {
+          "terminal": false,
+          "next": [
+            "DEPLOYING",
+            "CLEANED_UP",
+            "FAILED"
+          ]
+        },
+        "ROLLBACK_REQUESTED": {
+          "terminal": false,
+          "next": [
+            "DEPLOYING",
+            "FAILED"
+          ]
+        },
+        "CLEANED_UP": {
+          "terminal": true,
+          "next": []
+        }
+      },
+      "aliases": {
+        "pending": "queued",
+        "build_queued": "queued",
+        "build": "BUILDING",
+        "imageready": "IMAGE_READY",
+        "deploy_ready": "IMAGE_READY",
+        "rollout": "DEPLOYING",
+        "succeeded": "READY",
+        "success": "READY",
+        "buildfailed": "BUILD_FAILED",
+        "error": "FAILED",
+        "canceled": "CANCELLED",
+        "cleanup_requested": "PREVIEW_CLEANUP_REQUESTED"
+      }
+    },
+    "workflow": {
+      "initial": "queued",
+      "states": {
+        "queued": {
+          "terminal": false,
+          "next": [
+            "running",
+            "cancelled"
+          ]
+        },
+        "running": {
+          "terminal": false,
+          "next": [
+            "queued",
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "succeeded": {
+          "terminal": true,
+          "next": []
+        },
+        "failed": {
+          "terminal": true,
+          "next": []
+        },
+        "cancelled": {
+          "terminal": true,
+          "next": []
+        }
+      },
+      "aliases": {
+        "completed": "succeeded",
+        "complete": "succeeded",
+        "success": "succeeded",
+        "pending": "queued",
+        "retrying": "queued"
+      }
+    },
+    "resource": {
+      "initial": "PROVISIONING",
+      "states": {
+        "PROVISIONING": {
+          "terminal": false,
+          "next": [
+            "RECONCILING",
+            "DELETE_REQUESTED"
+          ]
+        },
+        "RECONCILING": {
+          "terminal": false,
+          "next": [
+            "PROVISIONING",
+            "READY",
+            "FAILED",
+            "DELETE_REQUESTED"
+          ]
+        },
+        "READY": {
+          "terminal": true,
+          "next": [
+            "RECONCILING",
+            "DELETE_REQUESTED"
+          ]
+        },
+        "FAILED": {
+          "terminal": true,
+          "next": [
+            "PROVISIONING",
+            "RECONCILING",
+            "DELETE_REQUESTED"
+          ]
+        },
+        "DELETE_REQUESTED": {
+          "terminal": false,
+          "next": [
+            "DELETING"
+          ]
+        },
+        "DELETING": {
+          "terminal": false,
+          "next": [
+            "DELETE_REQUESTED",
+            "DELETED"
+          ]
+        },
+        "DELETED": {
+          "terminal": true,
+          "next": []
+        }
+      },
+      "aliases": {}
+    },
+    "backup": {
+      "initial": "QUEUED",
+      "states": {
+        "QUEUED": {
+          "terminal": false,
+          "next": [
+            "RUNNING",
+            "FAILED"
+          ]
+        },
+        "RUNNING": {
+          "terminal": false,
+          "next": [
+            "VERIFYING",
+            "FAILED"
+          ]
+        },
+        "VERIFYING": {
+          "terminal": false,
+          "next": [
+            "READY",
+            "FAILED"
+          ]
+        },
+        "READY": {
+          "terminal": true,
+          "next": [
+            "EXPIRED",
+            "DELETING"
+          ]
+        },
+        "FAILED": {
+          "terminal": true,
+          "next": [
+            "DELETING"
+          ]
+        },
+        "EXPIRED": {
+          "terminal": true,
+          "next": [
+            "DELETING"
+          ]
+        },
+        "DELETING": {
+          "terminal": false,
+          "next": [
+            "DELETED",
+            "FAILED"
+          ]
+        },
+        "DELETED": {
+          "terminal": true,
+          "next": []
+        }
+      },
+      "aliases": {
+        "created": "QUEUED"
+      }
+    },
+    "restore": {
+      "initial": "QUEUED",
+      "states": {
+        "QUEUED": {
+          "terminal": false,
+          "next": [
+            "RUNNING",
+            "FAILED",
+            "CANCELLED"
+          ]
+        },
+        "RUNNING": {
+          "terminal": false,
+          "next": [
+            "VERIFYING",
+            "FAILED",
+            "CANCELLED"
+          ]
+        },
+        "VERIFYING": {
+          "terminal": false,
+          "next": [
+            "READY",
+            "FAILED",
+            "CANCELLED"
+          ]
+        },
+        "READY": {
+          "terminal": true,
+          "next": []
+        },
+        "FAILED": {
+          "terminal": true,
+          "next": []
+        },
+        "CANCELLED": {
+          "terminal": true,
+          "next": []
+        }
+      },
+      "aliases": {}
+    },
+    "domain": {
+      "initial": "PENDING_VERIFICATION",
+      "states": {
+        "PENDING_VERIFICATION": {
+          "terminal": false,
+          "next": [
+            "VERIFIED",
+            "FAILED",
+            "DELETING"
+          ]
+        },
+        "VERIFIED": {
+          "terminal": false,
+          "next": [
+            "ROUTING",
+            "PENDING_VERIFICATION",
+            "FAILED",
+            "DELETING"
+          ]
+        },
+        "ROUTING": {
+          "terminal": false,
+          "next": [
+            "READY",
+            "PENDING_VERIFICATION",
+            "FAILED",
+            "DELETING"
+          ]
+        },
+        "READY": {
+          "terminal": true,
+          "next": [
+            "PENDING_VERIFICATION",
+            "FAILED",
+            "DELETING"
+          ]
+        },
+        "FAILED": {
+          "terminal": true,
+          "next": [
+            "PENDING_VERIFICATION",
+            "VERIFIED",
+            "ROUTING",
+            "DELETING"
+          ]
+        },
+        "DELETING": {
+          "terminal": false,
+          "next": []
+        }
+      },
+      "aliases": {
+        "pending": "PENDING_VERIFICATION"
+      }
+    },
+    "tls": {
+      "initial": "PENDING",
+      "states": {
+        "PENDING": {
+          "terminal": false,
+          "next": [
+            "ISSUING",
+            "FAILED"
+          ]
+        },
+        "ISSUING": {
+          "terminal": false,
+          "next": [
+            "READY",
+            "FAILED",
+            "PENDING"
+          ]
+        },
+        "READY": {
+          "terminal": true,
+          "next": [
+            "PENDING",
+            "ISSUING",
+            "FAILED"
+          ]
+        },
+        "FAILED": {
+          "terminal": true,
+          "next": [
+            "PENDING",
+            "ISSUING"
+          ]
+        }
+      },
+      "aliases": {}
+    },
+    "health": {
+      "initial": "UNKNOWN",
+      "states": {
+        "UNKNOWN": {
+          "terminal": false,
+          "next": [
+            "CHECKING"
+          ]
+        },
+        "CHECKING": {
+          "terminal": false,
+          "next": [
+            "HEALTHY",
+            "DEGRADED",
+            "UNKNOWN"
+          ]
+        },
+        "HEALTHY": {
+          "terminal": true,
+          "next": [
+            "CHECKING",
+            "UNKNOWN"
+          ]
+        },
+        "DEGRADED": {
+          "terminal": true,
+          "next": [
+            "CHECKING",
+            "UNKNOWN"
+          ]
+        }
+      },
+      "aliases": {}
+    },
+    "resourceHealth": {
+      "initial": "UNKNOWN",
+      "states": {
+        "UNKNOWN": {
+          "terminal": false,
+          "next": [
+            "HEALTHY",
+            "UNHEALTHY"
+          ]
+        },
+        "HEALTHY": {
+          "terminal": true,
+          "next": [
+            "UNHEALTHY"
+          ]
+        },
+        "UNHEALTHY": {
+          "terminal": true,
+          "next": [
+            "HEALTHY"
+          ]
+        }
+      },
+      "aliases": {}
+    }
+  }
+}

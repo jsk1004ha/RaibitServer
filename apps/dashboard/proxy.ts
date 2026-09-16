@@ -5,8 +5,8 @@ import {
   dashboardRequestUrl,
   dashboardSecurityHeaders,
   publicHostnameForConsole,
-  SESSION_COOKIE_NAME,
 } from './lib/request-security.js';
+import { expireLegacySessionCookie, LEGACY_SESSION_COOKIE_NAME, readSessionToken } from './lib/session-cookies.js';
 
 function unauthorizedResponse(headers: Record<string, string>) {
   return new NextResponse('Dashboard admin authentication required.', {
@@ -26,6 +26,12 @@ function parseBasicHeader(header: string | null) {
 }
 
 export function proxy(request: NextRequest) {
+  const response = routeRequest(request);
+  if (request.cookies.has(LEGACY_SESSION_COOKIE_NAME)) expireLegacySessionCookie(response);
+  return response;
+}
+
+function routeRequest(request: NextRequest) {
   const nonce = crypto.randomUUID();
   const forwardedProto = request.headers.get('x-forwarded-proto');
   const host = request.headers.get('host');
@@ -72,7 +78,7 @@ export function proxy(request: NextRequest) {
     const credentials = parseBasicHeader(request.headers.get('authorization'));
     if (!credentials || credentials !== configured) return unauthorizedResponse(headers);
   }
-  const hasSession = Boolean(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+  const hasSession = Boolean(readSessionToken(request.headers.get('cookie')));
   const requiresSession = isProtectedPage(pathname) || (protectedDashboardHost && isConsolePage(pathname));
   if (requiresSession && !hasSession) {
     const login = new URL('/login', publicRequestUrl);

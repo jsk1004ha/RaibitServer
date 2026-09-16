@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { cookies, headers } from 'next/headers';
-import { ThemeToggle } from '@/components/theme-toggle';
 import { e2eFixturesEnabled } from '@/lib/e2e-fixture-policy';
 import { THEME_COOKIE_NAME, normalizeThemePreference } from '@/lib/theme';
 import './globals.css';
@@ -33,14 +32,13 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       <body className="bg-background font-sans text-foreground">
         <nav aria-label="바로가기">
           <a
-            className="sr-only fixed left-raibit-md top-raibit-md z-50 rounded-sm bg-primary px-raibit-md py-raibit-sm text-button-md text-primary-foreground focus:not-sr-only"
+            className="fixed left-raibit-md top-raibit-md z-50 -translate-y-[calc(100%+var(--space-md))] rounded-sm bg-primary px-raibit-md py-raibit-sm text-button-md text-primary-foreground focus:translate-y-0"
             href="#main-content"
           >
             본문으로 건너뛰기
           </a>
         </nav>
         {children}
-        <ThemeToggle initialTheme={theme} />
       </body>
     </html>
   );

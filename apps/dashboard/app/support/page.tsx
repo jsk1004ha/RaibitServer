@@ -22,10 +22,10 @@ export default function SupportPage() {
               <p className="text-micro font-medium tracking-[0.16em] text-primary">
                 RAIBIT SUPPORT
               </p>
-              <h1 className="max-w-[10ch] text-display-xl font-medium text-balance text-foreground sm:text-display-xxl">
+              <h1 className="break-keep [overflow-wrap:anywhere] max-w-[10ch] text-display-xl font-medium text-balance text-foreground sm:text-display-xxl">
                 도움이 필요하신가요?
               </h1>
-              <p className="max-w-md text-body-lg text-pretty text-muted-foreground">
+              <p className="break-keep [overflow-wrap:anywhere] max-w-md text-body-lg text-pretty text-muted-foreground">
                 계정 · 승인 · 배포 문의를 운영진에게 보내 주세요.
               </p>
             </header>

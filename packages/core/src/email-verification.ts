@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { createSessionToken, hashPasswordAsync, normalizeEmail, personalOrganizationSlug, sessionTtlSeconds, signupPolicyForAccount } from './identity.ts';
+import { parseOrganizationRouteSlug } from './rbac.ts';
 
 export const DEFAULT_EMAIL_VERIFICATION_TTL_SECONDS = 10 * 60;
 export const MAX_EMAIL_VERIFICATION_TTL_SECONDS = 24 * 60 * 60;
@@ -163,7 +164,14 @@ export async function issueSignupEmailVerificationCode(repository: any, input: R
   const name = requiredSignupString(input.name, 'name');
   const studentId = requiredSignupString(input.studentId, 'student_id');
   const clubMemberClaim = normalizeClubMemberClaim(input.clubMemberClaim);
-  const organizationSlug = input.organizationSlug || input.orgSlug || personalOrganizationSlug(email);
+  const hasExplicitOrganizationSlug = Object.hasOwn(input, 'organizationSlug') || Object.hasOwn(input, 'orgSlug');
+  const organizationSlug = Object.hasOwn(input, 'organizationSlug')
+    ? input.organizationSlug
+    : Object.hasOwn(input, 'orgSlug') ? input.orgSlug : personalOrganizationSlug(email);
+  if (hasExplicitOrganizationSlug) {
+    const parsed = parseOrganizationRouteSlug(organizationSlug);
+    if (parsed.ok === false) throw statusError(parsed.code, parsed.statusCode);
+  }
   const [userCount, passwordHash, existing, existingOrganization] = await Promise.all([
     countUsersForRepository(target),
     hashPasswordAsync(input.password),

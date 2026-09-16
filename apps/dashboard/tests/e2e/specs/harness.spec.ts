@@ -10,7 +10,7 @@ test('@harness real login preserves exact native FormData and reaches console', 
   await page.getByRole('button', { name: '콘솔에 로그인' }).click();
   await expectRoute(page, '/console', { notice: 'saved' });
   await expect(page.getByRole('heading', { name: '내 프로젝트' })).toBeVisible();
-  const csp = await page.request.get('http://127.0.0.1:3410/console', { headers: { host: 'console.localhost:3410', cookie: 'raibitserver_session=fixture-user-populated' } });
+  const csp = await page.request.get('http://127.0.0.1:3410/console', { headers: { host: 'console.localhost:3410', cookie: '__Host-raibitserver_session=fixture-user-populated' } });
   expect(csp.headers()['content-security-policy']).toContain("default-src 'self'");
   const fixtureLog = await request.get(`${FIXTURE_ORIGIN}/__fixture/requests`);
   const requests = (await fixtureLog.json()).requests;

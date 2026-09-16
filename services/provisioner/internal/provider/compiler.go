@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/raibitserver/provisioner/internal/providercontract"
 	"github.com/raibitserver/provisioner/internal/store"
 )
 
@@ -22,6 +23,7 @@ var (
 )
 
 type Plan struct {
+	Image           string
 	Engine          string
 	Provider        string
 	Name            string
@@ -29,6 +31,8 @@ type Plan struct {
 	SecretName      string
 	PVCName         string
 	Endpoint        string
+	Database        string
+	User            string
 	ConnectionKeys  []string
 	ProbeCommand    []string
 	SecretData      map[string]string
@@ -55,7 +59,8 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	if region != "" && region != "local" {
 		return nil, fmt.Errorf("provider region %q is not served by the dedicated local reconciler", resource.Region)
 	}
-	if !digestImagePattern.MatchString(strings.TrimSpace(image)) {
+	image = strings.TrimSpace(image)
+	if !digestImagePattern.MatchString(image) {
 		return nil, fmt.Errorf("provider image for %s must be configured and pinned by sha256 digest", engine)
 	}
 	name, namespace, secretName, pvcName, err := ObjectNames(resource)
@@ -74,7 +79,18 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate provider reconcile token: %w", err)
 	}
-	database := identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "databaseName"), resource.Name, "app"))
+	database, username := "", ""
+	host := name + "." + namespace + ".svc.cluster.local"
+	if providercontract.SupportsRecovery(engine) {
+		recovery, recoveryErr := providercontract.RecoveryFor(engine, name, namespace, resource.Name, resource.DesiredSpec)
+		if recoveryErr != nil {
+			return nil, recoveryErr
+		}
+		database, username, host = recovery.Database, recovery.User, recovery.Host
+	} else {
+		database = identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "databaseName"), resource.Name, "app"))
+		username = identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "username"), name+"-app"))
+	}
 	target := database
 	switch engine {
 	case "object-storage":
@@ -84,11 +100,9 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	case "nats":
 		target = identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "topic"), stringValue(resource.DesiredSpec, "databaseName"), resource.Name, "app"))
 	}
-	username := identifier(firstNonEmpty(stringValue(resource.DesiredSpec, "username"), name+"-app"))
 	if (engine == "mysql" || engine == "mariadb") && username == "root" {
 		return nil, fmt.Errorf("provider username %q is reserved by the %s image", username, engine)
 	}
-	host := name + "." + namespace + ".svc.cluster.local"
 	port, data, connectionKeys, container := providerContract(engine, host, target, username, password, secondary, secretName)
 	endpoint := fmt.Sprintf("%s:%d", host, port)
 	labels := map[string]any{
@@ -101,8 +115,9 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	}
 	storage := storageSize(resource.DesiredSpec)
 	plan := &Plan{
+		Image:  image,
 		Engine: engine, Provider: "raibitserver-local-" + engine, Name: name, Namespace: namespace,
-		SecretName: secretName, PVCName: pvcName, Endpoint: endpoint, ConnectionKeys: connectionKeys, ProbeCommand: container.ProbeCommand, SecretData: data, Labels: labels,
+		SecretName: secretName, PVCName: pvcName, Endpoint: endpoint, Database: database, User: username, ConnectionKeys: connectionKeys, ProbeCommand: container.ProbeCommand, SecretData: data, Labels: labels,
 	}
 	plan.PublicManifests = []map[string]any{
 		tenantNamespaceManifest(namespace, resource.ProjectID, resource.ProjectSlug),
@@ -578,6 +593,9 @@ func networkPolicy(namespace, name string, labels map[string]any, port int) map[
 func supportedEngine(engine, configuredProvider string) (string, error) {
 	normalizedEngine, err := normalizeEngine(engine)
 	if err != nil {
+		return "", err
+	}
+	if err := requireLocalCapability(normalizedEngine); err != nil {
 		return "", err
 	}
 	providerName := strings.ToLower(strings.TrimSpace(configuredProvider))

@@ -61,6 +61,20 @@ func TestSensitiveOutputIsReturnedOnlyOnSuccessAndRedactedOnFailure(t *testing.T
 	}
 }
 
+func TestSensitiveOutputClassifiesMissingKubernetesObjectWithoutExposingOutput(t *testing.T) {
+	t.Setenv("RAIBITSERVER_COMMAND_HELPER", "1")
+	t.Setenv("RAIBITSERVER_COMMAND_HELPER_SECRET", "missing-object-secret-must-not-escape")
+	_, output, err := runSensitiveOutput(
+		context.Background(),
+		os.Args[0],
+		[]string{"-test.run=TestNotFoundHelper", "--"},
+		time.Minute,
+	)
+	if !errors.Is(err, ErrObjectNotFound) || len(output) != 0 || strings.Contains(err.Error(), "missing-object-secret-must-not-escape") {
+		t.Fatalf("missing object must be classified without output disclosure: output=%q err=%v", output, err)
+	}
+}
+
 func TestCreateInputClassifiesAlreadyExistsWithoutExposingPayload(t *testing.T) {
 	t.Setenv("RAIBITSERVER_COMMAND_HELPER", "1")
 	secret := "provider-create-payload-must-not-escape"
@@ -362,6 +376,15 @@ func TestAlreadyExistsHelper(t *testing.T) {
 		return
 	}
 	_, _ = fmt.Fprintln(os.Stderr, "Error from server (AlreadyExists): secrets provider already exists")
+	_, _ = fmt.Fprintln(os.Stderr, os.Getenv("RAIBITSERVER_COMMAND_HELPER_SECRET"))
+	os.Exit(1)
+}
+
+func TestNotFoundHelper(t *testing.T) {
+	if os.Getenv("RAIBITSERVER_COMMAND_HELPER") != "1" {
+		return
+	}
+	_, _ = fmt.Fprintln(os.Stderr, "Error from server (NotFound): pods provider-0 not found")
 	_, _ = fmt.Fprintln(os.Stderr, os.Getenv("RAIBITSERVER_COMMAND_HELPER_SECRET"))
 	os.Exit(1)
 }

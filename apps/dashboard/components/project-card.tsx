@@ -34,10 +34,10 @@ export function ProjectCard({ project, href }: ProjectCardProps) {
   const serviceCount = project.services ?? project.serviceCount ?? 0;
   const resourceCount = project.resources ?? project.resourceCount ?? 0;
   const body = (
-    <Card size="sm" className="transition-[border-color,box-shadow] group-hover:border-foreground/20 group-hover:shadow-[0_2px_8px_rgb(0_0_0/0.07)] group-focus-visible:border-ring group-focus-visible:ring-3 group-focus-visible:ring-ring/25">
-      <CardContent className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 sm:gap-4">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary-soft text-primary" aria-hidden="true"><FolderIcon className="size-4" /></span>
-        <span className="flex min-w-0 flex-col gap-1">
+    <Card size="sm" className="@container/project-card transition-[border-color,box-shadow] group-hover:border-foreground/20 group-hover:shadow-[0_2px_8px_rgb(0_0_0/0.07)] group-focus-visible:border-ring group-focus-visible:ring-3 group-focus-visible:ring-ring/25">
+      <CardContent className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 sm:gap-4 @max-[16rem]/project-card:grid-cols-[auto_auto] @max-[16rem]/project-card:items-start">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary-soft text-primary @max-[16rem]/project-card:col-start-1 @max-[16rem]/project-card:row-start-1" aria-hidden="true"><FolderIcon className="size-4" /></span>
+        <span className="flex min-w-0 flex-col gap-1 @max-[16rem]/project-card:col-span-2 @max-[16rem]/project-card:row-start-2">
           <span className="flex min-w-0 flex-wrap items-center gap-2"><span className="min-w-0 break-words text-sm font-medium text-foreground">{title}</span><ProjectStatus status={project.status} /></span>
           <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {identifier ? <code className="max-w-full break-all font-mono">{identifier}</code> : null}
@@ -45,7 +45,7 @@ export function ProjectCard({ project, href }: ProjectCardProps) {
             <span className="inline-flex items-center gap-1"><DatabaseIcon className="size-3.5" /> 리소스 {resourceCount}개</span>
           </span>
         </span>
-        {href ? <ArrowUpRightIcon className="size-4 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" aria-hidden="true" /> : null}
+        {href ? <ArrowUpRightIcon className="size-4 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 @max-[16rem]/project-card:col-start-2 @max-[16rem]/project-card:row-start-1 @max-[16rem]/project-card:justify-self-end" aria-hidden="true" /> : null}
       </CardContent>
     </Card>
   );

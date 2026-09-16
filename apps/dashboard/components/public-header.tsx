@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { Brand } from './brand';
+import { ThemeMenu } from './theme-menu';
+import { buttonVariants } from './ui/button';
 
 export type PublicNavigationItem = Readonly<{
   href: string;
@@ -22,14 +24,21 @@ export function PublicHeader({
   currentPath,
   items = publicNavigationItems,
 }: PublicHeaderProps) {
+  const resolvedActions = actions === undefined
+    ? <a className={buttonVariants({ size: 'sm' })} href="/console">콘솔</a>
+    : actions;
+
   return (
     <header className="border-b border-border bg-background">
-      <div className="mx-auto flex min-h-16 w-full max-w-7xl flex-wrap items-center justify-between gap-raibit-md px-raibit-lg py-raibit-sm sm:px-raibit-xl">
-        <a className="inline-flex min-h-11 items-center gap-raibit-sm text-button-md font-medium tracking-wide text-foreground" href="/">
-          <Brand height={32} mode="informative" priority width={32} />
-          <span>RAIBIT SERVER</span>
-        </a>
-        <div className="flex flex-wrap items-center justify-end gap-raibit-md">
+      <div className="mx-auto flex min-h-16 w-full max-w-7xl flex-col gap-raibit-sm px-raibit-lg py-raibit-sm sm:flex-row sm:items-center sm:justify-between sm:gap-raibit-md sm:px-raibit-xl">
+        <div className="flex w-full items-center justify-between sm:w-auto">
+          <a className="inline-flex min-h-11 items-center gap-raibit-sm text-button-md font-medium tracking-wide text-foreground" href="/">
+            <Brand height={32} mode="informative" priority width={32} />
+            <span>RAIBIT SERVER</span>
+          </a>
+          <ThemeMenu />
+        </div>
+        <div className="flex w-full flex-wrap items-center justify-between gap-raibit-md sm:w-auto sm:flex-nowrap sm:justify-end">
           <nav aria-label="공개 화면 탐색" className="flex flex-wrap items-center gap-raibit-xs">
             {items.map((item) => (
               <a
@@ -42,7 +51,7 @@ export function PublicHeader({
               </a>
             ))}
           </nav>
-          {actions}
+          {resolvedActions}
         </div>
       </div>
     </header>

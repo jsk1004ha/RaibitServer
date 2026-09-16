@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { SectionNavigationScroll } from '../../components/section-navigation-scroll';
 
 const topics = ['projects', 'source', 'environment', 'deployments', 'resources', 'github', 'administration'] as const;
 type GuideTopic = typeof topics[number];
@@ -170,7 +171,7 @@ export default async function GuidePage({ searchParams }: { searchParams: Promis
         <header className="border-b border-border pb-6"><p className="mb-1.5 text-xs font-medium text-muted-foreground">RAIBIT GUIDE</p><h1 className="text-2xl font-medium tracking-tight text-foreground md:text-[1.75rem]">사용 안내</h1><p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">Dockerfile 우선 배포부터 운영 관리까지, 필요한 주제를 URL로 바로 열어 확인합니다.</p></header>
         {!projectsResult.ok ? <Alert variant="destructive"><AlertTitle>프로젝트 정보를 불러오지 못했습니다.</AlertTitle><AlertDescription>안내 내용은 계속 볼 수 있습니다. 프로젝트 상태는 잠시 후 다시 확인해 주세요.</AlertDescription></Alert> : null}
         <div className="grid min-w-0 gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
-          <nav aria-label="사용 안내 주제" className="min-w-0"><ul className="flex min-w-0 gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">{navItems.map((item) => { const current = item.id === topic; return <li key={item.id} className="min-w-36 lg:min-w-0"><Link className={cn('flex min-h-14 flex-col justify-center rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/25', current ? 'border-primary bg-primary-soft text-primary' : 'border-border bg-card text-foreground hover:bg-muted')} aria-current={current ? 'page' : undefined} href={item.href}><strong className="font-medium">{item.label}</strong><span className={cn('text-xs', current ? 'text-primary' : 'text-muted-foreground')}>{item.description}</span></Link></li>; })}</ul></nav>
+          <nav aria-label="사용 안내 주제" className="min-w-0"><SectionNavigationScroll as="ul" current={topic} viewportClassName="gap-2 pb-1 lg:flex-col lg:overflow-visible">{navItems.map((item) => { const current = item.id === topic; return <li key={item.id} className="min-w-36 lg:min-w-0"><Link className={cn('flex min-h-14 flex-col justify-center rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/25', current ? 'border-primary bg-primary-soft text-primary' : 'border-border bg-card text-foreground hover:bg-muted')} aria-current={current ? 'page' : undefined} href={item.href}><strong className="font-medium">{item.label}</strong><span className={cn('text-xs', current ? 'text-primary' : 'text-muted-foreground')}>{item.description}</span></Link></li>; })}</SectionNavigationScroll></nav>
           <article className="flex min-w-0 flex-col gap-5">
             <Card>
               <CardHeader className="border-b"><Badge variant="secondary" className="mb-1">{guide.summary}</Badge><CardTitle><h2 className="text-xl md:text-2xl">{guide.title}</h2></CardTitle><CardDescription>현재 조직: <span className="break-all font-medium text-foreground">{orgSlug}</span></CardDescription></CardHeader>

@@ -40,6 +40,10 @@ spec:
               value: {{ .Values.ingress.gatewayNamespace | quote }}
             - name: RAIBITSERVER_INGRESS_CLASS_NAME
               value: {{ .Values.ingress.className | quote }}
+            - name: RAIBITSERVER_DOMAIN_CLUSTER_ISSUER
+              value: {{ .Values.orchestrator.domainClusterIssuer | quote }}
+            - name: RAIBITSERVER_DOMAIN_RETRY_SECONDS
+              value: {{ .Values.orchestrator.domainRetrySeconds | quote }}
             - name: RAIBITSERVER_BASE_DOMAIN
               value: {{ .Values.ingress.hosts.public | quote }}
             - name: RAIBITSERVER_INGRESS_CUSTOM_HTTP_ERRORS

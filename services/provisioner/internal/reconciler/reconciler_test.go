@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,8 +15,10 @@ import (
 	"github.com/raibitserver/provisioner/internal/store"
 )
 
-const testCredentialSecretUID = "5c0c1aa2-e18f-43be-9dc7-3dfbf158cd21"
-const testCredentialSecretGeneration = "dGhpcy1pcy1hLTMyaWJ5dGUtcmFuZG9tLW5vbmNlMDA"
+const (
+	testCredentialSecretUID        = "5c0c1aa2-e18f-43be-9dc7-3dfbf158cd21"
+	testCredentialSecretGeneration = "dGhpcy1pcy1hLTMyaWJ5dGUtcmFuZG9tLW5vbmNlMDA"
+)
 
 func credentialState(updates map[string]any) map[string]any {
 	state := map[string]any{"credentialSecretUID": testCredentialSecretUID}
@@ -254,7 +257,7 @@ func TestDryRunReturnsResourceToProvisioningWithoutReadyTransition(t *testing.T)
 }
 
 func TestLiveReconcileWaitsForProviderReadyBeforeReadyTransition(t *testing.T) {
-	resource := &store.Resource{ID: "res-1", ProjectID: "project-1", OrganizationID: "org-1", ProjectSlug: "demo", Name: "db", Slug: "db", Engine: "postgresql", Plan: "shared-small", Status: store.StatusProvisioning, ClaimToken: "claim-1"}
+	resource := &store.Resource{ID: "res-1", ProjectID: "project-1", OrganizationID: "org-1", ProjectSlug: "demo", Name: "db", Slug: "db", Engine: "postgresql", Plan: "shared-small", Status: store.StatusProvisioning, ClaimToken: "claim-1", DesiredSpec: map[string]any{"databaseName": "Customer Data", "username": "App Owner"}}
 	name, _, secretName, _, err := provider.ObjectNames(resource)
 	if err != nil {
 		t.Fatal(err)
@@ -287,6 +290,10 @@ func TestLiveReconcileWaitsForProviderReadyBeforeReadyTransition(t *testing.T) {
 	}
 	if state.lastDesiredState["credentialSecretUID"] != testCredentialSecretUID || state.persistedCredentialUID != testCredentialSecretUID || state.lastDesiredState["healthManaged"] != true {
 		t.Fatalf("READY state must retain the server-assigned credential Secret UID: %#v", state)
+	}
+	providerResult, _ := state.lastDesiredState["providerResult"].(map[string]any)
+	if providerResult["database"] != "customer_data" || providerResult["user"] != "app_owner" {
+		t.Fatalf("READY state lost normalized provider identity: %#v", providerResult)
 	}
 	if strings.Contains(strings.Join(runner.calls, "\n"), "password") {
 		t.Fatalf("secret values must not appear in command arguments: %#v", runner.calls)
@@ -768,7 +775,8 @@ func TestLiveProvidersWithoutPrimitiveBootstrapFailClosed(t *testing.T) {
 			state := &fakeStore{resource: resource}
 			runner := &fakeRunner{}
 			result, err := New(Config{DryRun: false, OutputDir: t.TempDir(), Images: map[string]string{engine: "registry.example/provider@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, state, runner).RunOnce(context.Background())
-			if err == nil || result == nil || result.Status != store.StatusFailed || !strings.Contains(strings.ToLower(err.Error()), "bootstrap") {
+			var unavailable *provider.CapabilityUnavailableError
+			if !errors.As(err, &unavailable) || result == nil || result.Status != store.StatusFailed {
 				t.Fatalf("%s live provisioning must fail closed before truthful primitive readiness exists: result=%#v err=%v", engine, result, err)
 			}
 			if state.readyTransitions != 0 || len(runner.calls) != 0 {
@@ -930,6 +938,7 @@ func cloneMap(input map[string]any) map[string]any {
 }
 
 type fakeRunner struct {
+	appliedWorkload        []byte
 	calls                  []string
 	inputs                 []string
 	failure                error
@@ -976,7 +985,35 @@ func (r *fakeRunner) RunInput(_ context.Context, name string, args []string, inp
 func (r *fakeRunner) RunSensitiveOutput(_ context.Context, name string, args []string, _ time.Duration) (string, []byte, error) {
 	call := name + " " + strings.Join(args, " ")
 	r.calls = append(r.calls, call)
+	if strings.Contains(call, "kubectl apply") && strings.Contains(call, "--output=json") {
+		payload, err := os.ReadFile(args[3])
+		if err != nil {
+			return call, nil, err
+		}
+		var manifest struct {
+			Items []map[string]any `json:"items"`
+		}
+		if err := json.Unmarshal(payload, &manifest); err != nil {
+			return call, nil, err
+		}
+		for _, item := range manifest.Items {
+			if item["kind"] != "StatefulSet" {
+				continue
+			}
+			item["metadata"].(map[string]any)["uid"] = provenanceUID
+			item["metadata"].(map[string]any)["generation"] = 1
+			item["status"] = map[string]any{"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1, "currentRevision": "revision-1", "updateRevision": "revision-1"}
+			r.appliedWorkload, err = json.Marshal(item)
+			if err != nil {
+				return call, nil, err
+			}
+		}
+		return call, r.appliedWorkload, r.callError(call)
+	}
 	if strings.Contains(call, "kubectl get statefulset/") && strings.Contains(call, "--output=json") {
+		if r.appliedWorkload != nil {
+			return call, r.appliedWorkload, r.callError(call)
+		}
 		return call, []byte(`{"metadata":{"generation":1},"spec":{"replicas":1},"status":{"observedGeneration":1,"replicas":1,"readyReplicas":1,"updatedReplicas":1,"currentRevision":"revision-1","updateRevision":"revision-1"}}`), r.callError(call)
 	}
 	if strings.Contains(call, "kubectl get namespace/") {

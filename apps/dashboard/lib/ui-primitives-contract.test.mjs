@@ -12,22 +12,23 @@ test("global semantics preserve the RAIBIT light canvas and add a dark palette",
   assert.equal(css.includes(`#${"68df88"}`), false);
   assert.equal(css.includes([104, 223, 136].join(" ")), false);
   assert.match(css, /\[data-theme="dark"\][\s\S]*color-scheme:\s*dark/);
-  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*#111315;/);
+  assert.match(css, /\[data-theme="dark"\][\s\S]*--background:\s*var\(--raibit-dark-canvas\);/);
   assert.match(css, /prefers-color-scheme:\s*dark[\s\S]*\[data-theme="system"\]/);
 });
 
-test("root documents select a normalized saved theme with a system fallback", async () => {
-  const [layout, globalError, toggle] = await Promise.all([
+test("root documents and the theme menu select normalized direct preferences", async () => {
+  const [layout, globalError, menu] = await Promise.all([
     readFile(new URL("app/layout.tsx", appDirectory), "utf8"),
     readFile(new URL("app/global-error.tsx", appDirectory), "utf8"),
-    readFile(new URL("components/theme-toggle.tsx", appDirectory), "utf8"),
+    readFile(new URL("components/theme-menu.tsx", appDirectory), "utf8"),
   ]);
 
   assert.match(layout, /data-theme=\{theme\}/);
   assert.match(layout, /requestCookies\.get\(THEME_COOKIE_NAME\)/);
   assert.match(globalError, /data-theme="system"/);
-  assert.match(toggle, /nextThemePreference/);
-  assert.match(toggle, /serializeThemeCookie/);
+  assert.match(menu, /normalizeThemePreference/);
+  assert.match(menu, /DropdownMenuRadioGroup/);
+  assert.doesNotMatch(menu, /nextThemePreference|data-theme-toggle/);
 });
 
 test("the exact planned primitive modules exist without forbidden catalog filler", async () => {
@@ -37,6 +38,7 @@ test("the exact planned primitive modules exist without forbidden catalog filler
 
   assert.deepEqual(files, [
     "alert.tsx",
+    "avatar.tsx",
     "badge.tsx",
     "breadcrumb.tsx",
     "button.tsx",
@@ -88,6 +90,7 @@ test("interactive code is isolated to the planned client leaves", async () => {
   }
 
   assert.deepEqual(clientFiles.sort(), [
+    "avatar.tsx",
     "checkbox.tsx",
     "command.tsx",
     "dialog.tsx",

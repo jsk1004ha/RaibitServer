@@ -1,9 +1,16 @@
 {{- if .Values.production }}
-{{- $liveProviders := dict "postgresql" true "mysql" true "mariadb" true "mongodb" true "redis" true "valkey" true }}
-{{- range $provider, $image := .Values.provisioner.providerImages }}
-{{- $configuredImage := default "" $image }}
-{{- if and (or (hasKey $liveProviders $provider) (ne $configuredImage "")) (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$" $configuredImage)) }}
+{{- range $provider := (include "raibitserver.localProviderEngines" . | fromJsonArray) }}
+{{- $configuredImage := default "" (index $.Values.provisioner.providerImages $provider) }}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$" $configuredImage) }}
 {{- fail (printf "production provider image %s requires a valid sha256 digest-pinned reference" $provider) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.provisioner.backups.enabled }}
+{{- range $engine := list "postgresql" "mysql" "mariadb" "mongodb" "redis" "valkey" }}
+{{- $toolImage := default "" (index $.Values.provisioner.recoveryToolImages $engine) }}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$" $toolImage) }}
+{{- fail (printf "recovery tool image %s requires a valid sha256 digest-pinned reference" $engine) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -11,6 +18,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "raibitserver.fullname" . }}-provisioner
+  annotations:
+    raibitserver.io/resource-capabilities-sha256: {{ .Files.Get "files/resource-capabilities-v1.json" | sha256sum | quote }}
   labels:
     {{- include "raibitserver.commonLabels" . | nindent 4 }}
     app.kubernetes.io/name: raibitserver-provisioner
@@ -31,6 +40,7 @@ spec:
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -38,6 +48,8 @@ spec:
           image: "{{ .Values.image.registry }}/raibitserver/provisioner{{ if .Values.image.digests.provisioner }}@{{ .Values.image.digests.provisioner }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            - name: RAIBITSERVER_RESOURCE_ENVIRONMENT
+              value: {{ ternary "release" "local" .Values.production | quote }}
             - name: RAIBITSERVER_DRY_RUN
               value: {{ ternary "0" "1" .Values.provisioner.execute | quote }}
             - name: RAIBITSERVER_EXECUTE
@@ -71,6 +83,28 @@ spec:
               value: {{ .Values.provisioner.providerImages.qdrant | quote }}
             - name: RAIBITSERVER_PROVIDER_NATS_IMAGE
               value: {{ .Values.provisioner.providerImages.nats | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_POSTGRESQL_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.postgresql | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_MYSQL_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.mysql | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_MARIADB_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.mariadb | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_MONGODB_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.mongodb | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_REDIS_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.redis | quote }}
+            - name: RAIBITSERVER_RECOVERY_TOOL_VALKEY_IMAGE
+              value: {{ .Values.provisioner.recoveryToolImages.valkey | quote }}
+{{- if .Values.provisioner.backups.enabled }}
+            - name: RAIBITSERVER_PROVISIONER_BACKUP_ENABLED
+              value: "true"
+            - name: RAIBITSERVER_PROVISIONER_BACKUP_ENDPOINT
+              value: {{ .Values.provisioner.backups.endpoint | quote }}
+            - name: RAIBITSERVER_PROVISIONER_BACKUP_BUCKET
+              value: {{ .Values.provisioner.backups.bucket | quote }}
+            - name: RAIBITSERVER_PROVISIONER_BACKUP_CONFIG_FILE
+              value: /var/run/secrets/raibitserver/backup/config.json
+{{- end }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -88,6 +122,17 @@ spec:
               drop: ["ALL"]
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+{{- if .Values.provisioner.backups.enabled }}
+            - { name: backup-config, mountPath: /var/run/secrets/raibitserver/backup, readOnly: true }
+{{- end }}
       volumes:
         - name: tmp
           emptyDir: { sizeLimit: 128Mi }
+{{- if .Values.provisioner.backups.enabled }}
+        - name: backup-config
+          secret:
+            secretName: {{ .Values.provisioner.backups.existingSecret | quote }}
+            defaultMode: 0440
+            items:
+              - { key: {{ .Values.provisioner.backups.secretKey | quote }}, path: config.json }
+{{- end }}

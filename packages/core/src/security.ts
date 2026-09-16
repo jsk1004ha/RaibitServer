@@ -1,7 +1,11 @@
 import crypto from 'node:crypto';
-import { isSecretKey, maskSecretValue } from './secrets.ts';
+import { sanitizeObservationLine, sanitizeObservationRecord } from './observability-redaction.ts';
+import { HEALTH_PATH_FIELDS, serviceHealthInput } from './deployment-health.ts';
+import { isSecretKey } from './secrets.ts';
 import { can } from './rbac.ts';
 import { canonicalizeProviderDesiredSpec, sanitizeResourceValue } from './resource-sanitizer.ts';
+import { INTERNAL_SERVICE_MUTATION, parseResourceMutation, parseServiceMutation } from './desired-state-mutations.ts';
+import { requireResourceCapability } from './resource-capabilities.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -38,6 +42,7 @@ const SAFE_SERVICE_KEYS = new Set([
   'resources',
   'scaling',
   'healthCheck',
+  ...HEALTH_PATH_FIELDS,
   'schedule',
   'concurrencyPolicy',
   'backoffLimit',
@@ -72,7 +77,6 @@ const SAFE_RESOURCE_API_KEYS = new Set([
 ]);
 
 const RESOURCE_TYPES = new Set(['database', 'cache', 'storage', 'vector', 'queue']);
-const RESOURCE_ENGINES = new Set(['postgresql', 'postgres', 'pg', 'mysql', 'mariadb', 'mongodb', 'mongo', 'redis', 'valkey', 'sqlite', 'sqlite3', 'object-storage', 's3', 'minio', 'qdrant', 'vector-db', 'weaviate', 'milvus', 'nats', 'message-queue', 'rabbitmq', 'kafka', 'redpanda']);
 const RESOURCE_PLANS = new Set(['shared-small', 'dedicated-local']);
 
 const SAFE_DEPLOYMENT_CREATE_KEYS = new Set([
@@ -254,7 +258,7 @@ export function assertRateLimit(limiter: ReturnType<typeof createFixedWindowRate
   return result;
 }
 
-export async function enforceAuthAbuseLimits(repository: AnyRecord, input: AnyRecord = {}) {
+export async function enforceAuthAbuseLimits(repository: AnyRecord, input: AnyRecord & { readonly phase?: 'all' | 'request' | 'email' } = {}) {
   if (!repository || typeof repository.consumeAuthRateLimit !== 'function') {
     const error = new Error('durable_auth_rate_limiter_not_configured');
     (error as any).statusCode = 500;
@@ -271,23 +275,23 @@ export async function enforceAuthAbuseLimits(repository: AnyRecord, input: AnyRe
     limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_GLOBAL_RATE_LIMIT, 5_000, 1, 50_000),
     windowMs,
   };
-  if (typeof repository.peekAuthRateLimit === 'function') {
+  if (input.phase !== 'email' && typeof repository.peekAuthRateLimit === 'function') {
     const globalState = await repository.peekAuthRateLimit({ ...globalDimension, now });
     if (!globalState.allowed) throwAuthRateLimitExceeded(globalState, now);
   }
-  const dimensions = [
+  const dimensions = input.phase === 'email' ? [] : [
     { key: authRateLimitKey(`source:${action}`, source, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_SOURCE_RATE_LIMIT, 30, 1, 100_000), windowMs },
     { key: authRateLimitKey('flow-source', source, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_FLOW_SOURCE_RATE_LIMIT, 60, 1, 100_000), windowMs },
     globalDimension,
   ];
-  if (action === 'email-resend' && email) {
+  if (input.phase !== 'request' && ['email-resend', 'password-reset'].includes(action) && email) {
     dimensions.push({
       key: authRateLimitKey('resend-cooldown', email, env),
       limit: 1,
       windowMs: boundedPositiveInteger(env.RAIBITSERVER_EMAIL_RESEND_COOLDOWN_MS, 60_000, 1_000, 24 * 60 * 60_000),
     });
   }
-  if (email) dimensions.push({ key: authRateLimitKey(`email:${action}`, email, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_EMAIL_RATE_LIMIT, 10, 1, 10_000), windowMs });
+  if (input.phase !== 'request' && email) dimensions.push({ key: authRateLimitKey(`email:${action}`, email, env), limit: boundedPositiveInteger(env.RAIBITSERVER_AUTH_EMAIL_RATE_LIMIT, 10, 1, 10_000), windowMs });
   const results = [];
   for (const dimension of dimensions) {
     const result = await repository.consumeAuthRateLimit({ ...dimension, now });
@@ -321,7 +325,7 @@ function boundedPositiveInteger(value: any, fallback: number, minimum: number, m
 
 export function sanitizeTenantServiceInput(input: AnyRecord = {}, options: AnyRecord = {}) {
   if (options.allowGitHubBinding !== true) assertNoTenantGitHubBinding(input);
-  const output = pickKnown(input, SAFE_SERVICE_KEYS);
+  const output = pickKnown({ ...input, ...serviceHealthInput(input) }, SAFE_SERVICE_KEYS);
 
   sanitizeRuntimeCommandFields(output);
   if (output.name !== undefined) output.name = String(output.name || '').trim();
@@ -369,7 +373,7 @@ function sanitizeRuntimeCommandFields(output: AnyRecord) {
 }
 
 export function sanitizeTenantServiceUpdate(input: AnyRecord = {}, options: AnyRecord = {}) {
-  const output = sanitizeTenantServiceInput(input, options);
+  const output = sanitizeTenantServiceInput(options.mutation === INTERNAL_SERVICE_MUTATION || options.allowGitHubBinding === true ? input : parseServiceMutation(input), options);
   delete output.projectId;
   return output;
 }
@@ -395,7 +399,7 @@ export function sanitizeTenantResourceApiInput(input: AnyRecord = {}) {
 function validateManagedResourceRouteFields(input: AnyRecord) {
   if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 128)) badRequest('resource name must be a non-empty string of at most 128 characters');
   if (input.type !== undefined && !RESOURCE_TYPES.has(String(input.type).toLowerCase())) badRequest(`unsupported managed resource type: ${input.type}`);
-  if (input.engine !== undefined && !RESOURCE_ENGINES.has(String(input.engine).toLowerCase())) badRequest(`unsupported managed resource engine: ${input.engine}`);
+  if (input.engine !== undefined) requireResourceCapability(String(input.engine), 'provision');
   if (input.plan !== undefined && !RESOURCE_PLANS.has(String(input.plan).toLowerCase())) badRequest(`unsupported managed resource plan: ${input.plan}`);
   if (input.region !== undefined && String(input.region).trim().toLowerCase() !== 'local') badRequest(`unsupported managed resource region: ${input.region}`);
   if (input.version !== undefined && String(input.version).trim() !== '') badRequest('managed resource version selection is not implemented');
@@ -408,8 +412,9 @@ function validateManagedResourceRouteFields(input: AnyRecord) {
   }
 }
 
-export function sanitizeTenantResourceApiUpdate(input: AnyRecord = {}) {
-  const output = sanitizeTenantResourceApiInput(input);
+export function sanitizeTenantResourceApiUpdate(input: AnyRecord = {}, currentEngine?: unknown) {
+  const mutation = parseResourceMutation(input);
+  const output = sanitizeTenantResourceApiInput(currentEngine !== undefined && !Object.hasOwn(mutation, 'engine') ? { ...mutation, engine: currentEngine } : mutation);
   delete output.projectId;
   return output;
 }
@@ -441,7 +446,7 @@ export function redactDbConsoleStatement(statement: any) {
   const withoutLiteralValues = String(statement || '')
     .replace(/'([^']|'')*'/g, "'?'")
     .replace(/"([^"]|"")*"/g, '"?"');
-  const text = sanitizeLogString(withoutLiteralValues.replace(/\s+/g, ' ').trim()).slice(0, 160);
+  const text = sanitizeObservationLine(withoutLiteralValues.replace(/\s+/g, ' ').trim()).line.slice(0, 160);
   return text ? `${text}${String(statement || '').length > 160 ? '…' : ''}` : '';
 }
 
@@ -568,26 +573,7 @@ function stripLeadingSqlComments(value: string) {
 }
 
 export function sanitizeLogRecord(record: any): any {
-  if (typeof record === 'string') return sanitizeLogString(record);
-  if (Array.isArray(record)) return record.map((item) => sanitizeLogRecord(item));
-  if (!record || typeof record !== 'object') return record;
-  const output: AnyRecord = {};
-  for (const [key, value] of Object.entries(record)) {
-    output[key] = isSecretKey(key) && value !== null && value !== undefined && typeof value !== 'object'
-      ? maskSecretValue(value)
-      : sanitizeLogRecord(value);
-  }
-  return output;
-}
-
-function sanitizeLogString(value: string) {
-  return value
-    .replace(/([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)/gi, '$1****')
-    .replace(/(["']?[A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*["']?\s*[:=]\s*["'])([^"'\s,}]+)/gi, '$1****')
-    .replace(/\b(Bearer|Token)\s+[A-Za-z0-9._~+/-]+=*/gi, '$1 ****')
-    .replace(/(postgres(?:ql)?:\/\/[^:\s/@]+:)([^@\s]+)(@)/gi, '$1****$3')
-    .replace(/(mysql:\/\/[^:\s/@]+:)([^@\s]+)(@)/gi, '$1****$3')
-    .replace(/(redis:\/\/:[^@\s]+@)/gi, 'redis://:****@');
+  return sanitizeObservationRecord(record);
 }
 
 export function splitEnvForSecret(environment: AnyRecord = {}) {

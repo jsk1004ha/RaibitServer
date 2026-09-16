@@ -18,6 +18,8 @@ type Config struct {
 	IngressClassName        string
 	IngressCustomHTTPErrors string
 	IngressErrorMiddleware  string
+	DomainClusterIssuer     string
+	DomainRetryAfter        time.Duration
 	DryRun                  bool
 	Timeout                 time.Duration
 	PollInterval            time.Duration
@@ -34,6 +36,7 @@ func FromEnv() Config {
 	}
 	pollInterval := secondsEnv("RAIBITSERVER_RECONCILE_INTERVAL_SECONDS", 5*time.Second)
 	claimLease := secondsEnv("RAIBITSERVER_CLAIM_LEASE_SECONDS", 15*time.Minute)
+	domainRetryAfter := secondsEnv("RAIBITSERVER_DOMAIN_RETRY_SECONDS", 5*time.Minute)
 	hostname, _ := os.Hostname()
 	return Config{
 		DatabaseURL:             firstNonEmpty(os.Getenv("RAIBITSERVER_CONTROL_PLANE_DATABASE_URL"), os.Getenv("DATABASE_URL")),
@@ -46,6 +49,8 @@ func FromEnv() Config {
 		IngressClassName:        firstNonEmpty(os.Getenv("RAIBITSERVER_INGRESS_CLASS_NAME"), "nginx"),
 		IngressCustomHTTPErrors: ingressCustomHTTPErrorsFromEnv(),
 		IngressErrorMiddleware:  os.Getenv("RAIBITSERVER_INGRESS_ERROR_MIDDLEWARE"),
+		DomainClusterIssuer:     os.Getenv("RAIBITSERVER_DOMAIN_CLUSTER_ISSUER"),
+		DomainRetryAfter:        domainRetryAfter,
 		DryRun:                  os.Getenv("RAIBITSERVER_DRY_RUN") != "0" && os.Getenv("RAIBITSERVER_EXECUTE") != "1",
 		Timeout:                 timeout,
 		PollInterval:            pollInterval,

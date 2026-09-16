@@ -14,7 +14,7 @@ test('beta resource lifecycle plans through the API and attaches only Go-provisi
   const service = controlPlane.store.createService({ projectId: project.id, name: 'web', type: 'web', attachedResources: [] });
   const server = await serve(controlPlane);
   try {
-      const engines = ['postgresql', 'sqlite', 'redis', 'valkey', 'object-storage', 'mysql', 'mariadb', 'mongodb', 'qdrant', 'nats'];
+      const engines = ['postgresql', 'sqlite', 'redis', 'valkey', 'mysql', 'mariadb', 'mongodb'];
     const resources = [];
     for (const engine of engines) {
       const created = await request(server.port, 'POST', `/projects/${project.id}/resources`, resourceBody(engine));
@@ -22,7 +22,9 @@ test('beta resource lifecycle plans through the API and attaches only Go-provisi
       assert.equal(created.body.engine, engine);
         assert.equal(created.body.connectionSecretName ?? null, null, `${engine} has no control-plane credential secret`);
       resources.push(created.body);
-      const provisioned = await request(server.port, 'POST', `/resources/${created.body.id}/provision`, { dryRun: true });
+      const before = controlPlane.store.snapshot();
+      const provisioned = await request(server.port, 'POST', `/resources/${created.body.id}/provision`, { intent: 'preview-plan' });
+      assert.deepEqual(controlPlane.store.snapshot(), before);
       assert.equal(provisioned.statusCode, 202, `${engine} provision`);
       assert.equal(provisioned.body.resource.status, 'provisioning');
       assert.equal(provisioned.body.result.dryRun, true);
@@ -71,14 +73,12 @@ test('beta resource lifecycle plans through the API and attaches only Go-provisi
     assert.deepEqual((await request(server.port, 'GET', `/resources/${mongodb.id}/console/collections`)).body.collections, ['health']);
     assert.equal((await request(server.port, 'POST', `/resources/${mongodb.id}/console/command`, { command: 'db.health.find({})' })).body.rows[0].ok, true);
 
-    const objectStorage = resources.find((resource) => resource.engine === 'object-storage');
-    assert.equal((await request(server.port, 'POST', `/resources/${objectStorage.id}/console/browse`, {})).body.buckets[0], 'assets');
-
-    const qdrant = resources.find((resource) => resource.engine === 'qdrant');
-    assert.equal((await request(server.port, 'POST', `/resources/${qdrant.id}/console/command`, { command: 'GET /collections' })).body.collections[0], 'vectors');
-
-    const nats = resources.find((resource) => resource.engine === 'nats');
-    assert.equal((await request(server.port, 'POST', `/resources/${nats.id}/console/command`, { command: 'subjects' })).body.subjects[0], 'events.>');
+    for (const engine of ['object-storage', 'qdrant', 'nats']) {
+      const rejected = await request(server.port, 'POST', `/projects/${project.id}/resources`, resourceBody(engine));
+      assert.equal(rejected.statusCode, 400);
+      assert.match(rejected.body.error, /RESOURCE_CAPABILITY_UNAVAILABLE/);
+      assert.equal(controlPlane.store.snapshot().resources.length, engines.length);
+    }
 
     const deleted = await request(server.port, 'DELETE', `/resources/${redis.id}`);
     assert.equal(deleted.statusCode, 200);
@@ -92,13 +92,15 @@ test('beta resource lifecycle plans through the API and attaches only Go-provisi
 });
 
 test('provider plans cover beta DB/resource backup, restore, and cleanup contracts', () => {
-  for (const engine of ['postgresql', 'sqlite', 'redis', 'object-storage', 'mysql', 'mariadb', 'mongodb', 'qdrant', 'nats']) {
+  for (const engine of ['postgresql', 'sqlite', 'redis', 'valkey', 'mysql', 'mariadb', 'mongodb']) {
     const plan = buildResourceProviderPlan(resourceBody(engine), { password: 'provider-secret-password' });
     assert.equal(plan.connectionSecret.providerOwned, true, `${engine} provider secret`);
     assert.ok(plan.commands.create, `${engine} create command`);
     assert.ok(plan.commands.test, `${engine} test command`);
-    assert.ok(plan.commands.backup || ['qdrant', 'nats'].includes(engine), `${engine} backup command`);
-    assert.ok(plan.commands.restore || ['qdrant', 'nats'].includes(engine), `${engine} restore command`);
+    assert.ok(plan.commands.backup, `${engine} backup command`);
+    assert.ok(plan.commands.restore, `${engine} restore command`);
+    assert.equal(plan.capabilities.local.backup, false, `${engine} has no managed backup workflow`);
+    assert.equal(plan.capabilities.local.restore, false, `${engine} has no managed restore workflow`);
     assert.ok(plan.commands.delete, `${engine} delete command`);
     assert.equal(JSON.stringify(plan).includes('provider-secret-password'), false, `${engine} secret masked`);
   }

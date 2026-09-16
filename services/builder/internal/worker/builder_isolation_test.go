@@ -465,8 +465,8 @@ func TestBuilderAuthorizedPrebuiltImageIsNotSignedAsPlatformOutput(t *testing.T)
 	if store.calls != 1 || result.ImageDigest != digest {
 		t.Fatalf("authorization was not applied to the exact digest: calls=%d result=%#v", store.calls, result)
 	}
-	if got := strings.Join(runner.commandNames(), ","); got != "trivy" {
-		t.Fatalf("prebuilt image must be scanned but never platform-signed, got %s", got)
+	if got := strings.Join(runner.commandNames(), ","); got != "trivy,cosign" || runner.commands[1].Args[0] != "verify" {
+		t.Fatalf("prebuilt image must be scanned and verified but never platform-signed, got %s", got)
 	}
 }
 

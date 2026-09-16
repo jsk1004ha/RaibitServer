@@ -1,0 +1,110 @@
+{
+  "schema": "raibitserver.production-evidence/v1",
+  "profile": "component",
+  "identity": {
+    "runId": "20af4da6-2df9-4743-95df-ea405e90fe22",
+    "environmentFingerprint": "ed803ebaf5e6802cca2132164095a8cd8e61b613c53b7f8de1d7c1e37aa6dc12",
+    "sourceCommitSha": "0000000000000000000000000000000000000000",
+    "migrationDigest": "bdde7220bf71e00082950d9e70be1827cd850582cb1e9f149702cb92768b8e86",
+    "approvedInputSha256": "0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2",
+    "operatorContractDigest": "9018b7e14c139b64ce0df686901624c4238db4f8d60d987ef46b72ea0b0a4a6c",
+    "operatorInputFingerprint": "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb"
+  },
+  "startedAt": "2026-09-02T09:55:06.046Z",
+  "observedAt": "2026-09-02T09:55:06.046Z",
+  "status": "PASS",
+  "preflight": {
+    "status": "NOT_RUN",
+    "approvedInputSha256": "0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2",
+    "operatorContractDigest": "9018b7e14c139b64ce0df686901624c4238db4f8d60d987ef46b72ea0b0a4a6c",
+    "operatorInputFingerprint": "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb"
+  },
+  "fragments": [
+    {
+      "component": "resources",
+      "level": "L3",
+      "provenance": "fixture",
+      "identity": {
+        "runId": "20af4da6-2df9-4743-95df-ea405e90fe22",
+        "environmentFingerprint": "ed803ebaf5e6802cca2132164095a8cd8e61b613c53b7f8de1d7c1e37aa6dc12",
+        "sourceCommitSha": "0000000000000000000000000000000000000000",
+        "migrationDigest": "bdde7220bf71e00082950d9e70be1827cd850582cb1e9f149702cb92768b8e86",
+        "approvedInputSha256": "0EC3728F53E872561F78D2A4849EBB11C037FF65529439AD5E55DAD49EB9AEE2",
+        "operatorContractDigest": "9018b7e14c139b64ce0df686901624c4238db4f8d60d987ef46b72ea0b0a4a6c",
+        "operatorInputFingerprint": "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb"
+      },
+      "startedAt": "2026-09-02T09:55:06.046Z",
+      "observedAt": "2026-09-02T09:55:06.046Z",
+      "status": "PASS",
+      "assertions": [
+        {
+          "id": "provision",
+          "status": "PASS",
+          "artifactPaths": [
+            "assertions.json"
+          ]
+        },
+        {
+          "id": "attach_query",
+          "status": "PASS",
+          "artifactPaths": [
+            "assertions.json"
+          ]
+        },
+        {
+          "id": "backup_checksum",
+          "status": "PASS",
+          "artifactPaths": [
+            "assertions.json"
+          ]
+        },
+        {
+          "id": "isolated_restore",
+          "status": "PASS",
+          "artifactPaths": [
+            "assertions.json"
+          ]
+        },
+        {
+          "id": "resource_delete",
+          "status": "PASS",
+          "artifactPaths": [
+            "assertions.json"
+          ]
+        }
+      ],
+      "artifacts": [
+        {
+          "path": "assertions.json",
+          "sha256": "b30fe71e30d44dc95a497946017c7ecadea4857f1fe8d9546110227c73c7ef35",
+          "redacted": true
+        }
+      ],
+      "cleanup": {
+        "status": "PASS",
+        "assertions": [
+          {
+            "id": "component_cleanup",
+            "status": "PASS",
+            "artifactPaths": [
+              "assertions.json"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "cleanup": {
+    "status": "PASS",
+    "assertions": [
+      {
+        "id": "run_cleanup",
+        "status": "PASS",
+        "artifactPaths": [
+          "assertions.json"
+        ]
+      }
+    ]
+  },
+  "fixture": true
+}

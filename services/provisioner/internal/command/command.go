@@ -22,6 +22,7 @@ import (
 
 var (
 	ErrAlreadyExists     = errors.New("resource already exists")
+	ErrObjectNotFound    = errors.New("Kubernetes object not found")
 	ErrSecretNotFound    = errors.New("credential Secret not found")
 	ErrSecretUIDMismatch = errors.New("credential Secret UID precondition failed")
 )
@@ -54,6 +55,13 @@ type Runner interface {
 	DeleteObjectUID(ctx context.Context, resource, namespace, name, uid string, timeout time.Duration) (string, error)
 }
 
+// StreamingRunner transfers recovery payloads through subprocess pipes without
+// retaining the artifact in memory. It is intentionally separate from Runner so
+// existing resource-reconcile fakes do not gain an unused method.
+type StreamingRunner interface {
+	RunStream(context.Context, string, []string, io.Reader, io.Writer, time.Duration) (string, error)
+}
+
 type OSRunner struct {
 	KubernetesAPIURL        string
 	ServiceAccountTokenFile string
@@ -84,65 +92,37 @@ func (*OSRunner) RunSensitiveOutput(ctx context.Context, name string, args []str
 	return runSensitiveOutput(ctx, name, args, timeout)
 }
 
-func (r *OSRunner) GetSecretMetadata(ctx context.Context, namespace, secretName string, timeout time.Duration) (string, *SecretMetadata, error) {
-	commandLine := "kubernetes-api patch metadata secret/" + secretName + " --namespace " + namespace + " --dry-run=server"
-	apiPath, err := namespacedResourceAPIPath("secret", strings.TrimSpace(namespace), strings.TrimSpace(secretName))
-	if err != nil {
-		return commandLine, nil, err
-	}
+func (*OSRunner) RunStream(ctx context.Context, name string, args []string, input io.Reader, output io.Writer, timeout time.Duration) (string, error) {
+	printable := name + " " + strings.Join(args, " ")
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
-	requestContext, cancel := context.WithTimeout(ctx, timeout)
+	commandContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	apiURL, err := r.kubernetesAPIURL()
+	cmd := exec.CommandContext(commandContext, name, args...)
+	cmd.Stdin, cmd.Stdout = input, output
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return printable, fmt.Errorf("%s failed: %w (sensitive command output withheld)", printable, err)
+	}
+	return printable, nil
+}
+
+func (r *OSRunner) GetSecretMetadata(ctx context.Context, namespace, secretName string, timeout time.Duration) (string, *SecretMetadata, error) {
+	return r.patchSecretMetadata(ctx, namespace, secretName, []byte("[]"), timeout)
+}
+
+func (r *OSRunner) patchSecretMetadata(ctx context.Context, namespace, secretName string, patch []byte, timeout time.Duration) (string, *SecretMetadata, error) {
+	commandLine, payload, err := r.inspectSecret(ctx, secretInspection{namespace: namespace, name: secretName,
+		accept: "application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1", patch: patch, maxBytes: 64 << 10}, timeout)
 	if err != nil {
 		return commandLine, nil, err
-	}
-	token, err := r.serviceAccountToken()
-	if err != nil {
-		return commandLine, nil, err
-	}
-	endpoint, err := url.Parse(strings.TrimRight(apiURL, "/") + apiPath)
-	if err != nil {
-		return commandLine, nil, fmt.Errorf("create Kubernetes Secret metadata endpoint: %w", err)
-	}
-	query := endpoint.Query()
-	query.Set("dryRun", "All")
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(requestContext, http.MethodPatch, endpoint.String(), bytes.NewReader([]byte("[]")))
-	if err != nil {
-		return commandLine, nil, fmt.Errorf("create Kubernetes Secret metadata request: %w", err)
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", "application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1")
-	request.Header.Set("Content-Type", "application/json-patch+json")
-	client, err := r.kubernetesHTTPClient()
-	if err != nil {
-		return commandLine, nil, err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return commandLine, nil, fmt.Errorf("execute Kubernetes Secret metadata request: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-		return commandLine, nil, ErrSecretNotFound
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-		return commandLine, nil, &KubernetesAPIError{StatusCode: response.StatusCode}
 	}
 	var partial struct {
 		APIVersion string          `json:"apiVersion"`
 		Kind       string          `json:"kind"`
 		Metadata   json.RawMessage `json:"metadata"`
-	}
-	const maxMetadataResponseBytes = 64 << 10
-	payload, readErr := io.ReadAll(io.LimitReader(response.Body, maxMetadataResponseBytes+1))
-	if readErr != nil || len(payload) > maxMetadataResponseBytes {
-		return commandLine, nil, errors.New("Kubernetes API returned an invalid-sized metadata-only Secret representation")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
@@ -281,10 +261,10 @@ func (r *OSRunner) runObjectUIDRequest(ctx context.Context, resource, namespace,
 		return commandLine, err
 	}
 	propagationPolicy := "Foreground"
-	if resource == "secret" {
-		// The provider Secret admission policy reserves connection Secret updates
-		// to the provisioner. Foreground deletion would require the garbage
-		// collector to update its finalizer and would therefore deadlock.
+	if resource == "secret" || resource == "networkpolicy" || resource == "job" {
+		// Admission reserves these immutable objects to the provisioner.
+		// Foreground deletion would require a garbage-collector UPDATE and
+		// deadlock against that policy.
 		propagationPolicy = "Background"
 	}
 	options := deleteOptions{
@@ -349,6 +329,8 @@ func namespacedResourceAPIPath(resource, namespace, name string) (string, error)
 		prefix, plural = "/apis/apps/v1", "statefulsets"
 	case "networkpolicy":
 		prefix, plural = "/apis/networking.k8s.io/v1", "networkpolicies"
+	case "job":
+		prefix, plural = "/apis/batch/v1", "jobs"
 	default:
 		return "", fmt.Errorf("resource %q is not allowed for UID-fenced deletion", resource)
 	}
@@ -449,6 +431,9 @@ func execute(ctx context.Context, name string, args []string, input []byte, dryR
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if bytes.Contains(output, []byte("Error from server (NotFound):")) {
+			return printable, nil, fmt.Errorf("%s: %w", printable, ErrObjectNotFound)
+		}
 		if redactOutput {
 			return printable, nil, fmt.Errorf("%s failed: %w (sensitive command output withheld)", printable, err)
 		}

@@ -7,6 +7,9 @@ import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHe
 import { cn } from '@/lib/utils';
 import { Brand } from './brand';
 import { Icon, type IconName } from './icon';
+import { UserAvatar } from './user-avatar';
+import { AccountMenu } from './account-menu';
+import { OrganizationSwitcher, type OrganizationSwitcherMembership } from './organization-switcher';
 
 type MobileNavItem = { readonly id: string; readonly label: string; readonly href: string; readonly icon: IconName };
 
@@ -17,25 +20,30 @@ type ConsoleMobileNavProps = {
   readonly navItems: readonly MobileNavItem[];
   readonly orgLabel: string;
   readonly orgValue: string;
+  readonly organizationMemberships: readonly OrganizationSwitcherMembership[];
+  readonly organizationRouteValue: string;
   readonly projectLabel: string;
   readonly projectValue: string;
+  readonly role: string;
+  readonly userAvatarUrl?: string;
   readonly userEmail: string;
+  readonly userName?: string;
 };
 
-export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgLabel, orgValue, projectLabel, projectValue, userEmail }: ConsoleMobileNavProps) {
+export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgLabel, orgValue, organizationMemberships, organizationRouteValue, projectLabel, projectValue, role, userAvatarUrl, userEmail, userName }: ConsoleMobileNavProps) {
   const [open, setOpen] = useState(false);
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <div className="flex min-w-0 items-center gap-2 md:hidden">
+      <div className="flex min-w-0 items-center gap-2 max-[12rem]:w-full max-[12rem]:basis-full md:hidden">
         <SheetTrigger render={<Button variant="outline" size="icon" aria-label="콘솔 메뉴 열기" />}><MenuIcon data-icon="inline-start" /></SheetTrigger>
-        <a className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground" href="/console"><Brand height={26} width={26} /><span className="truncate">RAIBIT SERVER</span></a>
+        <a className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium text-foreground" href="/console"><Brand className="shrink-0" height={26} width={26} /><span className="truncate">RAIBIT SERVER</span></a>
       </div>
-      <SheetContent className="w-[calc(100%-2rem)] overflow-hidden sm:max-w-sm" side="left">
+      <SheetContent className="data-[side=left]:w-[calc(100%-2rem)] overflow-hidden sm:max-w-sm" side="left">
         <SheetHeader className="border-b border-border"><SheetTitle>RAIBIT SERVER 콘솔</SheetTitle><SheetDescription>{orgValue} · {projectValue}</SheetDescription></SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
           <div className="flex flex-col gap-3 border-b border-border px-2 pb-4">
-            <div className="min-w-0"><p className="text-xs text-muted-foreground">{orgLabel}</p><p className="truncate text-sm font-medium text-foreground" title={orgValue}>{orgValue}</p></div>
+            <div className="min-w-0"><p className="text-xs text-muted-foreground">{orgLabel}</p><OrganizationSwitcher currentOrganizationId={organizationRouteValue} memberships={organizationMemberships} /></div>
             <div className="min-w-0"><p className="text-xs text-muted-foreground">{projectLabel}</p><p className="truncate text-sm text-foreground" title={projectValue}>{projectValue}</p></div>
           </div>
           <nav className="flex flex-col gap-1 py-3" aria-label="모바일 콘솔 메뉴">
@@ -47,8 +55,7 @@ export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgL
           </nav>
         </div>
         <SheetFooter className="border-t border-border">
-          <p className="truncate text-xs text-muted-foreground" title={userEmail}>{userEmail}</p>
-          <form method="post" action={logoutAction}><input type="hidden" name="_returnTo" value="/login" /><button className={cn(buttonVariants({ variant: 'ghost' }), 'w-full justify-start')} type="submit">로그아웃</button></form>
+          <AccountMenu avatarUrl={userAvatarUrl} email={userEmail} logoutAction={logoutAction} name={userName} organization={orgValue} role={role} />
           <SheetClose render={<Button className="w-full" variant="outline" />}>메뉴 닫기</SheetClose>
         </SheetFooter>
       </SheetContent>

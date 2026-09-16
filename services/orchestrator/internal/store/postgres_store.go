@@ -19,7 +19,10 @@ const postgresDriverName = "pgx"
 const claimDeploymentSQL = `
 SELECT d.id, d."serviceId", d."projectId", d.status, d."deploymentType", d."triggerType", d.branch,
        d."commitSha", d."imageUrl", d."imageDigest", d."previewUrl", d."pullRequestNumber",
-       d."reconcileAction", d."reconcileLockedBy", d."reconcileLockedAt", d."reconcileAttempts"
+       d."reconcileAction", d."reconcileLockedBy", d."reconcileLockedAt", d."reconcileAttempts",
+       d."desiredSpecSnapshot", d."snapshotVersion", d."sourceDeploymentId", d."retryOfDeploymentId",
+       d."publicHealthStatus",d."healthCheckedAt",d."healthFailureCode",d."observedGeneration",
+       d."previewLineageId",d."previewGeneration",d."previewRuntime",d."previewOwnedObjects"
 FROM "Deployment" d
 JOIN "Service" s ON s.id = d."serviceId"
 JOIN "Project" p ON p.id = d."projectId"
@@ -33,7 +36,8 @@ LIMIT 1`
 
 const claimServiceDeletionSQL = `
 SELECT s.id, s."projectId", s.name, s.slug, s.type, s."imageUrl", s.port,
-       s."desiredSpec", s."desiredState", s.status, s."deletionRequestedAt", s."updatedAt"
+       s."desiredSpec", s."desiredState", s.status, s."deletionRequestedAt", s."updatedAt",
+       s."healthCheckPath",s."livenessPath",s."readinessPath",s."publicHealthPath"
 FROM "Service" s
 WHERE s.status = 'DELETE_REQUESTED'
    OR (s.status = 'DELETING' AND s."updatedAt" <= $1)
@@ -246,19 +250,11 @@ func (s *PostgresStore) releaseDeletion(ctx context.Context, table string, lease
 }
 
 func (s *PostgresStore) FinalizeServiceDeletion(ctx context.Context, lease DeletionLease) error {
-	result, err := s.db.ExecContext(ctx, finalizeServiceDeletionSQL, lease.ID, lease.ClaimedAt)
-	if err != nil {
-		return err
-	}
-	return requireOneAffected(result, ErrDeletionLeaseLost)
+	return s.finalizeHealthParent(ctx, lease, true)
 }
 
 func (s *PostgresStore) FinalizeProjectDeletion(ctx context.Context, lease DeletionLease) error {
-	result, err := s.db.ExecContext(ctx, finalizeProjectDeletionSQL, lease.ID, lease.ClaimedAt)
-	if err != nil {
-		return err
-	}
-	return requireOneAffected(result, ErrDeletionLeaseLost)
+	return s.finalizeHealthParent(ctx, lease, false)
 }
 
 func (s *PostgresStore) ParentsDeleting(ctx context.Context, projectID string, serviceID string) (bool, error) {
@@ -307,6 +303,11 @@ func (s *PostgresStore) ClaimNextDeployment(ctx context.Context, options ClaimOp
 		return nil, err
 	}
 	originalStatus := deployment.Status
+	if row, err := (healthTransaction{ctx: ctx, tx: tx}).deployment(deployment.ID); err != nil {
+		return nil, err
+	} else if row == nil {
+		return nil, ErrParentDeletionRequested
+	}
 	originalAttempt := deployment.ReconcileAttempts
 	action, ready := deploymentActionForPostgresClaim(deployment)
 	if !ready {
@@ -373,7 +374,8 @@ func (s *PostgresStore) GetProject(ctx context.Context, projectID string) (*Proj
 
 func (s *PostgresStore) GetService(ctx context.Context, serviceID string) (*Service, error) {
 	service, err := scanPostgresService(s.db.QueryRowContext(ctx, `
-SELECT id, "projectId", name, slug, type, "imageUrl", port, "desiredSpec", "desiredState", status, "deletionRequestedAt", "updatedAt"
+SELECT id, "projectId", name, slug, type, "imageUrl", port, "desiredSpec", "desiredState", status, "deletionRequestedAt", "updatedAt",
+ "healthCheckPath","livenessPath","readinessPath","publicHealthPath"
 FROM "Service" WHERE id = $1`, serviceID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, notFound("service", serviceID)
@@ -404,7 +406,10 @@ func (s *PostgresStore) TransitionDeployment(ctx context.Context, lease Deployme
 		` WHERE id = $` + strconv.Itoa(idArg) + ` AND ` + predicate +
 		` RETURNING id, "serviceId", "projectId", status, "deploymentType", "triggerType", branch,
           "commitSha", "imageUrl", "imageDigest", "previewUrl", "pullRequestNumber",
-          "reconcileAction", "reconcileLockedBy", "reconcileLockedAt", "reconcileAttempts"`
+          "reconcileAction", "reconcileLockedBy", "reconcileLockedAt", "reconcileAttempts",
+          "desiredSpecSnapshot", "snapshotVersion", "sourceDeploymentId", "retryOfDeploymentId",
+          "publicHealthStatus","healthCheckedAt","healthFailureCode","observedGeneration",
+          "previewLineageId","previewGeneration","previewRuntime","previewOwnedObjects"`
 	deployment, err := scanPostgresDeployment(s.db.QueryRowContext(ctx, query, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrDeploymentLeaseLost
@@ -429,11 +434,14 @@ func (s *PostgresStore) AppendRuntimeLog(ctx context.Context, input RuntimeLogIn
 	if strings.TrimSpace(input.Line) == "" {
 		return nil
 	}
+	if !runtimeSourceInstancePattern.MatchString(input.SourceInstanceID) {
+		return ErrRuntimeLogSourceIdentity
+	}
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO "RuntimeLog" (id, "serviceId", "deploymentId", "podName", "containerName", line, level, timestamp)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now.Format(time.RFC3339Nano)),
-		input.ServiceID, nullable(input.DeploymentID), defaultString(input.PodName, "orchestrator"), defaultString(input.ContainerName, "app"), Redact(input.Line), defaultString(input.Level, "info"), now)
+INSERT INTO "RuntimeLog" (id, "serviceId", "deploymentId", "podName", "podUid", "containerName", line, level, timestamp)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, stableID("rlog", input.ServiceID, input.DeploymentID, input.Line, now.Format(time.RFC3339Nano)),
+		input.ServiceID, nullable(input.DeploymentID), defaultString(input.PodName, "orchestrator"), input.SourceInstanceID, defaultString(input.ContainerName, "app"), Redact(input.Line), defaultString(input.Level, "info"), now)
 	return err
 }
 
@@ -465,6 +473,7 @@ func scanPostgresProjectWithOrganization(row rowScanner) (*Project, error) {
 
 func scanPostgresService(row rowScanner) (*Service, error) {
 	var service Service
+	var healthCheckPath, livenessPath, readinessPath, publicHealthPath sql.NullString
 	var imageURL sql.NullString
 	var port sql.NullInt64
 	var desiredSpec, desiredState []byte
@@ -472,10 +481,15 @@ func scanPostgresService(row rowScanner) (*Service, error) {
 	if err := row.Scan(
 		&service.ID, &service.ProjectID, &service.Name, &service.Slug, &service.Type, &imageURL, &port,
 		&desiredSpec, &desiredState, &service.Status, &deletionRequestedAt, &service.UpdatedAt,
+		&healthCheckPath, &livenessPath, &readinessPath, &publicHealthPath,
 	); err != nil {
 		return nil, err
 	}
 	service.ImageURL = nullString(imageURL)
+	service.HealthCheckPath = healthCheckPath.String
+	service.LivenessPath = livenessPath.String
+	service.ReadinessPath = readinessPath.String
+	service.PublicHealthPath = publicHealthPath.String
 	if port.Valid {
 		service.Port = int(port.Int64)
 	}
@@ -511,16 +525,50 @@ func requireOneAffected(result sql.Result, missing error) error {
 
 func scanPostgresDeployment(row rowScanner) (*Deployment, error) {
 	var deployment Deployment
+	var publicHealthStatus, healthFailureCode sql.NullString
+	var healthCheckedAt sql.NullTime
+	var observedGeneration sql.NullInt64
 	var commitSHA, imageURL, imageDigest, previewURL, reconcileAction, reconcileLockedBy sql.NullString
 	var reconcileLockedAt sql.NullTime
 	var pullRequestNumber sql.NullInt64
+	var snapshotVersion sql.NullInt64
+	var snapshot []byte
+	var sourceDeploymentID, retryOfDeploymentID, previewLineageID sql.NullString
+	var previewGeneration sql.NullInt64
+	var previewRuntime, previewOwnedObjects []byte
 	err := row.Scan(&deployment.ID, &deployment.ServiceID, &deployment.ProjectID, &deployment.Status, &deployment.DeploymentType,
 		&deployment.TriggerType, &deployment.Branch, &commitSHA, &imageURL, &imageDigest, &previewURL, &pullRequestNumber,
-		&reconcileAction, &reconcileLockedBy, &reconcileLockedAt, &deployment.ReconcileAttempts)
+		&reconcileAction, &reconcileLockedBy, &reconcileLockedAt, &deployment.ReconcileAttempts,
+		&snapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID,
+		&publicHealthStatus, &healthCheckedAt, &healthFailureCode, &observedGeneration,
+		&previewLineageID, &previewGeneration, &previewRuntime, &previewOwnedObjects)
 	if err != nil {
 		return nil, err
 	}
 	deployment.CommitSHA = nullString(commitSHA)
+	deployment.PublicHealthStatus = defaultString(publicHealthStatus.String, "UNKNOWN")
+	deployment.HealthFailureCode = healthFailureCode.String
+	if healthCheckedAt.Valid {
+		deployment.HealthCheckedAt = healthCheckedAt.Time
+	}
+	if observedGeneration.Valid {
+		deployment.ObservedGeneration = int(observedGeneration.Int64)
+	}
+	deployment.DesiredSpecSnapshot = snapshot
+	if snapshotVersion.Valid {
+		deployment.SnapshotVersion = int(snapshotVersion.Int64)
+		if deployment.SnapshotVersion < 1 {
+			deployment.SnapshotVersion = -1
+		}
+	}
+	deployment.SourceDeploymentID = nullString(sourceDeploymentID)
+	deployment.RetryOfDeploymentID = nullString(retryOfDeploymentID)
+	deployment.PreviewLineageID = nullString(previewLineageID)
+	if previewGeneration.Valid {
+		deployment.PreviewGeneration = int(previewGeneration.Int64)
+	}
+	deployment.PreviewRuntimeJSON = previewRuntime
+	deployment.PreviewOwnedJSON = previewOwnedObjects
 	deployment.ImageURL = nullString(imageURL)
 	deployment.ImageDigest = nullString(imageDigest)
 	deployment.PreviewURL = nullString(previewURL)

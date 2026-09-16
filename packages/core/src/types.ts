@@ -52,7 +52,11 @@ export interface ServiceSpec {
     requests?: Record<string, string>;
     limits?: Record<string, string>;
   };
-  healthCheck?: { path?: string };
+  readonly healthCheck?: { readonly path?: string } | null;
+  readonly healthCheckPath?: string | null;
+  readonly livenessPath?: string | null;
+  readonly readinessPath?: string | null;
+  readonly publicHealthPath?: string | null;
   [key: string]: unknown;
 }
 

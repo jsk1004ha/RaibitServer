@@ -344,13 +344,13 @@ fi
 echo "[live-e2e] provisioning and authenticating a real managed PostgreSQL resource"
 kubectl --context "${KUBE_CONTEXT}" --namespace "${CONTROL_PLANE_NAMESPACE}" exec -i deployment/postgres -- \
   env "PGPASSWORD=${POSTGRES_PASSWORD}" psql --host=127.0.0.1 --username "${POSTGRES_USER}" \
-    --dbname "${POSTGRES_DATABASE}" --set ON_ERROR_STOP=1 <<'SQL'
+    --dbname "${POSTGRES_DATABASE}" --set ON_ERROR_STOP=1 --set=provider_image="${POSTGRES_IMAGE}" <<'SQL'
 INSERT INTO "Organization" (id, name, slug, "updatedAt")
 VALUES ('live-provider-org', 'Live Provider Organization', 'live-provider-org', CURRENT_TIMESTAMP);
 INSERT INTO "Project" (id, "organizationId", name, slug, status, "updatedAt")
 VALUES ('live-provider-project', 'live-provider-org', 'Live Provider Project', 'live-provider-project', 'ACTIVE', CURRENT_TIMESTAMP);
 INSERT INTO "Resource" (id, "projectId", name, slug, type, engine, provider, plan, region, status, "desiredSpec", "desiredState", "updatedAt")
-VALUES ('live-postgresql', 'live-provider-project', 'Live PostgreSQL', 'live-postgresql', 'database', 'postgresql', 'raibitserver', 'shared-small', 'local', 'provisioning', '{"databaseName":"live_app","storageGb":1}'::jsonb, '{}'::jsonb, CURRENT_TIMESTAMP);
+VALUES ('live-postgresql', 'live-provider-project', 'Live PostgreSQL', 'live-postgresql', 'database', 'postgresql', 'raibitserver', 'shared-small', 'local', 'provisioning', '{"databaseName":"live_app","storageGb":1}'::jsonb, jsonb_build_object('resourceExecution', jsonb_build_object('intent', 'live-provision', 'environment', 'local', 'image', :'provider_image')), CURRENT_TIMESTAMP);
 SQL
 
 provider_ready=0

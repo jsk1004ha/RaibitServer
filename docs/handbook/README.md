@@ -56,7 +56,7 @@ flowchart LR
 
 | 용어 | 뜻 |
 | --- | --- |
-| 조직 | 사용자와 프로젝트의 권한 범위 |
+| 조직 | 구성원과 프로젝트의 권한 범위이며, slug가 generated route의 tenant segment |
 | 프로젝트 | 서비스, 리소스, 배포를 묶는 단위 |
 | 서비스 | 실행되는 컨테이너. `web`, `private`, `worker`, `cron`, `job` 지원 |
 | 리소스 | PostgreSQL, Redis 같은 플랫폼 관리 데이터 계층 |

@@ -1,5 +1,18 @@
 {{- $registryGateway := .Values.builder.registryCredentials.privateGateway }}
 {{- $githubApp := .Values.builder.githubAppCredentials }}
+{{- $trustRoot := .Values.security.imageVerification.trustRoot }}
+{{- $verificationSecret := .Values.builder.verification.existingSecret }}
+{{- $verificationKey := .Values.builder.verification.key }}
+{{- if and (not $verificationSecret) (eq $trustRoot.namespace .Release.Namespace) }}
+{{- $verificationSecret = $trustRoot.existingSecret }}
+{{- $verificationKey = $trustRoot.key }}
+{{- end }}
+{{- if and $trustRoot.existingSecret (ne $trustRoot.namespace .Release.Namespace) (not $verificationSecret) }}
+{{- fail "builder verification requires an explicit release-namespace public trust key Secret projection for a foreign admission trust namespace" }}
+{{- end }}
+{{- if and $verificationSecret (not (regexMatch "^[A-Za-z0-9._-]+$" (default "" $verificationKey))) }}
+{{- fail "builder verification requires a valid public trust Secret data key" }}
+{{- end }}
 {{- if $registryGateway.enabled }}
 {{- if or (gt (len (default "" $registryGateway.namespace)) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" (default "" $registryGateway.namespace))) }}
 {{- fail "registry credential private gateway namespace must be a valid exact Kubernetes namespace" }}
@@ -63,6 +76,13 @@
 {{- end }}
 {{- if not .Values.builder.scan.enabled }}
 {{- fail "production builder.scan.enabled must be true" }}
+{{- end }}
+{{- $severities := splitList "," .Values.builder.scan.severity }}
+{{- if or (not (has "HIGH" $severities)) (not (has "CRITICAL" $severities)) }}
+{{- fail "production builder scanner policy must include HIGH and CRITICAL" }}
+{{- end }}
+{{- if not $verificationSecret }}
+{{- fail "production builder requires a local public trust key Secret projection" }}
 {{- end }}
 {{- if or (not .Values.builder.signing.enabled) (not .Values.builder.signing.existingSecret) }}
 {{- fail "production builder signing must be enabled with an existing secret" }}
@@ -463,6 +483,10 @@ spec:
                   value: {{ ternary "1" "0" .Values.builder.signing.enabled | quote }}
                 - name: RAIBITSERVER_SIGNER
                   value: {{ .Values.builder.signing.command | quote }}
+{{ if $verificationSecret }}
+                - name: RAIBITSERVER_VERIFICATION_KEY
+                  value: /var/run/secrets/raibitserver/verification/cosign.pub
+{{ end }}
 {{ if .Values.builder.signing.existingSecret }}
                 - name: RAIBITSERVER_SIGNING_KEY
                   value: /var/run/secrets/raibitserver/signing/cosign.key
@@ -506,6 +530,9 @@ spec:
 {{ end }}
 {{ if .Values.builder.signing.existingSecret }}
                 - { name: signing-key, mountPath: /var/run/secrets/raibitserver/signing, readOnly: true }
+{{ end }}
+{{ if $verificationSecret }}
+                - { name: verification-key, mountPath: /var/run/secrets/raibitserver/verification, readOnly: true }
 {{ end }}
 {{ if .Values.builder.registryCredentials.existingSecret }}
                 - { name: registry-broker-token, mountPath: /var/run/secrets/raibitserver/registry-broker, readOnly: true }
@@ -563,4 +590,12 @@ spec:
                 secretName: {{ .Values.builder.signing.existingSecret | quote }}
                 items:
                   - { key: {{ .Values.builder.signing.keyKey | quote }}, path: cosign.key }
+{{ end }}
+{{ if $verificationSecret }}
+            - name: verification-key
+              secret:
+                secretName: {{ $verificationSecret | quote }}
+                defaultMode: 0440
+                items:
+                  - { key: {{ $verificationKey | quote }}, path: cosign.pub }
 {{ end }}
