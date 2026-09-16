@@ -34,6 +34,9 @@ func (s *PostgresStore) publishOrdinaryResource(ctx context.Context, p ordinaryP
 			err = errors.Join(err, ErrRecoveryStorage)
 		}
 	}()
+	if err = setOperationalProtocol(ctx, tx); err != nil {
+		return false, ErrRecoveryStorage
+	}
 	var marker, pin string
 	var blocked bool
 	err = tx.QueryRowContext(ctx, `SELECT COALESCE("desiredState"->>'recoveryRestoreId',''),

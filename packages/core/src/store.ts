@@ -35,6 +35,7 @@ import { acceptMemoryOrganizationInvite, listMemoryOrganizationInvites, replaceM
 import type { OrganizationInviteRecord, ReplaceOrganizationInviteInput } from './organization-invite.ts';
 import { assertOrganizationCreatorEligible, OrganizationCreationError, parseAuthenticatedOrganizationCreateInput, type AuthenticatedOrganizationCreateInput } from './organization-creation.ts';
 import { DomainLifecycleError, issueCustomDomain, normalizeCustomHostname, publicCustomDomain, requestCustomDomainCheck, requestCustomDomainDelete, rotateCustomDomain, type CustomDomainRecord } from './domain.ts';
+import { EnvironmentError, developmentEnvironmentOperationId, developmentEnvironmentSubjectId, environmentIdForKind, environmentPhysicalSlug, parseEnvironmentSelector, projectRuntimeEnvironment, publicEnvironment, publicEnvironmentSubject, type EnvironmentKind } from './environments.ts';
 import { changeMemoryOrganizationMembershipRole, leaveMemoryOrganization, listMemoryOrganizationMembers, removeMemoryOrganizationMember, revokeMemoryOrganizationInvite } from './membership-transition-memory.ts';
 import {
   boundedActivityRows,
@@ -57,6 +58,7 @@ import {
 export const AUTH_RETENTION_PRUNE_BATCH_SIZE = 256;
 
 export class ControlPlaneStore {
+  private developmentAdmissionSequence = 0;
   readonly recoveryState = emptyRecoveryState();
   organizations: Map<string, any>;
   users: Map<string, any>;
@@ -65,6 +67,9 @@ export class ControlPlaneStore {
   services: Map<string, any>;
   deployments: Map<string, any>;
   resources: Map<string, any>;
+  environments: Map<string, any>;
+  environmentServices: Map<string, any>;
+  environmentResources: Map<string, any>;
   domains: Map<string, any>;
   usageRecords: any[];
   auditLogs: any[];
@@ -96,6 +101,9 @@ export class ControlPlaneStore {
     this.services = new Map();
     this.deployments = new Map();
     this.resources = new Map();
+    this.environments = new Map();
+    this.environmentServices = new Map();
+    this.environmentResources = new Map();
     this.domains = new Map();
     this.usageRecords = [];
     this.auditLogs = [];
@@ -495,8 +503,84 @@ export class ControlPlaneStore {
     const existing = this.projects.get(project.id);
     if (existing && (existing.organizationId !== organizationId || existing.slug !== project.slug)) throw conflict('project_identity_collision');
     this.projects.set(project.id, project);
+    this.ensureProductionEnvironment(project.id);
     this.audit('system', 'project:create', 'project', project.id, { organizationId, slug: project.slug });
     return deepClone(project);
+  }
+
+  ensureProductionEnvironment(projectId: string) {
+    const id = environmentIdForKind(projectId, 'prod');
+    const current = this.environments.get(id);
+    if (current) return deepClone(publicEnvironment(current));
+    const timestamp = nowIso();
+    const environment = { id, projectId, kind: 'prod', status: 'active', createdAt: timestamp, updatedAt: timestamp };
+    this.environments.set(id, environment);
+    return deepClone(publicEnvironment(environment));
+  }
+
+  listEnvironments(projectId: string) {
+    return deepClone([...this.environments.values()].filter((row) => row.projectId === projectId).sort((left, right) => left.kind.localeCompare(right.kind)).map(publicEnvironment));
+  }
+
+  resolveEnvironment(projectId: string, selectorInput: unknown = {}) {
+    const selector = parseEnvironmentSelector(selectorInput);
+    const environment = selector.environmentId
+      ? this.environments.get(selector.environmentId)
+      : [...this.environments.values()].find((row) => row.projectId === projectId && row.kind === (selector.kind ?? 'prod'));
+    if (!environment || environment.projectId !== projectId || (selector.kind !== undefined && environment.kind !== selector.kind)) {
+      throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+    }
+    return deepClone(publicEnvironment(environment));
+  }
+
+  createEnvironment({ projectId, kind, expectedVersion }: Record<string, any>) {
+    if (kind !== 'dev') throw new EnvironmentError('ENVIRONMENT_INPUT_INVALID', 400);
+    if (expectedVersion !== 0) throw new EnvironmentError('ENVIRONMENT_VERSION_CONFLICT', 409);
+    const id = environmentIdForKind(projectId, kind);
+    if (this.environments.has(id)) throw new EnvironmentError('ENVIRONMENT_VERSION_CONFLICT', 409);
+    const timestamp = nowIso();
+    const environment = { id, projectId, kind, status: 'active', createdAt: timestamp, updatedAt: timestamp };
+    this.environments.set(id, environment);
+    return deepClone(publicEnvironment(environment));
+  }
+
+  deleteEnvironment({ projectId, environmentId, expectedVersion, confirmation }: Record<string, any>) {
+    const environment = this.environments.get(environmentId);
+    if (!environment || environment.projectId !== projectId || environment.kind !== 'dev') throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+    if (expectedVersion !== 1) throw new EnvironmentError('ENVIRONMENT_VERSION_CONFLICT', 409);
+    if (confirmation !== `delete dev ${environmentId}`) throw new EnvironmentError('ENVIRONMENT_CONFIRMATION_INVALID', 400);
+    const occupied = [...this.environmentServices.values(), ...this.environmentResources.values()].some((binding) => binding.environmentId === environmentId);
+    if (occupied) throw new EnvironmentError('ENVIRONMENT_NOT_EMPTY', 409);
+    this.environments.delete(environmentId);
+    return { deleted: true, environmentId };
+  }
+
+  serviceEnvironment(serviceId: string) { return deepClone(this.environmentServices.get(serviceId) || null); }
+  resourceEnvironment(resourceId: string) { return deepClone(this.environmentResources.get(resourceId) || null); }
+  listServicesForEnvironment(projectId: string, environmentId: string) {
+    const environment = this.resolveEnvironment(projectId, { environmentId });
+    return [...this.services.values()].filter((row) => this.environmentServices.get(row.id)?.environmentId === environment.id)
+      .map((row) => publicEnvironmentSubject(row, { ...this.environmentServices.get(row.id), environmentKind: environment.kind }));
+  }
+  listResourcesForEnvironment(projectId: string, environmentId: string) {
+    const environment = this.resolveEnvironment(projectId, { environmentId });
+    return [...this.resources.values()].filter((row) => this.environmentResources.get(row.id)?.environmentId === environment.id)
+      .map((row) => publicEnvironmentSubject(row, { ...this.environmentResources.get(row.id), environmentKind: environment.kind }));
+  }
+
+  runtimeEnvironmentProjection(projectId: string, selectorInput: unknown = {}) {
+    const environment = this.resolveEnvironment(projectId, selectorInput);
+    const services = [...this.environmentServices.values()].filter((binding) => binding.environmentId === environment.id).map((binding) => {
+      const service = this.services.get(binding.serviceId);
+      if (!service || service.projectId !== projectId) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      return { id: service.id, projectId, slug: service.slug, logicalSlug: binding.logicalSlug, physicalSlug: service.slug };
+    });
+    const resources = [...this.environmentResources.values()].filter((binding) => binding.environmentId === environment.id).map((binding) => {
+      const resource = this.resources.get(binding.resourceId);
+      if (!resource || resource.projectId !== projectId) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      return { id: resource.id, projectId, slug: resource.slug, logicalSlug: binding.logicalSlug, physicalName: resource.name };
+    });
+    return projectRuntimeEnvironment({ environment, services, resources });
   }
 
   getProject(projectId: string) {
@@ -573,7 +657,13 @@ export class ControlPlaneStore {
     return deepClone(current);
   }
 
-  createService({ projectId, name, type = 'web', runtimeType = 'container', sourceType = 'github', image = null, imageUrl = null, ...rest }: Record<string, any>, options: Record<string, any> = {}) {
+  createService({ projectId, name, type = 'web', runtimeType = 'container', sourceType = 'github', image = null, imageUrl = null, environmentId = null, logicalSlug = null, ...rest }: Record<string, any>, options: Record<string, any> = {}) {
+    const environment = this.resolveEnvironment(projectId, {
+      ...(environmentId === null ? {} : { environmentId }), kind: rest.kind, environmentKind: rest.environmentKind,
+      ...(rest.environment && typeof rest.environment === 'object' && !Array.isArray(rest.environment) ? {} : { environment: rest.environment }),
+    });
+    const logical = slugify(logicalSlug || rest.slug || name);
+    const physicalSlug = environmentPhysicalSlug(environment.kind, environment.id, logical);
     Object.assign(rest, serviceHealthInput({ ...rest, type }));
     if (options.allowGitHubBinding !== true) assertNoTenantGitHubBinding(rest);
     delete rest.id;
@@ -582,10 +672,9 @@ export class ControlPlaneStore {
     const resolvedImageUrl = imageUrl || image || undefined;
     const timestamp = nowIso();
     const service = {
-      id: stableId('svc', projectId, name),
+      id: environment.kind === 'prod' ? stableId('svc', projectId, name) : developmentEnvironmentSubjectId('svc', projectId, environment.id, logical),
       projectId,
       name,
-      slug: slugify(name),
       type,
       runtimeType,
       sourceType,
@@ -595,9 +684,15 @@ export class ControlPlaneStore {
       createdAt: timestamp,
       updatedAt: timestamp,
       ...rest,
+      slug: physicalSlug,
     };
+    const collision = [...this.environmentServices.values()].find((binding) => binding.environmentId === environment.id && binding.logicalSlug === logical && binding.serviceId !== service.id);
+    if (collision) throw conflict('service logical slug already exists in environment');
+    const idBinding = this.environmentServices.get(service.id);
+    if (this.services.has(service.id) && (!idBinding || idBinding.environmentId !== environment.id || idBinding.logicalSlug !== logical)) throw conflict('service identity collision');
     assertServiceReplacement(this.services.has(service.id) && [...this.deployments.values()].some((deployment) => deployment.serviceId === service.id));
     this.services.set(service.id, service);
+    this.environmentServices.set(service.id, { serviceId: service.id, projectId, environmentId: environment.id, logicalSlug: logical, displayName: name, createdAt: timestamp, updatedAt: timestamp });
     this.audit('system', 'service:create', 'service', service.id, { projectId, type });
     return deepClone(service);
   }
@@ -618,6 +713,13 @@ export class ControlPlaneStore {
     }));
     delete normalized.id;
     delete normalized.projectId;
+    const binding = this.environmentServices.get(serviceId);
+    const environment = binding ? this.environments.get(binding.environmentId) : null;
+    if (binding && environment?.kind === 'dev' && typeof normalized.name === 'string') {
+      this.environmentServices.set(serviceId, { ...binding, displayName: normalized.name, updatedAt: nowIso() });
+      delete normalized.name;
+      delete normalized.slug;
+    }
     if (options.allowDesiredState !== true) delete normalized.desiredState;
     if (normalized.slug) normalized.slug = slugify(normalized.slug);
     if (normalized.image && !normalized.imageUrl) normalized.imageUrl = normalized.image;
@@ -658,8 +760,11 @@ export class ControlPlaneStore {
     const replacementInput = parseServiceReplacement(input);
     assertExpectedServiceVersion(service, replacementInput.expectedUpdatedAt);
     if (![...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId)) throw new ServiceSettingsError('REPLACEMENT_REQUIRES_DEPLOYMENT', 409);
-    if ([...this.services.values()].some((candidate) => candidate.projectId === service.projectId && candidate.slug === slugify(replacementInput.name))) throw new ServiceSettingsError('REPLACEMENT_NAME_CONFLICT', 409);
-    const replacement = this.createService({ projectId: service.projectId, name: replacementInput.name, ...replacementInput.source });
+    const binding = this.environmentServices.get(serviceId);
+    if (!binding) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+    const logicalSlug = slugify(replacementInput.name);
+    if ([...this.environmentServices.values()].some((candidate) => candidate.environmentId === binding.environmentId && candidate.logicalSlug === logicalSlug)) throw new ServiceSettingsError('REPLACEMENT_NAME_CONFLICT', 409);
+    const replacement = this.createService({ projectId: service.projectId, environmentId: binding.environmentId, logicalSlug, name: replacementInput.name, ...replacementInput.source });
     return { impact: 'old_service_preserved', oldServiceId: serviceId, service: replacement };
   }
 
@@ -676,16 +781,21 @@ export class ControlPlaneStore {
     for (const [id, row] of this.environmentVariables.entries()) if (String(row.serviceId) === String(serviceId)) this.environmentVariables.delete(id);
     this.resourceAttachments = this.resourceAttachments.filter((row) => String(row.serviceId) !== String(serviceId));
     this.services.delete(serviceId);
+    this.environmentServices.delete(serviceId);
     this.audit('system', 'service:delete', 'service', serviceId, { projectId: current.projectId });
     return deepClone(current);
   }
 
-  createResource({ projectId, name, type = 'database', engine, provider = 'shared-provider', plan = 'shared-small', region = 'local', status = 'provisioning', ...rest }: Record<string, any>) {
+  createResource({ projectId, name, type = 'database', engine, provider = 'shared-provider', plan = 'shared-small', region = 'local', status = 'provisioning', environmentId = null, logicalSlug = null, ...rest }: Record<string, any>) {
+    const environment = this.resolveEnvironment(projectId, { ...rest, ...(environmentId === null ? {} : { environmentId }) });
+    const logical = slugify(logicalSlug || rest.slug || name);
+    const physicalSlug = environmentPhysicalSlug(environment.kind, environment.id, logical);
     const safe = sanitizeTenantResourceInput({ projectId, name, type, engine, provider, plan, region, status, ...rest });
     const normalizedEngine = normalizeResourceEngine(safe.engine || safe.type);
     const resourceExecution = requireResourceExecution(normalizedEngine);
-    const existing = [...this.resources.values()].find(resource => resource.projectId === safe.projectId && resource.name === safe.name);
-    const id = existing?.id || stableId('res', safe.projectId, resourceNameFallback(safe.name) || safe.name);
+    const existing = [...this.resources.values()].find(resource => this.environmentResources.get(resource.id)?.environmentId === environment.id && this.environmentResources.get(resource.id)?.logicalSlug === logical);
+    const id = existing?.id || (environment.kind === 'prod' ? stableId('res', safe.projectId, resourceNameFallback(safe.name) || safe.name) : developmentEnvironmentSubjectId('res', safe.projectId, environment.id, logical));
+    if (!existing && this.resources.has(id)) throw conflict('resource identity collision');
       if (String(existing?.status || '').toUpperCase() === 'READY') return deepClone(existing);
     const sqlitePath = normalizedEngine === 'sqlite' ? existing?.sqlitePath || existing?.desiredSpec?.sqlitePath || providerOwnedSqlitePath(id) : null;
   const canonicalSpec = canonicalizeProviderDesiredSpec(safe, { rejectUnknown: false });
@@ -695,8 +805,6 @@ export class ControlPlaneStore {
       id,
       projectId: safe.projectId,
       type: safe.type || resourceTypeForEngine(normalizedEngine),
-      name: safe.name,
-      slug: safe.slug || existing?.slug || resourceNameFallback(safe.name) || slugify(safe.name),
       engine: normalizedEngine,
       provider: safe.provider || provider,
       status: safe.status || status,
@@ -705,11 +813,15 @@ export class ControlPlaneStore {
       createdAt: nowIso(),
       updatedAt: nowIso(),
       ...safe,
+      name: environment.kind === 'prod' ? safe.name : physicalSlug,
+      slug: physicalSlug,
       desiredSpec,
       desiredState,
       sqlitePath: sqlitePath || undefined,
     };
     this.resources.set(resource.id, resource);
+    const timestamp = nowIso();
+    this.environmentResources.set(resource.id, { resourceId: resource.id, projectId, environmentId: environment.id, logicalSlug: logical, displayName: name, createdAt: existing?.createdAt || timestamp, updatedAt: timestamp });
     this.audit('system', 'resource:create', 'resource', resource.id, { projectId: resource.projectId, engine: resource.engine, provider: resource.provider });
     return deepClone(this.resources.get(resource.id));
   }
@@ -725,6 +837,13 @@ export class ControlPlaneStore {
       if (String(current.status || '').toUpperCase() === 'READY') throw conflict('READY managed resources cannot be updated in place; delete and recreate the resource');
   if (String(current.status || '').toUpperCase() === 'RECONCILING' && Object.keys(updates).length > 0) throw conflict('RECONCILING managed resources cannot be updated while the provisioner claim is active');
     const safe = sanitizeTenantResourceInput({ ...updates, projectId: current.projectId, name: updates.name || current.name, engine: updates.engine || current.engine, type: updates.type || current.type });
+    const binding = this.environmentResources.get(resourceId);
+    const environment = binding ? this.environments.get(binding.environmentId) : null;
+    if (binding && environment?.kind === 'dev' && typeof updates.name === 'string') {
+      this.environmentResources.set(resourceId, { ...binding, displayName: updates.name, updatedAt: nowIso() });
+      safe.name = current.name;
+      delete safe.slug;
+    }
     const engine = normalizeResourceEngine(safe.engine || current.engine);
     const resourceExecution = requireResourceExecution(engine);
     const sqlitePath = engine === 'sqlite' ? (current.sqlitePath || providerOwnedSqlitePath(resourceId)) : undefined;
@@ -757,17 +876,19 @@ export class ControlPlaneStore {
       if (secret.scopeType === 'resource-provider-connection' && String(secret.scopeId) === String(resourceId)) this.secrets.delete(id);
     }
     this.resources.delete(resourceId);
+    this.environmentResources.delete(resourceId);
     this.audit('system', 'resource:delete', 'resource', resourceId, { projectId: current.projectId, engine: current.engine });
     return deepClone(current);
   }
 
   attachResource({ resourceId, serviceId, envPrefix = null, actorUserId = 'system' }: Record<string, any>) {
-    assertRecoveryTargetPublished(this.recoveryState, resourceId);
     const resource = this.resources.get(resourceId);
     const service = this.services.get(serviceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
     if (!service) throw notFound(`service not found: ${serviceId}`);
     if (resource.projectId !== service.projectId) throw forbidden('resource and service must be in the same project');
+    if (this.environmentResources.get(resourceId)?.environmentId !== this.environmentServices.get(serviceId)?.environmentId) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+    assertRecoveryTargetPublished(this.recoveryState, resourceId);
       const injectedEnv = providerSecretEnvRefs(resource, envPrefix);
       const row = { id: stableId('attach', resourceId, serviceId), resourceId, serviceId, envPrefix, injectedEnv, createdAt: nowIso(), updatedAt: nowIso() };
     const existingIndex = this.resourceAttachments.findIndex((candidate) => String(candidate.resourceId) === String(resourceId) && String(candidate.serviceId) === String(serviceId));
@@ -789,10 +910,14 @@ export class ControlPlaneStore {
 
   createDeployment({ id = null, serviceId, commitHash = null, commitSha = null, imageUrl, image = null, imageDigest = null, status = 'queued', deploymentType = 'production', branch = 'main', previewUrl = null, triggerType = 'manual', pullRequestNumber = null, errorCode = null, errorMessage = null, ...rest }: Record<string, any>) {
     const service = this.services.get(serviceId);
+    const serviceBinding = this.environmentServices.get(serviceId);
+    const environment = serviceBinding ? this.environments.get(serviceBinding.environmentId) : null;
     const sha = commitSha || commitHash || null;
     const resolvedImageUrl = imageUrl || image || null;
     const deployment = {
-      id: id || stableId('dep', serviceId, sha || resolvedImageUrl || Date.now()),
+      id: id || (environment?.kind === 'dev'
+        ? developmentEnvironmentOperationId('dep', environment.id, [serviceId, sha, resolvedImageUrl, deploymentType, branch, triggerType, pullRequestNumber, this.developmentAdmissionSequence++])
+        : stableId('dep', serviceId, sha || resolvedImageUrl || Date.now())),
       serviceId,
       projectId: rest.projectId || service?.projectId || null,
       commitHash: commitHash || sha,
@@ -815,8 +940,16 @@ export class ControlPlaneStore {
       updatedAt: nowIso(),
       finishedAt: null,
       ...maskSecrets(rest),
+      environmentId: serviceBinding?.environmentId || null,
+      ...(environment ? { environmentKind: environment.kind } : {}),
       ...INITIAL_DEPLOYMENT_HEALTH,
-      desiredSpecSnapshot: rest.desiredSpecSnapshot ? deepClone(rest.desiredSpecSnapshot) : captureDeploymentSnapshot(service || {}),
+      desiredSpecSnapshot: rest.desiredSpecSnapshot ? deepClone(rest.desiredSpecSnapshot) : {
+        ...captureDeploymentSnapshot(service || {}),
+        ...(environment && serviceBinding ? {
+          environmentId: environment.id, environmentKind: environment.kind, kind: environment.kind,
+          logicalSlug: serviceBinding.logicalSlug, physicalSlug: service.slug,
+        } : {}),
+      },
       snapshotVersion: rest.snapshotVersion ?? 1,
     };
     this.deployments.set(deployment.id, deployment);
@@ -911,8 +1044,9 @@ export class ControlPlaneStore {
       throw conflict('no previous READY deployment image is available for rollback');
     }
     const imageDigest = previous?.imageDigest || null;
+    const environment = this.environments.get(this.environmentServices.get(current.serviceId)?.environmentId);
     const rollback = this.createDeployment({
-      id: stableId('dep', current.serviceId, 'rollback', current.id, nowIso()),
+      id: this.serviceOperationId(current.serviceId, 'dep', [current.serviceId, 'rollback', current.id, nowIso(), ...(environment?.kind === 'dev' ? [this.developmentAdmissionSequence++] : [])]),
       serviceId: current.serviceId,
       projectId: current.projectId,
       commitSha: previous?.commitSha || current.commitSha || null,
@@ -1010,10 +1144,28 @@ export class ControlPlaneStore {
   }
 
   enqueueWorkflowJob(input: Record<string, any>) {
-    const row = createWorkflowJobRecord(input);
+    const deployment = input.targetType === 'deployment' ? this.deployments.get(String(input.targetId)) : null;
+    const serviceId = deployment?.serviceId || (input.targetType === 'service' ? input.targetId : null) || input.payload?.serviceId;
+    const binding = serviceId ? this.environmentServices.get(String(serviceId)) : null;
+    const environment = binding ? this.environments.get(binding.environmentId) : null;
+    const row = createWorkflowJobRecord({
+      ...input,
+      environmentId: binding?.environmentId || input.environmentId || null,
+      environmentKind: environment?.kind,
+      identitySequence: environment?.kind === 'dev' ? this.developmentAdmissionSequence++ : undefined,
+      operationalProtocolVersion: environment?.kind === 'dev' ? 2 : (input.operationalProtocolVersion || 1),
+    });
     this.workflowJobs.push(row);
     this.audit('system', 'workflow:enqueue', row.targetType, row.targetId, { workflowJobId: row.id, type: row.type, status: row.status });
     return deepClone(row);
+  }
+
+  private serviceOperationId(serviceId: string, prefix: 'dep' | 'job' | 'preview-lineage', parts: readonly unknown[]): string {
+    const binding = this.environmentServices.get(serviceId);
+    const environment = binding ? this.environments.get(binding.environmentId) : null;
+    return environment?.kind === 'dev'
+      ? developmentEnvironmentOperationId(prefix, environment.id, [serviceId, ...parts])
+      : stableId(prefix, ...parts);
   }
 
   claimNextWorkflowJob(options: Record<string, any> = {}) {
@@ -1088,7 +1240,7 @@ export class ControlPlaneStore {
   upsertServiceEnvironment({ projectId, serviceId, entries, actorUserId = 'system', source = 'api' }: Record<string, any>) {
     const service = this.services.get(serviceId);
     if (!service) throw notFound(`service not found: ${serviceId}`);
-    if (String(service.projectId) !== String(projectId)) throw forbidden('service does not belong to project');
+    if (String(service.projectId) !== String(projectId)) throw notFound(`service not found: ${serviceId}`);
     const normalizedEntries = normalizeEnvEntries(entries, { source });
     const environment = { ...(service.environment || {}) };
     const desiredSpec = { ...(service.desiredSpec || {}) };
@@ -1502,17 +1654,18 @@ export class ControlPlaneStore {
     const { projectId, integrationId = null, repositoryId = null, repository, repoUrl, branch = null, serviceName = null, serviceSlug = null, expectedDefaultBranch = null, expectedCatalogGeneration = null, idempotencyKey = null, actorUserId = 'system' } = input;
     const project = this.projects.get(projectId);
     if (!project) throw notFound(`project not found: ${projectId}`);
+    const environment = this.resolveEnvironment(projectId, input);
     const integration = requireVerifiedGitHubIntegration(this.githubIntegrations, integrationId, project.organizationId);
     const repo = resolveGitHubRepositoryRecord([...this.githubRepositories.values()], integration.installationId, { repositoryId, repoUrl: repoUrl || repository });
     assertGitHubSourceReady(integration, repo, { branch, expectedDefaultBranch, expectedCatalogGeneration });
     const operation = () => {
-    const duplicate = [...this.services.values()].find(candidate => String(candidate.githubRepositoryId || candidate.desiredState?.githubRepositoryId || candidate.desiredState?.github?.repositoryId || '') === String(repo.githubRepoId) && String(this.projects.get(candidate.projectId)?.organizationId || '') === String(project.organizationId));
+    const name = serviceName || repo.repo;
+    const slug = String(serviceSlug || slugify(name));
+    const duplicate = [...this.services.values()].find(candidate => String(candidate.githubRepositoryId || candidate.desiredState?.githubRepositoryId || candidate.desiredState?.github?.repositoryId || '') === String(repo.githubRepoId) && this.environmentServices.get(candidate.id)?.environmentId === environment.id && this.environmentServices.get(candidate.id)?.logicalSlug === slug);
     if (duplicate) githubSourceConflict('GITHUB_DUPLICATE_IMPORT', { action: duplicate.projectId === projectId ? 'OPEN_EXISTING_SERVICE' : 'OPEN_EXISTING_PROJECT', projectId: duplicate.projectId, ...(duplicate.projectId === projectId ? { serviceId: duplicate.id } : {}) });
     const resolvedBranch = branch || repo.defaultBranch || integration.defaultBranch || 'main';
     const binding = gitHubServiceBinding(integration, repo);
-    const name = serviceName || repo.repo;
-    const slug = String(serviceSlug || slugify(name));
-    const collision = [...this.services.values()].find(candidate => String(candidate.projectId) === String(projectId) && String(candidate.slug) === slug);
+    const collision = [...this.services.values()].find(candidate => this.environmentServices.get(candidate.id)?.environmentId === environment.id && this.environmentServices.get(candidate.id)?.logicalSlug === slug);
     if (collision) githubSourceConflict('GITHUB_PROJECT_SLUG_COLLISION', { action: 'CHOOSE_NEW_SLUG', projectId, suggestedSlug: `${slug}-2` });
     const created = this.createService({
       projectId,
@@ -1529,12 +1682,14 @@ export class ControlPlaneStore {
       githubRepository: repo.fullName,
       githubRepositoryVisibility: repo.private ? 'private' : 'public',
       sourceAccess: repo.private ? 'github-app-private' : 'github-app-public',
+      environmentId: environment.id,
+      logicalSlug: slug,
     }, { allowGitHubBinding: true });
     const service = this.updateService(created.id, { desiredState: { ...binding, github: { ...binding.github, imported: true } } }, { allowDesiredState: true, allowGitHubBinding: true });
     this.audit(actorUserId, 'github:import-repository', 'project', projectId, { repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId });
     return { service, github: { ...binding.github, branch: resolvedBranch } };
     };
-    return this.runGitHubSourceMutation({ organizationId: project.organizationId, operation: 'import', idempotencyKey, payload: { projectId, integrationId, repositoryId, repository, repoUrl, branch, serviceName, serviceSlug, expectedDefaultBranch, expectedCatalogGeneration }, execute: operation });
+    return this.runGitHubSourceMutation({ organizationId: project.organizationId, operation: 'import', idempotencyKey, payload: { projectId, environmentId: environment.id, integrationId, repositoryId, repository, repoUrl, branch, serviceName, serviceSlug, expectedDefaultBranch, expectedCatalogGeneration }, execute: operation });
   }
 
   syncGitHubRepository(input: Record<string, any>) {
@@ -1557,7 +1712,21 @@ export class ControlPlaneStore {
       const repositoryRecord = resolveGitHubRepositoryRecord([...this.githubRepositories.values()], integration.installationId, { repositoryId: service.githubRepositoryId || service.desiredState?.githubRepositoryId || service.desiredState?.github?.repositoryId });
       assertGitHubSourceReady(integration, repositoryRecord, { branch: input.branch || service.branch, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration });
     }
-    const workflowJob = this.enqueueWorkflowJob({ type: 'github-repository-sync', targetType: 'github-repository', targetId: normalized, payload: { repository: normalized, serviceIds: services.map((service) => service.id) } });
+    const environmentBindings = services.map((service) => {
+      const binding = this.environmentServices.get(service.id);
+      if (!binding || binding.projectId !== service.projectId) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      const environment = this.resolveEnvironment(service.projectId, { environmentId: binding.environmentId });
+      return { serviceId: service.id, projectId: service.projectId, environmentId: environment.id, environmentKind: environment.kind };
+    });
+    const environmentIds = new Set(environmentBindings.map((binding) => binding.environmentId));
+    const hasDevelopment = environmentBindings.some((binding) => binding.environmentKind === 'dev');
+    const workflowJob = this.enqueueWorkflowJob({
+      ...(hasDevelopment ? { id: developmentEnvironmentOperationId('job', environmentBindings[0].environmentId, ['github-repository-sync', normalized, environmentBindings, this.developmentAdmissionSequence++]) } : {}),
+      type: 'github-repository-sync', targetType: 'github-repository', targetId: normalized,
+      environmentId: environmentIds.size === 1 ? environmentBindings[0].environmentId : null,
+      operationalProtocolVersion: hasDevelopment ? 2 : 1,
+      payload: { repository: normalized, serviceIds: services.map((service) => service.id), environmentBindings },
+    });
     this.audit(actorUserId, 'github:repository-sync', 'github-repository', normalized, { serviceIds: services.map((service) => service.id) });
     return { repository: normalized, services: deepClone(services), workflowJob };
     };
@@ -1700,23 +1869,23 @@ export class ControlPlaneStore {
       const blockedServiceIds = this.githubWebhookQuotaBlocks(services, actionPlan, actions);
       for (const service of services.filter((candidate) => !blockedServiceIds.has(String(candidate.id)))) {
       if (actionPlan.kind === 'production-deploy') {
-        const deployment = this.createDeployment({ id: stableId('dep', 'github', id, service.id, actionPlan.kind), serviceId: service.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'production', triggerType: 'github_push', branch: actionPlan.branch });
-        const workflowJob = this.enqueueWorkflowJob({ id: stableId('job', 'github', id, service.id, actionPlan.kind), type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId: id } });
+        const deployment = this.createDeployment({ id: this.serviceOperationId(service.id, 'dep', ['github', id, service.id, actionPlan.kind]), serviceId: service.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'production', triggerType: 'github_push', branch: actionPlan.branch });
+        const workflowJob = this.enqueueWorkflowJob({ id: this.serviceOperationId(service.id, 'job', ['github', id, service.id, actionPlan.kind]), type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId: id } });
         actions.push({ type: 'production-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id });
       } else if (actionPlan.kind === 'preview-deploy') {
         const project = this.projects.get(service.projectId);
         const organization = project ? this.organizations.get(project.organizationId) : null;
         const previewPlan = previewRuntimePlan({ service, project, organization, pullRequestNumber: actionPlan.pullRequestNumber });
-        const deployment = this.createDeployment({ id: stableId('dep', 'github', id, service.id, actionPlan.kind), serviceId: service.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewPlan.url });
+        const deployment = this.createDeployment({ id: this.serviceOperationId(service.id, 'dep', ['github', id, service.id, actionPlan.kind]), serviceId: service.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewPlan.url });
         const preview = previewRuntimePlan({ service, project, organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id });
-        const workflowJob = this.enqueueWorkflowJob({ id: stableId('job', 'github', id, service.id, actionPlan.kind), type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId: id, preview, kubernetes: preview.kubernetes } });
+        const workflowJob = this.enqueueWorkflowJob({ id: this.serviceOperationId(service.id, 'job', ['github', id, service.id, actionPlan.kind]), type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId: id, preview, kubernetes: preview.kubernetes } });
         this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.workload.queued', message: `Preview Kubernetes workload queued for PR #${actionPlan.pullRequestNumber}`, metadata: { previewUrl: preview.url, workloadName: preview.kubernetes.workloadName, namespace: preview.kubernetes.namespace } });
         actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: preview.url, previewWorkloadName: preview.kubernetes.workloadName });
       } else if (actionPlan.kind === 'preview-cleanup') {
         const project = this.projects.get(service.projectId);
         const organization = project ? this.organizations.get(project.organizationId) : null;
         const preview = previewRuntimePlan({ service, project, organization, pullRequestNumber: actionPlan.pullRequestNumber, action: 'delete' });
-        const workflowJob = this.enqueueWorkflowJob({ id: stableId('job', 'github', id, service.id, actionPlan.kind), type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook', deliveryId: id, preview, kubernetes: preview.kubernetes } });
+        const workflowJob = this.enqueueWorkflowJob({ id: this.serviceOperationId(service.id, 'job', ['github', id, service.id, actionPlan.kind]), type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook', deliveryId: id, preview, kubernetes: preview.kubernetes } });
         const deployments = [...this.deployments.values()].filter((deployment) => deployment.serviceId === service.id && deployment.deploymentType === 'preview' && Number(deployment.pullRequestNumber) === Number(actionPlan.pullRequestNumber));
         for (const deployment of deployments) {
           const cleanupPlan = previewRuntimePlan({ service, project, organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id, action: 'delete' });
@@ -1755,15 +1924,17 @@ export class ControlPlaneStore {
       const blocked = event.action === 'closed' ? new Set<string>() : this.githubWebhookQuotaBlocks(services, actionPlan, actions);
       for (const service of services.filter((candidate) => !blocked.has(String(candidate.id)))) {
         const project = this.projects.get(service.projectId);
+        const environment = this.environmentServices.get(service.id);
+        if (!environment) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
         const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
         const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
         const integrationId = String(service.githubIntegrationId || desired.githubIntegrationId || github.integrationId || '');
-        const lineageId = stableId('preview-lineage', project.organizationId, project.id, service.id, event.installationId, event.repositoryId, event.pullRequestNumber);
+        const lineageId = this.serviceOperationId(service.id, 'preview-lineage', [project.organizationId, project.id, service.id, event.installationId, event.repositoryId, event.pullRequestNumber]);
         const transition = transitionPreviewLineage(this.previewLineages.get(lineageId) || null, event, { organizationId: project.organizationId, projectId: project.id, serviceId: service.id, integrationId }, lineageId);
         if (transition.decision === 'stale' || transition.decision === 'duplicate') { actions.push({ type: `preview-${transition.decision}`, serviceId: service.id, lineageId }); continue; }
-        this.previewLineages.set(lineageId, transition.lineage);
+        this.previewLineages.set(lineageId, { ...transition.lineage, environmentId: environment.environmentId });
         if (transition.decision === 'ambiguous') {
-          const job = this.enqueueWorkflowJob({ id: resolverJobId(transition.lineage), type: PREVIEW_RESOLVER_JOB, targetType: 'preview-lineage', targetId: lineageId, payload: resolverPayload(transition.lineage), maxAttempts: 3 });
+          const job = this.enqueueWorkflowJob({ id: resolverJobId(transition.lineage), environmentId: environment.environmentId, type: PREVIEW_RESOLVER_JOB, targetType: 'preview-lineage', targetId: lineageId, payload: { ...resolverPayload(transition.lineage), environmentId: environment.environmentId }, maxAttempts: 3 });
           actions.push({ type: 'preview-resolution-enqueued', serviceId: service.id, lineageId, workflowJobId: job.id });
           continue;
         }
@@ -1776,10 +1947,10 @@ export class ControlPlaneStore {
           actions.push({ type: 'preview-cleanup-requested', serviceId: service.id, lineageId, deploymentIds });
           continue;
         }
-        const deploymentId = stableId('dep', 'github-preview', event.deliveryId, service.id, transition.lineage.generation);
+        const deploymentId = this.serviceOperationId(service.id, 'dep', ['github-preview', event.deliveryId, service.id, transition.lineage.generation]);
         const runtime = createPreviewRuntime(transition.lineage, deploymentId);
         const deployment = this.createDeployment({ id: deploymentId, serviceId: service.id, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime });
-        const job = this.enqueueWorkflowJob({ id: stableId('job', 'github-preview', event.deliveryId, service.id), type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, runtime } });
+        const job = this.enqueueWorkflowJob({ id: this.serviceOperationId(service.id, 'job', ['github-preview', event.deliveryId, service.id]), type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, runtime } });
         this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.workload.queued', message: `Preview Kubernetes workload queued for PR #${event.pullRequestNumber}`, metadata: previewWebhookLineage(delivery.id, lineageId, event) });
         this.previewLineages.set(lineageId, { ...transition.lineage, candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation });
         actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, lineageId, deploymentId: deployment.id, workflowJobId: job.id });
@@ -2154,6 +2325,9 @@ export class ControlPlaneStore {
       services: [...this.services.values()],
       deployments: [...this.deployments.values()],
       resources: [...this.resources.values()],
+      environments: [...this.environments.values()].map(publicEnvironment),
+      environmentServices: [...this.environmentServices.values()],
+      environmentResources: [...this.environmentResources.values()],
       domains: [...this.domains.values()],
       usageRecords: this.usageRecords,
       auditLogs: this.auditLogs,

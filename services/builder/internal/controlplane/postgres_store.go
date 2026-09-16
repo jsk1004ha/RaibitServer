@@ -17,6 +17,8 @@ import (
 
 const postgresDriverName = "pgx"
 
+const setOperationalProtocolSQL = `SELECT set_config('raibitserver.operational_protocol', '2', true)`
+
 const claimWorkflowJobSQL = `
 WITH exhausted AS (
   SELECT wj.id,
@@ -37,6 +39,17 @@ WITH exhausted AS (
     AND wj."lockedAt" IS NOT NULL
     AND wj."lockedAt" <= $3
     AND wj.attempts >= CASE WHEN wj."maxAttempts" > 0 THEN wj."maxAttempts" ELSE 3 END
+    AND EXISTS (
+      SELECT 1
+      FROM "Deployment" AS deployment
+      JOIN "Service" AS service ON service.id = deployment."serviceId" AND service."projectId" = deployment."projectId"
+      LEFT JOIN "EnvironmentService" AS binding ON binding."serviceId" = service.id AND binding."projectId" = service."projectId"
+      LEFT JOIN "Environment" AS environment ON environment.id = binding."environmentId" AND environment."projectId" = binding."projectId"
+      WHERE deployment.id = COALESCE(NULLIF(BTRIM(wj.payload ->> 'deploymentId'), ''), CASE WHEN LOWER(BTRIM(wj."targetType")) = 'deployment' THEN NULLIF(BTRIM(wj."targetId"), '') END)
+		AND (COALESCE(environment.kind, 'prod') = 'prod' OR ($10 = 2 AND wj."operationalProtocolVersion" = 2))
+		AND ($10 = 1 OR binding."serviceId" IS NOT NULL)
+        AND (deployment."environmentId" IS NULL OR deployment."environmentId" = binding."environmentId")
+    )
   ORDER BY wj."lockedAt" ASC, wj."createdAt" ASC, wj.id ASC
   FOR UPDATE SKIP LOCKED
   LIMIT $5
@@ -107,6 +120,17 @@ WITH exhausted AS (
           OR UPPER(COALESCE(p.status, '')) IN ('DELETE_REQUESTED', 'DELETING', 'DELETE_FAILED')
         )
     )
+    AND EXISTS (
+      SELECT 1
+      FROM "Deployment" AS deployment
+      JOIN "Service" AS service ON service.id = deployment."serviceId" AND service."projectId" = deployment."projectId"
+      LEFT JOIN "EnvironmentService" AS binding ON binding."serviceId" = service.id AND binding."projectId" = service."projectId"
+      LEFT JOIN "Environment" AS environment ON environment.id = binding."environmentId" AND environment."projectId" = binding."projectId"
+      WHERE deployment.id = COALESCE(NULLIF(BTRIM(wj.payload ->> 'deploymentId'), ''), CASE WHEN LOWER(BTRIM(wj."targetType")) = 'deployment' THEN NULLIF(BTRIM(wj."targetId"), '') END)
+		AND (COALESCE(environment.kind, 'prod') = 'prod' OR ($10 = 2 AND wj."operationalProtocolVersion" = 2))
+		AND ($10 = 1 OR binding."serviceId" IS NOT NULL)
+        AND (deployment."environmentId" IS NULL OR deployment."environmentId" = binding."environmentId")
+    )
   ORDER BY wj."runAfter" ASC, wj."createdAt" ASC, wj.id ASC
   FOR UPDATE SKIP LOCKED
   LIMIT 1
@@ -176,16 +200,31 @@ SET status = 'BUILDING', "buildStartedAt" = $1, "updatedAt" = $1
 WHERE id = $2 AND UPPER(BTRIM(status)) = 'QUEUED'`
 
 type PostgresStore struct {
-	db *sql.DB
+	db                  *sql.DB
+	operationalProtocol int
 }
 
 func NewPostgresStore(db *sql.DB) *PostgresStore {
-	return &PostgresStore{db: db}
+	return &PostgresStore{db: db, operationalProtocol: OperationalProtocolLegacy}
+}
+
+func NewPostgresStoreWithOperationalProtocol(db *sql.DB, protocol int) (*PostgresStore, error) {
+	if protocol != OperationalProtocolLegacy && protocol != OperationalProtocolActive {
+		return nil, errors.New("operational protocol version must be 1 or 2")
+	}
+	return &PostgresStore{db: db, operationalProtocol: protocol}, nil
 }
 
 func OpenPostgresStore(ctx context.Context, dsn string) (*PostgresStore, func() error, error) {
+	return OpenPostgresStoreWithOperationalProtocol(ctx, dsn, OperationalProtocolLegacy)
+}
+
+func OpenPostgresStoreWithOperationalProtocol(ctx context.Context, dsn string, protocol int) (*PostgresStore, func() error, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, nil, errors.New("PostgreSQL control-plane DSN is required")
+	}
+	if protocol != OperationalProtocolLegacy && protocol != OperationalProtocolActive {
+		return nil, nil, errors.New("operational protocol version must be 1 or 2")
 	}
 	db, err := sql.Open(postgresDriverName, dsn)
 	if err != nil {
@@ -195,7 +234,12 @@ func OpenPostgresStore(ctx context.Context, dsn string) (*PostgresStore, func() 
 		_ = db.Close()
 		return nil, nil, fmt.Errorf("connect PostgreSQL control-plane store: %w", err)
 	}
-	return NewPostgresStore(db), db.Close, nil
+	store, err := NewPostgresStoreWithOperationalProtocol(db, protocol)
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, err
+	}
+	return store, db.Close, nil
 }
 
 func PostgresDSNFromEnv(env map[string]string) string {
@@ -232,6 +276,9 @@ func (s *PostgresStore) ClaimNextWorkflowJob(ctx context.Context, options ClaimO
 		return nil, err
 	}
 	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return nil, err
+	}
 
 	now := options.Now
 	if now.IsZero() {
@@ -263,6 +310,7 @@ func (s *PostgresStore) ClaimNextWorkflowJob(ctx context.Context, options ClaimO
 		string(errorSpec),
 		now.Format(time.RFC3339Nano),
 		workerID,
+		s.operationalProtocol,
 	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -327,7 +375,15 @@ func (s *PostgresStore) RenewWorkflowJobLease(ctx context.Context, lease Workflo
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	result, err := s.db.ExecContext(ctx, renewWorkflowLeaseSQL, now, lease.JobID, lease.WorkerID, lease.Attempt)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, renewWorkflowLeaseSQL, now, lease.JobID, lease.WorkerID, lease.Attempt)
 	if err != nil {
 		return err
 	}
@@ -338,7 +394,7 @@ func (s *PostgresStore) RenewWorkflowJobLease(ctx context.Context, lease Workflo
 	if updated != 1 {
 		return ErrWorkflowLeaseLost
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *PostgresStore) GetProject(ctx context.Context, projectID string) (*Project, error) {
@@ -361,12 +417,7 @@ func (s *PostgresStore) GetService(ctx context.Context, serviceID string) (*Serv
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	service, err := scanService(s.db.QueryRowContext(ctx, `
-SELECT id, "projectId", name, slug, type, "runtimeType", "sourceType", "buildMode", "repoUrl", branch,
-       "rootDirectory", "buildContext", "dockerfilePath", "installCommand", "buildCommand", "startCommand",
-       "outputDirectory", image, "imageUrl", port, status, "desiredSpec", "desiredState"
-FROM "Service"
-WHERE id = $1`, serviceID))
+	service, err := scanService(s.db.QueryRowContext(ctx, serviceSelectSQL+` WHERE s.id = $1`, serviceID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, notFound("service", serviceID)
 	}
@@ -380,7 +431,7 @@ func (s *PostgresStore) GetDeployment(ctx context.Context, deploymentID string) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	deployment, err := scanDeployment(s.db.QueryRowContext(ctx, deploymentSelectSQL()+` WHERE id = $1`, deploymentID))
+	deployment, err := scanDeployment(s.db.QueryRowContext(ctx, deploymentSelectSQL()+` AND d.id = $1`, deploymentID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, notFound("deployment", deploymentID)
 	}
@@ -391,7 +442,19 @@ func (s *PostgresStore) GetDeployment(ctx context.Context, deploymentID string) 
 }
 
 func (s *PostgresStore) UpdateDeployment(ctx context.Context, deploymentID string, updates map[string]any) (*Deployment, error) {
-	return updateDeploymentRow(ctx, s.db, deploymentID, updates)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return nil, err
+	}
+	deployment, err := updateDeploymentRow(ctx, tx, deploymentID, updates)
+	if err != nil {
+		return nil, err
+	}
+	return deployment, tx.Commit()
 }
 
 func (s *PostgresStore) updateDeploymentForLease(ctx context.Context, lease WorkflowLease, deploymentID string, updates map[string]any) (*Deployment, error) {
@@ -400,6 +463,9 @@ func (s *PostgresStore) updateDeploymentForLease(ctx context.Context, lease Work
 		return nil, err
 	}
 	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return nil, err
+	}
 	if err := assertWorkflowLeaseLocked(ctx, tx, lease); err != nil {
 		return nil, err
 	}
@@ -407,7 +473,7 @@ func (s *PostgresStore) updateDeploymentForLease(ctx context.Context, lease Work
 		if validationErr != nil {
 			return nil, validationErr
 		}
-		current, currentErr := scanDeployment(tx.QueryRowContext(ctx, deploymentSelectSQL()+` WHERE id = $1 FOR UPDATE`, deploymentID))
+		current, currentErr := scanDeployment(tx.QueryRowContext(ctx, deploymentSelectSQL()+` AND d.id = $1 FOR UPDATE OF d`, deploymentID))
 		if errors.Is(currentErr, sql.ErrNoRows) {
 			return nil, notFound("deployment", deploymentID)
 		}
@@ -433,7 +499,7 @@ func (s *PostgresStore) UpdateDeploymentForLease(ctx context.Context, lease Work
 	return s.updateDeploymentForLease(ctx, lease, deploymentID, updates)
 }
 
-func updateDeploymentRow(ctx context.Context, queryer rowQueryer, deploymentID string, updates map[string]any) (*Deployment, error) {
+func updateDeploymentRow(ctx context.Context, queryer rowQueryExecer, deploymentID string, updates map[string]any) (*Deployment, error) {
 	assignments, args, err := updateAssignments(updates, deploymentUpdateColumns)
 	if err != nil {
 		return nil, err
@@ -442,21 +508,35 @@ func updateDeploymentRow(ctx context.Context, queryer rowQueryer, deploymentID s
 	sqlText := `
 UPDATE "Deployment"
 SET ` + strings.Join(append(assignments, `"updatedAt" = $`+strconv.Itoa(len(args)-1)), ", ") + `
-WHERE id = $` + strconv.Itoa(len(args)) + `
-RETURNING id, "serviceId", "projectId", status, "deploymentType", "triggerType", branch, "commitSha", "commitHash",
-          "pullRequestNumber", "previewUrl", "imageUrl", "imageDigest", "desiredSpecSnapshot", "snapshotVersion", "sourceDeploymentId", "retryOfDeploymentId"`
-	deployment, err := scanDeployment(queryer.QueryRowContext(ctx, sqlText, args...))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, notFound("deployment", deploymentID)
-	}
+WHERE id = $` + strconv.Itoa(len(args))
+	result, err := queryer.ExecContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err
 	}
-	return deployment, nil
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if updated != 1 {
+		return nil, notFound("deployment", deploymentID)
+	}
+	return scanDeployment(queryer.QueryRowContext(ctx, deploymentSelectSQL()+` AND d.id = $1`, deploymentID))
 }
 
 func (s *PostgresStore) UpdateService(ctx context.Context, serviceID string, updates map[string]any) (*Service, error) {
-	return updateServiceRow(ctx, s.db, serviceID, updates)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return nil, err
+	}
+	service, err := updateServiceRow(ctx, tx, serviceID, updates)
+	if err != nil {
+		return nil, err
+	}
+	return service, tx.Commit()
 }
 
 func (s *PostgresStore) updateServiceForLease(ctx context.Context, lease WorkflowLease, serviceID string, updates map[string]any) (*Service, error) {
@@ -465,6 +545,9 @@ func (s *PostgresStore) updateServiceForLease(ctx context.Context, lease Workflo
 		return nil, err
 	}
 	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return nil, err
+	}
 	if err := assertWorkflowLeaseLocked(ctx, tx, lease); err != nil {
 		return nil, err
 	}
@@ -478,7 +561,7 @@ func (s *PostgresStore) updateServiceForLease(ctx context.Context, lease Workflo
 	return service, nil
 }
 
-func updateServiceRow(ctx context.Context, queryer rowQueryer, serviceID string, updates map[string]any) (*Service, error) {
+func updateServiceRow(ctx context.Context, queryer rowQueryExecer, serviceID string, updates map[string]any) (*Service, error) {
 	assignments, args, err := updateAssignments(updates, serviceUpdateColumns)
 	if err != nil {
 		return nil, err
@@ -487,22 +570,28 @@ func updateServiceRow(ctx context.Context, queryer rowQueryer, serviceID string,
 	sqlText := `
 UPDATE "Service"
 SET ` + strings.Join(append(assignments, `"updatedAt" = $`+strconv.Itoa(len(args)-1)), ", ") + `
-WHERE id = $` + strconv.Itoa(len(args)) + `
-RETURNING id, "projectId", name, slug, type, "runtimeType", "sourceType", "buildMode", "repoUrl", branch,
-          "rootDirectory", "buildContext", "dockerfilePath", "installCommand", "buildCommand", "startCommand",
-          "outputDirectory", image, "imageUrl", port, status, "desiredSpec", "desiredState"`
-	service, err := scanService(queryer.QueryRowContext(ctx, sqlText, args...))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, notFound("service", serviceID)
-	}
+WHERE id = $` + strconv.Itoa(len(args))
+	result, err := queryer.ExecContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err
 	}
-	return service, nil
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if updated != 1 {
+		return nil, notFound("service", serviceID)
+	}
+	return scanService(queryer.QueryRowContext(ctx, serviceSelectSQL+` WHERE s.id = $1`, serviceID))
 }
 
 type rowQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type rowQueryExecer interface {
+	rowQueryer
+	sqlExecer
 }
 
 type sqlExecer interface {
@@ -535,6 +624,9 @@ func (s *PostgresStore) StartBuild(ctx context.Context, input BuildStartInput) e
 		return err
 	}
 	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return err
+	}
 
 	job, err := scanWorkflowJobUpdate(tx.QueryRowContext(ctx, lockBuildWorkflowLeaseSQL, input.Lease.JobID, input.DeploymentID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -589,6 +681,9 @@ func (s *PostgresStore) PublishImageReady(ctx context.Context, input ImagePublic
 		return err
 	}
 	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return err
+	}
 
 	job, err := scanWorkflowJobUpdate(tx.QueryRowContext(ctx, lockBuildWorkflowLeaseSQL, input.Lease.JobID, input.DeploymentID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -684,6 +779,9 @@ func (s *PostgresStore) appendBuildLogForLease(ctx context.Context, lease Workfl
 		return err
 	}
 	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return err
+	}
 	if err := assertWorkflowLeaseLocked(ctx, tx, lease); err != nil {
 		return err
 	}
@@ -720,6 +818,9 @@ func (s *PostgresStore) appendDeploymentEventForLease(ctx context.Context, lease
 		return err
 	}
 	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return err
+	}
 	if err := assertWorkflowLeaseLocked(ctx, tx, lease); err != nil {
 		return err
 	}
@@ -756,6 +857,9 @@ func (s *PostgresStore) updateWorkflowJob(ctx context.Context, lease WorkflowLea
 		return err
 	}
 	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return err
+	}
 
 	job, err := scanWorkflowJobUpdate(tx.QueryRowContext(ctx, `
 SELECT id, status, payload, attempts, "maxAttempts", "lockedBy"
@@ -838,6 +942,7 @@ func scanService(row scanner) (*Service, error) {
 		&service.ID, &service.ProjectID, &service.Name, &service.Slug, &service.Type, &service.RuntimeType, &service.SourceType, &service.BuildMode,
 		&repoURL, &branch, &rootDirectory, &buildContext, &dockerfilePath, &installCommand, &buildCommand, &startCommand,
 		&outputDirectory, &image, &imageURL, &port, &service.Status, &desiredSpec, &desiredState,
+		&service.EnvironmentID, &service.EnvironmentKind, &service.LogicalSlug,
 	)
 	if err != nil {
 		return nil, err
@@ -870,8 +975,22 @@ func scanService(row scanner) (*Service, error) {
 	if service.Port == 0 {
 		service.Port = intField(service.DesiredState, "port")
 	}
+	if err := normalizeServiceEnvironment(&service); err != nil {
+		return nil, err
+	}
 	return &service, nil
 }
+
+const serviceSelectSQL = `
+SELECT s.id, s."projectId", s.name, s.slug, s.type, s."runtimeType", s."sourceType", s."buildMode", s."repoUrl", s.branch,
+       s."rootDirectory", s."buildContext", s."dockerfilePath", s."installCommand", s."buildCommand", s."startCommand",
+       s."outputDirectory", s.image, s."imageUrl", s.port, s.status, s."desiredSpec", s."desiredState",
+       COALESCE(binding."environmentId", '') AS environment_id,
+       COALESCE(environment.kind, 'prod') AS environment_kind,
+       COALESCE(binding."logicalSlug", s.slug) AS logical_slug
+FROM "Service" AS s
+LEFT JOIN "EnvironmentService" AS binding ON binding."serviceId" = s.id AND binding."projectId" = s."projectId"
+LEFT JOIN "Environment" AS environment ON environment.id = binding."environmentId" AND environment."projectId" = binding."projectId"`
 
 func scanDeployment(row scanner) (*Deployment, error) {
 	var deployment Deployment
@@ -884,6 +1003,7 @@ func scanDeployment(row scanner) (*Deployment, error) {
 		&deployment.ID, &deployment.ServiceID, &deployment.ProjectID, &deployment.Status, &deployment.DeploymentType, &deployment.TriggerType,
 		&deployment.Branch, &commitSha, &commitHash, &pr, &previewURL, &imageURL, &imageDigest,
 		&desiredSpecSnapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID,
+		&deployment.EnvironmentID, &deployment.EnvironmentKind, &deployment.LogicalSlug,
 	)
 	if err != nil {
 		return nil, err
@@ -908,9 +1028,16 @@ func scanDeployment(row scanner) (*Deployment, error) {
 }
 
 func deploymentSelectSQL() string {
-	return `SELECT id, "serviceId", "projectId", status, "deploymentType", "triggerType", branch, "commitSha", "commitHash",
-       "pullRequestNumber", "previewUrl", "imageUrl", "imageDigest", "desiredSpecSnapshot", "snapshotVersion", "sourceDeploymentId", "retryOfDeploymentId"
-FROM "Deployment"`
+	return `SELECT d.id, d."serviceId", d."projectId", d.status, d."deploymentType", d."triggerType", d.branch, d."commitSha", d."commitHash",
+       d."pullRequestNumber", d."previewUrl", d."imageUrl", d."imageDigest", d."desiredSpecSnapshot", d."snapshotVersion", d."sourceDeploymentId", d."retryOfDeploymentId",
+       COALESCE(d."environmentId", binding."environmentId", '') AS environment_id,
+       COALESCE(environment.kind, 'prod') AS environment_kind,
+       COALESCE(binding."logicalSlug", service.slug) AS logical_slug
+FROM "Deployment" AS d
+JOIN "Service" AS service ON service.id = d."serviceId" AND service."projectId" = d."projectId"
+LEFT JOIN "EnvironmentService" AS binding ON binding."serviceId" = service.id AND binding."projectId" = service."projectId"
+LEFT JOIN "Environment" AS environment ON environment.id = binding."environmentId" AND environment."projectId" = binding."projectId"
+WHERE (d."environmentId" IS NULL OR d."environmentId" = binding."environmentId")`
 }
 
 var deploymentUpdateColumns = map[string]updateColumn{
@@ -996,4 +1123,14 @@ func nullString(value sql.NullString) string {
 
 func rollbackUnlessCommitted(tx *sql.Tx) {
 	_ = tx.Rollback()
+}
+
+func (s *PostgresStore) configureTransaction(ctx context.Context, tx *sql.Tx) error {
+	if s.operationalProtocol != OperationalProtocolActive {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, setOperationalProtocolSQL); err != nil {
+		return fmt.Errorf("set transaction-local operational protocol: %w", err)
+	}
+	return nil
 }

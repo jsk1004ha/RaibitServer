@@ -7,6 +7,7 @@ import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
 import { requireResourceCapability } from './resource-capabilities.ts';
 import { slugify } from './ids.ts';
 import { boundedDnsLabel, domainPlanForProject, serviceHostname, tenantProjectLabel } from './domain-router.ts';
+import { runtimeCompilationIdentity } from './runtime-environment.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -24,35 +25,45 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   const baseDomain = spec.baseDomain || DEFAULT_DOMAIN;
   const ingressGatewayNamespace = trustedIngressGatewayNamespace(trustedOptions.ingressGatewayNamespace);
   const ingressErrorOptions = trustedIngressErrorOptions(trustedOptions);
-  const namespace = tenantProjectLabel(
+  const legacyNamespace = tenantProjectLabel(
     organizationNamespaceIdentity,
     projectRouteSlug,
     projectNamespaceIdentity ? `${organizationNamespaceIdentity}\0${projectNamespaceIdentity}` : undefined,
   );
   const services: AnyRecord[] = spec.services || [];
   const resources: AnyRecord[] = spec.resources || [];
-  const manifests: AnyRecord[] = [namespaceManifest(namespace, projectSlug)];
+  const runtimeIdentity = runtimeCompilationIdentity({ projectId: String(project.id || spec.projectId || ''), services, resources, projection: trustedOptions.runtimeEnvironment });
+  const namespace = runtimeIdentity.namespace(legacyNamespace);
+  const runtimeServices = services.map((service) => {
+    const binding = runtimeIdentity.service(service.id);
+    return binding ? { ...service, name: binding.physicalSlug, slug: binding.physicalSlug, logicalSlug: binding.logicalSlug } : service;
+  });
+  const runtimeResources = resources.map((resource) => {
+    const binding = runtimeIdentity.resource(resource.id);
+    return binding ? { ...resource, name: binding.physicalName, slug: binding.physicalName, logicalSlug: binding.logicalSlug } : resource;
+  });
+  const manifests: AnyRecord[] = [namespaceManifest(namespace, projectSlug, runtimeIdentity)];
   const buildPlans: AnyRecord[] = [];
-  const resourcePlans = resources.map((resource) => resourcePlan(resource, namespace, projectSlug));
+  const resourcePlans = runtimeResources.map((resource) => resourcePlan(resource, namespace, projectSlug));
   const resourceEnvByName = Object.fromEntries(resources.map((resource) => [resource.name, connectionEnvForResource(resource, projectSlug)]));
 
-  for (const service of services) {
+  for (const service of runtimeServices) {
     const serviceName = kubernetesServiceName(service);
-    const serviceRouteName = service.slug || service.name || serviceName;
+    const serviceRouteName = service.logicalSlug || service.slug || service.name || serviceName;
     const fullService = {
       projectSlug,
       registry: spec.registry,
       ...service,
       name: serviceName,
     };
-    const buildPlan = resolveBuildStrategy(fullService, filesByService[service.name] || filesByService[serviceName] || {});
+    const buildPlan = resolveBuildStrategy(fullService, filesByService[service.logicalSlug] || filesByService[service.name] || filesByService[serviceName] || {});
     buildPlans.push(buildPlan);
-    const serviceManifests = compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service: fullService, resources, resourceEnvByName, image: buildPlan.image, ingressErrorOptions });
+    const serviceManifests = compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service: fullService, resources, resourceEnvByName, image: buildPlan.image, ingressErrorOptions, runtimeIdentity });
     manifests.push(...serviceManifests);
   }
 
   const ignoredPrePullImages = imagePrePullList(spec, buildPlans);
-  manifests.push(...networkPolicyManifests(namespace, projectSlug, services, resources, ingressGatewayNamespace));
+  manifests.push(...networkPolicyManifests(namespace, projectSlug, runtimeServices, runtimeResources, ingressGatewayNamespace, runtimeIdentity));
   return {
     apiVersion: 'raibitserver.io/v1alpha1',
     kind: 'ProjectDeploymentPlan',
@@ -69,7 +80,10 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
       strategy: ignoredPrePullImages.length ? 'disabled-tenant-prepull-not-supported' : 'disabled',
     },
     resourcePlans,
-    domainPlan: domainPlanForProject(spec),
+    domainPlan: domainPlanForProject(
+      { ...spec, services: runtimeServices, resources: runtimeResources },
+      { environmentKind: runtimeIdentity.environmentKind, namespace },
+    ),
     manifests,
     security: {
       tenantNamespace: namespace,
@@ -83,13 +97,13 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   };
 }
 
-function compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service, resources, resourceEnvByName, image, ingressErrorOptions }: AnyRecord) {
+function compileService({ namespace, projectSlug, organizationRouteSlug, projectRouteSlug, serviceRouteName, baseDomain, service, resources, resourceEnvByName, image, ingressErrorOptions, runtimeIdentity }: AnyRecord) {
   const serviceName = kubernetesServiceName(service);
   const type = service.type || SERVICE_TYPES.WEB;
   const port = Number(service.port || DEFAULT_PORT);
   const env = injectResourceEnv(service, resources, projectSlug, { resourceEnvByName });
   const { plain, secret } = splitEnvForSecret(env);
-  const labels = labelsFor(projectSlug, serviceName, type);
+  const labels = labelsFor(projectSlug, serviceName, type, runtimeIdentity);
   const out: AnyRecord[] = [];
 
   if (Object.keys(secret).length) out.push(secretManifest(namespace, derivedServiceObjectName(service, 'env'), labels, secret));
@@ -109,7 +123,7 @@ function compileService({ namespace, projectSlug, organizationRouteSlug, project
     out.push(serviceManifest(namespace, serviceName, labels, port));
   }
   if (type === SERVICE_TYPES.WEB) {
-    out.push(ingressManifest(namespace, service, serviceRouteName, organizationRouteSlug, projectRouteSlug, baseDomain, labels, port, ingressErrorOptions));
+    out.push(ingressManifest(namespace, service, serviceRouteName, organizationRouteSlug, projectRouteSlug, baseDomain, labels, port, ingressErrorOptions, runtimeIdentity));
   }
   if (service.scaling?.maxReplicas && Number(service.scaling.maxReplicas) > Number(service.scaling.minReplicas || 1)) {
     out.push(hpaManifest(namespace, service, service.scaling));
@@ -118,7 +132,7 @@ function compileService({ namespace, projectSlug, organizationRouteSlug, project
   return out;
 }
 
-function namespaceManifest(namespace: string, projectSlug: string): AnyRecord {
+function namespaceManifest(namespace: string, projectSlug: string, runtimeIdentity: AnyRecord): AnyRecord {
   return {
     apiVersion: 'v1',
     kind: 'Namespace',
@@ -126,19 +140,21 @@ function namespaceManifest(namespace: string, projectSlug: string): AnyRecord {
       name: namespace,
       labels: {
         'raibitserver.io/project': projectSlug,
+        ...environmentLabels(runtimeIdentity),
         'pod-security.kubernetes.io/enforce': 'restricted',
       },
     },
   };
 }
 
-function labelsFor(projectSlug: string, serviceName: string, type: string): AnyRecord {
+function labelsFor(projectSlug: string, serviceName: string, type: string, runtimeIdentity: AnyRecord): AnyRecord {
   return {
     'app.kubernetes.io/name': serviceName,
     'app.kubernetes.io/managed-by': 'raibitserver',
     'raibitserver.io/project': projectSlug,
     'raibitserver.io/service': serviceName,
     'raibitserver.io/service-type': type,
+    ...environmentLabels(runtimeIdentity),
   };
 }
 
@@ -254,7 +270,7 @@ function serviceManifest(namespace: string, serviceName: string, labels: AnyReco
   };
 }
 
-function ingressManifest(namespace: string, service: AnyRecord, serviceRouteName: string, organizationSlug: string, projectSlug: string, baseDomain: string, labels: AnyRecord, port: number, ingressErrorOptions: AnyRecord): AnyRecord {
+function ingressManifest(namespace: string, service: AnyRecord, serviceRouteName: string, organizationSlug: string, projectSlug: string, baseDomain: string, labels: AnyRecord, port: number, ingressErrorOptions: AnyRecord, runtimeIdentity: AnyRecord): AnyRecord {
   const serviceName = kubernetesServiceName(service);
   const host = serviceHostname({
     organizationSlug,
@@ -262,6 +278,7 @@ function ingressManifest(namespace: string, service: AnyRecord, serviceRouteName
     serviceName: serviceRouteName,
     baseDomain: service.baseDomain || baseDomain || DEFAULT_DOMAIN,
     customDomain: service.domain || null,
+    environmentKind: runtimeIdentity.environmentKind,
   });
   return {
     apiVersion: 'networking.k8s.io/v1',
@@ -372,16 +389,16 @@ function configMapManifest(namespace: string, name: string, labels: AnyRecord, d
   };
 }
 
-function networkPolicyManifests(namespace: string, projectSlug: string, services: AnyRecord[], resources: AnyRecord[], ingressGatewayNamespace: string): AnyRecord[] {
-  const base = tenantIsolationNetworkPolicy(namespace, services, resources, ingressGatewayNamespace);
+function networkPolicyManifests(namespace: string, projectSlug: string, services: AnyRecord[], resources: AnyRecord[], ingressGatewayNamespace: string, runtimeIdentity: AnyRecord): AnyRecord[] {
+  const base = tenantIsolationNetworkPolicy(namespace, services, resources, ingressGatewayNamespace, runtimeIdentity);
   const publicEgress = services
     .filter((service) => service.allowPublicEgress === true || service.publicEgress === true || service.egress?.publicInternet === true)
-    .map((service) => servicePublicEgressPolicy(namespace, projectSlug, service));
+    .map((service) => servicePublicEgressPolicy(namespace, projectSlug, service, runtimeIdentity));
   base.raibitserver.publicEgressServices = publicEgress.map((policy) => policy.raibitserver.service);
   return [base, ...publicEgress];
 }
 
-function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], resources: AnyRecord[], ingressGatewayNamespace: string): AnyRecord {
+function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], resources: AnyRecord[], ingressGatewayNamespace: string, runtimeIdentity: AnyRecord): AnyRecord {
   const serviceNames = services.map((service) => kubernetesServiceName(service));
   const resourceNames = resources.map((resource) => slugify(resource.name));
   const egress: AnyRecord[] = [
@@ -399,7 +416,7 @@ function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], 
   return {
     apiVersion: 'networking.k8s.io/v1',
     kind: 'NetworkPolicy',
-    metadata: { name: 'tenant-isolation', namespace },
+    metadata: { name: 'tenant-isolation', namespace, ...(runtimeIdentity.environmentKind === 'dev' ? { labels: environmentLabels(runtimeIdentity) } : {}) },
     spec: {
       podSelector: {},
       policyTypes: ['Ingress', 'Egress'],
@@ -423,9 +440,9 @@ function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], 
   };
 }
 
-function servicePublicEgressPolicy(namespace: string, projectSlug: string, service: AnyRecord): AnyRecord {
+function servicePublicEgressPolicy(namespace: string, projectSlug: string, service: AnyRecord, runtimeIdentity: AnyRecord): AnyRecord {
   const serviceName = kubernetesServiceName(service);
-  const labels = labelsFor(projectSlug, serviceName, 'egress-policy');
+  const labels = labelsFor(projectSlug, serviceName, 'egress-policy', runtimeIdentity);
   return {
     apiVersion: 'networking.k8s.io/v1',
     kind: 'NetworkPolicy',
@@ -455,6 +472,13 @@ function kubernetesServiceName(service: AnyRecord) {
 function derivedServiceObjectName(service: AnyRecord, suffix: string) {
   const serviceName = kubernetesServiceName(service);
   return boundedDnsLabel(`${serviceName}-${suffix}`, 63, `${service?.id || serviceName}\0${suffix}`);
+}
+
+function environmentLabels(runtimeIdentity: AnyRecord): AnyRecord {
+  return runtimeIdentity.environmentKind === 'dev' ? {
+    'raibitserver.io/environment-id': runtimeIdentity.environmentId,
+    'raibitserver.io/environment-kind': 'dev',
+  } : {};
 }
 
 const PRIVATE_IPV4_EGRESS_EXCEPTIONS = Object.freeze(['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']);

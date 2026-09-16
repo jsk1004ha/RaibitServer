@@ -20,6 +20,9 @@ type Resource struct {
 	ProjectID            string
 	OrganizationID       string
 	ProjectSlug          string
+	EnvironmentID        string
+	EnvironmentKind      string
+	LogicalSlug          string
 	Name                 string
 	Slug                 string
 	Type                 string

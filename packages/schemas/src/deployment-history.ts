@@ -10,6 +10,8 @@ const actionType = z.enum(['retry', 'redeploy', 'cancel', 'rollback']);
 export const DeploymentHistoryQuerySchema = z.strictObject({
   serviceId: id.optional(),
   environment: z.enum(['production', 'preview', 'manual']).optional(),
+  environmentId: id.optional(),
+  environmentKind: z.enum(['prod', 'dev']).optional(),
   status: DeploymentStatusSchema.optional(),
   trigger: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional(),
   from: timestamp.optional(),
@@ -30,6 +32,8 @@ export const DeploymentHistoryActionSchema = z.strictObject({
 export const DeploymentHistoryRowSchema = z.strictObject({
   id,
   projectId: id,
+  environmentId: id.nullable(),
+  environmentKind: z.enum(['prod', 'dev']),
   service: z.strictObject({ id, name: z.string().min(1), slug: z.string().min(1) }),
   environment: z.enum(['production', 'preview', 'manual']),
   status: DeploymentStatusSchema,

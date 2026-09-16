@@ -1,0 +1,77 @@
+name: Operational environment Prisma writer preflight
+
+on:
+  push:
+    branches:
+      - codex/raibit-operational-features
+    paths:
+      - scripts/operational/environment-writers-preflight.mjs
+      - .github/workflows/operational-environments.yml
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full reviewed and committed source SHA
+        required: true
+        type: string
+      writer_sha256:
+        description: Reviewed environment-writers-preflight.mjs SHA-256
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  environment-writers:
+    name: PostgreSQL 16 / actual Prisma dev writers
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: raibitserver
+          POSTGRES_PASSWORD: raibitserver-ci-only
+          POSTGRES_DB: raibitserver_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U raibitserver -d raibitserver_admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      RAIBITSERVER_TEST_DATABASE_URL: postgresql://raibitserver:raibitserver-ci-only@127.0.0.1:5432/raibitserver_admin
+      RAIBITSERVER_EXPECTED_SOURCE_SHA: ${{ github.event_name == 'push' && github.sha || inputs.source_sha }}
+      RAIBITSERVER_EXPECTED_WRITER_SHA256: ${{ github.event_name == 'push' && '00133b11912804308c24539787c9e6d8c6c87c5a5c6227f6757954a7d37508b9' || inputs.writer_sha256 }}
+      RAIBITSERVER_OPERATIONAL_EVIDENCE_DIR: ${{ github.workspace }}/.omo/evidence/raibit-operational-features/wave-2/task-7-native-writers/hosted-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RAIBITSERVER_EXPECTED_SOURCE_SHA }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - name: Install locked hosted dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Generate actual Prisma client in hosted job
+        run: pnpm prisma:generate
+      - name: Run reviewed writer gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RAIBITSERVER_OPERATIONAL_EVIDENCE_DIR"
+          node scripts/operational/environment-writers-preflight.mjs \
+            2>&1 | tee "$RAIBITSERVER_OPERATIONAL_EVIDENCE_DIR/invocation.log"
+      - name: Upload writer observations and cleanup outcomes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-environment-writers-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .omo/evidence/raibit-operational-features/wave-2/task-7-native-writers/hosted-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 14

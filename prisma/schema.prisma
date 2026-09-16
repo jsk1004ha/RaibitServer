@@ -150,6 +150,17 @@ model Project {
   deployments    Deployment[]
   environmentVariables EnvironmentVariable[]
   usageRecords   UsageRecord[]
+  environments Environment[]
+  templateInstallations TemplateInstallation[]
+  promotionPreviews PromotionPreview[]
+  promotionOperations PromotionOperation[]
+  notificationDestinations NotificationDestination[]
+  notificationIntents NotificationIntent[]
+  backupPolicies BackupPolicy[]
+  backupPolicyRuns BackupPolicyRun[]
+  objectUploadReservations ObjectUploadReservation[]
+  objectStorageObjects ObjectStorageObject[]
+  objectMultipartUploads ObjectMultipartUpload[]
 
   @@unique([organizationId, slug])
   @@index([status, updatedAt, createdAt])
@@ -197,6 +208,7 @@ model Service {
   runtimeMetrics     RuntimeMetric[]
   attachments        ResourceAttachment[]
   usageRecords       UsageRecord[]
+  environmentBinding EnvironmentService?
 
   @@unique([projectId, slug])
   @@index([status, updatedAt, createdAt])
@@ -208,6 +220,7 @@ model Deployment {
   id                String    @id @default(cuid())
   serviceId         String
   projectId         String
+  environmentId     String?
   sourceDeploymentId String?
   retryOfDeploymentId String?
   requestIdempotencyKey String?
@@ -246,6 +259,7 @@ model Deployment {
   updatedAt         DateTime  @updatedAt
   service           Service   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
   project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  environment       Environment? @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
   buildLogs         BuildLog[]
   runtimeLogs       RuntimeLog[]
   runtimeMetrics    RuntimeMetric[]
@@ -261,6 +275,7 @@ model Deployment {
   @@index([status, reconcileLockedAt, createdAt])
   @@index([serviceId, createdAt, id])
   @@index([projectId, createdAt, id])
+  @@index([environmentId, createdAt, id])
   @@unique([previewLineageId, previewGeneration])
   @@unique([id, previewLineageId, previewGeneration])
 }
@@ -270,6 +285,7 @@ model PreviewLineage {
   organizationId String
   projectId String
   serviceId String
+  environmentId String?
   integrationId String
   installationId String
   repositoryId String
@@ -303,10 +319,12 @@ model PreviewLineage {
   attempts Deployment[] @relation("PreviewAttempts")
   candidate Deployment? @relation("PreviewCandidate", fields: [candidateDeploymentId, id, candidateGeneration], references: [id, previewLineageId, previewGeneration], onDelete: Restrict)
   current Deployment? @relation("PreviewCurrent", fields: [currentDeploymentId, id, currentGeneration], references: [id, previewLineageId, previewGeneration], onDelete: Restrict)
+  environment Environment? @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
 
   @@unique([organizationId, projectId, serviceId, installationId, repositoryId, pullRequestNumber], map: "PreviewLineage_identity")
   @@unique([id, projectId, serviceId])
   @@index([state, updatedAt])
+  @@index([environmentId, updatedAt])
 }
 
 model BuildLog {
@@ -411,11 +429,18 @@ model Resource {
   usageRecords         UsageRecord[]
   backups              ResourceBackup[]
   recoveryPins         ResourceRecoveryPin[]
+  environmentBinding   EnvironmentResource?
+  backupPolicy         BackupPolicy?
+  backupPolicyRuns     BackupPolicyRun[]
+  objectUploadReservations ObjectUploadReservation[]
+  objectStorageObjects ObjectStorageObject[]
+  objectMultipartUploads ObjectMultipartUpload[]
 
   @@unique([projectId, name])
   @@unique([projectId, slug])
   @@index([status, updatedAt, createdAt])
   @@index([projectId, createdAt, id])
+  @@unique([id, projectId])
 }
 
 model ResourceAttachment {
@@ -464,9 +489,20 @@ model ResourceBackup {
   expiresAt DateTime?
   updatedAt DateTime?
   errorCode String?
+  origin String @default("manual")
+  policyId String?
+  policyRunId String? @unique
+  policyVersion Int?
+  scheduledAtUtc DateTime?
+  policySnapshot Json?
+  environmentId String?
   restores ResourceRestore[]
   recoveryPins ResourceRecoveryPin[]
   attempts ResourceRecoveryAttempt[]
+  policyRun BackupPolicyRun? @relation("ResourceBackupPolicyRun", fields: [policyRunId], references: [id], onDelete: SetNull)
+  reportedByPolicyRun BackupPolicyRun? @relation("BackupPolicyRunBackup")
+  policy BackupPolicy? @relation(fields: [policyId], references: [id], onDelete: Restrict)
+  environment Environment? @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
 
   @@unique([organizationId, resourceId, requestIdempotencyKey], map: "ResourceBackup_replay_key")
 }
@@ -755,6 +791,7 @@ model WorkflowJob {
   status      String    @default("queued")
   targetType  String
   targetId    String
+  environmentId String?
   payload     Json
   attempts    Int       @default(0)
   maxAttempts Int       @default(3)
@@ -763,7 +800,435 @@ model WorkflowJob {
   lockedAt    DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  operationalProtocolVersion Int @default(1)
 
   @@index([status, runAfter])
   @@index([targetType, targetId])
+  @@index([environmentId, status, runAfter])
+}
+
+model Environment {
+  id String @id
+  projectId String
+  kind String
+  status String @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  serviceBindings EnvironmentService[]
+  resourceBindings EnvironmentResource[]
+  deployments Deployment[]
+  previewLineages PreviewLineage[]
+  templateInstallations TemplateInstallation[]
+  promotionSources PromotionPreview[] @relation("PromotionPreviewSource")
+  promotionTargets PromotionPreview[] @relation("PromotionPreviewTarget")
+  operationSources PromotionOperation[] @relation("PromotionOperationSource")
+  operationTargets PromotionOperation[] @relation("PromotionOperationTarget")
+  notificationSubscriptions NotificationSubscription[]
+  notificationIntents NotificationIntent[]
+  backupPolicies BackupPolicy[]
+  backupPolicyRuns BackupPolicyRun[]
+  resourceBackups ResourceBackup[]
+  objectUploadReservations ObjectUploadReservation[]
+  objectStorageObjects ObjectStorageObject[]
+  objectMultipartUploads ObjectMultipartUpload[]
+
+  @@unique([projectId, kind])
+  @@unique([id, projectId])
+  @@index([projectId, status, createdAt])
+}
+
+model EnvironmentService {
+  serviceId String @id
+  environmentId String
+  projectId String
+  logicalSlug String
+  displayName String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Cascade)
+  service Service @relation(fields: [serviceId, projectId], references: [id, projectId], onDelete: Cascade)
+
+  @@unique([environmentId, logicalSlug])
+  @@unique([serviceId, projectId])
+  @@index([projectId, environmentId])
+}
+
+model EnvironmentResource {
+  resourceId String @id
+  environmentId String
+  projectId String
+  logicalSlug String
+  displayName String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Cascade)
+  resource Resource @relation(fields: [resourceId, projectId], references: [id, projectId], onDelete: Cascade)
+
+  @@unique([environmentId, logicalSlug])
+  @@unique([resourceId, projectId])
+  @@index([projectId, environmentId])
+}
+
+model TemplateInstallation {
+  id String @id @default(cuid())
+  projectId String
+  environmentId String
+  catalogId String
+  status String @default("pending")
+  version Int @default(1)
+  requestIdempotencyKey String
+  idempotencyFingerprint String
+  deletionRequestedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  versions TemplateInstallationVersion[]
+
+  @@unique([projectId, requestIdempotencyKey])
+  @@unique([environmentId, catalogId])
+  @@unique([id, projectId, environmentId])
+  @@index([projectId, environmentId, status])
+}
+
+model TemplateInstallationVersion {
+  id String @id @default(cuid())
+  installationId String
+  projectId String
+  environmentId String
+  version Int
+  catalogVersion String
+  catalogDigest String
+  sourceDigest String
+  graphDigest String
+  provenance Json
+  idempotencyFingerprint String
+  createdAt DateTime @default(now())
+  installation TemplateInstallation @relation(fields: [installationId, projectId, environmentId], references: [id, projectId, environmentId], onDelete: Restrict)
+
+  @@unique([installationId, version])
+  @@unique([projectId, idempotencyFingerprint])
+  @@index([projectId, environmentId, createdAt])
+}
+
+model PromotionPreview {
+  id String @id @default(cuid())
+  projectId String
+  sourceEnvironmentId String
+  targetEnvironmentId String
+  sourceImageDigest String
+  diffHash String
+  previewDigest String
+  graphSnapshot Json
+  expectedVersion Int
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  sourceEnvironment Environment @relation("PromotionPreviewSource", fields: [sourceEnvironmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  targetEnvironment Environment @relation("PromotionPreviewTarget", fields: [targetEnvironmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  operations PromotionOperation[]
+
+  @@unique([id, projectId])
+  @@unique([projectId, previewDigest])
+  @@index([projectId, expiresAt])
+}
+
+model PromotionOperation {
+  id String @id @default(cuid())
+  projectId String
+  previewId String
+  sourceEnvironmentId String
+  targetEnvironmentId String
+  sourceImageDigest String
+  diffHash String
+  requestIdempotencyKey String
+  requestFingerprint String
+  protocolVersion Int @default(2)
+  status String @default("pending")
+  fenceToken String?
+  workerId String?
+  leaseGeneration Int @default(0)
+  leaseUntil DateTime?
+  attempts Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  finishedAt DateTime?
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  preview PromotionPreview @relation(fields: [previewId, projectId], references: [id, projectId], onDelete: Restrict)
+  sourceEnvironment Environment @relation("PromotionOperationSource", fields: [sourceEnvironmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  targetEnvironment Environment @relation("PromotionOperationTarget", fields: [targetEnvironmentId, projectId], references: [id, projectId], onDelete: Restrict)
+
+  @@unique([projectId, requestIdempotencyKey])
+  @@index([status, leaseUntil, createdAt])
+  @@index([projectId, targetEnvironmentId, createdAt])
+}
+
+model NotificationDestination {
+  id String @id @default(cuid())
+  projectId String
+  kind String
+  sealedWebhookUrl String
+  encryptionKeyVersion String
+  version Int @default(1)
+  enabled Boolean @default(false)
+  deletionRequestedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  subscriptions NotificationSubscription[]
+  intents NotificationIntent[]
+  deliveryAttempts NotificationDeliveryAttempt[]
+
+  @@unique([id, projectId])
+  @@unique([projectId, kind])
+  @@index([projectId, kind, enabled])
+}
+
+model NotificationSubscription {
+  id String @id @default(cuid())
+  projectId String
+  destinationId String
+  environmentId String
+  environmentKind String @default("prod")
+  eventCode String
+  enabled Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  destination NotificationDestination @relation(fields: [destinationId, projectId], references: [id, projectId], onDelete: Cascade)
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Cascade)
+
+  @@unique([destinationId, environmentId, eventCode])
+  @@index([projectId, environmentId, enabled])
+}
+
+model NotificationIntent {
+  id String @id @default(cuid())
+  projectId String
+  environmentId String
+  destinationId String
+  destinationVersion Int
+  environmentKind String
+  eventCode String
+  subjectId String
+  subjectGenerationOrIncidentSequence Int
+  dedupKey String @unique
+  payload Json
+  protocolVersion Int @default(2)
+  status String @default("pending")
+  createdAt DateTime @default(now())
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  destination NotificationDestination @relation(fields: [destinationId, projectId], references: [id, projectId], onDelete: Restrict)
+  deliveryAttempts NotificationDeliveryAttempt[]
+
+  @@unique([destinationId, destinationVersion, eventCode, subjectId, subjectGenerationOrIncidentSequence], map: "NotificationIntent_semantic_identity")
+  @@index([projectId, environmentId, status, createdAt])
+  @@index([destinationId, destinationVersion, createdAt])
+}
+
+model NotificationDeliveryAttempt {
+  id String @id @default(cuid())
+  projectId String
+  intentId String
+  destinationId String
+  destinationVersion Int
+  attempt Int
+  state String @default("pending")
+  runAfter DateTime @default(now())
+  workerId String?
+  leaseToken String?
+  leaseGeneration Int @default(0)
+  leaseUntil DateTime?
+  deadlineAt DateTime?
+  responseMessageId String?
+  errorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  finishedAt DateTime?
+  intent NotificationIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  destination NotificationDestination @relation(fields: [destinationId, projectId], references: [id, projectId], onDelete: Restrict)
+
+  @@unique([intentId, attempt])
+  @@index([state, runAfter, leaseUntil])
+  @@index([destinationId, destinationVersion, createdAt])
+}
+
+model BackupPolicy {
+  id String @id @default(cuid())
+  organizationId String
+  projectId String
+  environmentId String
+  resourceId String
+  createdByUserId String
+  enabled Boolean @default(false)
+  version Int @default(1)
+  timezone String @default("Asia/Seoul")
+  localMinute Int @default(180)
+  nextRunAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project Project @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  resource Resource @relation(fields: [resourceId, projectId], references: [id, projectId], onDelete: Restrict)
+  runs BackupPolicyRun[]
+  backups ResourceBackup[]
+
+  @@unique([resourceId, environmentId])
+  @@unique([resourceId, projectId])
+  @@unique([id, organizationId, projectId, environmentId, resourceId])
+  @@index([enabled, nextRunAt])
+  @@index([projectId, environmentId])
+}
+
+model BackupPolicyRun {
+  id String @id @default(cuid())
+  policyId String
+  organizationId String
+  projectId String
+  environmentId String
+  resourceId String
+  scheduledAtUtc DateTime
+  policyVersion Int
+  policySnapshot Json
+  protocolVersion Int @default(2)
+  status String @default("DUE")
+  skipReason String?
+  workerId String?
+  leaseToken String?
+  leaseGeneration Int @default(0)
+  leaseUntil DateTime?
+  attempts Int @default(0)
+  deadlineAt DateTime?
+  startedAt DateTime?
+  finishedAt DateTime?
+  errorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  backupId String? @unique
+  project Project @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  resource Resource @relation(fields: [resourceId, projectId], references: [id, projectId], onDelete: Restrict)
+  policy BackupPolicy @relation(fields: [policyId, organizationId, projectId, environmentId, resourceId], references: [id, organizationId, projectId, environmentId, resourceId], onDelete: Restrict)
+  backup ResourceBackup? @relation("BackupPolicyRunBackup", fields: [backupId], references: [id], onDelete: SetNull)
+  occurrenceBackup ResourceBackup? @relation("ResourceBackupPolicyRun")
+
+  @@unique([policyId, scheduledAtUtc])
+  @@index([status, scheduledAtUtc, leaseUntil])
+  @@index([resourceId, status, finishedAt])
+}
+
+model ObjectUploadReservation {
+  id String @id @default(cuid())
+  projectId String
+  environmentId String
+  resourceId String
+  providerEndpointRef String
+  operationKind String
+  objectKey String
+  objectGeneration Int
+  credentialGeneration Int
+  multipartUploadId String?
+  partNumber Int?
+  checksumSha256 String
+  expectedBytes BigInt
+  reservedBytes BigInt
+  committedBytes BigInt @default(0)
+  accountingState String @default("reserved")
+  requestIdempotencyKey String
+  requestFingerprint String
+  protocolVersion Int @default(2)
+  version Int @default(1)
+  status String @default("pending")
+  workerId String?
+  leaseToken String?
+  leaseGeneration Int @default(0)
+  leaseUntil DateTime?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  resource Resource @relation(fields: [resourceId, projectId], references: [id, projectId], onDelete: Restrict)
+  multipartUpload ObjectMultipartUpload? @relation(fields: [multipartUploadId], references: [id], onDelete: Restrict)
+  multipartPart ObjectMultipartPart?
+
+  @@unique([projectId, requestIdempotencyKey])
+  @@unique([multipartUploadId, partNumber])
+  @@index([resourceId, objectKey, objectGeneration])
+  @@index([accountingState, expiresAt])
+  @@index([status, leaseUntil, createdAt])
+}
+
+model ObjectStorageObject {
+  id String @id @default(cuid())
+  projectId String
+  environmentId String
+  resourceId String
+  objectKey String
+  committedBytes BigInt
+  checksumSha256 String?
+  etag String
+  providerVersion String?
+  generation Int @default(1)
+  credentialGeneration Int
+  reconciliationState String @default("verified")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  resource Resource @relation(fields: [resourceId, projectId], references: [id, projectId], onDelete: Restrict)
+
+  @@unique([resourceId, objectKey])
+  @@index([projectId, environmentId, reconciliationState])
+}
+
+model ObjectMultipartUpload {
+  id String @id @default(cuid())
+  projectId String
+  environmentId String
+  resourceId String
+  objectKey String
+  providerUploadId String
+  destinationGeneration Int
+  credentialGeneration Int
+  requestIdempotencyKey String
+  requestFingerprint String
+  state String @default("open")
+  workerId String?
+  leaseToken String?
+  leaseGeneration Int @default(0)
+  leaseUntil DateTime?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  environment Environment @relation(fields: [environmentId, projectId], references: [id, projectId], onDelete: Restrict)
+  resource Resource @relation(fields: [resourceId, projectId], references: [id, projectId], onDelete: Restrict)
+  parts ObjectMultipartPart[]
+  reservations ObjectUploadReservation[]
+
+  @@unique([resourceId, providerUploadId])
+  @@unique([projectId, requestIdempotencyKey])
+  @@index([resourceId, objectKey, destinationGeneration])
+  @@index([state, leaseUntil, expiresAt])
+}
+
+model ObjectMultipartPart {
+  uploadId String
+  providerUploadId String
+  partNumber Int
+  reservationId String @unique
+  sizeBytes BigInt
+  checksumSha256 String
+  etag String
+  state String @default("verified")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  upload ObjectMultipartUpload @relation(fields: [uploadId], references: [id], onDelete: Restrict)
+  reservation ObjectUploadReservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+
+  @@id([providerUploadId, partNumber])
+  @@unique([uploadId, partNumber])
+  @@index([uploadId, state])
 }

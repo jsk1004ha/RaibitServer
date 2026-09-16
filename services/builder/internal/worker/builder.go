@@ -406,6 +406,9 @@ func (b *Builder) resolveState(ctx context.Context, job *controlplane.WorkflowJo
 	if err != nil {
 		return nil, err
 	}
+	if err := controlplane.BindDeploymentEnvironment(service, deployment); err != nil {
+		return nil, err
+	}
 	return &buildContext{Job: resolvedJob, Deployment: deployment, Service: service, Project: project}, nil
 }
 
@@ -1125,6 +1128,9 @@ func validateBuildOwnership(state *buildContext) error {
 	}
 	if state.Service.ProjectID != state.Project.ID || state.Deployment.ProjectID != state.Project.ID || state.Deployment.ServiceID != state.Service.ID {
 		return errors.New("deployment, service, and project ownership records do not match")
+	}
+	if err := controlplane.BindDeploymentEnvironment(state.Service, state.Deployment); err != nil {
+		return err
 	}
 	return nil
 }

@@ -13,6 +13,8 @@ import { bootParityApi } from './fixtures/api-parity-runtime.mjs';
 
 const requiredWireBodies = {
   'github-repositories-refresh': { expectedIntegrationVersion: 1, expectedGeneration: 0 },
+  'projects-environments-post': { kind: 'dev', expectedVersion: 0 },
+  'projects-environments-delete': { expectedVersion: 1, confirmation: 'delete dev' },
 };
 
 test('OAuth callback contract represents exactly one bound code or fixed denial', () => {

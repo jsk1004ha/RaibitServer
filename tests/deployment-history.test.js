@@ -173,6 +173,7 @@ test('Prisma deployment history keeps tenant filters and actions set-based', asy
   };
   const prisma = {
     project: { findFirst: async (query) => { calls.push(['project', query]); return { id: 'project-db' }; } },
+    environment: { findUnique: async (query) => { calls.push(['environment', query]); return { id: 'environment-db-prod', projectId: 'project-db', kind: 'prod', createdAt, updatedAt: createdAt }; } },
     deployment: { findMany: async (query) => { calls.push(['deployment', query]); return query.include ? [deployment] : [deployment]; } },
   };
   const repository = new PrismaControlPlaneRepository(prisma);
@@ -185,12 +186,19 @@ test('Prisma deployment history keeps tenant filters and actions set-based', asy
 
   // Then tenant scope, SQL filters, stable ordering, and bounded query count are explicit.
   assert.deepEqual(calls[0][1].where, { id: 'project-db', organizationId: 'organization-db' });
-  assert.equal(calls[1][1].where.projectId, 'project-db');
-  assert.equal(calls[1][1].where.serviceId, service.id);
-  assert.deepEqual(calls[1][1].orderBy, [{ createdAt: 'desc' }, { id: 'desc' }]);
-  assert.equal(calls[1][1].take, 26);
+  assert.deepEqual(calls[1][1].where, { projectId_kind: { projectId: 'project-db', kind: 'prod' } });
+  assert.equal(calls[2][1].where.projectId, 'project-db');
+  assert.equal(calls[2][1].where.serviceId, service.id);
+  assert.deepEqual(calls[2][1].where.AND, [
+    { OR: [{ environmentId: 'environment-db-prod' }, { environmentId: null }] },
+    { service: { OR: [{ environmentBinding: { is: { environmentId: 'environment-db-prod' } } }, { environmentBinding: { is: null } }] } },
+  ]);
+  assert.deepEqual(calls[2][1].orderBy, [{ createdAt: 'desc' }, { id: 'desc' }]);
+  assert.equal(calls[2][1].take, 26);
   assert.equal(calls.filter(([model]) => model === 'deployment').length, 2);
   assert.equal(page.deployments[0].source.commitSha, 'd'.repeat(40));
+  assert.equal(page.deployments[0].environmentId, 'environment-db-prod');
+  assert.equal(page.deployments[0].environmentKind, 'prod');
 });
 
 test('Nest deployment history route serves the typed project scope', async (t) => {

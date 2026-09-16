@@ -43,6 +43,8 @@ import { INTERNAL_SERVICE_MUTATION, assertServiceReplacement, parseProjectMutati
 import { assertExpectedServiceVersion, parseServiceReplacement, parseServiceSettingsInput, previewServiceSettings, serviceSettingsSnapshot, ServiceSettingsError } from './service-settings.ts';
 import { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 import { DomainLifecycleError, issueCustomDomain, normalizeCustomHostname, publicCustomDomain, requestCustomDomainCheck, requestCustomDomainDelete, rotateCustomDomain, type CustomDomainRecord } from './domain.ts';
+import { EnvironmentError, developmentEnvironmentOperationId, developmentEnvironmentSubjectId, environmentIdForKind, environmentPhysicalSlug, parseEnvironmentSelector, projectRuntimeEnvironment, publicEnvironment, publicEnvironmentSubject } from './environments.ts';
+import { setOperationalProtocolVersion } from './operational-persistence.ts';
 import {
   activityLimit,
   boundedKeysetRows,
@@ -64,6 +66,15 @@ import {
 
 type QuotaRequirement = { metric: string; increment: number };
 type ObservationLogRow = Record<string, unknown>;
+
+export class OperationalPersistenceUnavailable extends Error {
+  readonly name = 'OperationalPersistenceUnavailable';
+  readonly code = 'OPERATIONAL_PERSISTENCE_UNAVAILABLE' as const;
+
+  constructor() {
+    super('OPERATIONAL_PERSISTENCE_UNAVAILABLE');
+  }
+}
 export type PemContextSource = {
   readonly requestId: number;
   readonly source: string;
@@ -159,6 +170,10 @@ export class InMemoryControlPlaneRepository {
     this.store = store;
   }
 
+  requireOperationalPrismaClient(): never {
+    throw new OperationalPersistenceUnavailable();
+  }
+
   async createOrganization(input: Record<string, any>) { return this.store.createOrganization(input); }
   async createOrganizationForUser(input: AuthenticatedOrganizationCreateInput) { return this.store.createOrganizationForUser(input); }
   async findOrganizationBySlug(slug: string) { return this.store.findOrganizationBySlug(slug); }
@@ -204,17 +219,31 @@ export class InMemoryControlPlaneRepository {
     const existing = [...this.store.projects.values()].find((project) => String(project.organizationId) === String(input.organizationId) && String(project.slug) === slug);
     return this.runQuotaMutation(input.actorUserId, 'project:create', [{ metric: 'maxProjects', increment: existing ? 0 : 1 }], () => this.store.createProject({ ...input, status: input.actorUserId ? 'ACTIVE' : input.status }));
   }
+
+  async listEnvironments(projectId: string) { return this.store.listEnvironments(projectId); }
+  async resolveEnvironment(projectId: string, selector: unknown = {}) { return this.store.resolveEnvironment(projectId, selector); }
+  async runtimeEnvironmentProjection(projectId: string, selector: unknown = {}) { return this.store.runtimeEnvironmentProjection(projectId, selector); }
+  async createEnvironment(input: Record<string, any>) { return this.runQuotaMutation(null, 'environment:create', [], () => this.store.createEnvironment(input)); }
+  async deleteEnvironment(input: Record<string, any>) { return this.runQuotaMutation(null, 'environment:delete', [], () => this.store.deleteEnvironment(input)); }
   async updateProject(projectId: string, updates: Record<string, any>) { return this.store.updateProject(projectId, updates); }
   async getProjectSettings(projectId: string, organizationId: string) { return this.store.getProjectSettings(projectId, organizationId); }
   async updateProjectSettings(input: ProjectSettingsMutation) { return this.store.updateProjectSettings(input); }
   async scheduleProjectDeletion(input: ProjectDeletionRequest) { return this.store.scheduleProjectDeletion(input); }
   async deleteProject(projectId: string) { return this.store.deleteProject(projectId); }
   async createService(input: Record<string, any>, options: Record<string, any> = {}) {
-    const slug = slugInput(input.slug || input.name);
-    const existing = [...this.store.services.values()].find((service) => String(service.projectId) === String(input.projectId) && String(service.slug) === slug);
-    return this.runQuotaMutation(input.actorUserId, 'service:create', serviceQuotaRequirements(existing, input), () => this.store.createService(input, options));
+    const environment = this.store.resolveEnvironment(input.projectId, serviceEnvironmentSelector(input));
+    const logicalSlug = slugInput(input.logicalSlug || input.slug || input.name);
+    const existingBinding = [...this.store.environmentServices.values()].find((binding) => binding.environmentId === environment.id && binding.logicalSlug === logicalSlug);
+    const existing = existingBinding ? this.store.services.get(existingBinding.serviceId) : null;
+    return this.runQuotaMutation(input.actorUserId, 'service:create', serviceQuotaRequirements(existing, input), () => {
+      const row = this.store.createService({ ...input, environmentId: environment.id, logicalSlug }, options);
+      return publicEnvironmentSubject(row, { environmentId: environment.id, environmentKind: environment.kind, logicalSlug, displayName: input.name });
+    });
   }
-  async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateService(serviceId, updates, options); }
+  async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
+    const row = this.store.updateService(serviceId, updates, options);
+    return row ? this.getService(serviceId) : null;
+  }
   async getServiceSettings(serviceId: string) { return this.store.getServiceSettings(serviceId); }
   async previewServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) { return this.store.previewServiceSettings(serviceId, input, options); }
   async updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateServiceSettings(serviceId, input, options); }
@@ -226,10 +255,19 @@ export class InMemoryControlPlaneRepository {
   async deleteService(serviceId: string) { return this.store.deleteService(serviceId); }
   async createResource(input: Record<string, any>) {
     requireResourceExecution(normalizeResourceEngine(input.engine || input.type));
-    const existing = [...this.store.resources.values()].find((resource) => String(resource.projectId) === String(input.projectId) && String(resource.name) === String(input.name));
-    return this.runQuotaMutation(input.actorUserId, 'resource:create', resourceQuotaRequirements(existing, input), () => this.store.createResource(input));
+    const environment = this.store.resolveEnvironment(input.projectId, input);
+    const logicalSlug = slugInput(input.logicalSlug || input.slug || input.name);
+    const existingBinding = [...this.store.environmentResources.values()].find((binding) => binding.environmentId === environment.id && binding.logicalSlug === logicalSlug);
+    const existing = existingBinding ? this.store.resources.get(existingBinding.resourceId) : null;
+    return this.runQuotaMutation(input.actorUserId, 'resource:create', resourceQuotaRequirements(existing, input), () => {
+      const row = this.store.createResource({ ...input, environmentId: environment.id, logicalSlug });
+      return publicEnvironmentSubject(row, { environmentId: environment.id, environmentKind: environment.kind, logicalSlug, displayName: input.name });
+    });
   }
-  async updateResource(resourceId: string, updates: Record<string, any>) { return this.store.updateResource(resourceId, updates); }
+  async updateResource(resourceId: string, updates: Record<string, any>) {
+    const row = this.store.updateResource(resourceId, updates);
+    return row ? this.getResource(resourceId) : null;
+  }
   async deleteResource(resourceId: string) { return this.store.deleteResource(resourceId); }
   async attachProviderConnectionSecret(input: Record<string, any>) { return this.store.attachProviderConnectionSecret(input); }
   async attachProviderConnectionSecrets(input: Record<string, any>) { return this.store.attachProviderConnectionSecrets(input); }
@@ -274,18 +312,39 @@ export class InMemoryControlPlaneRepository {
     const requestedDeployment = input.deployment || input;
     return this.runQuotaMutation(input.actorUserId || requestedDeployment.actorUserId, 'deployment:create', deploymentQuotaRequirements(requestedDeployment.deploymentType), () => {
       const deployment = this.store.createDeployment(requestedDeployment);
+      const environment = this.store.resolveEnvironment(deployment.projectId, { environmentId: deployment.environmentId });
       const workflowJob = this.store.enqueueWorkflowJob({
         type: input.workflow?.type || 'build-and-deploy',
         targetType: 'deployment',
         targetId: deployment.id,
-        payload: { ...(input.workflow?.payload || {}), deploymentId: deployment.id },
+        payload: {
+          ...(input.workflow?.payload || {}),
+          deploymentId: deployment.id,
+          serviceId: deployment.serviceId,
+          projectId: deployment.projectId,
+          environmentId: environment.id,
+          environmentKind: environment.kind,
+          kind: environment.kind,
+          desiredSpecSnapshot: deepClone(deployment.desiredSpecSnapshot),
+          snapshotVersion: deployment.snapshotVersion,
+        },
       });
       return { deployment, workflowJob };
     });
   }
   async getProject(projectId: string) { return this.store.getProject(projectId); }
-  async getService(serviceId: string) { return deepClone(this.store.services.get(serviceId) || null); }
-  async getResource(resourceId: string) { return deepClone(this.store.resources.get(resourceId) || null); }
+  async getService(serviceId: string) {
+    const row = this.store.services.get(serviceId);
+    const binding = this.store.environmentServices.get(serviceId);
+    const environment = binding ? this.store.environments.get(binding.environmentId) : null;
+    return row && binding && environment ? deepClone(publicEnvironmentSubject(row, { ...binding, environmentKind: environment.kind })) : deepClone(row || null);
+  }
+  async getResource(resourceId: string) {
+    const row = this.store.resources.get(resourceId);
+    const binding = this.store.environmentResources.get(resourceId);
+    const environment = binding ? this.store.environments.get(binding.environmentId) : null;
+    return row && binding && environment ? deepClone(publicEnvironmentSubject(row, { ...binding, environmentKind: environment.kind })) : deepClone(row || null);
+  }
   async getDeployment(deploymentId: string) { return this.store.getDeployment(deploymentId); }
   async listProjectsForOrganizations(organizationIds?: string[], options: Record<string, any> = {}) {
     const allowed = organizationIds ? new Set(organizationIds.map(String)) : null;
@@ -317,35 +376,50 @@ export class InMemoryControlPlaneRepository {
     const auditLogs = this.store.auditLogs.slice(-limit).reverse();
     return deepClone({ users, quotas, auditLogs });
   }
-  async listServicesForProject(projectId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.services.values()].filter((service) => String(service.projectId) === String(projectId)), options)); }
+  async listServicesForProject(projectId: string, options: Record<string, any> = {}) {
+    const environment = this.store.resolveEnvironment(projectId, options);
+    return deepClone(boundedKeysetRows(this.store.listServicesForEnvironment(projectId, environment.id), options));
+  }
   async createCustomDomain(input: Record<string, any>) { return this.store.createCustomDomain(input); }
-  async listCustomDomainsForProject(projectId: string) { return this.store.listCustomDomainsForProject(projectId); }
+  async listCustomDomainsForProject(projectId: string, options: Record<string, any> = {}) {
+    const environment = this.store.resolveEnvironment(projectId, options);
+    const serviceIds = new Set(this.store.listServicesForEnvironment(projectId, environment.id).map((service) => String(service.id)));
+    return this.store.listCustomDomainsForProject(projectId).filter((domain) => serviceIds.has(String(domain.serviceId)));
+  }
   async getCustomDomain(domainId: string) { return this.store.getCustomDomain(domainId); }
   async rotateCustomDomainChallenge(domainId: string, input: Record<string, any>) { return this.store.rotateCustomDomainChallenge(domainId, input); }
   async requestCustomDomainVerification(domainId: string, input: Record<string, any>) { return this.store.requestCustomDomainVerification(domainId, input); }
   async requestCustomDomainDeletion(domainId: string, input: Record<string, any>) { return this.store.requestCustomDomainDeletion(domainId, input); }
-  async listResourcesForProject(projectId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId)), options)); }
+  async listResourcesForProject(projectId: string, options: Record<string, any> = {}) {
+    const environment = this.store.resolveEnvironment(projectId, options);
+    return deepClone(boundedKeysetRows(this.store.listResourcesForEnvironment(projectId, environment.id), options));
+  }
   async listDeploymentsForService(serviceId: string, options: Record<string, any> = {}) { return deepClone(boundedKeysetRows([...this.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId)), options)).map(publicDeploymentHealth); }
   async listDeploymentsForProject(projectId: string, options: Record<string, any> = {}) {
-    return deepClone(boundedKeysetRows([...this.store.deployments.values()]
-      .filter((deployment) => String(deployment.projectId) === String(projectId)), options)).map(publicDeploymentHealth);
+    const environment = this.store.resolveEnvironment(projectId, options);
+    return deepClone(boundedKeysetRows(memoryEnvironmentDeployments(this.store, environment), options)).map(publicDeploymentHealth);
   }
   async listDeploymentHistory(input: DeploymentHistoryScope & { readonly query: DeploymentHistoryQuery; readonly execute: boolean }) {
     const project = this.store.projects.get(input.projectId);
     if (!project || project.organizationId !== input.organizationId) return null;
+    const environment = this.store.resolveEnvironment(input.projectId, input);
     return deploymentHistoryPage({
-      deployments: [...this.store.deployments.values()].filter((deployment) => deployment.projectId === input.projectId),
-      services: [...this.store.services.values()].filter((service) => service.projectId === input.projectId),
-      query: input.query, scope: input, execute: input.execute,
+      deployments: memoryEnvironmentDeployments(this.store, environment),
+      services: this.store.listServicesForEnvironment(input.projectId, environment.id),
+      query: input.query, scope: { ...input, environmentId: environment.id, environmentKind: environment.kind }, execute: input.execute,
     });
   }
   async getDeploymentHistoryItem(deploymentId: string, input: Omit<DeploymentHistoryScope, 'cursorSecret'> & { readonly execute: boolean }) {
     const deployment = this.store.deployments.get(deploymentId);
     const project = deployment ? this.store.projects.get(deployment.projectId) : null;
     if (!deployment || !project || project.organizationId !== input.organizationId || project.id !== input.projectId) return null;
-    const service = this.store.services.get(deployment.serviceId);
+    const environment = this.store.resolveEnvironment(input.projectId, input);
+    const scopedDeployments = memoryEnvironmentDeployments(this.store, environment);
+    const scopedDeployment = scopedDeployments.find(row => row.id === deploymentId);
+    if (!scopedDeployment) return null;
+    const service = this.store.listServicesForEnvironment(input.projectId, environment.id).find(row => row.id === deployment.serviceId);
     if (!service) return null;
-    return deploymentHistoryRow({ deployment, service, serviceDeployments: [...this.store.deployments.values()].filter((candidate) => candidate.serviceId === deployment.serviceId), execute: input.execute });
+    return deploymentHistoryRow({ deployment: scopedDeployment, service, serviceDeployments: scopedDeployments.filter(candidate => candidate.serviceId === deployment.serviceId), execute: input.execute });
   }
   async upsertServiceEnvironment(input: Record<string, any>) { return this.store.upsertServiceEnvironment(input); }
   async importServiceEnvFile(input: Record<string, any>) { return this.store.importServiceEnvFile(input); }
@@ -355,7 +429,10 @@ export class InMemoryControlPlaneRepository {
   async verifyGitHubIntegration(input: Record<string, any>) { return this.store.verifyGitHubIntegration(input); }
   async registerGitHubRepository(input: Record<string, any>) { return this.store.registerGitHubRepository(input); }
   async listGitHubIntegrations(input: Record<string, any>) { return this.store.listGitHubIntegrations(input); }
-  async attachGitHubRepositoryToService(input: Record<string, any>) { return this.store.attachGitHubRepositoryToService(input); }
+  async attachGitHubRepositoryToService(input: Record<string, any>) {
+    const result = this.store.attachGitHubRepositoryToService(input);
+    return { ...result, service: await this.getService(input.serviceId) };
+  }
   async listGitHubInstallations(input: Record<string, any>) { return this.store.listGitHubInstallations(input); }
   async listGitHubInstallationRepositories(input: Record<string, any>) { return this.store.listGitHubInstallationRepositories(input); }
   async refreshGitHubInstallationRepositories(input: Record<string, any>) { return this.store.refreshGitHubInstallationRepositories(input); }
@@ -363,8 +440,12 @@ export class InMemoryControlPlaneRepository {
     const repository = [...this.store.githubRepositories.values()].find((candidate) => String(candidate.githubRepoId) === String(input.repositoryId)
       || normalizePrismaRepositoryId(candidate.fullName) === normalizePrismaRepositoryId(input.repoUrl || input.repository || ''));
     const serviceName = input.serviceName || repository?.repo || String(repository?.fullName || input.repository || '').split('/').pop() || 'web';
-    const existing = [...this.store.services.values()].find((service) => String(service.projectId) === String(input.projectId) && String(service.slug) === slugInput(serviceName));
-    return this.runQuotaMutation(input.actorUserId, 'service:create', serviceQuotaRequirements(existing, { ...input, name: serviceName }), () => this.store.importGitHubRepository(input));
+    const environment = this.store.resolveEnvironment(input.projectId, input);
+    const logicalSlug = String(input.serviceSlug || slugInput(serviceName));
+    const binding = [...this.store.environmentServices.values()].find(candidate => candidate.environmentId === environment.id && candidate.logicalSlug === logicalSlug);
+    const existing = binding ? this.store.services.get(binding.serviceId) : null;
+    const result = await this.runQuotaMutation(input.actorUserId, 'service:create', serviceQuotaRequirements(existing, { ...input, name: serviceName }), () => this.store.importGitHubRepository(input));
+    return { ...result, service: await this.getService(result.service.id) };
   }
   async listServicesForGitHubRepository(repository: any, scope: Record<string, any> = {}) { return deepClone(this.store.servicesForGitHubRepository(repository, scope)); }
   async syncGitHubRepository(input: Record<string, any>) { return this.store.syncGitHubRepository(input); }
@@ -462,6 +543,10 @@ export class PrismaControlPlaneRepository {
 
   constructor(prisma: PrismaClient) {
     this.prisma = prisma;
+  }
+
+  requireOperationalPrismaClient(): PrismaClient {
+    return this.prisma;
   }
 
   setGitHubCatalogPageFetcher(fetcher: GitHubCatalogPageFetcher | null) { this.githubCatalogPageFetcher = fetcher; }
@@ -989,11 +1074,70 @@ export class PrismaControlPlaneRepository {
       const existing = await tx.project.findUnique({ where: { organizationId_slug: { organizationId: input.organizationId, slug } } });
       assertMutable(existing, 'project');
       await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'project:create', [{ metric: 'maxProjects', increment: existing ? 0 : 1 }]);
-      return tx.project.upsert({
+      const project = await tx.project.upsert({
         where: { organizationId_slug: { organizationId: input.organizationId, slug } },
         update: { name: input.name, description: input.description || '', status: input.actorUserId ? 'ACTIVE' : (input.status || 'ACTIVE') },
         create: { organizationId: input.organizationId, name: input.name, slug, description: input.description || '', status: input.actorUserId ? 'ACTIVE' : (input.status || 'ACTIVE') },
       });
+      await tx.environment.upsert({
+        where: { projectId_kind: { projectId: project.id, kind: 'prod' } },
+        update: {},
+        create: { id: environmentIdForKind(project.id, 'prod'), projectId: project.id, kind: 'prod', status: 'active' },
+      });
+      return project;
+    });
+  }
+
+  async listEnvironments(projectId: string) {
+    return (await this.prisma.environment.findMany({ where: { projectId }, orderBy: [{ kind: 'asc' }, { id: 'asc' }] })).map(publicEnvironment);
+  }
+
+  async resolveEnvironment(projectId: string, selectorInput: unknown = {}) {
+    return resolvePrismaEnvironment(this.prisma, projectId, selectorInput);
+  }
+
+  async runtimeEnvironmentProjection(projectId: string, selectorInput: unknown = {}) {
+    const environment = await resolvePrismaEnvironment(this.prisma, projectId, selectorInput);
+    const [serviceBindings, resourceBindings] = await Promise.all([
+      (this.prisma as any).environmentService.findMany({ where: { environmentId: environment.id }, include: { service: true } }),
+      (this.prisma as any).environmentResource.findMany({ where: { environmentId: environment.id }, include: { resource: true } }),
+    ]);
+    return projectRuntimeEnvironment({
+      environment,
+      services: serviceBindings.map((binding: Record<string, any>) => ({ id: binding.service.id, projectId: binding.projectId, slug: binding.service.slug, logicalSlug: binding.logicalSlug, physicalSlug: binding.service.slug })),
+      resources: resourceBindings.map((binding: Record<string, any>) => ({ id: binding.resource.id, projectId: binding.projectId, slug: binding.resource.slug, logicalSlug: binding.logicalSlug, physicalName: binding.resource.name })),
+    });
+  }
+
+  async createEnvironment(input: Record<string, any>) {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      await requireMutableProject(tx, input.projectId);
+      if (input.kind !== 'dev') throw new EnvironmentError('ENVIRONMENT_INPUT_INVALID', 400);
+      if (input.expectedVersion !== 0) throw new EnvironmentError('ENVIRONMENT_VERSION_CONFLICT', 409);
+      await setOperationalProtocolVersion(tx);
+      const existing = await tx.environment.findUnique({ where: { projectId_kind: { projectId: input.projectId, kind: input.kind } } });
+      if (existing) throw new EnvironmentError('ENVIRONMENT_VERSION_CONFLICT', 409);
+      const environment = await tx.environment.create({ data: { id: environmentIdForKind(input.projectId, 'dev'), projectId: input.projectId, kind: 'dev', status: 'active' } });
+      await tx.auditLog.create({ data: { actorUserId: input.actorUserId, action: 'environment:create', targetType: 'environment', targetId: environment.id, metadata: { projectId: input.projectId, kind: 'dev' } } });
+      return publicEnvironment(environment);
+    });
+  }
+
+  async deleteEnvironment(input: Record<string, any>) {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+      await setOperationalProtocolVersion(tx);
+      const environment = await tx.environment.findFirst({ where: { id: input.environmentId, projectId: input.projectId, kind: 'dev' } });
+      if (!environment) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      if (input.expectedVersion !== 1) throw new EnvironmentError('ENVIRONMENT_VERSION_CONFLICT', 409);
+      if (input.confirmation !== `delete dev ${environment.id}`) throw new EnvironmentError('ENVIRONMENT_CONFIRMATION_INVALID', 400);
+      const [services, resources] = await Promise.all([
+        tx.environmentService.count({ where: { environmentId: environment.id } }),
+        tx.environmentResource.count({ where: { environmentId: environment.id } }),
+      ]);
+      if (services + resources > 0) throw new EnvironmentError('ENVIRONMENT_NOT_EMPTY', 409);
+      await tx.environment.delete({ where: { id: environment.id } });
+      await tx.auditLog.create({ data: { actorUserId: input.actorUserId, action: 'environment:delete', targetType: 'environment', targetId: environment.id, metadata: { projectId: input.projectId, kind: 'dev' } } });
+      return { deleted: true, environmentId: environment.id };
     });
   }
 
@@ -1052,6 +1196,7 @@ export class PrismaControlPlaneRepository {
       if (!current) return null;
       if (options.organizationId !== undefined && String(current.organizationId) !== options.organizationId) return null;
       await lockRecoveryDeletion(tx, { projectId });
+      await setOperationalProtocolVersion(tx);
       const requestedAt = current.deletionRequestedAt || new Date();
       const services = await tx.service.findMany({ where: { projectId }, select: { id: true } });
       const resources = await tx.resource.findMany({ where: { projectId }, select: { id: true } });
@@ -1081,18 +1226,22 @@ export class PrismaControlPlaneRepository {
   }
 
   async createService(input: Record<string, any>, options: Record<string, any> = {}) {
-    const slug = input.slug || slugInput(input.name);
+    const logicalSlug = slugInput(input.logicalSlug || input.slug || input.name);
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       await requireMutableProject(tx, input.projectId);
-      const existing = await tx.service.findUnique({ where: { projectId_slug: { projectId: input.projectId, slug } } });
+      const environment = await resolvePrismaEnvironment(tx, input.projectId, serviceEnvironmentSelector(input));
+      await setOperationalProtocolVersion(tx);
+      const binding = await tx.environmentService.findUnique({ where: { environmentId_logicalSlug: { environmentId: environment.id, logicalSlug } } });
+      const existing = binding ? await tx.service.findUnique({ where: { id: binding.serviceId } }) : null;
       assertMutable(existing, 'service');
       assertServiceReplacement(Boolean(existing && await tx.deployment.findFirst({ where: { serviceId: existing.id }, select: { id: true } })));
       await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'service:create', serviceQuotaRequirements(existing, input));
-      return tx.service.upsert({
-        where: { projectId_slug: { projectId: input.projectId, slug } },
-        update: serviceData(input, options),
-        create: { projectId: input.projectId, name: input.name, slug, ...serviceData(input, options) },
-      });
+      const physicalSlug = environmentPhysicalSlug(environment.kind, environment.id, logicalSlug);
+      const service = existing
+        ? await tx.service.update({ where: { id: existing.id }, data: serviceData(input, options) })
+        : await tx.service.create({ data: { ...(environment.kind === 'dev' ? { id: developmentEnvironmentSubjectId('svc', input.projectId, environment.id, logicalSlug) } : {}), projectId: input.projectId, name: input.name, slug: physicalSlug, ...serviceData(input, options) } });
+      if (!binding) await tx.environmentService.create({ data: { environmentId: environment.id, projectId: input.projectId, serviceId: service.id, logicalSlug, displayName: input.name } });
+      return publicEnvironmentSubject(service, { environmentId: environment.id, environmentKind: environment.kind, logicalSlug, displayName: input.name });
     });
   }
 
@@ -1100,15 +1249,19 @@ export class PrismaControlPlaneRepository {
     requireResourceExecution(normalizeResourceEngine(input.engine || input.type));
     const row = await serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       await requireMutableProject(tx, input.projectId);
-      const existing = await tx.resource.findUnique({ where: { projectId_name: { projectId: input.projectId, name: input.name } } });
+      const environment = await resolvePrismaEnvironment(tx, input.projectId, input);
+      await setOperationalProtocolVersion(tx);
+      const logicalSlug = slugInput(input.logicalSlug || input.slug || input.name);
+      const binding = await tx.environmentResource.findUnique({ where: { environmentId_logicalSlug: { environmentId: environment.id, logicalSlug } } });
+      const existing = binding ? await tx.resource.findUnique({ where: { id: binding.resourceId } }) : null;
       assertMutable(existing, 'resource');
       if (String(existing?.status || '').toUpperCase() === 'READY') return existing;
       await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'resource:create', resourceQuotaRequirements(existing, input));
-      return tx.resource.upsert({
-        where: { projectId_name: { projectId: input.projectId, name: input.name } },
-        update: resourceData({ ...input, slug: input.slug || existing?.slug }, { connectionSecretName: existing?.connectionSecretName || null, baseDesiredSpec: existing?.desiredSpec || {}, currentDesiredState: existing?.desiredState || {} }),
-        create: { projectId: input.projectId, name: input.name, slug: input.slug || slugInput(input.name), ...resourceData(input) },
-      });
+      if (existing) return tx.resource.update({ where: { id: existing.id }, data: resourceData({ ...input, slug: existing.slug }, { connectionSecretName: existing.connectionSecretName || null, baseDesiredSpec: existing.desiredSpec || {}, currentDesiredState: existing.desiredState || {} }) });
+      const physicalName = environment.kind === 'prod' ? input.name : environmentPhysicalSlug(environment.kind, environment.id, logicalSlug);
+      const resource = await tx.resource.create({ data: { ...resourceData(input), ...(environment.kind === 'dev' ? { id: developmentEnvironmentSubjectId('res', input.projectId, environment.id, logicalSlug) } : {}), projectId: input.projectId, name: physicalName, slug: environmentPhysicalSlug(environment.kind, environment.id, logicalSlug) } });
+      await tx.environmentResource.create({ data: { environmentId: environment.id, projectId: input.projectId, resourceId: resource.id, logicalSlug, displayName: input.name } });
+      return resource;
     });
     return this.getResource(row.id);
   }
@@ -1116,13 +1269,21 @@ export class PrismaControlPlaneRepository {
   async updateResource(resourceId: string, updates: Record<string, any>) {
     parseResourceMutation(updates);
     const updated = await this.prisma.$transaction(async (tx: any) => {
-      const current = await tx.resource.findUnique({ where: { id: resourceId } });
+      const current = await tx.resource.findUnique({ where: { id: resourceId }, include: { environmentBinding: { include: { environment: true } } } });
       if (!current) return null;
       assertMutable(current, 'resource');
         if (String(current.status || '').toUpperCase() === 'READY') throw conflictError('READY managed resources cannot be updated in place; delete and recreate the resource');
     if (String(current.status || '').toUpperCase() === 'RECONCILING' && Object.keys(updates || {}).length > 0) throw conflictError('RECONCILING managed resources cannot be updated while the provisioner claim is active');
       await requireMutableProject(tx, current.projectId);
-      const row = await tx.resource.update({ where: { id: resourceId }, data: resourceData({ ...current, ...updates, projectId: current.projectId, name: updates.name || current.name }, { connectionSecretName: current.connectionSecretName || null, baseDesiredSpec: current.desiredSpec || {}, currentDesiredState: current.desiredState || {} }) });
+      const safeUpdates = { ...updates };
+      await setOperationalProtocolVersion(tx);
+      if (current.environmentBinding?.environment?.kind === 'dev' && typeof safeUpdates.name === 'string') {
+        await tx.environmentResource.update({ where: { resourceId }, data: { displayName: safeUpdates.name } });
+        delete safeUpdates.name;
+        delete safeUpdates.slug;
+      }
+      const { desiredSpec: baseDesiredSpec, ...currentInput } = current;
+      const row = await tx.resource.update({ where: { id: resourceId }, data: resourceData({ ...currentInput, ...safeUpdates, projectId: current.projectId, name: safeUpdates.name || current.name }, { connectionSecretName: current.connectionSecretName || null, baseDesiredSpec: baseDesiredSpec || {}, currentDesiredState: current.desiredState || {} }) });
       await tx.auditLog.create({ data: { actorUserId: null, action: 'resource:update', targetType: 'resource', targetId: resourceId, metadata: maskSecrets(updates) } });
       return row;
     }, { isolationLevel: 'Serializable' });
@@ -1133,6 +1294,7 @@ export class PrismaControlPlaneRepository {
   async deleteResource(resourceId: string) {
     return this.prisma.$transaction(async (tx: any) => {
       await lockRecoveryDeletion(tx, { resourceId });
+      await setOperationalProtocolVersion(tx);
       const current = await tx.resource.findUnique({ where: { id: resourceId } });
       if (!current) return null;
       const attachmentsRevoked = await revokeResourceAttachments(tx, [resourceId]);
@@ -1158,6 +1320,7 @@ export class PrismaControlPlaneRepository {
         assertMutable(resource, 'resource');
         if (['READY', 'RECONCILING'].includes(String(resource.status).toUpperCase())) throw conflictError('Active managed resources cannot be reprovisioned');
         await requireMutableProject(tx, resource.projectId);
+        await setOperationalProtocolVersion(tx);
         // Persist a request only; the authoritative Go provisioner owns execution.
         const result = { intent, engine: plan.engine, provider: plan.provider, status: 'PROVISIONING', dryRun: false };
         const updated = await tx.resource.update({
@@ -1183,18 +1346,21 @@ export class PrismaControlPlaneRepository {
 
   async createDeployment(input: Record<string, any>) {
     return this.prisma.$transaction(async (tx: any) => {
-      const service = input.serviceId ? await tx.service.findUnique({ where: { id: input.serviceId } }) : null;
+      const service = input.serviceId ? await tx.service.findUnique({ where: { id: input.serviceId }, include: { environmentBinding: { include: { environment: true } } } }) : null;
       if (!service) throw notFoundError(`service not found: ${input.serviceId}`);
+      const environment = requirePrismaServiceEnvironment(service);
+      if ((input.projectId && input.projectId !== service.projectId) || (input.environmentId && input.environmentId !== environment.id)) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
       assertMutable(service, 'service');
-      const projectId = input.projectId || service.projectId;
+      const projectId = service.projectId;
       await requireMutableProject(tx, projectId);
-      return tx.deployment.create({ data: deploymentData({ ...input, projectId, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
+      await setOperationalProtocolVersion(tx);
+      return tx.deployment.create({ data: deploymentData({ ...input, projectId, environmentId: environment.id, desiredSpecSnapshot: prismaDeploymentSnapshot(service), snapshotVersion: 1 }) });
     }, { isolationLevel: 'Serializable' });
   }
 
   async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
-    return this.prisma.$transaction(async (tx: any) => {
-      const current = await tx.service.findUnique({ where: { id: serviceId } });
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const current = await tx.service.findUnique({ where: { id: serviceId }, include: { environmentBinding: { include: { environment: true } } } });
       if (!current) return null;
       assertMutable(current, 'service');
       assertPrismaGitHubBindingImmutable(current, updates);
@@ -1206,18 +1372,26 @@ export class PrismaControlPlaneRepository {
         ? Boolean(await tx.deployment.findFirst({ where: { serviceId }, select: { id: true } })) : false;
       const quota = !trusted && parsed.resources !== undefined && options.actorUserId
         ? await tx.quota.findFirst({ where: { userId: options.actorUserId }, orderBy: { updatedAt: 'desc' } }) : undefined;
-      const safeUpdates = trusted ? parsed : serviceMutationState(current, parsed, { deployed, quota });
+      const safeUpdates = trusted ? { ...parsed } : serviceMutationState(current, parsed, { deployed, quota });
+      await setOperationalProtocolVersion(tx);
+      if (current.environmentBinding?.environment?.kind === 'dev' && typeof safeUpdates.name === 'string') {
+        await tx.environmentService.update({ where: { serviceId }, data: { displayName: safeUpdates.name } });
+        delete safeUpdates.name;
+        delete safeUpdates.slug;
+      }
       return tx.service.update({
         where: { id: serviceId },
         data: serviceUpdateData(safeUpdates, { ...options, currentDesiredState: current.desiredState, currentDesiredSpec: current.desiredSpec }),
       });
     }, { isolationLevel: 'Serializable' });
+    return updated ? this.getService(serviceId) : null;
   }
 
   async deleteService(serviceId: string) {
     return this.prisma.$transaction(async (tx: any) => {
       const current = await tx.service.findUnique({ where: { id: serviceId } });
       if (!current) return null;
+      await setOperationalProtocolVersion(tx);
       const deployments = await tx.deployment.findMany({ where: { serviceId }, select: { id: true } });
       await tx.service.updateMany({
         where: { id: serviceId, status: { notIn: deletionStatuses } },
@@ -1230,38 +1404,36 @@ export class PrismaControlPlaneRepository {
   }
 
   async updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
-    const current = await this.prisma.deployment.findUnique({ where: { id: deploymentId } });
-    if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
-    if (current && Object.prototype.hasOwnProperty.call(updates || {}, 'status')) {
-      if (options.validateTransition === true) assertDeploymentTransition(current.status, updates.status);
-    }
-    const data = deploymentUpdateData(updates, current);
-    const deployment = await this.prisma.deployment.update({ where: { id: deploymentId }, data });
-    const statusChanged = Object.prototype.hasOwnProperty.call(data, 'status') && normalizeDeploymentStatus(current.status) !== normalizeDeploymentStatus(deployment.status);
-    if ((statusChanged || options.eventType) && options.appendEvent !== false) {
-      await this.appendDeploymentEvent({
-        deploymentId,
-        type: options.eventType || 'deployment.status.changed',
-        message: options.message || `Deployment status changed: ${normalizeDeploymentStatus(current.status)} -> ${normalizeDeploymentStatus(deployment.status)}`,
-        metadata: { from: normalizeDeploymentStatus(current.status), to: normalizeDeploymentStatus(deployment.status), imageUrl: deployment.imageUrl, imageDigest: deployment.imageDigest, errorCode: deployment.errorCode, ...(options.metadata || {}) },
-      });
-    }
-    return deployment;
+    return serializableTransactionWithRetry(this.prisma, async (tx: Prisma.TransactionClient) => {
+      const current = await tx.deployment.findUnique({ where: { id: deploymentId } });
+      if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
+      const service = await tx.service.findUnique({ where: { id: current.serviceId }, include: { environmentBinding: { include: { environment: true } } } });
+      if (!service) throw notFoundError(`service not found: ${current.serviceId}`);
+      const environment = requirePrismaServiceEnvironment(service);
+      if (current.projectId !== service.projectId || (current.environmentId ?? environmentIdForKind(current.projectId, 'prod')) !== environment.id) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      if (Object.prototype.hasOwnProperty.call(updates || {}, 'status') && options.validateTransition === true) assertDeploymentTransition(current.status, updates.status);
+      const data = deploymentUpdateData(updates, current);
+      const deployment = await tx.deployment.update({ where: { id: deploymentId }, data });
+      const statusChanged = Object.prototype.hasOwnProperty.call(data, 'status') && normalizeDeploymentStatus(current.status) !== normalizeDeploymentStatus(deployment.status);
+      if ((statusChanged || options.eventType) && options.appendEvent !== false) {
+        await tx.deploymentEvent.create({ data: {
+          deploymentId,
+          type: options.eventType || 'deployment.status.changed',
+          message: maskLogLine(options.message || `Deployment status changed: ${normalizeDeploymentStatus(current.status)} -> ${normalizeDeploymentStatus(deployment.status)}`),
+          metadata: sanitizeJson(sanitizeLogRecord({ from: normalizeDeploymentStatus(current.status), to: normalizeDeploymentStatus(deployment.status), imageUrl: deployment.imageUrl, imageDigest: deployment.imageDigest, errorCode: deployment.errorCode, ...(options.metadata || {}) })),
+        } });
+      }
+      return deployment;
+    });
   }
 
   async transitionDeployment(deploymentId: string, status: string, updates: Record<string, any> = {}, options: Record<string, any> = {}) {
-    const current = await this.prisma.deployment.findUnique({ where: { id: deploymentId } });
-    if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
-    const nextStatus = normalizeDeploymentStatus(status);
-    assertDeploymentTransition(current.status, nextStatus);
-    const deployment = await this.updateDeployment(deploymentId, { ...updates, status: nextStatus }, { ...options, appendEvent: false });
-    await this.appendDeploymentEvent({
-      deploymentId,
-      type: options.eventType || 'deployment.status.changed',
-      message: options.message || `Deployment status changed: ${normalizeDeploymentStatus(current.status)} -> ${nextStatus}`,
-      metadata: { from: normalizeDeploymentStatus(current.status), to: nextStatus, ...(options.metadata || {}) },
+    return this.updateDeployment(deploymentId, { ...updates, status: normalizeDeploymentStatus(status) }, {
+      ...options,
+      validateTransition: true,
+      appendEvent: true,
+      eventType: options.eventType || 'deployment.status.changed',
     });
-    return deployment;
   }
 
   async cancelDeployment(deploymentId: string, input: Record<string, any> = {}) {
@@ -1314,6 +1486,10 @@ export class PrismaControlPlaneRepository {
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const current = await tx.deployment.findUnique({ where: { id: deploymentId } });
       if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
+      const service = await tx.service.findUnique({ where: { id: current.serviceId }, include: { environmentBinding: { include: { environment: true } } } });
+      if (!service) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      const environment = requirePrismaServiceEnvironment(service);
+      if ((current.environmentId ?? environmentIdForKind(current.projectId, 'prod')) !== environment.id) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
       const previous = input.previousDeploymentId
         ? await tx.deployment.findUnique({ where: { id: String(input.previousDeploymentId) } })
         : await tx.deployment.findFirst({
@@ -1321,6 +1497,7 @@ export class PrismaControlPlaneRepository {
           orderBy: [{ deployedAt: 'desc' }, { finishedAt: 'desc' }, { createdAt: 'desc' }],
         });
       validateRollbackSource(current, previous, input.previousDeploymentId);
+      if (previous && (previous.environmentId ?? environmentIdForKind(previous.projectId, 'prod')) !== environment.id) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
       const imageUrl = previous?.imageUrl || null;
       if (!imageUrl) throw conflictError('no previous READY deployment image is available for rollback');
       const imageDigest = previous?.imageDigest || null;
@@ -1328,6 +1505,9 @@ export class PrismaControlPlaneRepository {
       const rollback = await tx.deployment.create({ data: deploymentData({
         serviceId: current.serviceId,
         projectId: current.projectId,
+        environmentId: environment.id,
+        desiredSpecSnapshot: previous?.desiredSpecSnapshot || prismaDeploymentSnapshot(service),
+        snapshotVersion: previous?.snapshotVersion || 1,
         commitSha: previous?.commitSha || current.commitSha || null,
         imageUrl,
         imageDigest,
@@ -1342,7 +1522,9 @@ export class PrismaControlPlaneRepository {
         type: 'rollback-deploy',
         targetType: 'deployment',
         targetId: rollback.id,
-        payload: { deploymentId: rollback.id, rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, serviceId: rollback.serviceId, projectId: rollback.projectId, imageUrl, imageDigest },
+        environmentId: environment.id,
+        environmentKind: environment.kind,
+        payload: { deploymentId: rollback.id, rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, serviceId: rollback.serviceId, projectId: rollback.projectId, environmentId: environment.id, environmentKind: environment.kind, imageUrl, imageDigest },
       }) });
       return { deployment: rollback, rollbackOfDeploymentId: current.id, previousDeployment: previous || null, workflowJob };
     });
@@ -1378,17 +1560,22 @@ export class PrismaControlPlaneRepository {
   async createDeploymentWorkflow(input: Record<string, any>) {
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const requestedDeployment = input.deployment || input;
-      const service = await tx.service.findUnique({ where: { id: requestedDeployment.serviceId } });
+      const service = await tx.service.findUnique({ where: { id: requestedDeployment.serviceId }, include: { environmentBinding: { include: { environment: true } } } });
       if (!service) throw notFoundError(`service not found: ${requestedDeployment.serviceId}`);
+      const environment = requirePrismaServiceEnvironment(service);
+      if ((requestedDeployment.projectId && requestedDeployment.projectId !== service.projectId) || (requestedDeployment.environmentId && requestedDeployment.environmentId !== environment.id)) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
       assertMutable(service, 'service');
-      await requireMutableProject(tx, requestedDeployment.projectId || service.projectId);
+      await requireMutableProject(tx, service.projectId);
       await enforcePrismaQuotaRequirements(tx, input.actorUserId || requestedDeployment.actorUserId, 'deployment:create', deploymentQuotaRequirements(requestedDeployment.deploymentType));
-      const deployment = await tx.deployment.create({ data: deploymentData({ ...requestedDeployment, projectId: requestedDeployment.projectId || service?.projectId, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
+      const deployment = await tx.deployment.create({ data: deploymentData({ ...requestedDeployment, projectId: service.projectId, environmentId: environment.id, desiredSpecSnapshot: prismaDeploymentSnapshot(service), snapshotVersion: 1 }) });
       const workflowJob = await tx.workflowJob.create({ data: workflowJobData({
         ...(input.workflow || {}),
         targetType: 'deployment',
         targetId: deployment.id,
-        payload: { ...(input.workflow?.payload || {}), deploymentId: deployment.id },
+        environmentId: environment.id,
+        environmentKind: environment.kind,
+        operationalProtocolVersion: environment.kind === 'dev' ? 2 : 1,
+        payload: { ...(input.workflow?.payload || {}), deploymentId: deployment.id, serviceId: service.id, projectId: service.projectId, environmentId: environment.id, environmentKind: environment.kind, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: deployment.snapshotVersion },
       }) });
       return { deployment, workflowJob };
     });
@@ -1403,7 +1590,8 @@ export class PrismaControlPlaneRepository {
   }
 
   async getService(serviceId: string) {
-    return this.prisma.service.findUnique({ where: { id: serviceId } });
+    const row = await this.prisma.service.findUnique({ where: { id: serviceId }, include: { environmentBinding: { include: { environment: true } } } });
+    return publicPrismaEnvironmentSubject(row);
   }
 
   async getServiceSettings(serviceId: string) {
@@ -1425,13 +1613,19 @@ export class PrismaControlPlaneRepository {
   async updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
     const parsed = parseServiceSettingsInput(input);
     return this.prisma.$transaction(async (tx: any) => {
-      const current = await tx.service.findUnique({ where: { id: serviceId } });
+      const current = await tx.service.findUnique({ where: { id: serviceId }, include: { environmentBinding: { include: { environment: true } } } });
       if (!current) return null;
       await requireMutableProject(tx, current.projectId);
       const deployed = Boolean(await tx.deployment.findFirst({ where: { serviceId }, select: { id: true } }));
       const quota = options.actorUserId ? await tx.quota.findFirst({ where: { userId: options.actorUserId }, orderBy: { updatedAt: 'desc' } }) : undefined;
       previewServiceSettings(current, parsed, { deployed, quota });
       const safeUpdates = serviceMutationState(current, parsed.changes, { deployed, quota });
+      await setOperationalProtocolVersion(tx);
+      if (current.environmentBinding?.environment?.kind === 'dev' && typeof safeUpdates.name === 'string') {
+        await tx.environmentService.update({ where: { serviceId }, data: { displayName: safeUpdates.name } });
+        delete safeUpdates.name;
+        delete safeUpdates.slug;
+      }
       const result = await tx.service.updateMany({
         where: { id: serviceId, updatedAt: current.updatedAt },
         data: serviceUpdateData(safeUpdates, { currentDesiredState: current.desiredState, currentDesiredSpec: current.desiredSpec }),
@@ -1446,15 +1640,20 @@ export class PrismaControlPlaneRepository {
   async createServiceReplacement(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
     const replacementInput = parseServiceReplacement(input);
     return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
-      const current = await tx.service.findUnique({ where: { id: serviceId } });
+      const current = await tx.service.findUnique({ where: { id: serviceId }, include: { environmentBinding: { include: { environment: true } } } });
       if (!current) return null;
       assertExpectedServiceVersion(current, replacementInput.expectedUpdatedAt);
       await requireMutableProject(tx, current.projectId);
       if (!await tx.deployment.findFirst({ where: { serviceId }, select: { id: true } })) throw new ServiceSettingsError('REPLACEMENT_REQUIRES_DEPLOYMENT', 409);
-      const slug = slugInput(replacementInput.name);
-      if (await tx.service.findUnique({ where: { projectId_slug: { projectId: current.projectId, slug } }, select: { id: true } })) throw conflictError('replacement service name is already in use');
+      const binding = current.environmentBinding;
+      if (!binding || (binding.environment.kind !== 'prod' && binding.environment.kind !== 'dev')) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      const logicalSlug = slugInput(replacementInput.name);
+      if (await tx.environmentService.findUnique({ where: { environmentId_logicalSlug: { environmentId: binding.environmentId, logicalSlug } } })) throw conflictError('replacement service name is already in use');
       await enforcePrismaQuotaRequirements(tx, options.actorUserId, 'service:create', serviceQuotaRequirements(null, replacementInput.source));
+      await setOperationalProtocolVersion(tx);
+      const slug = environmentPhysicalSlug(binding.environment.kind, binding.environmentId, logicalSlug);
       const service = await tx.service.create({ data: { projectId: current.projectId, name: replacementInput.name, slug, ...serviceData(replacementInput.source) } });
+      await tx.environmentService.create({ data: { environmentId: binding.environmentId, projectId: current.projectId, serviceId: service.id, logicalSlug, displayName: replacementInput.name } });
       await tx.auditLog.create({ data: { actorUserId: options.actorUserId || null, action: 'service:create', targetType: 'service', targetId: service.id, metadata: { projectId: current.projectId, replacementForServiceId: serviceId } } });
       return { impact: 'old_service_preserved', oldServiceId: serviceId, service };
     });
@@ -1487,8 +1686,10 @@ export class PrismaControlPlaneRepository {
     }
   }
 
-  async listCustomDomainsForProject(projectId: string) {
-    const rows = await this.prisma.domain.findMany({ where: { projectId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+  async listCustomDomainsForProject(projectId: string, options: Record<string, any> = {}) {
+    const environment = await resolvePrismaEnvironment(this.prisma, projectId, options);
+    const bindings = await (this.prisma as any).environmentService.findMany({ where: { environmentId: environment.id }, select: { serviceId: true } });
+    const rows = await this.prisma.domain.findMany({ where: { projectId, serviceId: { in: bindings.map((binding: Record<string, any>) => String(binding.serviceId)) } }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
     return rows.filter(isManagedDomainRow).map((row) => publicCustomDomain(persistedDomainRecord(row)));
   }
 
@@ -1541,8 +1742,10 @@ export class PrismaControlPlaneRepository {
       // READ COMMITTED takes a fresh snapshot after the per-service lock, so all
       // concurrent replays observe the committed winner without retry storms.
       await tx.$queryRaw`SELECT 1::int AS locked FROM pg_advisory_xact_lock(hashtextextended(${input.serviceId}, 15))`;
-      const service = await tx.service.findUnique({ where: { id: input.serviceId } });
+      const service = await tx.service.findUnique({ where: { id: input.serviceId }, include: { environmentBinding: { include: { environment: true } } } });
       if (!service) throw new DeploymentOperationError('DEPLOYMENT_SOURCE_NOT_FOUND', 404);
+      const environment = requirePrismaServiceEnvironment(service);
+      await setOperationalProtocolVersion(tx);
       const existing = await tx.deployment.findUnique({ where: { serviceId_requestIdempotencyKey: { serviceId: input.serviceId, requestIdempotencyKey: input.requestIdempotencyKey } } });
       if (existing) {
         const workflowJob = await tx.workflowJob.findFirst({ where: { targetId: existing.id, targetType: 'deployment' } });
@@ -1553,6 +1756,7 @@ export class PrismaControlPlaneRepository {
       const source = input.operation === 'retry'
         ? await tx.deployment.findUnique({ where: { id: input.sourceDeploymentId || '' } })
         : await tx.deployment.findFirst({ where: { serviceId: input.serviceId, status: { in: ['BUILD_FAILED', 'FAILED', 'READY'] } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
+      if (source && (source.projectId !== service.projectId || (source.environmentId ?? environmentIdForKind(service.projectId, 'prod')) !== environment.id)) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
       let previewLineage: PreviewLineageRecord | null = null;
       if (String(source?.deploymentType || '').toLowerCase() === 'preview') {
         const lineageRow = await tx.previewLineage.findUnique({ where: { id: source.previewLineageId || '' } });
@@ -1571,8 +1775,9 @@ export class PrismaControlPlaneRepository {
       await requireMutableProject(tx, service.projectId);
       await enforcePrismaQuotaRequirements(tx, input.requestedByUserId === 'system' ? null : input.requestedByUserId, 'deployment:create', deploymentQuotaRequirements(candidate.deploymentType));
       const { previewRuntime, ...candidateWithoutPreviewRuntime } = candidate;
-      const deployment = await tx.deployment.create({ data: previewRuntime === null ? candidateWithoutPreviewRuntime : candidate });
-      const workflowJob = await tx.workflowJob.create({ data: workflowJobData(successorWorkflow(candidate, input)) });
+      const deployment = await tx.deployment.create({ data: { ...(previewRuntime === null ? candidateWithoutPreviewRuntime : candidate), environmentId: environment.id } });
+      const workflow = successorWorkflow(candidate, input);
+      const workflowJob = await tx.workflowJob.create({ data: workflowJobData({ ...workflow, environmentId: environment.id, environmentKind: environment.kind, operationalProtocolVersion: environment.kind === 'dev' ? 2 : 1, payload: { ...workflow.payload, environmentId: environment.id, environmentKind: environment.kind } }) });
       if (candidate.previewLineageId) await tx.previewLineage.update({ where: { id: candidate.previewLineageId }, data: { candidateDeploymentId: deployment.id, candidateGeneration: candidate.previewGeneration } });
       await tx.deploymentEvent.create({ data: { deploymentId: deployment.id, type: 'deployment.queued', message: 'Immutable deployment operation queued', metadata: { sourceDeploymentId: candidate.sourceDeploymentId } } });
       return { deployment, workflowJob, operationId: workflowJob.id, status: deployment.status, streamHref: `/deployments/${deployment.id}/stream` };
@@ -1580,7 +1785,8 @@ export class PrismaControlPlaneRepository {
   }
 
   async getResource(resourceId: string) {
-    return this.prisma.resource.findUnique({ where: { id: resourceId } });
+    const row = await this.prisma.resource.findUnique({ where: { id: resourceId }, include: { environmentBinding: { include: { environment: true } } } });
+    return publicPrismaEnvironmentSubject(row);
   }
 
   async getDeployment(deploymentId: string) {
@@ -1676,11 +1882,21 @@ export class PrismaControlPlaneRepository {
   }
 
   async listServicesForProject(projectId: string, options: Record<string, any> = {}) {
-    return findKeysetRows(this.prisma.service, { projectId }, options);
+    const environment = await resolvePrismaEnvironment(this.prisma, projectId, options);
+    return (await findKeysetRows(this.prisma.service, { projectId, environmentBinding: { is: { environmentId: environment.id } } }, options, { include: { environmentBinding: true } }))
+      .map((row: Record<string, any>) => {
+        const { environmentBinding, ...subject } = row;
+        return publicEnvironmentSubject(subject, { ...environmentBinding, environmentKind: environment.kind });
+      });
   }
 
   async listResourcesForProject(projectId: string, options: Record<string, any> = {}) {
-    return findKeysetRows(this.prisma.resource, { projectId }, options);
+    const environment = await resolvePrismaEnvironment(this.prisma, projectId, options);
+    return (await findKeysetRows(this.prisma.resource, { projectId, environmentBinding: { is: { environmentId: environment.id } } }, options, { include: { environmentBinding: true } }))
+      .map((row: Record<string, any>) => {
+        const { environmentBinding, ...subject } = row;
+        return publicEnvironmentSubject(subject, { ...environmentBinding, environmentKind: environment.kind });
+      });
   }
 
   async listDeploymentsForService(serviceId: string, options: Record<string, any> = {}) {
@@ -1688,19 +1904,24 @@ export class PrismaControlPlaneRepository {
   }
 
   async listDeploymentsForProject(projectId: string, options: Record<string, any> = {}) {
-    return (await findKeysetRows(this.prisma.deployment, { projectId }, options)).map(publicDeploymentHealth);
+    const environment = await resolvePrismaEnvironment(this.prisma, projectId, options);
+    return (await findKeysetRows(this.prisma.deployment, { projectId, ...deploymentEnvironmentWhere(environment) }, options))
+      .map((row: Record<string, unknown>) => publicDeploymentHealth({ ...row, environmentId: environment.id, environmentKind: environment.kind }));
   }
 
   async listDeploymentHistory(input: DeploymentHistoryScope & { readonly query: DeploymentHistoryQuery; readonly execute: boolean }) {
     const project = await this.prisma.project.findFirst({ where: { id: input.projectId, organizationId: input.organizationId }, select: { id: true } });
     if (!project) return null;
-    const cursor = input.query.cursor ? decodeDeploymentHistoryCursor(input.query.cursor, input, input.query) : null;
+    const environment = await resolvePrismaEnvironment(this.prisma, input.projectId, input);
+    const scope = { ...input, environmentId: environment.id, environmentKind: environment.kind };
+    const cursor = input.query.cursor ? decodeDeploymentHistoryCursor(input.query.cursor, scope, input.query) : null;
     const createdAt = {
       ...(input.query.from ? { gte: new Date(input.query.from) } : {}),
       ...(input.query.to ? { lte: new Date(input.query.to) } : {}),
     };
     const filters: Prisma.DeploymentWhereInput = {
       projectId: input.projectId,
+      ...deploymentEnvironmentWhere(environment),
       ...(input.query.serviceId ? { serviceId: input.query.serviceId } : {}),
       ...(input.query.environment ? { deploymentType: { in: [input.query.environment, input.query.environment.toUpperCase()] } } : {}),
       ...(input.query.status ? { status: input.query.status } : {}),
@@ -1710,21 +1931,22 @@ export class PrismaControlPlaneRepository {
     const where: Prisma.DeploymentWhereInput = cursor ? { AND: [filters, { OR: [{ createdAt: { lt: new Date(cursor.at) } }, { createdAt: new Date(cursor.at), id: { lt: cursor.id } }] }] } : filters;
     const rows = await this.prisma.deployment.findMany({
       where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: input.query.limit + 1,
-      include: { service: { select: { id: true, name: true, slug: true } } },
+      include: { service: { include: { environmentBinding: { include: { environment: true } } } } },
     });
     const serviceIds = [...new Set(rows.map((row) => row.serviceId))];
-    const actionDeployments = serviceIds.length === 0 ? [] : await this.prisma.deployment.findMany({ where: { projectId: input.projectId, serviceId: { in: serviceIds } } });
-    return deploymentHistoryPage({ deployments: rows, actionDeployments, services: rows.map((row) => row.service), query: input.query, scope: input, execute: input.execute });
+    const actionDeployments = serviceIds.length === 0 ? [] : await this.prisma.deployment.findMany({ where: { projectId: input.projectId, serviceId: { in: serviceIds }, ...deploymentEnvironmentWhere(environment) } });
+    return deploymentHistoryPage({ deployments: rows.map(row => ({ ...row, environmentId: environment.id, environmentKind: environment.kind })), actionDeployments, services: rows.map(row => publicPrismaEnvironmentSubject(row.service)), query: input.query, scope, execute: input.execute });
   }
 
   async getDeploymentHistoryItem(deploymentId: string, input: Omit<DeploymentHistoryScope, 'cursorSecret'> & { readonly execute: boolean }) {
+    const environment = await resolvePrismaEnvironment(this.prisma, input.projectId, input);
     const deployment = await this.prisma.deployment.findFirst({
-      where: { id: deploymentId, projectId: input.projectId, project: { organizationId: input.organizationId } },
-      include: { service: { select: { id: true, name: true, slug: true } } },
+      where: { id: deploymentId, projectId: input.projectId, project: { organizationId: input.organizationId }, ...deploymentEnvironmentWhere(environment) },
+      include: { service: { include: { environmentBinding: { include: { environment: true } } } } },
     });
     if (!deployment) return null;
-    const serviceDeployments = await this.prisma.deployment.findMany({ where: { projectId: input.projectId, serviceId: deployment.serviceId } });
-    return deploymentHistoryRow({ deployment, service: deployment.service, serviceDeployments, execute: input.execute });
+    const serviceDeployments = await this.prisma.deployment.findMany({ where: { projectId: input.projectId, serviceId: deployment.serviceId, ...deploymentEnvironmentWhere(environment) } });
+    return deploymentHistoryRow({ deployment: { ...deployment, environmentId: environment.id, environmentKind: environment.kind }, service: publicPrismaEnvironmentSubject(deployment.service), serviceDeployments, execute: input.execute });
   }
 
   async upsertServiceEnvironment(input: Record<string, any>) {
@@ -1733,6 +1955,7 @@ export class PrismaControlPlaneRepository {
       if (!service) throw notFoundError(`service not found: ${input.serviceId}`);
       assertMutable(service, 'service');
       await requireMutableProject(tx, input.projectId || service.projectId);
+      await setOperationalProtocolVersion(tx);
       return upsertServiceEnvironmentWithDb(tx, { ...input, projectId: service.projectId, desiredSpec: service.desiredSpec });
     }, { isolationLevel: 'Serializable' });
   }
@@ -1888,10 +2111,10 @@ export class PrismaControlPlaneRepository {
   }
 
   async attachGitHubRepositoryToService(input: Record<string, any>) {
-    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
+    const result = await serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const serviceRow = await tx.service.findUnique({ where: { id: input.serviceId }, include: { project: true } });
       if (!serviceRow) throw notFoundError(`service not found: ${input.serviceId}`);
-      if (String(serviceRow.projectId) !== String(input.projectId)) throw forbiddenError('service does not belong to project');
+      if (String(serviceRow.projectId) !== String(input.projectId)) throw notFoundError(`service not found: ${input.serviceId}`);
       const hasDeployment = Boolean(await tx.deployment.findFirst({ where: { serviceId: input.serviceId }, select: { id: true } }));
       const integration = await requireVerifiedPrismaGitHubIntegration(tx, input.integrationId, serviceRow.project?.organizationId);
       const repo = await resolvePrismaGitHubRepository(tx, integration.installationId, input);
@@ -1914,6 +2137,7 @@ export class PrismaControlPlaneRepository {
       return { service, github: { ...binding.github, branch } };
       });
     });
+    return { ...result, service: await this.getService(input.serviceId) };
   }
 
   async listGitHubInstallations(input: Record<string, any>) {
@@ -1981,18 +2205,22 @@ export class PrismaControlPlaneRepository {
       const project = await tx.project.findUnique({ where: { id: input.projectId } });
       if (!project) throw notFoundError(`project not found: ${input.projectId}`);
       assertMutable(project, 'project');
+      const environment = await resolvePrismaEnvironment(tx, input.projectId, input);
+      await setOperationalProtocolVersion(tx);
       const integration = await requireVerifiedPrismaGitHubIntegration(tx, input.integrationId, project.organizationId);
       const repo = await resolvePrismaGitHubRepository(tx, integration.installationId, input);
       const installation = await tx.gitHubInstallation.findUnique({ where: { installationId: String(integration.installationId) } });
       assertPrismaGitHubSourceReady(integration, installation, repo, input);
-      return prismaGitHubSourceMutation(tx, { ...input, organizationId: project.organizationId, operation: 'import', payload: { projectId: input.projectId, integrationId: input.integrationId, repositoryId: input.repositoryId, repository: input.repository, repoUrl: input.repoUrl, branch: input.branch, serviceName: input.serviceName, serviceSlug: input.serviceSlug, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration } }, async () => {
-      const duplicate = await tx.service.findFirst({ where: { githubRepositoryId: String(repo.githubRepoId), project: { organizationId: project.organizationId } } });
+      return prismaGitHubSourceMutation(tx, { ...input, organizationId: project.organizationId, operation: 'import', payload: { projectId: input.projectId, environmentId: environment.id, integrationId: input.integrationId, repositoryId: input.repositoryId, repository: input.repository, repoUrl: input.repoUrl, branch: input.branch, serviceName: input.serviceName, serviceSlug: input.serviceSlug, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration } }, async () => {
+      const name = input.serviceName || repo.repo;
+      const logicalSlug = input.serviceSlug || slugInput(name);
+      const duplicate = await tx.service.findFirst({ where: { githubRepositoryId: String(repo.githubRepoId), environmentBinding: { is: { environmentId: environment.id, logicalSlug } } } });
       if (duplicate) githubSourceConflict('GITHUB_DUPLICATE_IMPORT', { action: String(duplicate.projectId) === String(input.projectId) ? 'OPEN_EXISTING_SERVICE' : 'OPEN_EXISTING_PROJECT', projectId: String(duplicate.projectId), ...(String(duplicate.projectId) === String(input.projectId) ? { serviceId: String(duplicate.id) } : {}) });
       const branch = input.branch || repo.defaultBranch || integration.defaultBranch || 'main';
       const binding = prismaGitHubServiceBinding(integration, repo);
-      const name = input.serviceName || repo.repo;
-      const slug = input.serviceSlug || slugInput(name);
-      const existing = await tx.service.findUnique({ where: { projectId_slug: { projectId: input.projectId, slug } } });
+      const slug = environmentPhysicalSlug(environment.kind, environment.id, logicalSlug);
+      const existingBinding = await tx.environmentService.findUnique({ where: { environmentId_logicalSlug: { environmentId: environment.id, logicalSlug } } });
+      const existing = existingBinding ? await tx.service.findUnique({ where: { id: existingBinding.serviceId } }) : null;
       if (existing) githubSourceConflict('GITHUB_PROJECT_SLUG_COLLISION', { action: 'CHOOSE_NEW_SLUG', projectId: input.projectId, suggestedSlug: `${slug}-2` });
       const serviceInput = {
         projectId: input.projectId,
@@ -2008,8 +2236,9 @@ export class PrismaControlPlaneRepository {
       };
       await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'service:create', serviceQuotaRequirements(existing, serviceInput));
       const service = await tx.service.create({ data: { projectId: input.projectId, name, slug, ...serviceData(serviceInput, { allowGitHubBinding: true }) } });
+      await tx.environmentService.create({ data: { environmentId: environment.id, projectId: input.projectId, serviceId: service.id, logicalSlug, displayName: name } });
       await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:import-repository', targetType: 'project', targetId: input.projectId, metadata: maskSecrets({ repository: repo.fullName, repositoryId: repo.githubRepoId, integrationId: integration.id, installationId: integration.installationId }) } });
-      return { service, github: { ...binding.github, branch } };
+      return { service: publicEnvironmentSubject(service, { environmentId: environment.id, environmentKind: environment.kind, logicalSlug, displayName: name }), github: { ...binding.github, branch } };
       });
     });
   }
@@ -2020,14 +2249,17 @@ export class PrismaControlPlaneRepository {
 
   async syncGitHubRepository(input: Record<string, any>) {
     const repository = normalizePrismaRepositoryId(input.repositoryId || input.repository || '');
-    const matchedServices = await servicesForPrismaGitHubRepository(this.prisma, repository, { organizationId: input.organizationId, organizationIds: input.organizationIds });
+    return serializableTransactionWithRetry(this.prisma, async (tx: Prisma.TransactionClient) => {
+    const matchedServices = await servicesForPrismaGitHubRepository(tx, repository, { organizationId: input.organizationId, organizationIds: input.organizationIds });
     const authorizedServiceIds = Array.isArray(input.serviceIds) ? new Set(input.serviceIds.map(String)) : null;
     const services = authorizedServiceIds
       ? matchedServices.filter((service: Record<string, any>) => authorizedServiceIds.has(String(service.id)))
       : matchedServices;
     if (!services.length) githubSourceConflict('GITHUB_INSTALLATION_MISMATCH', { action: 'CANCEL' });
+    const environmentBindings = services.map((service: PrismaEnvironmentService) => ({ serviceId: service.id, projectId: service.projectId, environmentId: requirePrismaServiceEnvironment(service).id, environmentKind: requirePrismaServiceEnvironment(service).kind }));
+    const environmentIds = new Set(environmentBindings.map((binding: Readonly<{ environmentId: string }>) => binding.environmentId));
     const organizationId = String(services[0].project.organizationId);
-    return serializableTransactionWithRetry(this.prisma, async (tx: any) => prismaGitHubSourceMutation(tx, { ...input, organizationId, operation: 'sync', payload: { repository, branch: input.branch, integrationId: input.integrationId, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration, serviceIds: services.map((service: Record<string, any>) => String(service.id)).sort() } }, async () => {
+    return prismaGitHubSourceMutation(tx, { ...input, organizationId, operation: 'sync', payload: { repository, branch: input.branch, integrationId: input.integrationId, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration, serviceIds: services.map((service: Record<string, any>) => String(service.id)).sort() } }, async () => {
       const sourceAccess = services.map((service: Record<string, any>) => String(service.desiredState?.sourceAccess || service.desiredState?.github?.sourceAccess || ''));
       if (sourceAccess.includes('GITHUB_SOURCE_DISCONNECTED')) githubSourceConflict('GITHUB_SOURCE_DISCONNECTED', { action: 'REATTACH_INSTALLATION' });
       if (sourceAccess.includes('SOURCE_ACCESS_REVOKED')) githubSourceConflict('GITHUB_SOURCE_ACCESS_REVOKED', { action: 'REFRESH_CATALOG' });
@@ -2039,10 +2271,11 @@ export class PrismaControlPlaneRepository {
         const installation = await tx.gitHubInstallation.findUnique({ where: { installationId: String(integration.installationId) } });
         assertPrismaGitHubSourceReady(integration, installation, repositoryRecord, { branch: input.branch || service.branch, expectedDefaultBranch: input.expectedDefaultBranch, expectedCatalogGeneration: input.expectedCatalogGeneration });
       }
-      const workflowJob = await tx.workflowJob.create({ data: workflowJobData({ type: 'github-repository-sync', targetType: 'github-repository', targetId: repository, payload: { repository, serviceIds: services.map((service: Record<string, any>) => service.id) } }) });
+      const workflowJob = await tx.workflowJob.create({ data: workflowJobData({ type: 'github-repository-sync', targetType: 'github-repository', targetId: repository, environmentId: environmentIds.size === 1 ? environmentBindings[0].environmentId : null, operationalProtocolVersion: environmentBindings.some((binding: Readonly<{ environmentKind: string }>) => binding.environmentKind === 'dev') ? 2 : 1, payload: { repository, serviceIds: services.map((service: Record<string, any>) => service.id), environmentBindings } }) });
       await tx.auditLog.create({ data: { actorUserId: auditActorUserId(input.actorUserId), action: 'github:repository-sync', targetType: 'github-repository', targetId: repository, metadata: { serviceIds: services.map((service: Record<string, any>) => String(service.id)) } } });
       return { repository, services, workflowJob };
-    }));
+    });
+    });
   }
 
   async handleGitHubWebhook(input: Record<string, any>) {
@@ -2072,18 +2305,19 @@ export class PrismaControlPlaneRepository {
       const services = await servicesForPrismaGitHubWebhook(tx, actionPlan);
       const blockedServiceIds = await prismaGitHubWebhookQuotaBlocks(tx, services, actionPlan, actions);
       for (const service of services.filter((candidate: Record<string, any>) => !blockedServiceIds.has(String(candidate.id)))) {
-        const deploymentId = stableId('dep', 'github', deliveryId, service.id, actionPlan.kind);
-        const workflowJobId = stableId('job', 'github', deliveryId, service.id, actionPlan.kind);
+        const environment = requirePrismaServiceEnvironment(service);
+        const deploymentId = environment.kind === 'dev' ? developmentEnvironmentOperationId('dep', environment.id, ['github', deliveryId, service.id, actionPlan.kind]) : stableId('dep', 'github', deliveryId, service.id, actionPlan.kind);
+        const workflowJobId = environment.kind === 'dev' ? developmentEnvironmentOperationId('job', environment.id, ['github', deliveryId, service.id, actionPlan.kind]) : stableId('job', 'github', deliveryId, service.id, actionPlan.kind);
         if (actionPlan.kind === 'production-deploy') {
           const deployment = await tx.deployment.upsert({
             where: { id: deploymentId },
             update: {},
-            create: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'production', triggerType: 'github_push', branch: actionPlan.branch }),
+            create: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, environmentId: environment.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'production', triggerType: 'github_push', branch: actionPlan.branch, desiredSpecSnapshot: prismaDeploymentSnapshot(service), snapshotVersion: 1 }),
           });
           const workflowJob = await tx.workflowJob.upsert({
             where: { id: workflowJobId },
             update: {},
-            create: { id: workflowJobId, ...workflowJobData({ type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId } }) },
+            create: { id: workflowJobId, ...workflowJobData({ environmentId: environment.id, environmentKind: environment.kind, type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, environmentId: environment.id, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId } }) },
           });
           actions.push({ type: 'production-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id });
         } else if (actionPlan.kind === 'preview-deploy') {
@@ -2091,13 +2325,13 @@ export class PrismaControlPlaneRepository {
           const deployment = await tx.deployment.upsert({
             where: { id: deploymentId },
             update: {},
-            create: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewPlan.url }),
+            create: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, environmentId: environment.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewPlan.url, desiredSpecSnapshot: prismaDeploymentSnapshot(service), snapshotVersion: 1 }),
           });
           const preview = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id });
           const workflowJob = await tx.workflowJob.upsert({
             where: { id: workflowJobId },
             update: {},
-            create: { id: workflowJobId, ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId, preview, kubernetes: preview.kubernetes } }) },
+            create: { id: workflowJobId, ...workflowJobData({ environmentId: environment.id, environmentKind: environment.kind, type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, environmentId: environment.id, deploymentId: deployment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', deliveryId, preview, kubernetes: preview.kubernetes } }) },
           });
           const eventId = stableId('devevt', 'github', deliveryId, service.id, 'preview-queued');
           await tx.deploymentEvent.upsert({ where: { id: eventId }, update: {}, create: { id: eventId, deploymentId: deployment.id, type: 'preview.workload.queued', message: sanitizeLogRecord(`Preview Kubernetes workload queued for PR #${actionPlan.pullRequestNumber}`), metadata: sanitizeJson(maskSecrets({ previewUrl: preview.url, workloadName: preview.kubernetes.workloadName, namespace: preview.kubernetes.namespace })) } });
@@ -2107,7 +2341,7 @@ export class PrismaControlPlaneRepository {
           const workflowJob = await tx.workflowJob.upsert({
             where: { id: workflowJobId },
             update: {},
-            create: { id: workflowJobId, ...workflowJobData({ type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook', deliveryId, preview, kubernetes: preview.kubernetes } }) },
+            create: { id: workflowJobId, ...workflowJobData({ environmentId: environment.id, environmentKind: environment.kind, type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, environmentId: environment.id, repository: actionPlan.repository, githubRepositoryId: actionPlan.repositoryId, githubInstallationId: actionPlan.installationId, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook', deliveryId, preview, kubernetes: preview.kubernetes } }) },
           });
           const deployments = await tx.deployment.findMany({ where: { serviceId: service.id, deploymentType: 'preview', pullRequestNumber: Number(actionPlan.pullRequestNumber) } });
           for (const deployment of deployments) {
@@ -2141,13 +2375,14 @@ export class PrismaControlPlaneRepository {
       const actions: Record<string, unknown>[] = [];
       const blocked = event.action === 'closed' ? new Set<string>() : await prismaGitHubWebhookQuotaBlocks(tx, services, actionPlan, actions);
       for (const service of services.filter((candidate: Record<string, any>) => !blocked.has(String(candidate.id)))) {
+        const environment = requirePrismaServiceEnvironment(service);
         const organizationId = String(service.project.organizationId);
         await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,18))', `preview:organization:${organizationId}`);
         await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,15))', String(service.id));
         const desired = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
         const github = desired.github && typeof desired.github === 'object' && !Array.isArray(desired.github) ? desired.github : {};
         const integrationId = String(desired.githubIntegrationId || github.integrationId || '');
-        const lineageId = stableId('preview-lineage', organizationId, service.projectId, service.id, event.installationId, event.repositoryId, event.pullRequestNumber);
+        const lineageId = environment.kind === 'dev' ? developmentEnvironmentOperationId('preview-lineage', environment.id, [organizationId, service.projectId, service.id, event.installationId, event.repositoryId, event.pullRequestNumber]) : stableId('preview-lineage', organizationId, service.projectId, service.id, event.installationId, event.repositoryId, event.pullRequestNumber);
         const currentRow = await tx.previewLineage.findFirst({ where: { id: lineageId } });
         const current = currentRow ? previewLineageRecord(currentRow) : null;
         const transition = transitionPreviewLineage(current, event, { organizationId, projectId: service.projectId, serviceId: service.id, integrationId }, lineageId);
@@ -2155,11 +2390,11 @@ export class PrismaControlPlaneRepository {
           actions.push({ type: `preview-${transition.decision}`, serviceId: service.id, lineageId });
           continue;
         }
-        const data = previewLineageData(transition.lineage);
+        const data = { ...previewLineageData(transition.lineage), environmentId: environment.id };
         await tx.previewLineage.upsert({ where: { id: lineageId }, update: data, create: data });
         if (transition.decision === 'ambiguous') {
           const jobId = resolverJobId(transition.lineage);
-          await tx.workflowJob.upsert({ where: { id: jobId }, update: {}, create: { id: jobId, ...workflowJobData({ type: PREVIEW_RESOLVER_JOB, targetType: 'preview-lineage', targetId: lineageId, payload: resolverPayload(transition.lineage), maxAttempts: 3 }) } });
+          await tx.workflowJob.upsert({ where: { id: jobId }, update: {}, create: { id: jobId, ...workflowJobData({ environmentId: environment.id, environmentKind: environment.kind, type: PREVIEW_RESOLVER_JOB, targetType: 'preview-lineage', targetId: lineageId, payload: { ...resolverPayload(transition.lineage), environmentId: environment.id }, maxAttempts: 3 }) } });
           actions.push({ type: 'preview-resolution-enqueued', serviceId: service.id, lineageId, workflowJobId: jobId });
           continue;
         }
@@ -2172,11 +2407,11 @@ export class PrismaControlPlaneRepository {
           actions.push({ type: 'preview-cleanup-requested', serviceId: service.id, lineageId, deploymentIds: mutableIds });
           continue;
         }
-        const deploymentId = stableId('dep', 'github-preview', event.deliveryId, service.id, transition.lineage.generation);
+        const deploymentId = environment.kind === 'dev' ? developmentEnvironmentOperationId('dep', environment.id, ['github-preview', event.deliveryId, service.id, transition.lineage.generation]) : stableId('dep', 'github-preview', event.deliveryId, service.id, transition.lineage.generation);
         const runtime = createPreviewRuntime(transition.lineage, deploymentId);
-        const deployment = await tx.deployment.create({ data: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
-        const jobId = stableId('job', 'github-preview', event.deliveryId, service.id);
-        await tx.workflowJob.create({ data: { id: jobId, ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: 1, runtime } }) } });
+        const deployment = await tx.deployment.create({ data: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, environmentId: environment.id, commitSha: event.headSha, commitHash: event.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: event.headRef, pullRequestNumber: event.pullRequestNumber, previewUrl: `https://${transition.lineage.stableHost}`, previewLineageId: lineageId, previewGeneration: transition.lineage.generation, previewRuntime: runtime, desiredSpecSnapshot: prismaDeploymentSnapshot(service), snapshotVersion: 1 }) });
+        const jobId = environment.kind === 'dev' ? developmentEnvironmentOperationId('job', environment.id, ['github-preview', event.deliveryId, service.id]) : stableId('job', 'github-preview', event.deliveryId, service.id);
+        await tx.workflowJob.create({ data: { id: jobId, ...workflowJobData({ environmentId: environment.id, environmentKind: environment.kind, type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, environmentId: environment.id, lineageId, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: 1, runtime } }) } });
         await tx.deploymentEvent.create({ data: { deploymentId: deployment.id, type: 'preview.workload.queued', message: sanitizeLogRecord(`Preview Kubernetes workload queued for PR #${event.pullRequestNumber}`), metadata: sanitizeJson(previewWebhookLineage(delivery.id, lineageId, event)) } });
         await tx.previewLineage.update({ where: { id: lineageId }, data: { candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation } });
         actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, lineageId, deploymentId: deployment.id, workflowJobId: jobId, generation: transition.lineage.generation });
@@ -2192,6 +2427,7 @@ export class PrismaControlPlaneRepository {
     const now = new Date(options.now || Date.now());
     const expiredBefore = new Date(now.getTime() - 60_000);
     return this.prisma.$transaction(async (tx: any) => {
+      await setOperationalProtocolVersion(tx);
       const job = await tx.workflowJob.findFirst({ where: { type: PREVIEW_APPLY_JOB, attempts: { lt: 3 }, runAfter: { lte: now }, OR: [{ status: 'queued' }, { status: 'running', lockedAt: { lte: expiredBefore } }] }, orderBy: [{ runAfter: 'asc' }, { createdAt: 'asc' }] });
       if (!job) return { processed: false, reason: 'no_ready_preview_observation' };
       const claimed = await tx.workflowJob.updateMany({ where: { id: job.id, type: PREVIEW_APPLY_JOB, attempts: job.attempts, status: job.status, lockedAt: job.lockedAt }, data: { status: 'running', attempts: { increment: 1 }, lockedBy: workerId, lockedAt: now } });
@@ -2214,7 +2450,7 @@ export class PrismaControlPlaneRepository {
       }
       await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,18))', `preview:organization:${lineage.organizationId}`);
       await tx.$queryRawUnsafe('SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1,15))', String(lineage.serviceId));
-      const service = await tx.service.findUnique({ where: { id: lineage.serviceId }, include: { project: { include: { organization: true } } } });
+      const service = await tx.service.findUnique({ where: { id: lineage.serviceId }, include: { project: { include: { organization: true } }, environmentBinding: { include: { environment: true } } } });
       const actionPlan = { kind: observation.state === 'closed' ? 'preview-cleanup' : 'preview-deploy', repositoryId: observation.repositoryId, installationId: observation.installationId, repository: lineage.repository, baseBranch: observation.baseRef };
       const bindingValid = service && !['DELETE_REQUESTED', 'DELETING', 'DELETED'].includes(String(service.status).toUpperCase()) && !['DELETE_REQUESTED', 'DELETING', 'DELETED'].includes(String(service.project?.status).toUpperCase()) && serviceMatchesGitHubWebhook(service, actionPlan);
       const matched = bindingValid ? await servicesForPrismaGitHubWebhook(tx, actionPlan) : [];
@@ -2222,6 +2458,7 @@ export class PrismaControlPlaneRepository {
         await tx.workflowJob.update({ where: { id: job.id }, data: { status: 'failed', lockedBy: null, lockedAt: null, payload: { ...job.payload, terminalReason: 'preview_binding_inactive' } } });
         return { processed: true, reason: 'preview_binding_inactive' };
       }
+      const environment = requirePrismaServiceEnvironment(service);
       if (observation.state === 'open') {
         const blocked = await prismaGitHubWebhookQuotaBlocks(tx, [service], actionPlan, []);
         if (blocked.has(String(service.id))) {
@@ -2232,10 +2469,11 @@ export class PrismaControlPlaneRepository {
       const transition = applyPreviewObservation(previewLineageRecord(lineage), observation);
       await tx.previewLineage.update({ where: { id: lineage.id }, data: previewLineageData(transition.lineage) });
       if (transition.decision === 'open') {
-        const deploymentId = stableId('dep', 'github-preview-apply', lineage.id, transition.lineage.version, transition.lineage.generation);
+        const deploymentId = environment.kind === 'dev' ? developmentEnvironmentOperationId('dep', environment.id, ['github-preview-apply', lineage.id, transition.lineage.version, transition.lineage.generation]) : stableId('dep', 'github-preview-apply', lineage.id, transition.lineage.version, transition.lineage.generation);
         const runtime = createPreviewRuntime(transition.lineage, deploymentId);
-        const deployment = await tx.deployment.create({ data: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, commitSha: observation.headSha, commitHash: observation.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_preview_resolver', branch: observation.headRef, pullRequestNumber: observation.pullRequestNumber, previewUrl: `https://${lineage.stableHost}`, previewLineageId: lineage.id, previewGeneration: transition.lineage.generation, previewRuntime: runtime, desiredSpecSnapshot: captureDeploymentSnapshot(service), snapshotVersion: 1 }) });
-        await tx.workflowJob.create({ data: { id: stableId('job', 'github-preview-apply', lineage.id, transition.lineage.version), ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { version: 1, lineageId: lineage.id, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: 1, runtime } }) } });
+        const deployment = await tx.deployment.create({ data: deploymentData({ id: deploymentId, serviceId: service.id, projectId: service.projectId, environmentId: environment.id, commitSha: observation.headSha, commitHash: observation.headSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_preview_resolver', branch: observation.headRef, pullRequestNumber: observation.pullRequestNumber, previewUrl: `https://${lineage.stableHost}`, previewLineageId: lineage.id, previewGeneration: transition.lineage.generation, previewRuntime: runtime, desiredSpecSnapshot: prismaDeploymentSnapshot(service), snapshotVersion: 1 }) });
+        const jobId = environment.kind === 'dev' ? developmentEnvironmentOperationId('job', environment.id, ['github-preview-apply', lineage.id, transition.lineage.version]) : stableId('job', 'github-preview-apply', lineage.id, transition.lineage.version);
+        await tx.workflowJob.create({ data: { id: jobId, ...workflowJobData({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, environmentId: environment.id, environmentKind: environment.kind, payload: { version: 1, environmentId: environment.id, lineageId: lineage.id, lineageVersion: transition.lineage.version, generation: transition.lineage.generation, deploymentId: deployment.id, desiredSpecSnapshot: deployment.desiredSpecSnapshot, snapshotVersion: 1, runtime } }) } });
         await tx.previewLineage.update({ where: { id: lineage.id }, data: { candidateDeploymentId: deployment.id, candidateGeneration: transition.lineage.generation, resolutionObservation: null, resolutionErrorCode: null } });
       } else if (transition.decision === 'close') {
         const attempts = await tx.deployment.findMany({ where: { previewLineageId: lineage.id } });
@@ -2249,7 +2487,18 @@ export class PrismaControlPlaneRepository {
   }
 
   async enqueueWorkflowJob(input: Record<string, any>) {
-    return this.prisma.workflowJob.create({ data: workflowJobData(input) });
+    return serializableTransactionWithRetry(this.prisma, async (tx: Prisma.TransactionClient) => {
+      const deploymentId = input.targetType === 'service' ? null : input.targetType === 'deployment' ? input.targetId : input.deploymentId || input.payload?.deploymentId;
+      const deployment = deploymentId ? await tx.deployment.findUnique({ where: { id: String(deploymentId) } }) : null;
+      const serviceId = input.targetType === 'service' ? input.targetId : deployment?.serviceId || input.serviceId || input.payload?.serviceId;
+      if (deploymentId && !deployment) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      if (!serviceId) return tx.workflowJob.create({ data: workflowJobData(input) });
+      const service = await tx.service.findUnique({ where: { id: String(serviceId) }, include: { environmentBinding: { include: { environment: true } } } });
+      if (!service) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      const environment = requirePrismaServiceEnvironment(service);
+      if (deployment && (deployment.environmentId ?? environmentIdForKind(service.projectId, 'prod')) !== environment.id) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      return tx.workflowJob.create({ data: workflowJobData({ ...input, environmentId: environment.id, environmentKind: environment.kind, operationalProtocolVersion: environment.kind === 'dev' ? 2 : 1, payload: { ...(input.payload || {}), ...(deployment ? { deploymentId: deployment.id } : {}), serviceId: service.id, projectId: service.projectId, environmentId: environment.id, environmentKind: environment.kind } }) });
+    });
   }
 
   async claimNextWorkflowJob(options: Record<string, any> = {}) {
@@ -2273,7 +2522,7 @@ export class PrismaControlPlaneRepository {
         orderBy: [{ runAfter: 'asc' }, { createdAt: 'asc' }],
       });
       if (!job) return null;
-      const updated = await this.prisma.workflowJob.updateMany({
+      const updated = await serializableTransactionWithRetry(this.prisma, (tx: Prisma.TransactionClient) => tx.workflowJob.updateMany({
         where: {
           id: job.id,
           type: { notIn: [
@@ -2293,7 +2542,7 @@ export class PrismaControlPlaneRepository {
           lockedBy: options.workerId || options.worker || 'workflow-worker',
           lockedAt: now,
         },
-      });
+      }));
       if (updated.count === 1) return this.prisma.workflowJob.findUnique({ where: { id: job.id } });
     }
     return null;
@@ -2303,20 +2552,20 @@ export class PrismaControlPlaneRepository {
     const current = await this.prisma.workflowJob.findUnique({ where: { id: jobId } });
     if (!current) throw new Error(`workflow job not found: ${jobId}`);
     const next = options.record || completeWorkflowJobRecord(current, result, options);
-    return this.prisma.workflowJob.update({
+    return serializableTransactionWithRetry(this.prisma, (tx: Prisma.TransactionClient) => tx.workflowJob.update({
       where: { id: jobId },
       data: prismaWorkflowJobUpdateData(next),
-    });
+    }));
   }
 
   async failWorkflowJob(jobId: string, error: any, options: Record<string, any> = {}) {
     const current = await this.prisma.workflowJob.findUnique({ where: { id: jobId } });
     if (!current) throw new Error(`workflow job not found: ${jobId}`);
     const next = options.record || failWorkflowJobRecord(current, error, options);
-    return this.prisma.workflowJob.update({
+    return serializableTransactionWithRetry(this.prisma, (tx: Prisma.TransactionClient) => tx.workflowJob.update({
       where: { id: jobId },
       data: prismaWorkflowJobUpdateData(next),
-    });
+    }));
   }
 
   async processNextWorkflowJob(handlers: Record<string, any>, options: Record<string, any> = {}) {
@@ -2493,10 +2742,11 @@ export class PrismaControlPlaneRepository {
 
   async attachResource({ resourceId, serviceId, envPrefix = null, actorUserId = 'system' }: Record<string, any>) {
     return this.prisma.$transaction(async (tx: any) => {
-      await assertPostgresRecoveryPublished(tx, resourceId);
-      const [resource, service] = await Promise.all([
+      const [resource, service, resourceBinding, serviceBinding] = await Promise.all([
         tx.resource.findUnique({ where: { id: resourceId } }),
         tx.service.findUnique({ where: { id: serviceId } }),
+        tx.environmentResource.findUnique({ where: { resourceId } }),
+        tx.environmentService.findUnique({ where: { serviceId } }),
       ]);
       if (!resource) throw Object.assign(new Error(`resource not found: ${resourceId}`), { statusCode: 404 });
       if (!service) throw Object.assign(new Error(`service not found: ${serviceId}`), { statusCode: 404 });
@@ -2504,6 +2754,9 @@ export class PrismaControlPlaneRepository {
       assertMutable(service, 'service');
       await requireMutableProject(tx, resource.projectId);
       if (String(resource.projectId) !== String(service.projectId)) throw Object.assign(new Error('resource and service must be in the same project'), { statusCode: 403 });
+      if (!resourceBinding || !serviceBinding || String(resourceBinding.environmentId) !== String(serviceBinding.environmentId)) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+      await setOperationalProtocolVersion(tx);
+      await assertPostgresRecoveryPublished(tx, resourceId);
         const injectedEnv = providerSecretEnvRefs(resource, envPrefix);
         const existing = await tx.resourceAttachment.findUnique({ where: { resourceId_serviceId: { resourceId, serviceId } } });
         const previousKeys = Object.keys(existing?.injectedEnv || {});
@@ -2885,6 +3138,54 @@ function prismaClientOptions(input: Record<string, any>, env: Record<string, any
   return { ...input, datasourceUrl: url.toString(), transactionOptions };
 }
 
+async function resolvePrismaEnvironment(db: any, projectId: string, selectorInput: unknown = {}) {
+  const selector = parseEnvironmentSelector(selectorInput);
+  const environment = selector.environmentId
+    ? await db.environment.findFirst({ where: { id: selector.environmentId, projectId } })
+    : await db.environment.findUnique({ where: { projectId_kind: { projectId, kind: selector.kind ?? 'prod' } } });
+  if (!environment || (environment.kind !== 'prod' && environment.kind !== 'dev')) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+  if (selector.kind !== undefined && environment.kind !== selector.kind) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+  return publicEnvironment(environment);
+}
+
+function serviceEnvironmentSelector(input: Readonly<Record<string, unknown>>) {
+  const { environment, ...selector } = input;
+  return environment !== null && typeof environment === 'object' && !Array.isArray(environment) ? selector : input;
+}
+
+type ResolvedDeploymentEnvironment = Readonly<{ id: string; projectId: string; kind: 'prod' | 'dev' }>;
+
+function memoryEnvironmentDeployments(store: ControlPlaneStore, environment: ResolvedDeploymentEnvironment) {
+  return [...store.deployments.values()].filter(row => {
+    const binding = store.serviceEnvironment(String(row.serviceId));
+    const boundEnvironmentId = binding?.environmentId ?? environmentIdForKind(String(row.projectId), 'prod');
+    const rowEnvironmentId = row.environmentId ?? environmentIdForKind(String(row.projectId), 'prod');
+    return row.projectId === environment.projectId && boundEnvironmentId === environment.id && rowEnvironmentId === environment.id;
+  }).map(row => ({ ...row, environmentId: environment.id, environmentKind: environment.kind }));
+}
+
+function deploymentEnvironmentWhere(environment: ResolvedDeploymentEnvironment): Prisma.DeploymentWhereInput {
+  const binding = { environmentBinding: { is: { environmentId: environment.id } } };
+  return {
+    AND: [
+      { OR: [{ environmentId: environment.id }, ...(environment.kind === 'prod' ? [{ environmentId: null }] : [])] },
+      { service: { OR: [binding, ...(environment.kind === 'prod' ? [{ environmentBinding: { is: null } }] : [])] } },
+    ],
+  };
+}
+
+function publicPrismaEnvironmentSubject(row: Record<string, any> | null) {
+  if (!row) return null;
+  const { environmentBinding: binding, ...subject } = row;
+  if (!binding) {
+    const environmentId = environmentIdForKind(String(row.projectId), 'prod');
+    return publicEnvironmentSubject(subject, { environmentId, environmentKind: 'prod', logicalSlug: String(row.slug) });
+  }
+  const kind = binding.environment?.kind;
+  if (kind !== 'prod' && kind !== 'dev') throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+  return publicEnvironmentSubject(subject, { environmentId: String(binding.environmentId), environmentKind: kind, logicalSlug: String(binding.logicalSlug), displayName: typeof binding.displayName === 'string' ? binding.displayName : null });
+}
+
 function boundedInteger(value: any, fallback: number, minimum: number, maximum: number) {
   const parsed = Number.parseInt(String(value ?? fallback), 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -3192,6 +3493,7 @@ function deploymentData(input: Record<string, any>) {
     ...INITIAL_DEPLOYMENT_HEALTH,
     serviceId: input.serviceId,
     projectId: input.projectId,
+    environmentId: input.environmentId ?? null,
     commitSha: input.commitSha || input.commitHash || null,
     sourceDeploymentId: input.sourceDeploymentId ?? null,
     retryOfDeploymentId: input.retryOfDeploymentId ?? null,
@@ -3415,7 +3717,7 @@ async function servicesForPrismaGitHubRepository(prisma: any, repository: any, s
   const organizationIds = organizationScopeArray(scope);
   const services = await prisma.service.findMany({
     where: { repoUrl: { not: null } },
-    include: { project: { include: { organization: true } } },
+    include: { project: { include: { organization: true } }, environmentBinding: { include: { environment: true } } },
   });
   return services.filter((service: Record<string, any>) => !organizationIds.length || organizationIds.includes(String(service.project?.organizationId))).filter((service: Record<string, any>) => {
     const desired = service.desiredState || {};
@@ -3448,6 +3750,8 @@ function workflowJobData(input: Record<string, any>) {
     status: input.status || 'queued',
     targetType: input.targetType || 'deployment',
     targetId: input.targetId || input.deploymentId || input.serviceId,
+    environmentId: input.environmentId ?? input.payload?.environmentId ?? null,
+    operationalProtocolVersion: Number(input.operationalProtocolVersion || (input.environmentKind === 'dev' ? 2 : 1)),
     payload: sanitizeJson(input.payload || {}),
     attempts: Number(input.attempts || 0),
     maxAttempts: Number(input.maxAttempts || 3),
@@ -3608,7 +3912,10 @@ async function serializableTransactionWithRetry(prisma: any, work: (tx: any) => 
   let lastError: any = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await prisma.$transaction(work, { isolationLevel: 'Serializable' });
+      return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await setOperationalProtocolVersion(tx);
+        return work(tx);
+      }, { isolationLevel: 'Serializable' });
     } catch (error) {
       lastError = error;
       const code = String((error as any)?.code || '');
@@ -3952,9 +4259,37 @@ async function servicesForPrismaGitHubWebhook(prisma: any, actionPlan: Record<st
   if (!catalog || normalizePrismaRepositoryId(catalog.fullName) !== normalizePrismaRepositoryId(actionPlan.repository)) return [];
   const services = await prisma.service.findMany({
     where: { githubRepositoryId: String(actionPlan.repositoryId) },
-    include: { project: { include: { organization: true } } },
+    include: { project: { include: { organization: true } }, environmentBinding: { include: { environment: true } } },
   });
   return services.filter((service: Record<string, any>) => previewParentIsActive(service) && serviceMatchesGitHubWebhook(service, actionPlan));
+}
+
+type PrismaEnvironmentService = Readonly<Record<string, unknown>> & Readonly<{
+  id: string; projectId: string; slug: string;
+  environmentBinding?: Readonly<{
+    environmentId: string; projectId: string; logicalSlug: string; displayName?: string | null;
+    environment: Readonly<{ id: string; projectId: string; kind: string }>;
+  }> | null;
+}>;
+
+function requirePrismaServiceEnvironment(service: PrismaEnvironmentService) {
+  const binding = service.environmentBinding;
+  const environment = binding?.environment;
+  if (!environment || (environment.kind !== 'prod' && environment.kind !== 'dev')) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+  if (binding.projectId !== service.projectId || environment.projectId !== service.projectId || binding.environmentId !== environment.id) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+  return { ...environment, kind: environment.kind };
+}
+
+function prismaDeploymentSnapshot(service: PrismaEnvironmentService) {
+  const environment = requirePrismaServiceEnvironment(service);
+  const { environmentBinding, ...subject } = service;
+  if (!environmentBinding) throw new EnvironmentError('ENVIRONMENT_NOT_FOUND', 404);
+  return {
+    ...captureDeploymentSnapshot(subject),
+    id: service.id, projectId: service.projectId,
+    environmentId: environment.id, environmentKind: environment.kind, kind: environment.kind,
+    logicalSlug: environmentBinding.logicalSlug, slug: environmentBinding.logicalSlug, physicalSlug: service.slug,
+  };
 }
 
 function previewParentIsActive(service: Record<string, any>) {

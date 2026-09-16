@@ -3,6 +3,8 @@ import { can } from './rbac.ts';
 import { LIFECYCLE_CONTRACT } from './lifecycle.ts';
 import { captureRecoveryProvenance, canonicalRecoveryJson, recoveryBody, recoveryHash, RecoveryError } from './resource-recovery-provenance.ts';
 import type { BackupStatus, RestoreStatus, RecoveryState, RecoveryRequest, RecoveryKind, RecoveryBase, RecoveryResource, RecoveryBackup, RecoveryRestore, RecoveryJob, RecoveryScope } from './resource-recovery-types.ts';
+import { environmentPhysicalSlug } from './environments.ts';
+import { productionEnvironmentId } from './operational-persistence.ts';
 
 export function recoveryNow(value?: string): string {
   const now = value ?? new Date().toISOString();
@@ -66,6 +68,8 @@ export function createRecovery(state: RecoveryState, request: RecoveryRequest, k
   recoveryAuthorized(state, request, kind === 'restore' ? 'backup:restore' : 'backup:manage');
   const sourceBackup = kind === 'restore' ? recoveryBackup(state, request.sourceId, request.organizationId) : null;
   const source = activeRecoveryResource(state, sourceBackup?.resourceId ?? request.sourceId, request.organizationId);
+  const sourceEnvironmentId = sourceBackup?.environmentId || source.environmentId || productionEnvironmentId(source.projectId);
+  const sourceEnvironmentKind = source.environmentKind || 'prod';
   if (source.status !== 'READY') throw new RecoveryError('SOURCE_NOT_READY');
   if (!['postgresql', 'mysql', 'mariadb', 'mongodb', 'redis', 'valkey'].includes(source.engine)) throw new RecoveryError('RECOVERY_ENGINE_UNSUPPORTED');
   const provenance = captureRecoveryProvenance(source);
@@ -81,25 +85,27 @@ export function createRecovery(state: RecoveryState, request: RecoveryRequest, k
   let operation: RecoveryBackup | RecoveryRestore;
   if (sourceBackup) {
     const name = body.name ?? '';
-    if (state.resources.some(row => row.projectId === source.projectId && (row.name === name || row.slug === name))) throw new RecoveryError('RESTORE_TARGET_EXISTS');
+    if (state.resources.some(row => row.projectId === source.projectId && (row.environmentId || productionEnvironmentId(row.projectId)) === sourceEnvironmentId && (row.logicalSlug || row.slug) === name)) throw new RecoveryError('RESTORE_TARGET_EXISTS');
     const targetId = `res_${crypto.randomUUID()}`;
+    const physicalName = environmentPhysicalSlug(sourceEnvironmentKind, sourceEnvironmentId, name);
     const desiredSpec = sourceBackup.sourceSpec.desiredSpec;
     if (!desiredSpec || typeof desiredSpec !== 'object' || Array.isArray(desiredSpec)) throw new RecoveryError('SOURCE_PROVENANCE_UNAVAILABLE');
-    state.resources.push({ id: targetId, projectId: source.projectId, name, slug: name, type: source.type, engine: source.engine,
+    state.resources.push({ id: targetId, projectId: source.projectId, environmentId: sourceEnvironmentId, environmentKind: sourceEnvironmentKind, logicalSlug: name, displayName: name, name: physicalName, slug: physicalName, type: source.type, engine: source.engine,
       provider: source.provider, plan: source.plan, region: source.region, version: source.version ?? null,
       status: 'PROVISIONING', deletionRequestedAt: null, connectionSecretName: null, desiredSpec: Object.fromEntries(Object.entries(desiredSpec)),
       desiredState: { recoveryRestoreId: base.id, recoveryPublicationBlocked: true } });
-    operation = { ...base, status: 'QUEUED', backupId: sourceBackup.id, sourceResourceId: source.id, targetResourceId: targetId, targetCleanedAt: null };
+    operation = { ...base, environmentId: sourceEnvironmentId, status: 'QUEUED', backupId: sourceBackup.id, sourceResourceId: source.id, targetResourceId: targetId, targetCleanedAt: null };
     state.restores.push(operation);
     state.pins.push({ id: `pin_${crypto.randomUUID()}`, kind: 'RESTORE_TARGET', resourceId: targetId, backupId: sourceBackup.id, restoreId: base.id, createdAt: now });
   } else {
-    operation = { ...base, ...provenance, resourceId: source.id, status: 'QUEUED', artifactKey: null, artifactChecksum: null, artifactSize: null, encryptionKeyVersion: null, winningAttempt: null, expiresAt: null };
+    operation = { ...base, ...provenance, resourceId: source.id, environmentId: sourceEnvironmentId, status: 'QUEUED', artifactKey: null, artifactChecksum: null, artifactSize: null, encryptionKeyVersion: null, winningAttempt: null, expiresAt: null };
     state.backups.push(operation);
     state.pins.push({ id: `pin_${crypto.randomUUID()}`, kind: 'ARTIFACT_SOURCE', resourceId: source.id, backupId: base.id, restoreId: null, createdAt: now });
   }
   const type = kind === 'backup' ? 'resource.backup' : 'resource.restore';
+  const environmentId = sourceEnvironmentId;
   const job: RecoveryJob = { id: `job_${recoveryHash(`${type}\0${base.id}`)}`, type, targetType: kind === 'backup' ? 'resource-backup' : 'resource-restore', targetId: base.id,
-    payload: { version: 1, operationId: base.id }, status: 'queued', attempts: 0, maxAttempts: 3, lockedBy: null, lockedAt: null, createdAt: now, updatedAt: now, runAfter: now };
+    environmentId, operationalProtocolVersion: 2, payload: { version: 1, operationId: base.id }, status: 'queued', attempts: 0, maxAttempts: 3, lockedBy: null, lockedAt: null, createdAt: now, updatedAt: now, runAfter: now };
   state.jobs.push(job);
   state.auditEvents.push({ actorUserId: request.actorUserId, action: kind === 'backup' ? 'resource.backup:requested' : 'resource.restore:requested',
     targetType: kind === 'backup' ? 'resource-backup' : 'resource-restore', targetId: base.id,

@@ -25,6 +25,9 @@ COPY --from=build /out/builder /usr/local/bin/raibitserver-builder
 COPY --from=buildkit /usr/bin/buildctl /usr/local/bin/buildctl
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=cosign /ko-app/cosign /usr/local/bin/cosign
+COPY --chown=10001:10001 examples/starters /opt/raibitserver/starters
+COPY --chown=10001:10001 test-fixtures/contracts/starter-catalog-v1.json /opt/raibitserver/starter-catalog-v1.json
+COPY --chown=10001:10001 test-fixtures/contracts/starter-catalog-v1.bundle.json /opt/raibitserver/starter-catalog-v1.bundle.json
 ENV HOME=/tmp
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/raibitserver-builder"]

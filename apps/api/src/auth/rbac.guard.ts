@@ -12,10 +12,9 @@ export class RbacGuard implements CanActivate {
     const permission = this.reflector.getAllAndOverride<string>(RAIBITSERVER_PERMISSION, [context.getHandler(), context.getClass()]);
     if (!permission) return true;
     const req = context.switchToHttp().getRequest();
-    // Scope checks need repository/project ownership context; controllers/services
-    // enforce that after the action-level RBAC check succeeds.
     req.raibitSubject = subjectFromRequest(req, authConfig());
     await this.controlPlane.validateSessionSubject(req.raibitSubject);
+    await this.controlPlane.assertScopedRequestAccess(req.params ?? {}, req.query ?? {}, req.raibitSubject);
     req.raibitSubject = authorizeSubject(req.raibitSubject, permission);
     return true;
   }

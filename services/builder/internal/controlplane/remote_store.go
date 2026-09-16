@@ -331,6 +331,9 @@ func (h *dispatchHandler) resolveSession(ctx context.Context, job *WorkflowJob) 
 	if err != nil {
 		return dispatchSession{}, err
 	}
+	if err := BindDeploymentEnvironment(service, deployment); err != nil {
+		return dispatchSession{}, err
+	}
 	project, err := h.store.GetProject(ctx, deployment.ProjectID)
 	if err != nil {
 		return dispatchSession{}, err
@@ -678,6 +681,9 @@ func (s *RemoteStore) GetService(ctx context.Context, serviceID string) (*Servic
 	}
 	if response.Service == nil {
 		return nil, errors.New("dispatcher returned no service")
+	}
+	if err := normalizeServiceEnvironment(response.Service); err != nil {
+		return nil, err
 	}
 	return response.Service, nil
 }

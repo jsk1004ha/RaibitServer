@@ -35,6 +35,7 @@ func main() {
 	}
 	defer closeStore()
 	state.ConfigureResourceClaims(resourceEnvironment, eligibleImages)
+	state.ConfigureEnvironmentClaims(environmentClaimsEnabled())
 	commandRunner := &command.OSRunner{}
 	recovery, err := configureRecovery(state, commandRunner, processEnvironment())
 	if err != nil {
@@ -85,6 +86,10 @@ func main() {
 		case <-timer.C:
 		}
 	}
+}
+
+func environmentClaimsEnabled() bool {
+	return os.Getenv("RAIBITSERVER_OPERATIONAL_PROTOCOL_VERSION") == "2"
 }
 
 func configureRecovery(state *store.PostgresStore, runner *command.OSRunner, env map[string]string) (*backup.RecoveryDispatcher, error) {

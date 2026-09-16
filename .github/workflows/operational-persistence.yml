@@ -1,0 +1,84 @@
+name: Operational persistence PostgreSQL preflight
+
+on:
+  push:
+    branches:
+      - codex/raibit-operational-features
+    paths:
+      - prisma/migrations/202609130001_operational_persistence/migration.sql
+      - prisma/migrations/202609130002_runtime_environment_protocol/migration.sql
+      - prisma/migrations/202609130003_operational_state_dispatch/migration.sql
+      - scripts/operational/persistence-preflight.mjs
+      - tests/operational/fixtures/postgres-persistence-baseline.sql
+      - .github/workflows/operational-persistence.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-persistence-preflight:
+    name: PostgreSQL 16 / operational migration compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: raibitserver
+          POSTGRES_PASSWORD: raibitserver-ci-only
+          POSTGRES_DB: raibitserver_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U raibitserver -d raibitserver_admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      RAIBITSERVER_TEST_DATABASE_URL: postgresql://raibitserver:raibitserver-ci-only@127.0.0.1:5432/raibitserver_admin
+      RAIBITSERVER_OPERATIONAL_EVIDENCE_DIR: ${{ github.workspace }}/.omo/evidence/raibit-operational-features/a6f88fc/task-22-sql-preflight/hosted-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma:generate
+      - name: Run focused native PostgreSQL migration preflight
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RAIBITSERVER_OPERATIONAL_EVIDENCE_DIR"
+          node --test --test-concurrency=1 --test-reporter=tap scripts/operational/persistence-preflight.mjs \
+            2>&1 | tee "$RAIBITSERVER_OPERATIONAL_EVIDENCE_DIR/postgres-persistence.tap"
+      - name: Record hosted invocation metadata
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RAIBITSERVER_OPERATIONAL_EVIDENCE_DIR"
+          printf '%s\n' \
+            "workflow=operational-persistence.yml" \
+            "ref=$GITHUB_REF" \
+            "sha=$GITHUB_SHA" \
+            "run_id=$GITHUB_RUN_ID" \
+            "run_attempt=$GITHUB_RUN_ATTEMPT" \
+            "postgres=16-alpine" \
+            "node=24" \
+            "pnpm=11.1.2" \
+            "prisma=6.19.0" \
+            > "$RAIBITSERVER_OPERATIONAL_EVIDENCE_DIR/invocation.txt"
+      - name: Upload focused PostgreSQL evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-persistence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .omo/evidence/raibit-operational-features/a6f88fc/task-22-sql-preflight/hosted-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 14

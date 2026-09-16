@@ -1,5 +1,6 @@
 import type { RecoveryState, RecoveryTransaction, RecoveryTransactionContext } from './resource-recovery-types.ts';
 import { RecoveryError, recoveryHash } from './resource-recovery-provenance.ts';
+import { setOperationalProtocolVersion } from './operational-persistence.ts';
 
 export interface RecoverySql {
   $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
@@ -24,10 +25,10 @@ export class PostgresRecoveryTransaction implements RecoveryTransaction {
       // Quota mutations take the user lock before resource writes; preserve that order here before org-scoped serialization.
       const organizations = await recoveryRows<RecoveryState['organizations'][number]>(tx, 'SELECT to_jsonb(o) AS row FROM "Organization" o WHERE id=$1 FOR UPDATE', organizationId);
       const projects = await recoveryRows<RecoveryState['projects'][number]>(tx, 'SELECT to_jsonb(p) AS row FROM "Project" p WHERE "organizationId"=$1 ORDER BY id FOR UPDATE', organizationId);
-      const resources = await recoveryRows<RecoveryState['resources'][number]>(tx, 'SELECT to_jsonb(r) AS row FROM "Resource" r WHERE "projectId" IN (SELECT id FROM "Project" WHERE "organizationId"=$1) ORDER BY id FOR UPDATE', organizationId);
+      const resources = await recoveryRows<RecoveryState['resources'][number]>(tx, 'SELECT to_jsonb(r) || (SELECT jsonb_build_object(\'environmentId\',binding."environmentId",\'environmentKind\',environment.kind,\'logicalSlug\',binding."logicalSlug",\'displayName\',binding."displayName") FROM "EnvironmentResource" binding JOIN "Environment" environment ON environment.id=binding."environmentId" AND environment."projectId"=binding."projectId" WHERE binding."resourceId"=r.id AND binding."projectId"=r."projectId") AS row FROM "Resource" r WHERE r."projectId" IN (SELECT id FROM "Project" WHERE "organizationId"=$1) AND EXISTS (SELECT 1 FROM "EnvironmentResource" binding JOIN "Environment" environment ON environment.id=binding."environmentId" AND environment."projectId"=binding."projectId" WHERE binding."resourceId"=r.id AND binding."projectId"=r."projectId") ORDER BY r.id FOR UPDATE OF r', organizationId);
       const members = await recoveryRows<RecoveryState['members'][number]>(tx, 'SELECT to_jsonb(m) AS row FROM "Membership" m WHERE "organizationId"=$1', organizationId);
-      const backups = await recoveryRows<RecoveryState['backups'][number]>(tx, 'SELECT to_jsonb(b) || jsonb_build_object(\'artifactSize\',b."artifactSize"::text) AS row FROM "ResourceBackup" b WHERE "organizationId"=$1 AND "formatVersion"=1 ORDER BY id FOR UPDATE', organizationId);
-      const restores = await recoveryRows<RecoveryState['restores'][number]>(tx, 'SELECT to_jsonb(r) AS row FROM "ResourceRestore" r WHERE "organizationId"=$1 ORDER BY id FOR UPDATE', organizationId);
+      const backups = await recoveryRows<RecoveryState['backups'][number]>(tx, 'SELECT to_jsonb(b) || jsonb_build_object(\'artifactSize\',b."artifactSize"::text,\'environmentId\',COALESCE(b."environmentId",(SELECT binding."environmentId" FROM "EnvironmentResource" binding WHERE binding."resourceId"=b."resourceId" AND binding."projectId"=b."projectId"))) AS row FROM "ResourceBackup" b WHERE "organizationId"=$1 AND "formatVersion"=1 ORDER BY id FOR UPDATE', organizationId);
+      const restores = await recoveryRows<RecoveryState['restores'][number]>(tx, 'SELECT to_jsonb(r) || jsonb_build_object(\'environmentId\',(SELECT binding."environmentId" FROM "EnvironmentResource" binding WHERE binding."resourceId"=r."targetResourceId" AND binding."projectId"=r."projectId")) AS row FROM "ResourceRestore" r WHERE r."organizationId"=$1 AND EXISTS (SELECT 1 FROM "EnvironmentResource" binding WHERE binding."resourceId"=r."targetResourceId" AND binding."projectId"=r."projectId") ORDER BY r.id FOR UPDATE OF r', organizationId);
       const pins = await recoveryRows<RecoveryState['pins'][number]>(tx, 'SELECT to_jsonb(p) AS row FROM "ResourceRecoveryPin" p WHERE "backupId" IN (SELECT id FROM "ResourceBackup" WHERE "organizationId"=$1) ORDER BY id FOR UPDATE', organizationId);
       const attempts = await recoveryRows<RecoveryState['attempts'][number]>(tx, 'SELECT to_jsonb(a) || jsonb_build_object(\'candidateStoredBytes\',a."candidateStoredBytes"::text,\'candidatePlaintextBytes\',a."candidatePlaintextBytes"::text) AS row FROM "ResourceRecoveryAttempt" a WHERE "backupId" IN (SELECT id FROM "ResourceBackup" WHERE "organizationId"=$1) ORDER BY "backupId",attempt FOR UPDATE', organizationId);
       const jobs = await recoveryRows<RecoveryState['jobs'][number]>(tx, 'SELECT to_jsonb(j) AS row FROM "WorkflowJob" j WHERE (type=\'resource.backup\' AND "targetId" IN (SELECT id FROM "ResourceBackup" WHERE "organizationId"=$1)) OR (type=\'resource.restore\' AND "targetId" IN (SELECT id FROM "ResourceRestore" WHERE "organizationId"=$1)) ORDER BY id FOR UPDATE', organizationId);
@@ -42,13 +43,19 @@ export class PostgresRecoveryTransaction implements RecoveryTransaction {
 }
 async function persistRecoveryState(tx: RecoverySql, before: RecoveryState, next: RecoveryState) {
   const sets = [
-    { table: 'Resource', before: before.resources, next: next.resources },
     { table: 'ResourceBackup', before: before.backups, next: next.backups },
     { table: 'ResourceRestore', before: before.restores, next: next.restores },
     { table: 'ResourceRecoveryPin', before: before.pins, next: next.pins },
     { table: 'ResourceRecoveryAttempt', before: before.attempts, next: next.attempts },
     { table: 'WorkflowJob', before: before.jobs, next: next.jobs },
   ] as const;
+  const previousResourceIds = new Set(before.resources.map(resource => resource.id));
+  await setOperationalProtocolVersion(tx);
+  const previousResources = new Set(before.resources.map(resource => JSON.stringify(resource)));
+  for (const resource of next.resources) if (!previousResources.has(JSON.stringify(resource))) {
+    await writeRecoveryRow(tx, 'Resource', resource);
+    if (!previousResourceIds.has(resource.id)) await writeRecoveryResourceBinding(tx, resource);
+  }
   for (const set of sets) {
     const previous = new Set(set.before.map(row => JSON.stringify(row)));
     for (const row of set.next) if (!previous.has(JSON.stringify(row))) await writeRecoveryRow(tx, set.table, row);
@@ -65,7 +72,7 @@ async function persistRecoveryState(tx: RecoverySql, before: RecoveryState, next
   }
 }
 async function writeRecoveryRow(tx: RecoverySql, table: Table, row: object) {
-  const data = { ...row, ...(table === 'Resource' ? { updatedAt: new Date().toISOString() } : {}) };
+  const data = recoveryPersistenceData(table, row);
   const keys = Object.keys(data);
   if (keys.some(key => !/^[A-Za-z][A-Za-z0-9]*$/.test(key))) throw new RecoveryError('RECOVERY_COLUMN_INVALID');
   const columns = keys.map(key => `"${key}"`).join(',');
@@ -73,6 +80,27 @@ async function writeRecoveryRow(tx: RecoverySql, table: Table, row: object) {
   const updates = keys.filter(key => key !== 'id' && key !== 'createdAt').map(key => `"${key}"=EXCLUDED."${key}"`).join(',');
   // Only typed internal rows reach this adapter; SQL values remain parameterized.
   await tx.$executeRawUnsafe(`INSERT INTO "${table}" (${columns}) SELECT ${columns} FROM jsonb_populate_record(NULL::"${table}",$1::jsonb) ON CONFLICT (${conflict}) DO UPDATE SET ${updates}`, JSON.stringify(data));
+}
+function recoveryPersistenceData(table: Table, row: any) {
+  if (table === 'Resource') {
+    const { environmentId: _environmentId, environmentKind: _environmentKind, logicalSlug: _logicalSlug, displayName: _displayName, ...resource } = row;
+    return { ...resource, updatedAt: new Date().toISOString() };
+  }
+  if (table === 'ResourceRestore') {
+    const { environmentId: _environmentId, ...restore } = row;
+    return restore;
+  }
+  if (table === 'ResourceBackup' && row.origin !== 'scheduled') {
+    return { ...row, origin: 'manual', environmentId: null };
+  }
+  return { ...row };
+}
+async function writeRecoveryResourceBinding(tx: RecoverySql, resource: RecoveryState['resources'][number]) {
+  if (!resource.environmentId || !resource.logicalSlug) throw new RecoveryError('RECOVERY_NOT_FOUND', 404);
+  await tx.$executeRawUnsafe(
+    'INSERT INTO "EnvironmentResource" ("resourceId","environmentId","projectId","logicalSlug","displayName","createdAt","updatedAt") VALUES ($1,$2,$3,$4,$5,now(),now())',
+    resource.id, resource.environmentId, resource.projectId, resource.logicalSlug, resource.displayName ?? resource.logicalSlug,
+  );
 }
 export async function assertPostgresRecoveryPins(tx: RecoverySql, resourceIds: readonly string[]): Promise<void> {
   const pins = await tx.$queryRawUnsafe<{ readonly id: string }[]>('SELECT id FROM "ResourceRecoveryPin" WHERE "resourceId"=ANY($1::text[]) LIMIT 1', resourceIds);

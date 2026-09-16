@@ -5,18 +5,18 @@ import { RAIBITSERVERService } from '../../raibitserver.service';
 export class DeploymentsService {
   constructor(private readonly controlPlane: RAIBITSERVERService) {}
 
-  createDeploymentOperation(target: { readonly operation: 'retry' | 'redeploy'; readonly id: string }, input: unknown, subject: { readonly id: string }) { return this.controlPlane.createDeploymentOperation(target, input, subject); }
+  createDeploymentOperation(target: { readonly operation: 'retry' | 'redeploy'; readonly id: string }, input: unknown, subject: { readonly id: string }, selector: Record<string, any> = {}) { return this.controlPlane.createDeploymentOperation(target, input, subject, selector); }
   listDeploymentHistory(projectId: string, query: Record<string, unknown>, subject: Record<string, unknown>) { return this.controlPlane.listDeploymentHistory(projectId, query, subject); }
 
   listDeployments(projectId: string, serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.listDeployments(projectId, serviceId, subject, options); }
-  createDeployment(projectId: string, serviceId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.createDeployment(projectId, serviceId, input, subject); }
+  createDeployment(projectId: string, serviceId: string, input: Record<string, any>, subject: Record<string, any>, selector: Record<string, any> = {}) { return this.controlPlane.createDeployment(projectId, serviceId, input, subject, selector); }
   listDeploymentsForService(serviceId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.listDeploymentsForService(serviceId, subject, options); }
-  createDeploymentForService(serviceId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.createDeploymentForService(serviceId, input, subject); }
-  getDeployment(deploymentId: string, subject: Record<string, any>) { return this.controlPlane.getDeployment(deploymentId, subject); }
-  updateDeploymentStatus(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.updateDeploymentStatus(deploymentId, input, subject); }
-  cancelDeployment(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.cancelDeployment(deploymentId, input, subject); }
-  rollbackDeployment(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.rollbackDeployment(deploymentId, input, subject); }
-  requestPreviewCleanup(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.requestPreviewCleanup(deploymentId, input, subject); }
+  createDeploymentForService(serviceId: string, input: Record<string, any>, subject: Record<string, any>, selector: Record<string, any> = {}) { return this.controlPlane.createDeploymentForService(serviceId, input, subject, selector); }
+  getDeployment(deploymentId: string, subject: Record<string, any>, selector: Record<string, any> = {}) { return this.controlPlane.getDeployment(deploymentId, subject, selector); }
+  updateDeploymentStatus(deploymentId: string, input: Record<string, any>, subject: Record<string, any>, selector: Record<string, any> = {}) { return this.controlPlane.updateDeploymentStatus(deploymentId, input, subject, selector); }
+  cancelDeployment(deploymentId: string, input: Record<string, any>, subject: Record<string, any>, selector: Record<string, any> = {}) { return this.controlPlane.cancelDeployment(deploymentId, input, subject, selector); }
+  rollbackDeployment(deploymentId: string, input: Record<string, any>, subject: Record<string, any>, selector: Record<string, any> = {}) { return this.controlPlane.rollbackDeployment(deploymentId, input, subject, selector); }
+  requestPreviewCleanup(deploymentId: string, input: Record<string, any>, subject: Record<string, any>, selector: Record<string, any> = {}) { return this.controlPlane.requestPreviewCleanup(deploymentId, input, subject, selector); }
   listDeploymentLogs(deploymentId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.listDeploymentLogs(deploymentId, subject, options); }
   listDeploymentEvents(deploymentId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.listDeploymentEvents(deploymentId, subject, options); }
   deploymentActivitySnapshot(deploymentId: string, subject: Record<string, any>, options: Record<string, any> = {}) { return this.controlPlane.deploymentActivitySnapshot(deploymentId, subject, options); }

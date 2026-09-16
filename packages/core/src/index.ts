@@ -45,6 +45,16 @@ export { hashPassword, hashPasswordAsync, verifyPassword, verifyPasswordAsync, n
 export { issueSignupEmailVerificationCode, resendEmailVerificationCode, verifyEmailCodeAndCreateSession, assertUserEmailVerified, normalizeEmailVerificationCode, generateEmailVerificationCode, hashEmailVerificationCode, buildEmailVerificationMessage, deliverEmailVerificationMessage, emailVerificationSenderFromEnv, emailVerificationSenderDomainFromEnv } from './email-verification.ts';
 export { requestPasswordRecovery, completePasswordRecovery, PASSWORD_RESET_PURPOSE, PASSWORD_RESET_TTL_SECONDS, PASSWORD_RESET_MAX_ATTEMPTS, PASSWORD_RESET_COOLDOWN_SECONDS } from './password-recovery.ts';
 export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured, parseApiRuntimeConfig, validateApiRuntimeConfig, assertApiRuntimeConfig, devHeaderAuthAllowed, devTokenAuthAllowed } from './config.ts';
+export { OperationalContractError, assertOperationalWriterReady, notificationSemanticKey, operationalContractDigest, operationalIdentityProjection, parseOperationalFeaturesContract, parseOperationalRuntimeConfig, parseOperationalWriterIntent } from './operational-contract.ts';
+export type { OperationalContractErrorCode, OperationalRuntimeConfig } from './operational-contract.ts';
+export { OPERATIONAL_PROTOCOL_SESSION_SQL, OPERATIONAL_PROTOCOL_VERSION, OperationalPersistenceError, assertOperationalBindingScope, buildOperationalBackfillProjection, productionEnvironmentId, setOperationalProtocolVersion } from './operational-persistence.ts';
+export { ENVIRONMENT_KINDS, EnvironmentError, environmentIdForKind, environmentNamespace, environmentPhysicalSlug, parseEnvironmentSelector, projectRuntimeEnvironment, publicEnvironment, publicEnvironmentSubject } from './environments.ts';
+export type { EnvironmentErrorCode, EnvironmentKind, EnvironmentRecord, EnvironmentSelector, RuntimeEnvironmentProjection } from './environments.ts';
+export type { OperationalBackfillInput, OperationalBackfillProjection, OperationalBindingScope, OperationalPersistenceErrorCode, OperationalSqlExecutor } from './operational-persistence.ts';
+export * from './discord-alerts.ts';
+export { PrismaDiscordAlertsRepository } from './discord-alerts-postgres.ts';
+export * from './backup-policy.ts';
+export { PrismaBackupPolicyPersistence } from './backup-policy-postgres.ts';
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 export { buildPostgresProviderPlan, buildResourceProviderPlan, provisionPostgresProvider, provisionResourceProvider, providerConnectionEnvForResource, providerConsoleSurface } from './resource-providers.ts';
@@ -57,7 +67,7 @@ export type { GitHubAppInstallationState, GitHubInstallationRepository } from '.
 export { previewKey, previewWorkloadName, previewRuntimePlan } from './preview-deployments.ts';
 export * from './preview-contract.ts';
 export * from './preview-lineage.ts';
-export { createControlPlaneRepository, resolveControlPlaneRepositoryConfig, InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from './persistence.ts';
+export { createControlPlaneRepository, resolveControlPlaneRepositoryConfig, InMemoryControlPlaneRepository, OperationalPersistenceUnavailable, PrismaControlPlaneRepository } from './persistence.ts';
 export { normalizePublicSiteLimit, publicSitesFromServices, publicSitesFromSnapshot } from './public-sites.ts';
 export type * from './types.ts';
 export { oauthAttempt, publicOAuthError, OAuthPublicError } from './oauth-security.ts';

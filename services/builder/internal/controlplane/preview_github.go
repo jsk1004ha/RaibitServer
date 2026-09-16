@@ -26,6 +26,9 @@ var (
 type PreviewResolutionTarget struct {
 	LineageID         string
 	LineageVersion    int
+	EnvironmentID     string
+	EnvironmentKind   string
+	LogicalSlug       string
 	InstallationID    string
 	RepositoryID      string
 	Repository        string

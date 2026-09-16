@@ -33,6 +33,7 @@ type Config struct {
 	Timeout                 time.Duration
 	WorkerID                string
 	ClaimLease              time.Duration
+	DevelopmentEnvironments bool
 }
 
 type ServiceReconciler struct {
@@ -114,7 +115,7 @@ func (r *ServiceReconciler) RunOnceResult(ctx context.Context) (*ReconcileResult
 		fmt.Printf("raibitserver orchestrator dryRun=%t action=reconcile-desired-state reason=no-control-plane-store\n", r.config.DryRun)
 		return &ReconcileResult{Processed: 0, DryRun: r.config.DryRun, Reason: "no-control-plane-store"}, nil
 	}
-	claimOptions := store.ClaimOptions{WorkerID: r.config.WorkerID, Lease: r.config.ClaimLease}
+	claimOptions := store.ClaimOptions{WorkerID: r.config.WorkerID, Lease: r.config.ClaimLease, AllowDevelopment: r.config.DevelopmentEnvironments}
 	service, err := r.store.ClaimNextServiceDeletion(ctx, claimOptions)
 	if err != nil {
 		return nil, err
@@ -332,7 +333,7 @@ func deletionNamespace(project *store.Project, service *store.Service) string {
 	if service == nil {
 		service = &store.Service{ID: "project-deletion", ProjectID: project.ID, Name: "project-deletion", Slug: "project-deletion", Type: "worker"}
 	}
-	return kube.SpecFromState(project, service, &store.Deployment{ID: "deletion-namespace"}, "raibitserver.local").Namespace
+	return kube.SpecFromState(project, service, &store.Deployment{ID: "deletion-namespace", ServiceID: service.ID, ProjectID: service.ProjectID, EnvironmentID: service.EnvironmentID}, "raibitserver.local").Namespace
 }
 
 func (r *ServiceReconciler) abortIfParentDeleting(ctx context.Context, project *store.Project, service *store.Service, deployment *store.Deployment, manifestFile string, priorCommands []string) (*ReconcileResult, error) {

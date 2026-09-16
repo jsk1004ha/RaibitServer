@@ -20,6 +20,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -53,6 +77,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -986,6 +1034,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -1002,6 +1074,105 @@ paths:
       security:
         - bearerAuth: []
       x-permission: project:read
+  /projects/{projectId}/environments:
+    get:
+      operationId: projects-environments
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/projects-environmentsResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: project:read
+    post:
+      operationId: projects-environments-post
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/projects-environments-postBody"
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/projects-environments-postResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: environment:manage
+  /projects/{projectId}/environments/{environmentId}:
+    delete:
+      operationId: projects-environments-delete
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+        - name: environmentId
+          in: path
+          required: true
+          schema:
+            $schema: https://json-schema.org/draft/2020-12/schema
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/projects-environments-deleteBody"
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/projects-environments-deleteResponse"
+        default:
+          description: Typed error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - bearerAuth: []
+      x-permission: environment:manage
   /projects/{projectId}/services:
     get:
       operationId: services-list
@@ -1013,6 +1184,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -1063,7 +1258,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ServiceInput"
+              $ref: "#/components/schemas/services-createBody"
       responses:
         "201":
           description: Successful response
@@ -1091,6 +1286,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -1117,6 +1336,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: false
         content:
@@ -1149,6 +1392,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -1176,6 +1443,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -1202,6 +1493,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1235,6 +1550,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1268,6 +1607,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1301,6 +1664,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -1360,6 +1747,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -1386,6 +1797,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1419,6 +1854,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1452,6 +1911,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1492,6 +1975,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -1544,6 +2051,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: false
         content:
@@ -1592,6 +2123,20 @@ paths:
               - production
               - preview
               - manual
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: status
           in: query
           required: false
@@ -1669,6 +2214,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -1714,6 +2283,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: false
         content:
@@ -1747,6 +2340,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -1774,6 +2391,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1806,6 +2447,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1839,6 +2504,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: false
         content:
@@ -1872,6 +2561,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1905,6 +2618,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -1938,6 +2675,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -1984,6 +2745,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -2030,6 +2815,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: Last-Event-ID
           in: header
           required: false
@@ -2072,6 +2881,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -2118,6 +2951,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: Last-Event-ID
           in: header
           required: false
@@ -2226,6 +3083,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -2276,7 +3157,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ResourceInput"
+              $ref: "#/components/schemas/resources-createBody"
       responses:
         "201":
           description: Resource desired state created; this does not confirm runtime
@@ -2316,6 +3197,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -2342,6 +3247,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: false
         content:
@@ -2374,6 +3303,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -2401,6 +3354,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -2434,6 +3411,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -2467,6 +3468,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -2523,6 +3548,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -2588,6 +3637,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -2645,6 +3718,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -2702,6 +3799,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -2753,6 +3874,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -2807,6 +3952,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -2868,6 +4037,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -2922,6 +4115,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -2976,6 +4193,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
         - name: limit
           in: query
           required: false
@@ -3030,6 +4271,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -3063,6 +4328,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -3096,6 +4385,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: false
         content:
@@ -3136,6 +4449,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       responses:
         "200":
           description: Successful response
@@ -3169,6 +4506,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -3209,6 +4570,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -3458,6 +4843,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: true
         content:
@@ -3618,6 +5027,30 @@ paths:
             $schema: https://json-schema.org/draft/2020-12/schema
             type: string
             minLength: 1
+        - name: environmentId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
+        - name: environmentKind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - prod
+              - dev
       requestBody:
         required: false
         content:
@@ -6658,6 +8091,200 @@ components:
         - resources
         - deployments
       additionalProperties: false
+    projects-environmentsResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        environments:
+          readOnly: true
+          type: array
+          items:
+            $ref: "#/components/schemas/projects-environments-postResponse"
+      required:
+        - environments
+      additionalProperties: false
+    projects-environments-postResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        projectId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        kind:
+          type: string
+          enum:
+            - prod
+            - dev
+        status:
+          type: string
+          const: active
+        version:
+          type: number
+          const: 1
+        createdAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        updatedAt:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - id
+        - projectId
+        - kind
+        - status
+        - version
+        - createdAt
+        - updatedAt
+      additionalProperties: false
+    projects-environments-postBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        kind:
+          type: string
+          const: dev
+        expectedVersion:
+          type: number
+          const: 0
+      required:
+        - kind
+        - expectedVersion
+      additionalProperties: false
+    projects-environments-deleteResponse:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        deleted:
+          type: boolean
+          const: true
+        environmentId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+      required:
+        - deleted
+        - environmentId
+      additionalProperties: false
+    projects-environments-deleteBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        confirmation:
+          type: string
+          minLength: 1
+          maxLength: 256
+      required:
+        - expectedVersion
+        - confirmation
+      additionalProperties: false
+    services-createBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          enum:
+            - web
+            - private
+            - worker
+            - cron
+            - job
+        image:
+          type: string
+        sourceType:
+          type: string
+        port:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        healthCheckPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        livenessPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        readinessPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        publicHealthPath:
+          anyOf:
+            - type: string
+              maxLength: 1024
+              pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+              description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                segments or encoded separators/controls
+            - type: "null"
+        healthCheck:
+          anyOf:
+            - type: object
+              properties:
+                path:
+                  type: string
+                  maxLength: 1024
+                  pattern: ^\/(?!\/)[^\\\s?#\u0000-\u001f\u007f]*$
+                  description: Safe absolute path, max 1024 UTF-8 bytes; no query, fragment, dot
+                    segments or encoded separators/controls
+              required:
+                - path
+              additionalProperties: false
+            - type: "null"
+        environmentId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        environment:
+          anyOf:
+            - type: object
+              propertyNames:
+                type: string
+              additionalProperties:
+                type: string
+            - type: string
+              enum:
+                - prod
+                - dev
+        environmentKind:
+          type: string
+          enum:
+            - prod
+            - dev
+      required:
+        - name
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
     services-updateBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -7050,6 +8677,14 @@ components:
           type: string
           minLength: 1
           maxLength: 1024
+        environmentId:
+          type: string
+          minLength: 1
+        environmentKind:
+          type: string
+          enum:
+            - prod
+            - dev
       required:
         - serviceId
         - hostname
@@ -7275,6 +8910,16 @@ components:
               projectId:
                 type: string
                 minLength: 1
+              environmentId:
+                anyOf:
+                  - type: string
+                    minLength: 1
+                  - type: "null"
+              environmentKind:
+                type: string
+                enum:
+                  - prod
+                  - dev
               service:
                 type: object
                 properties:
@@ -7508,6 +9153,8 @@ components:
             required:
               - id
               - projectId
+              - environmentId
+              - environmentKind
               - service
               - environment
               - status
@@ -7705,6 +9352,16 @@ components:
               minimum: 1
               maximum: 2147483647
             - type: "null"
+        environmentId:
+          anyOf:
+            - type: string
+              minLength: 1
+            - type: "null"
+        environmentKind:
+          type: string
+          enum:
+            - prod
+            - dev
         service:
           type: object
           properties:
@@ -7930,6 +9587,8 @@ components:
         - healthCheckedAt
         - healthFailureCode
         - observedGeneration
+        - environmentId
+        - environmentKind
         - service
         - environment
         - trigger
@@ -8036,6 +9695,39 @@ components:
         - deploymentOrder
         - deployments
       additionalProperties: false
+    resources-createBody:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        engine:
+          $ref: "#/components/schemas/LocalResourceEngine"
+        provider:
+          type: string
+        plan:
+          type: string
+        environmentId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        environment:
+          type: string
+          enum:
+            - prod
+            - dev
+        environmentKind:
+          type: string
+          enum:
+            - prod
+            - dev
+      required:
+        - name
+        - engine
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
     resources-updateBody:
       $schema: https://json-schema.org/draft/2020-12/schema
       type: object
@@ -8788,6 +10480,14 @@ components:
           type: string
           maxLength: 63
           pattern: ^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$
+        environmentId:
+          type: string
+          minLength: 1
+        environmentKind:
+          type: string
+          enum:
+            - prod
+            - dev
       required:
         - integrationId
         - repositoryId

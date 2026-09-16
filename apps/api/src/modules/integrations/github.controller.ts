@@ -51,8 +51,8 @@ export class GitHubIntegrationController {
 
   @RequirePermission('deploy:run')
   @Post('projects/:projectId/services/:serviceId/github')
-  attach(@Param('projectId') projectId: string, @Param('serviceId') serviceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.githubService.attachGitHub(projectId, serviceId, input, req.raibitSubject);
+  attach(@Param('projectId') projectId: string, @Param('serviceId') serviceId: string, @Body() input: Record<string, any>, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.githubService.attachGitHub(projectId, serviceId, input, req.raibitSubject, query);
   }
 
   @RequirePermission('project:read')
@@ -83,7 +83,7 @@ export class GitHubIntegrationController {
   @RequirePermission('deploy:run')
   @Post('github/repositories/:repositoryId/sync')
   @HttpCode(202)
-  syncRepository(@Param('repositoryId') repositoryId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.githubService.syncGitHubRepository(repositoryId, input || {}, req.raibitSubject);
+  syncRepository(@Param('repositoryId') repositoryId: string, @Body() input: Record<string, any>, @Query() query: Record<string, unknown>, @Req() req: any) {
+    return this.githubService.syncGitHubRepository(repositoryId, input || {}, req.raibitSubject, query);
   }
 }

@@ -72,6 +72,9 @@ type AppServiceSpec struct {
 	PreviewLineageID   string            `json:"previewLineageId,omitempty"`
 	PreviewGeneration  int               `json:"previewGeneration,omitempty"`
 	InvalidReason      string            `json:"-"`
+	EnvironmentID      string            `json:"environmentId,omitempty"`
+	EnvironmentKind    string            `json:"environmentKind,omitempty"`
+	LogicalServiceName string            `json:"logicalServiceName,omitempty"`
 }
 
 type DeploymentPlan struct {
@@ -189,6 +192,13 @@ func describeWorkload(spec AppServiceSpec) (workloadDescriptor, error) {
 }
 
 func SpecFromState(project *store.Project, service *store.Service, deployment *store.Deployment, baseDomain string) AppServiceSpec {
+	environmentKind, bindingErr := service.RuntimeEnvironment(*deployment)
+	if bindingErr != nil {
+		return AppServiceSpec{ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID, InvalidReason: bindingErr.Error()}
+	}
+	if environmentKind == store.EnvironmentKindDev && service.Slug != devPhysicalName(service.EnvironmentID, service.LogicalSlug) {
+		return AppServiceSpec{ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID, InvalidReason: "dev service physical identity does not match environment binding"}
+	}
 	runtimeService, snapshotErr := deployment.RuntimeService(service)
 	if snapshotErr != nil {
 		return AppServiceSpec{ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID, InvalidReason: snapshotErr.Error()}
@@ -204,21 +214,30 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	tenantLabel := boundedDNSName(tenantIdentity, project.OrganizationID+"\x00"+project.ID, 63)
 	organizationRouteSlug := normalizeDNSName(firstNonEmpty(project.OrganizationSlug, project.OrganizationID, "org"))
 	projectRouteSlug := normalizeDNSName(firstNonEmpty(project.Slug, project.Name, project.ID, "project"))
-	serviceRouteName := normalizeDNSName(firstNonEmpty(service.Slug, service.Name, service.ID, "service"))
+	serviceRouteName := normalizeDNSName(firstNonEmpty(service.LogicalSlug, service.Slug, service.Name, service.ID, "service"))
 	serviceRouteIdentity := organizationRouteSlug + "--" + projectRouteSlug
 	if serviceRouteName != "web" {
 		serviceRouteIdentity += "--" + serviceRouteName
 	}
 	// Keep every generated tenant route directly under the base domain so one
 	// wildcard certificate (*.example.com) covers production and preview apps.
-	serviceRouteLabel := boundedDNSName("apps--"+serviceRouteIdentity, "apps--"+serviceRouteIdentity, 63)
+	routeZone := "apps"
+	if environmentKind == store.EnvironmentKindDev {
+		routeZone = "dev"
+		tenantLabel = devNamespace(service.EnvironmentID)
+	}
+	serviceRouteLabel := boundedDNSName(routeZone+"--"+serviceRouteIdentity, routeZone+"--"+serviceRouteIdentity, 63)
 	host := serviceRouteLabel + "." + domain
 	preview := false
 	var previewRuntime store.PreviewRuntime
 	if deployment.DeploymentType == "preview" && deployment.PullRequestNumber > 0 {
 		preview = true
 		previewKey := "pr-" + strconv.Itoa(deployment.PullRequestNumber)
-		previewRouteLabel := boundedDNSName(serviceRouteIdentity, serviceRouteIdentity, maxPreviewRouteIdentityLength)
+		previewRouteIdentity := serviceRouteIdentity
+		if environmentKind == store.EnvironmentKindDev {
+			previewRouteIdentity = "dev--" + previewRouteIdentity
+		}
+		previewRouteLabel := boundedDNSName(previewRouteIdentity, previewRouteIdentity, maxPreviewRouteIdentityLength)
 		previewLabel := "preview--" + previewKey + "--" + previewRouteLabel
 		host = previewLabel + "." + domain
 		serviceName = previewKey + "-" + baseServiceName
@@ -229,6 +248,9 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 		previewRuntime, runtimeErr = store.ParsePreviewRuntime(deployment.PreviewRuntimeJSON, deployment.PreviewLineageID, deployment.ID, deployment.PreviewGeneration)
 		if runtimeErr != nil {
 			return AppServiceSpec{ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID, InvalidReason: runtimeErr.Error()}
+		}
+		if environmentKind == store.EnvironmentKindDev && previewRuntime.Namespace != tenantLabel {
+			return AppServiceSpec{ProjectID: project.ID, ServiceID: service.ID, DeploymentID: deployment.ID, InvalidReason: "preview runtime namespace does not match environment binding"}
 		}
 		preview = true
 		host = previewRuntime.ProbeHost
@@ -247,6 +269,10 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	environmentConflictErr := runtimeEnvironmentConflict(environment, secretEnv)
 	paths, healthErr := healthPathsFromService(runtimeService)
 	invalidReason := firstError(commandErr, argsErr, scheduleErr, environmentErr, secretEnvErr, environmentConflictErr, healthErr)
+	environmentID, environmentKindName, logicalServiceName := "", "", ""
+	if environmentKind == store.EnvironmentKindDev {
+		environmentID, environmentKindName, logicalServiceName = service.EnvironmentID, string(environmentKind), serviceRouteName
+	}
 	return AppServiceSpec{
 		HealthCheckPath: paths[0], LivenessPath: paths[1], ReadinessPath: paths[2], PublicHealthPath: paths[3],
 		Name: serviceName, Namespace: tenantLabel, Image: image, Port: runtimeService.Port, Replicas: runtimeService.Replicas, Host: host,
@@ -255,6 +281,7 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 		Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName,
 		PreviewLineageID: deployment.PreviewLineageID, PreviewGeneration: deployment.PreviewGeneration,
 		PublicEgress: servicePublicEgress(runtimeService), AllowTenantIngress: serviceTenantIngress(runtimeService), InvalidReason: invalidReason,
+		EnvironmentID: environmentID, EnvironmentKind: environmentKindName, LogicalServiceName: logicalServiceName,
 	}
 }
 
@@ -362,7 +389,7 @@ func CleanupManifests(plan DeploymentPlan) []map[string]any {
 }
 
 func workloadLabels(spec AppServiceSpec) map[string]any {
-	labels := map[string]any{
+	labels := environmentLabels(spec, map[string]any{
 		"app.kubernetes.io/name":        spec.Name,
 		"app.kubernetes.io/managed-by":  "raibitserver",
 		"raibitserver.io/managed":       "true",
@@ -372,7 +399,7 @@ func workloadLabels(spec AppServiceSpec) map[string]any {
 		"raibitserver.io/project-id":    spec.ProjectID,
 		"raibitserver.io/service-id":    spec.ServiceID,
 		"raibitserver.io/deployment-id": spec.DeploymentID,
-	}
+	})
 	if spec.Preview {
 		labels["raibitserver.io/preview"] = "true"
 		labels["raibitserver.io/pull-request"] = strconv.Itoa(spec.PullRequestNumber)
@@ -391,7 +418,7 @@ func namespaceManifest(spec AppServiceSpec) map[string]any {
 		"kind":       "Namespace",
 		"metadata": map[string]any{
 			"name": spec.Namespace,
-			"labels": map[string]any{
+			"labels": environmentLabels(spec, map[string]any{
 				"app.kubernetes.io/managed-by":       "raibitserver",
 				"raibitserver.io/managed":            "true",
 				"raibitserver.io/namespace-kind":     "application",
@@ -400,7 +427,7 @@ func namespaceManifest(spec AppServiceSpec) map[string]any {
 				"pod-security.kubernetes.io/enforce": "restricted",
 				"pod-security.kubernetes.io/audit":   "restricted",
 				"pod-security.kubernetes.io/warn":    "restricted",
-			},
+			}),
 		},
 	}
 }
@@ -412,14 +439,14 @@ func resourceQuotaManifest(spec AppServiceSpec) map[string]any {
 		"metadata": map[string]any{
 			"name":      tenantQuotaName,
 			"namespace": spec.Namespace,
-			"labels": map[string]any{
+			"labels": environmentLabels(spec, map[string]any{
 				"app.kubernetes.io/managed-by":   "raibitserver",
 				"raibitserver.io/managed":        "true",
 				"raibitserver.io/namespace-kind": "application",
 				"raibitserver.io/project":        spec.ProjectSlug,
 				"raibitserver.io/project-id":     spec.ProjectID,
 				"raibitserver.io/resource-kind":  "tenant-resource-quota",
-			},
+			}),
 		},
 		"spec": map[string]any{
 			"hard": map[string]any{

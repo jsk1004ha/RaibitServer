@@ -106,13 +106,60 @@ func TestDeploymentSnapshotRemoteBoundary(t *testing.T) {
 	}
 }
 
+func TestEnvironmentIdentityRemoteBoundary(t *testing.T) {
+	// Given a trusted dispatcher serving a preview deployment bound to dev.
+	files := writeDispatchTestCertificates(t)
+	tlsConfig, err := NewDispatcherTLSConfig(files.ca, files.serverCert, files.serverKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := newDispatchFixtureStore()
+	fixture.service.EnvironmentID = "environment-dev"
+	fixture.service.EnvironmentKind = EnvironmentDevelopment
+	fixture.service.LogicalSlug = "web"
+	fixture.service.Slug = "dev-0123456789-web"
+	fixture.deployment.EnvironmentID = "environment-dev"
+	fixture.deployment.EnvironmentKind = EnvironmentDevelopment
+	fixture.deployment.LogicalSlug = "web"
+	fixture.deployment.DeploymentType = "preview"
+	server := httptest.NewUnstartedServer(NewDispatchHandler(fixture, 15*time.Minute))
+	server.TLS = tlsConfig
+	server.StartTLS()
+	defer server.Close()
+	store, err := NewRemoteStore(RemoteStoreConfig{BaseURL: server.URL, CAFile: files.ca, ClientCertificateFile: files.clientCert, ClientKeyFile: files.clientKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimNextWorkflowJob(context.Background(), ClaimOptions{WorkerID: "executor-env"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// When the public mTLS decoder reads service and deployment records.
+	service, err := store.GetService(context.Background(), fixture.service.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := store.GetDeployment(context.Background(), fixture.deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Then authoritative dev identity survives while preview remains a deployment type.
+	if err := BindDeploymentEnvironment(service, deployment); err != nil {
+		t.Fatal(err)
+	}
+	if deployment.EnvironmentID != "environment-dev" || deployment.EnvironmentKind != EnvironmentDevelopment || deployment.LogicalSlug != "web" || deployment.DeploymentType != "preview" {
+		t.Fatalf("remote environment decoder changed identity: %+v", deployment)
+	}
+}
+
 func TestDeploymentSnapshotPostgresScanBoundary(t *testing.T) {
 	for _, version := range []any{nil, int64(1), int64(2)} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			// Given exactly the selected SQL row columns; this is a scan unit test, not database acceptance.
 			row := snapshotScanRow{
 				"dep", "service", "project", "queued", "production", "retry", "main", nil, nil, nil, nil, nil, nil,
-				[]byte(`{"buildContext":"frozen"}`), version, "source", "source",
+				[]byte(`{"buildContext":"frozen"}`), version, "source", "source", "env-prod", "prod", "web",
 			}
 			// When the production scanner decodes the driver values.
 			deployment, err := scanDeployment(row)
