@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { sanitizeObservationLine, sanitizeObservationRecord } from './observability-redaction.ts';
 import { HEALTH_PATH_FIELDS, serviceHealthInput } from './deployment-health.ts';
 import { isSecretKey } from './secrets.ts';
+import { validateServiceRuntime } from './service-runtime.ts';
 import { can } from './rbac.ts';
 import { canonicalizeProviderDesiredSpec, sanitizeResourceValue } from './resource-sanitizer.ts';
 import { INTERNAL_SERVICE_MUTATION, parseResourceMutation, parseServiceMutation } from './desired-state-mutations.ts';
@@ -40,6 +41,7 @@ const SAFE_SERVICE_KEYS = new Set([
   'imageUrl',
   'port',
   'resources',
+  'persistence',
   'scaling',
   'healthCheck',
   ...HEALTH_PATH_FIELDS,
@@ -350,6 +352,7 @@ export function sanitizeTenantServiceInput(input: AnyRecord = {}, options: AnyRe
   delete output.status;
   delete output.desiredState;
   delete output.id;
+  validateServiceRuntime({ ...(output.desiredSpec || {}), ...output });
   return output;
 }
 

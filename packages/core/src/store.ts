@@ -50,9 +50,11 @@ import {
   resourceTypeForEngine,
   serviceCpuMillicores,
   serviceMemoryMb,
+  serviceStorageMb,
   usageMetricSum,
   utcMonthBounds,
 } from './store-helpers.ts';
+import { validateServiceRuntime, validateServiceRuntimeUpdate } from './service-runtime.ts';
 
 export const AUTH_RETENTION_PRUNE_BATCH_SIZE = 256;
 
@@ -566,7 +568,7 @@ export class ControlPlaneStore {
     assertRecoveryPins(this.recoveryState, [...this.resources.values()].filter(row => row.projectId === projectId).map(row => row.id));
     const current = this.projects.get(projectId);
     if (!current) return null;
-    for (const service of [...this.services.values()].filter((service) => String(service.projectId) === String(projectId))) this.deleteService(service.id);
+    for (const service of [...this.services.values()].filter((service) => String(service.projectId) === String(projectId))) this.deleteService(service.id, { allowPersistentDataDeletion: true });
     for (const resource of [...this.resources.values()].filter((resource) => String(resource.projectId) === String(projectId))) this.deleteResource(resource.id);
     this.projects.delete(projectId);
     this.audit('system', 'project:delete', 'project', projectId, { organizationId: current.organizationId });
@@ -576,13 +578,23 @@ export class ControlPlaneStore {
   createService({ projectId, name, type = 'web', runtimeType = 'container', sourceType = 'github', image = null, imageUrl = null, ...rest }: Record<string, any>, options: Record<string, any> = {}) {
     Object.assign(rest, serviceHealthInput({ ...rest, type }));
     if (options.allowGitHubBinding !== true) assertNoTenantGitHubBinding(rest);
+    const serviceId = stableId('svc', projectId, name);
+    const existing = this.services.get(serviceId);
+    const requested = { ...rest, projectId, name, type, runtimeType, sourceType, image, imageUrl };
+    if (existing) validateServiceRuntimeUpdate(existing, requested);
+    else validateServiceRuntime(effectiveServiceRuntime(requested));
     delete rest.id;
     delete rest.projectId;
     delete rest.desiredState;
+    const runtimeSpec = runtimeServiceSpecPatch(rest);
+    if (Object.keys(runtimeSpec).length || rest.desiredSpec) {
+      rest.desiredSpec = { ...(existing?.desiredSpec || {}), ...(rest.desiredSpec || {}), ...runtimeSpec };
+      rest.desiredState = { ...(existing?.desiredState || {}), ...runtimeSpec };
+    }
     const resolvedImageUrl = imageUrl || image || undefined;
     const timestamp = nowIso();
     const service = {
-      id: stableId('svc', projectId, name),
+      id: serviceId,
       projectId,
       name,
       slug: slugify(name),
@@ -616,6 +628,7 @@ export class ControlPlaneStore {
       deployed: [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId),
       quota: [...this.quotas.values()].find((quota) => quota.userId === options.actorUserId),
     }));
+    validateServiceRuntimeUpdate(current, normalized);
     delete normalized.id;
     delete normalized.projectId;
     if (options.allowDesiredState !== true) delete normalized.desiredState;
@@ -623,8 +636,22 @@ export class ControlPlaneStore {
     if (normalized.image && !normalized.imageUrl) normalized.imageUrl = normalized.image;
     if (normalized.imageUrl && !normalized.image) normalized.image = normalized.imageUrl;
     const health = parseHealthPaths(normalized);
+    const runtimeSpec = runtimeServiceSpecPatch(normalized);
+    const desiredSpecPatch = {
+      ...(normalized.desiredSpec && typeof normalized.desiredSpec === 'object' && !Array.isArray(normalized.desiredSpec) ? normalized.desiredSpec : {}),
+      ...runtimeSpec,
+      ...health,
+    };
     const updatedAt = new Date(Math.max(Date.now(), Date.parse(current.updatedAt || current.createdAt) + 1)).toISOString();
-    const next = { ...current, ...normalized, ...(Object.keys(health).length ? { desiredSpec: { ...current.desiredSpec, ...health }, desiredState: { ...current.desiredState, ...health } } : {}), updatedAt };
+    const next = {
+      ...current,
+      ...normalized,
+      ...(Object.keys(desiredSpecPatch).length ? {
+        desiredSpec: { ...(current.desiredSpec || {}), ...desiredSpecPatch },
+        desiredState: { ...(current.desiredState || {}), ...runtimeSpec, ...health },
+      } : {}),
+      updatedAt,
+    };
     this.services.set(serviceId, next);
     this.audit('system', 'service:update', 'service', serviceId, maskSecrets(updates));
     return deepClone(next);
@@ -638,10 +665,13 @@ export class ControlPlaneStore {
   previewServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
     const service = this.services.get(serviceId);
     if (!service) return null;
-    return previewServiceSettings(service, parseServiceSettingsInput(input), {
+    const parsed = parseServiceSettingsInput(input);
+    const context = {
       deployed: [...this.deployments.values()].some((deployment) => deployment.serviceId === serviceId),
       quota: [...this.quotas.values()].find((quota) => quota.userId === options.actorUserId),
-    });
+    };
+    validateServiceRuntimeUpdate(service, serviceMutationState(service, parsed.changes, context));
+    return previewServiceSettings(service, parsed, context);
   }
 
   updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
@@ -663,9 +693,12 @@ export class ControlPlaneStore {
     return { impact: 'old_service_preserved', oldServiceId: serviceId, service: replacement };
   }
 
-  deleteService(serviceId: string) {
+  deleteService(serviceId: string, options: Record<string, any> = {}) {
     const current = this.services.get(serviceId);
     if (!current) return null;
+    if (serviceStorageMb(current) > 0 && options.allowPersistentDataDeletion !== true) {
+      throw conflict('persistent service storage requires project deletion or an explicit data migration before service deletion');
+    }
     const deploymentIds = new Set([...this.deployments.values()]
       .filter((deployment) => String(deployment.serviceId) === String(serviceId))
       .map((deployment) => String(deployment.id)));
@@ -2059,7 +2092,8 @@ export class ControlPlaneStore {
       maxDeploymentsPerDay: deployments.length,
       maxPreviewDeployments: deployments.filter((deployment) => deployment.deploymentType === 'preview').length,
       maxDbStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource), 0),
-      maxObjectStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource), 0),
+      maxObjectStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource), 0)
+        + services.reduce((sum, service) => sum + serviceStorageMb(service), 0),
       maxBuildMinutesPerMonth: usageMetricSum(scopedUsage, ['build-minutes', 'build_minutes', 'buildMinutes', 'maxBuildMinutesPerMonth']) + allDeployments.reduce((sum, deployment) => sum + deploymentBuildMinutesWithin(deployment, month.start, month.end), 0),
       maxRuntimeHoursPerMonth: usageMetricSum(scopedUsage, ['runtime-hours', 'runtime_hours', 'runtimeHours', 'app-runtime-hours', 'maxRuntimeHoursPerMonth']) + allDeployments.reduce((sum, deployment) => sum + deploymentRuntimeHoursWithin(deployment, month.start, month.end), 0),
       maxCpuMillicores: services.reduce((sum, service) => sum + serviceCpuMillicores(service), 0),
@@ -2258,6 +2292,18 @@ function normalizeDeploymentUpdates(updates: Record<string, any>, current: Recor
     if ((status === 'FAILED' || status === 'BUILD_FAILED' || status === 'CANCELLED') && !normalized.finishedAt) normalized.finishedAt = timestamp;
   }
   return normalized;
+}
+
+function effectiveServiceRuntime(service: Record<string, any> = {}) {
+  const desiredSpec = service.desiredSpec && typeof service.desiredSpec === 'object' && !Array.isArray(service.desiredSpec) ? service.desiredSpec : {};
+  const desiredState = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+  return { ...desiredSpec, ...desiredState, ...service };
+}
+
+function runtimeServiceSpecPatch(service: Record<string, any> = {}) {
+  return Object.fromEntries(['resources', 'scaling', 'persistence', 'sleepPolicy', 'replicas']
+    .filter((key) => Object.prototype.hasOwnProperty.call(service, key))
+    .map((key) => [key, service[key]]));
 }
 
 function latestReadyDeploymentForService(deployments: Array<Record<string, any>>, current: Record<string, any>) {

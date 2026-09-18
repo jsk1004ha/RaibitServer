@@ -58,9 +58,11 @@ import {
   prismaKeysetFilter,
   serviceCpuMillicores,
   serviceMemoryMb,
+  serviceStorageMb,
   usageMetricSum,
   utcMonthBounds,
 } from './store-helpers.ts';
+import { validateServiceRuntime, validateServiceRuntimeUpdate } from './service-runtime.ts';
 
 type QuotaRequirement = { metric: string; increment: number };
 type ObservationLogRow = Record<string, unknown>;
@@ -109,11 +111,42 @@ function combineQuotaRequirements(requirements: QuotaRequirement[]) {
 }
 
 function serviceQuotaRequirements(existing: Record<string, any> | null | undefined, requested: Record<string, any>): QuotaRequirement[] {
+  assertServiceRuntimeMutation(existing, requested);
+  const target = mergedServiceRuntime(existing, requested);
   return [
     { metric: 'maxServices', increment: existing ? 0 : 1 },
-    { metric: 'maxCpuMillicores', increment: serviceCpuMillicores(requested) - serviceCpuMillicores(existing || {}) },
-    { metric: 'maxMemoryMb', increment: serviceMemoryMb(requested) - serviceMemoryMb(existing || {}) },
+    { metric: 'maxCpuMillicores', increment: serviceCpuMillicores(target) - serviceCpuMillicores(existing || {}) },
+    { metric: 'maxMemoryMb', increment: serviceMemoryMb(target) - serviceMemoryMb(existing || {}) },
+    { metric: 'maxObjectStorageMb', increment: serviceStorageMb(target) - serviceStorageMb(existing || {}) },
   ];
+}
+
+function assertServiceRuntimeMutation(existing: Record<string, any> | null | undefined, requested: Record<string, any>) {
+  if (existing) validateServiceRuntimeUpdate(existing, requested);
+  else validateServiceRuntime(effectiveServiceRuntime(requested));
+}
+
+function mergedServiceRuntime(existing: Record<string, any> | null | undefined, requested: Record<string, any> = {}) {
+  if (!existing) return effectiveServiceRuntime(requested);
+  const current = effectiveServiceRuntime(existing);
+  const patch = effectiveServiceRuntime(requested);
+  const merged = { ...current, ...patch };
+  if (patch.resources && typeof patch.resources === 'object' && !Array.isArray(patch.resources)) {
+    merged.resources = {
+      ...(current.resources || {}),
+      ...patch.resources,
+      requests: { ...(current.resources?.requests || {}), ...(patch.resources.requests || {}) },
+      limits: { ...(current.resources?.limits || {}), ...(patch.resources.limits || {}) },
+    };
+  }
+  if (patch.scaling && typeof patch.scaling === 'object' && !Array.isArray(patch.scaling)) merged.scaling = { ...(current.scaling || {}), ...patch.scaling };
+  return merged;
+}
+
+function effectiveServiceRuntime(service: Record<string, any> = {}) {
+  const desiredSpec = service.desiredSpec && typeof service.desiredSpec === 'object' && !Array.isArray(service.desiredSpec) ? service.desiredSpec : {};
+  const desiredState = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+  return { ...desiredSpec, ...desiredState, ...service };
 }
 
 function resourceQuotaRequirements(existing: Record<string, any> | null | undefined, requested: Record<string, any>): QuotaRequirement[] {
@@ -214,10 +247,20 @@ export class InMemoryControlPlaneRepository {
     const existing = [...this.store.services.values()].find((service) => String(service.projectId) === String(input.projectId) && String(service.slug) === slug);
     return this.runQuotaMutation(input.actorUserId, 'service:create', serviceQuotaRequirements(existing, input), () => this.store.createService(input, options));
   }
-  async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateService(serviceId, updates, options); }
+  async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
+    const current = this.store.services.get(serviceId);
+    if (!current) return null;
+    return this.runQuotaMutation(options.actorUserId, 'service:update', serviceQuotaRequirements(current, updates), () => this.store.updateService(serviceId, updates, options));
+  }
   async getServiceSettings(serviceId: string) { return this.store.getServiceSettings(serviceId); }
   async previewServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) { return this.store.previewServiceSettings(serviceId, input, options); }
-  async updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateServiceSettings(serviceId, input, options); }
+  async updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
+    const current = this.store.services.get(serviceId);
+    if (!current) return null;
+    const parsed = parseServiceSettingsInput(input);
+    const requirements = serviceQuotaRequirements(current, parsed.changes);
+    return this.runQuotaMutation(options.actorUserId, 'service:update', requirements, () => this.store.updateServiceSettings(serviceId, parsed, options));
+  }
   async createServiceReplacement(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
     const current = this.store.getService(serviceId);
     if (!current) return null;
@@ -1088,9 +1131,10 @@ export class PrismaControlPlaneRepository {
       assertMutable(existing, 'service');
       assertServiceReplacement(Boolean(existing && await tx.deployment.findFirst({ where: { serviceId: existing.id }, select: { id: true } })));
       await enforcePrismaQuotaRequirements(tx, input.actorUserId, 'service:create', serviceQuotaRequirements(existing, input));
+      const dataOptions = { ...options, baseDesiredSpec: existing?.desiredSpec || {}, currentDesiredState: existing?.desiredState || {} };
       return tx.service.upsert({
         where: { projectId_slug: { projectId: input.projectId, slug } },
-        update: serviceData(input, options),
+        update: serviceData(input, dataOptions),
         create: { projectId: input.projectId, name: input.name, slug, ...serviceData(input, options) },
       });
     });
@@ -1193,7 +1237,7 @@ export class PrismaControlPlaneRepository {
   }
 
   async updateService(serviceId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
-    return this.prisma.$transaction(async (tx: any) => {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const current = await tx.service.findUnique({ where: { id: serviceId } });
       if (!current) return null;
       assertMutable(current, 'service');
@@ -1207,17 +1251,22 @@ export class PrismaControlPlaneRepository {
       const quota = !trusted && parsed.resources !== undefined && options.actorUserId
         ? await tx.quota.findFirst({ where: { userId: options.actorUserId }, orderBy: { updatedAt: 'desc' } }) : undefined;
       const safeUpdates = trusted ? parsed : serviceMutationState(current, parsed, { deployed, quota });
+      const requirements = serviceQuotaRequirements(current, safeUpdates);
+      await enforcePrismaQuotaRequirements(tx, options.actorUserId, 'service:update', requirements);
       return tx.service.update({
         where: { id: serviceId },
         data: serviceUpdateData(safeUpdates, { ...options, currentDesiredState: current.desiredState, currentDesiredSpec: current.desiredSpec }),
       });
-    }, { isolationLevel: 'Serializable' });
+    });
   }
 
   async deleteService(serviceId: string) {
     return this.prisma.$transaction(async (tx: any) => {
       const current = await tx.service.findUnique({ where: { id: serviceId } });
       if (!current) return null;
+      if (serviceStorageMb(current) > 0) {
+        throw conflictError('persistent service storage requires project deletion or an explicit data migration before service deletion');
+      }
       const deployments = await tx.deployment.findMany({ where: { serviceId }, select: { id: true } });
       await tx.service.updateMany({
         where: { id: serviceId, status: { notIn: deletionStatuses } },
@@ -1419,12 +1468,14 @@ export class PrismaControlPlaneRepository {
     const parsed = parseServiceSettingsInput(input);
     const deployed = Boolean(await this.prisma.deployment.findFirst({ where: { serviceId }, select: { id: true } }));
     const quota = options.actorUserId ? await this.prisma.quota.findFirst({ where: { userId: options.actorUserId }, orderBy: { updatedAt: 'desc' } }) : undefined;
-    return previewServiceSettings(service, parsed, { deployed, quota: quota ?? undefined });
+    const context = { deployed, quota: quota ?? undefined };
+    serviceQuotaRequirements(service, serviceMutationState(service, parsed.changes, context));
+    return previewServiceSettings(service, parsed, context);
   }
 
   async updateServiceSettings(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
     const parsed = parseServiceSettingsInput(input);
-    return this.prisma.$transaction(async (tx: any) => {
+    return serializableTransactionWithRetry(this.prisma, async (tx: any) => {
       const current = await tx.service.findUnique({ where: { id: serviceId } });
       if (!current) return null;
       await requireMutableProject(tx, current.projectId);
@@ -1432,6 +1483,8 @@ export class PrismaControlPlaneRepository {
       const quota = options.actorUserId ? await tx.quota.findFirst({ where: { userId: options.actorUserId }, orderBy: { updatedAt: 'desc' } }) : undefined;
       previewServiceSettings(current, parsed, { deployed, quota });
       const safeUpdates = serviceMutationState(current, parsed.changes, { deployed, quota });
+      const requirements = serviceQuotaRequirements(current, safeUpdates);
+      await enforcePrismaQuotaRequirements(tx, options.actorUserId, 'service:update', requirements);
       const result = await tx.service.updateMany({
         where: { id: serviceId, updatedAt: current.updatedAt },
         data: serviceUpdateData(safeUpdates, { currentDesiredState: current.desiredState, currentDesiredSpec: current.desiredSpec }),
@@ -1440,7 +1493,7 @@ export class PrismaControlPlaneRepository {
       await tx.auditLog.create({ data: { actorUserId: options.actorUserId || null, action: 'service:update', targetType: 'service', targetId: serviceId, metadata: maskSecrets(safeUpdates) } });
       const updated = await tx.service.findUnique({ where: { id: serviceId } });
       return updated ? serviceSettingsSnapshot(updated, deployed) : null;
-    }, { isolationLevel: 'Serializable' });
+    });
   }
 
   async createServiceReplacement(serviceId: string, input: Record<string, any>, options: Record<string, any> = {}) {
@@ -2589,7 +2642,7 @@ export class PrismaControlPlaneRepository {
         assertServiceReplacement(Boolean(existingService && await tx.deployment.findFirst({ where: { serviceId: existingService.id }, select: { id: true } })));
         services.push(await tx.service.upsert({
           where: { projectId_slug: { projectId: project.id, slug: serviceSlug } },
-          update: serviceData({ ...service, projectId: project.id }),
+          update: serviceData({ ...service, projectId: project.id }, { baseDesiredSpec: existingService?.desiredSpec || {}, currentDesiredState: existingService?.desiredState || {} }),
           create: { projectId: project.id, name: service.name, slug: serviceSlug, ...serviceData({ ...service, projectId: project.id }) },
         }));
       }
@@ -2843,7 +2896,8 @@ function quotaUsageFromAggregate(row: Record<string, any>, month: ReturnType<typ
     maxDeploymentsPerDay: Number(row.maxDeploymentsPerDay || 0),
     maxPreviewDeployments: Number(row.maxPreviewDeployments || 0),
     maxDbStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
-    maxObjectStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
+    maxObjectStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0)
+      + services.reduce((sum, service) => sum + serviceStorageMb(service), 0),
     maxBuildMinutesPerMonth: usageMetricSum(usageRecords, ['build-minutes', 'build_minutes', 'buildMinutes', 'maxBuildMinutesPerMonth']) + deployments.reduce((sum, deployment) => sum + deploymentBuildMinutesWithin(deployment, month.start, month.end), 0),
     maxRuntimeHoursPerMonth: usageMetricSum(usageRecords, ['runtime-hours', 'runtime_hours', 'runtimeHours', 'app-runtime-hours', 'maxRuntimeHoursPerMonth']) + deployments.reduce((sum, deployment) => sum + deploymentRuntimeHoursWithin(deployment, month.start, month.end), 0),
     maxCpuMillicores: services.reduce((sum, service) => sum + serviceCpuMillicores(service), 0),
@@ -3076,9 +3130,11 @@ async function resolveDesiredOrganization(tx: any, orgInput: Record<string, any>
 
 function serviceData(input: Record<string, any>, options: Record<string, any> = {}) {
   const safe = sanitizeTenantServiceInput(input, { allowGitHubBinding: options.allowGitHubBinding === true });
-  const desiredState = options.allowGitHubBinding === true && input.desiredState && typeof input.desiredState === 'object' && !Array.isArray(input.desiredState)
+  const desiredSpec = { ...(options.baseDesiredSpec || {}), ...(safe.desiredSpec || safe) };
+  const requestedState = options.allowGitHubBinding === true && input.desiredState && typeof input.desiredState === 'object' && !Array.isArray(input.desiredState)
     ? { ...safe, ...input.desiredState }
     : safe;
+  const desiredState = { ...(options.currentDesiredState || {}), ...requestedState };
   return {
     type: safe.type || 'web',
     runtimeType: safe.runtimeType || 'container',
@@ -3099,7 +3155,7 @@ function serviceData(input: Record<string, any>, options: Record<string, any> = 
     port: safe.port ? Number(safe.port) : null,
     ...Object.fromEntries(HEALTH_PATH_FIELDS.map(field => [field, safe[field] ?? null])),
     status: 'created',
-    desiredSpec: sanitizeJson(safe.desiredSpec || safe),
+    desiredSpec: sanitizeJson(desiredSpec),
     desiredState: sanitizeJson(desiredState),
   };
 }
@@ -3142,9 +3198,14 @@ function serviceUpdateData(input: Record<string, any> = {}, options: Record<stri
   if (inputSafe.slug !== undefined) data.slug = slugInput(inputSafe.slug);
   if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'image') && !Object.prototype.hasOwnProperty.call(inputSafe || {}, 'imageUrl')) data.imageUrl = data.image;
   if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'imageUrl') && !Object.prototype.hasOwnProperty.call(inputSafe || {}, 'image')) data.image = data.imageUrl;
-  if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'desiredSpec')) data.desiredSpec = sanitizeJson(inputSafe.desiredSpec || {});
   const health = parseHealthPaths(inputSafe);
-  if (Object.keys(health).length) data.desiredSpec = sanitizeJson({ ...(options.currentDesiredSpec || {}), ...health });
+  const runtimeSpec = runtimeServiceSpecPatch(inputSafe);
+  const desiredSpecPatch = {
+    ...(inputSafe.desiredSpec && typeof inputSafe.desiredSpec === 'object' && !Array.isArray(inputSafe.desiredSpec) ? inputSafe.desiredSpec : {}),
+    ...runtimeSpec,
+    ...health,
+  };
+  if (Object.keys(desiredSpecPatch).length) data.desiredSpec = sanitizeJson({ ...(options.currentDesiredSpec || {}), ...desiredSpecPatch });
   if (Object.keys(inputSafe || {}).length && !data.desiredState) {
     const currentDesiredState = options.currentDesiredState && typeof options.currentDesiredState === 'object' && !Array.isArray(options.currentDesiredState)
       ? options.currentDesiredState
@@ -3152,6 +3213,12 @@ function serviceUpdateData(input: Record<string, any> = {}, options: Record<stri
     data.desiredState = sanitizeJson({ ...currentDesiredState, ...inputSafe });
   }
   return data;
+}
+
+function runtimeServiceSpecPatch(service: Record<string, any> = {}) {
+  return Object.fromEntries(['resources', 'scaling', 'persistence', 'sleepPolicy', 'replicas']
+    .filter((key) => Object.prototype.hasOwnProperty.call(service, key))
+    .map((key) => [key, service[key]]));
 }
 
 function deploymentUpdateData(input: Record<string, any> = {}, current: Record<string, any> = {}) {
@@ -3727,7 +3794,8 @@ async function prismaQuotaUsage(db: any, userId: string) {
     maxDeploymentsPerDay: deployments.length,
     maxPreviewDeployments: deployments.filter((deployment: Record<string, any>) => String(deployment.deploymentType).toLowerCase() === 'preview').length,
     maxDbStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
-    maxObjectStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0),
+    maxObjectStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource, { includeDesiredState: true }), 0)
+      + services.reduce((sum: number, service: Record<string, any>) => sum + serviceStorageMb(service), 0),
     maxBuildMinutesPerMonth: usageMetricSum(usageRecords, ['build-minutes', 'build_minutes', 'buildMinutes', 'maxBuildMinutesPerMonth']) + allDeployments.reduce((sum: number, deployment: Record<string, any>) => sum + deploymentBuildMinutesWithin(deployment, month.start, month.end), 0),
     maxRuntimeHoursPerMonth: usageMetricSum(usageRecords, ['runtime-hours', 'runtime_hours', 'runtimeHours', 'app-runtime-hours', 'maxRuntimeHoursPerMonth']) + allDeployments.reduce((sum: number, deployment: Record<string, any>) => sum + deploymentRuntimeHoursWithin(deployment, month.start, month.end), 0),
     maxCpuMillicores: services.reduce((sum: number, service: Record<string, any>) => sum + serviceCpuMillicores(service), 0),

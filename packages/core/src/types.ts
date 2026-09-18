@@ -57,6 +57,10 @@ export interface ServiceSpec {
   readonly livenessPath?: string | null;
   readonly readinessPath?: string | null;
   readonly publicHealthPath?: string | null;
+  readonly persistence?: {
+    readonly sizeGi: number;
+    readonly mountPath: string;
+  };
   [key: string]: unknown;
 }
 

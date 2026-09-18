@@ -82,6 +82,7 @@ export const ServiceCreateSchema = z.object({
   attachedResources: z.array(z.string()).default([]),
   resources: z.object({ requests: z.record(z.string(), z.string()).optional(), limits: z.record(z.string(), z.string()).optional() }).optional(),
   scaling: z.record(z.string(), z.unknown()).optional(),
+  persistence: z.object({ sizeGi: z.number().int().min(1).max(100), mountPath: z.string().regex(/^\/data(?:\/[A-Za-z0-9_-]+)*$/) }).strict().nullable().optional(),
   desiredSpec: z.record(z.string(), z.unknown()).optional(),
 }).passthrough().superRefine(refineServiceHealth);
 

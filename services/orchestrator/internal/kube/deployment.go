@@ -23,6 +23,9 @@ const (
 	maxRuntimeEnvironmentEntries   = 128
 	maxCronScheduleBytes           = 128
 	maxPreviewRouteIdentityLength  = 39
+	maxServiceStorageGi            = 100
+	maxServiceCPUMillicores        = 8000
+	maxServiceMemoryMi             = 16384
 	tenantQuotaName                = "tenant-resource-budget"
 	defaultIngressGatewayNamespace = "ingress-nginx"
 	defaultIngressClassName        = "nginx"
@@ -43,35 +46,47 @@ type ingressErrorOptions struct {
 }
 
 type AppServiceSpec struct {
-	HealthCheckPath    string            `json:"healthCheckPath,omitempty"`
-	LivenessPath       string            `json:"livenessPath,omitempty"`
-	ReadinessPath      string            `json:"readinessPath,omitempty"`
-	PublicHealthPath   string            `json:"publicHealthPath,omitempty"`
-	Name               string            `json:"name"`
-	Namespace          string            `json:"namespace"`
-	Image              string            `json:"image"`
-	Port               int               `json:"port"`
-	Replicas           int               `json:"replicas"`
-	Host               string            `json:"host,omitempty"`
-	Env                map[string]string `json:"env,omitempty"`
-	SecretEnv          []map[string]any  `json:"secretEnv,omitempty"`
-	ProjectID          string            `json:"projectId"`
-	ServiceID          string            `json:"serviceId"`
-	ProjectSlug        string            `json:"projectSlug"`
-	OrganizationSlug   string            `json:"organizationSlug"`
-	ServiceType        string            `json:"serviceType"`
-	DeploymentID       string            `json:"deploymentId"`
-	Command            []string          `json:"command,omitempty"`
-	Args               []string          `json:"args,omitempty"`
-	Schedule           string            `json:"schedule,omitempty"`
-	Preview            bool              `json:"preview"`
-	PullRequestNumber  int               `json:"pullRequestNumber,omitempty"`
-	BaseServiceName    string            `json:"baseServiceName,omitempty"`
-	PublicEgress       bool              `json:"publicEgress,omitempty"`
-	AllowTenantIngress bool              `json:"allowTenantIngress,omitempty"`
-	PreviewLineageID   string            `json:"previewLineageId,omitempty"`
-	PreviewGeneration  int               `json:"previewGeneration,omitempty"`
-	InvalidReason      string            `json:"-"`
+	HealthCheckPath    string              `json:"healthCheckPath,omitempty"`
+	LivenessPath       string              `json:"livenessPath,omitempty"`
+	ReadinessPath      string              `json:"readinessPath,omitempty"`
+	PublicHealthPath   string              `json:"publicHealthPath,omitempty"`
+	Name               string              `json:"name"`
+	Namespace          string              `json:"namespace"`
+	Image              string              `json:"image"`
+	Port               int                 `json:"port"`
+	Replicas           int                 `json:"replicas"`
+	Host               string              `json:"host,omitempty"`
+	Env                map[string]string   `json:"env,omitempty"`
+	SecretEnv          []map[string]any    `json:"secretEnv,omitempty"`
+	ProjectID          string              `json:"projectId"`
+	ServiceID          string              `json:"serviceId"`
+	ProjectSlug        string              `json:"projectSlug"`
+	OrganizationSlug   string              `json:"organizationSlug"`
+	ServiceType        string              `json:"serviceType"`
+	DeploymentID       string              `json:"deploymentId"`
+	Command            []string            `json:"command,omitempty"`
+	Args               []string            `json:"args,omitempty"`
+	Schedule           string              `json:"schedule,omitempty"`
+	Preview            bool                `json:"preview"`
+	PullRequestNumber  int                 `json:"pullRequestNumber,omitempty"`
+	BaseServiceName    string              `json:"baseServiceName,omitempty"`
+	PublicEgress       bool                `json:"publicEgress,omitempty"`
+	AllowTenantIngress bool                `json:"allowTenantIngress,omitempty"`
+	PreviewLineageID   string              `json:"previewLineageId,omitempty"`
+	PreviewGeneration  int                 `json:"previewGeneration,omitempty"`
+	Persistence        *ServicePersistence `json:"persistence,omitempty"`
+	Resources          ServiceResources    `json:"resources,omitempty"`
+	InvalidReason      string              `json:"-"`
+}
+
+type ServicePersistence struct {
+	SizeGi    int    `json:"sizeGi"`
+	MountPath string `json:"mountPath"`
+}
+
+type ServiceResources struct {
+	Requests map[string]string `json:"requests,omitempty"`
+	Limits   map[string]string `json:"limits,omitempty"`
 }
 
 type DeploymentPlan struct {
@@ -101,6 +116,9 @@ func NewDeploymentPlan(spec AppServiceSpec, options ...DeploymentOptions) Deploy
 	}
 	if strings.TrimSpace(spec.ServiceType) == "" {
 		spec.ServiceType = "web"
+	}
+	if spec.Persistence != nil {
+		spec.Replicas = 1
 	}
 	spec.Name = boundedDNSName(spec.Name, firstNonEmpty(spec.ServiceID, spec.Name), 63)
 	spec.Namespace = boundedDNSName(spec.Namespace, firstNonEmpty(spec.ProjectID, spec.Namespace), 63)
@@ -158,6 +176,9 @@ func describeWorkload(spec AppServiceSpec) (workloadDescriptor, error) {
 	if spec.InvalidReason != "" {
 		return workloadDescriptor{}, fmt.Errorf("invalid service runtime configuration: %s", spec.InvalidReason)
 	}
+	if spec.Persistence != nil && spec.Preview {
+		return workloadDescriptor{}, fmt.Errorf("persistence is not supported for preview deployments")
+	}
 	serviceType := strings.ToLower(strings.TrimSpace(spec.ServiceType))
 	descriptor := workloadDescriptor{serviceType: serviceType, name: spec.Name}
 	switch serviceType {
@@ -165,6 +186,9 @@ func describeWorkload(spec AppServiceSpec) (workloadDescriptor, error) {
 		descriptor.kind = "Deployment"
 		descriptor.readiness = ReadinessDeploymentRollout
 	case "cron":
+		if spec.Persistence != nil {
+			return workloadDescriptor{}, fmt.Errorf("persistence is supported only for web, private, and worker services")
+		}
 		descriptor.kind = "CronJob"
 		descriptor.readiness = ReadinessCronJobObserved
 		descriptor.name = boundedDNSName(spec.Name, firstNonEmpty(spec.ServiceID, spec.Name)+"\x00"+spec.Name, 52)
@@ -175,6 +199,9 @@ func describeWorkload(spec AppServiceSpec) (workloadDescriptor, error) {
 			return workloadDescriptor{}, err
 		}
 	case "job", "one-off", "one_off":
+		if spec.Persistence != nil {
+			return workloadDescriptor{}, fmt.Errorf("persistence is supported only for web, private, and worker services")
+		}
 		if strings.TrimSpace(spec.DeploymentID) == "" {
 			return workloadDescriptor{}, fmt.Errorf("job workload requires a deployment ID")
 		}
@@ -246,7 +273,9 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	secretEnv, secretEnvErr := runtimeSecretEnv(runtimeService)
 	environmentConflictErr := runtimeEnvironmentConflict(environment, secretEnv)
 	paths, healthErr := healthPathsFromService(runtimeService)
-	invalidReason := firstError(commandErr, argsErr, scheduleErr, environmentErr, secretEnvErr, environmentConflictErr, healthErr)
+	persistence, persistenceErr := runtimePersistence(runtimeService)
+	resources, resourcesErr := runtimeResources(runtimeService)
+	invalidReason := firstError(commandErr, argsErr, scheduleErr, environmentErr, secretEnvErr, environmentConflictErr, healthErr, persistenceErr, resourcesErr)
 	return AppServiceSpec{
 		HealthCheckPath: paths[0], LivenessPath: paths[1], ReadinessPath: paths[2], PublicHealthPath: paths[3],
 		Name: serviceName, Namespace: tenantLabel, Image: image, Port: runtimeService.Port, Replicas: runtimeService.Replicas, Host: host,
@@ -254,7 +283,7 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 		ServiceType: firstNonEmpty(runtimeService.Type, "web"), DeploymentID: deployment.ID, Command: command, Args: args, Schedule: schedule, Env: environment, SecretEnv: secretEnv,
 		Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName,
 		PreviewLineageID: deployment.PreviewLineageID, PreviewGeneration: deployment.PreviewGeneration,
-		PublicEgress: servicePublicEgress(runtimeService), AllowTenantIngress: serviceTenantIngress(runtimeService), InvalidReason: invalidReason,
+		PublicEgress: servicePublicEgress(runtimeService), AllowTenantIngress: serviceTenantIngress(runtimeService), Persistence: persistence, Resources: resources, InvalidReason: invalidReason,
 	}
 }
 
@@ -310,6 +339,9 @@ func compileServiceManifests(spec AppServiceSpec, descriptor workloadDescriptor,
 		namespaceManifest(spec),
 		resourceQuotaManifest(spec),
 	}
+	if spec.Persistence != nil {
+		items = append(items, persistentVolumeClaimManifest(spec))
+	}
 	switch descriptor.kind {
 	case "Deployment":
 		items = append(items, deploymentManifest(spec, descriptor.name, labels))
@@ -345,7 +377,7 @@ func ListJSON(manifests []map[string]any) ([]byte, error) {
 func CleanupManifests(plan DeploymentPlan) []map[string]any {
 	items := make([]map[string]any, 0, len(plan.Manifests))
 	for _, manifest := range plan.Manifests {
-		if manifest["kind"] == "Namespace" || manifest["kind"] == "ResourceQuota" {
+		if manifest["kind"] == "Namespace" || manifest["kind"] == "ResourceQuota" || manifest["kind"] == "PersistentVolumeClaim" {
 			continue
 		}
 		metadata, ok := manifest["metadata"].(map[string]any)
@@ -449,14 +481,41 @@ func resourceQuotaManifest(spec AppServiceSpec) map[string]any {
 	}
 }
 
+func persistentVolumeClaimManifest(spec AppServiceSpec) map[string]any {
+	labels := workloadLabels(spec)
+	delete(labels, "raibitserver.io/deployment")
+	delete(labels, "raibitserver.io/deployment-id")
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "PersistentVolumeClaim",
+		"metadata": map[string]any{
+			"name":      serviceDataPVCName(spec),
+			"namespace": spec.Namespace,
+			"labels":    labels,
+		},
+		"spec": map[string]any{
+			"accessModes": []any{"ReadWriteOnce"},
+			"resources":   map[string]any{"requests": map[string]any{"storage": strconv.Itoa(spec.Persistence.SizeGi) + "Gi"}},
+		},
+	}
+}
+
+func serviceDataPVCName(spec AppServiceSpec) string {
+	return boundedDNSName(spec.Name+"-data", firstNonEmpty(spec.ServiceID, spec.Name)+"\x00data", 63)
+}
+
 func deploymentManifest(spec AppServiceSpec, workloadName string, labels map[string]any) map[string]any {
+	strategy := map[string]any{"type": "RollingUpdate", "rollingUpdate": map[string]any{"maxUnavailable": 0, "maxSurge": 1}}
+	if spec.Persistence != nil {
+		strategy = map[string]any{"type": "Recreate"}
+	}
 	return map[string]any{
 		"apiVersion": "apps/v1", "kind": "Deployment",
 		"metadata": map[string]any{"name": workloadName, "namespace": spec.Namespace, "labels": labels},
 		"spec": map[string]any{
 			"replicas": spec.Replicas,
 			"selector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": spec.Name}},
-			"strategy": map[string]any{"type": "RollingUpdate", "rollingUpdate": map[string]any{"maxUnavailable": 0, "maxSurge": 1}},
+			"strategy": strategy,
 			"template": podTemplate(spec, labels, ""),
 		},
 	}
@@ -487,11 +546,32 @@ func jobManifest(spec AppServiceSpec, workloadName string, labels map[string]any
 }
 
 func podTemplate(spec AppServiceSpec, labels map[string]any, restartPolicy string) map[string]any {
+	volumes := []any{map[string]any{"name": "tmp", "emptyDir": map[string]any{"sizeLimit": "128Mi"}}}
+	container := runtimeContainer(spec)
+	podSecurityContext := map[string]any{"runAsNonRoot": true, "seccompProfile": map[string]any{"type": "RuntimeDefault"}}
+	if spec.Persistence != nil {
+		volumes = append(volumes, map[string]any{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": serviceDataPVCName(spec)}})
+		mounts := container["volumeMounts"].([]any)
+		container["volumeMounts"] = append(mounts, map[string]any{"name": "data", "mountPath": spec.Persistence.MountPath})
+		podSecurityContext["fsGroup"] = 10001
+	}
+	resources := container["resources"].(map[string]any)
+	requests := resources["requests"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	for name, value := range spec.Resources.Requests {
+		requests[name] = value
+	}
+	for name, value := range spec.Resources.Limits {
+		limits[name] = value
+	}
 	podSpec := map[string]any{
-		"securityContext":              map[string]any{"runAsNonRoot": true, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
+		"securityContext":              podSecurityContext,
 		"automountServiceAccountToken": false,
-		"containers":                   []any{runtimeContainer(spec)},
-		"volumes":                      []any{map[string]any{"name": "tmp", "emptyDir": map[string]any{"sizeLimit": "128Mi"}}},
+		"containers":                   []any{container},
+		"volumes":                      volumes,
+	}
+	if spec.Persistence != nil {
+		podSpec["terminationGracePeriodSeconds"] = 300
 	}
 	if restartPolicy != "" {
 		podSpec["restartPolicy"] = restartPolicy
@@ -504,7 +584,6 @@ func podTemplate(spec AppServiceSpec, labels map[string]any, restartPolicy strin
 		"spec": podSpec,
 	}
 }
-
 func serviceManifest(spec AppServiceSpec, labels map[string]any) map[string]any {
 	return map[string]any{"apiVersion": "v1", "kind": "Service", "metadata": map[string]any{"name": spec.Name, "namespace": spec.Namespace, "labels": labels}, "spec": map[string]any{"type": "ClusterIP", "selector": map[string]any{"app.kubernetes.io/name": spec.Name}, "ports": []any{map[string]any{"name": "http", "port": spec.Port, "targetPort": "http"}}}}
 }
@@ -688,6 +767,189 @@ func runtimeSchedule(service *store.Service) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(schedule), nil
+}
+
+func runtimePersistence(service *store.Service) (*ServicePersistence, error) {
+	value, found := desiredValue(service, "persistence")
+	if !found || value == nil {
+		return nil, nil
+	}
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("persistence must be null or an object")
+	}
+	for key := range entry {
+		if key != "sizeGi" && key != "mountPath" {
+			return nil, fmt.Errorf("persistence contains unsupported field %q", key)
+		}
+	}
+	sizeGi, ok := exactInt(entry["sizeGi"])
+	if !ok || sizeGi < 1 || sizeGi > maxServiceStorageGi {
+		return nil, fmt.Errorf("persistence.sizeGi must be an integer from 1 through %d", maxServiceStorageGi)
+	}
+	mountPath, ok := entry["mountPath"].(string)
+	if !ok || !serviceDataMountPathPattern.MatchString(mountPath) {
+		return nil, fmt.Errorf("persistence.mountPath must be /data or a safe descendant of /data")
+	}
+	return &ServicePersistence{SizeGi: sizeGi, MountPath: mountPath}, nil
+}
+
+func runtimeResources(service *store.Service) (ServiceResources, error) {
+	value, found := desiredValue(service, "resources")
+	if !found || value == nil {
+		return ServiceResources{}, nil
+	}
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return ServiceResources{}, fmt.Errorf("resources must be an object")
+	}
+	for key := range entry {
+		if key != "requests" && key != "limits" {
+			return ServiceResources{}, fmt.Errorf("resources contains unsupported field %q", key)
+		}
+	}
+	requests, err := runtimeResourceSet(entry["requests"], "resources.requests")
+	if err != nil {
+		return ServiceResources{}, err
+	}
+	limits, err := runtimeResourceSet(entry["limits"], "resources.limits")
+	if err != nil {
+		return ServiceResources{}, err
+	}
+	requestCPU, err := cpuMillicores(firstNonEmpty(requests["cpu"], "100m"))
+	if err != nil {
+		return ServiceResources{}, err
+	}
+	limitCPU, err := cpuMillicores(firstNonEmpty(limits["cpu"], "500m"))
+	if err != nil {
+		return ServiceResources{}, err
+	}
+	requestMemory, err := memoryMi(firstNonEmpty(requests["memory"], "128Mi"))
+	if err != nil {
+		return ServiceResources{}, err
+	}
+	limitMemory, err := memoryMi(firstNonEmpty(limits["memory"], "512Mi"))
+	if err != nil {
+		return ServiceResources{}, err
+	}
+	if requestCPU > limitCPU {
+		return ServiceResources{}, fmt.Errorf("resources.requests.cpu must not exceed resources.limits.cpu")
+	}
+	if requestMemory > limitMemory {
+		return ServiceResources{}, fmt.Errorf("resources.requests.memory must not exceed resources.limits.memory")
+	}
+	return ServiceResources{Requests: requests, Limits: limits}, nil
+}
+
+func runtimeResourceSet(value any, field string) (map[string]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	result := map[string]string{}
+	switch typed := value.(type) {
+	case map[string]any:
+		for name, raw := range typed {
+			text, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s.%s must be a string", field, name)
+			}
+			result[name] = text
+		}
+	case map[string]string:
+		for name, text := range typed {
+			result[name] = text
+		}
+	default:
+		return nil, fmt.Errorf("%s must be an object", field)
+	}
+	for name, value := range result {
+		switch name {
+		case "cpu":
+			if _, err := cpuMillicores(value); err != nil {
+				return nil, fmt.Errorf("%s.cpu %w", field, err)
+			}
+		case "memory":
+			if _, err := memoryMi(value); err != nil {
+				return nil, fmt.Errorf("%s.memory %w", field, err)
+			}
+		default:
+			return nil, fmt.Errorf("%s contains unsupported resource %q", field, name)
+		}
+	}
+	return result, nil
+}
+
+func cpuMillicores(value string) (int, error) {
+	if len(value) > 16 || !serviceCPUQuantityPattern.MatchString(value) {
+		return 0, fmt.Errorf("must be a positive CPU quantity no greater than 8 cores")
+	}
+	millicores := 0
+	if strings.HasSuffix(value, "m") {
+		parsed, err := strconv.Atoi(strings.TrimSuffix(value, "m"))
+		if err != nil {
+			return 0, fmt.Errorf("must be a positive CPU quantity no greater than 8 cores")
+		}
+		millicores = parsed
+	} else {
+		parts := strings.SplitN(value, ".", 2)
+		whole, err := strconv.Atoi(parts[0])
+		if err != nil || whole > maxServiceCPUMillicores/1000 {
+			return 0, fmt.Errorf("must be a positive CPU quantity no greater than 8 cores")
+		}
+		millicores = whole * 1000
+		if len(parts) == 2 {
+			fraction := parts[1] + strings.Repeat("0", 3-len(parts[1]))
+			parsed, _ := strconv.Atoi(fraction)
+			millicores += parsed
+		}
+	}
+	if millicores <= 0 || millicores > maxServiceCPUMillicores {
+		return 0, fmt.Errorf("must be a positive CPU quantity no greater than 8 cores")
+	}
+	return millicores, nil
+}
+
+func memoryMi(value string) (int, error) {
+	if len(value) > 16 {
+		return 0, fmt.Errorf("must be a positive integer Mi or Gi quantity no greater than 16Gi")
+	}
+	matches := serviceMemoryQuantityPattern.FindStringSubmatch(value)
+	if len(matches) != 3 {
+		return 0, fmt.Errorf("must be a positive integer Mi or Gi quantity no greater than 16Gi")
+	}
+	quantity, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, fmt.Errorf("must be a positive integer Mi or Gi quantity no greater than 16Gi")
+	}
+	if matches[2] == "Gi" {
+		if quantity > maxServiceMemoryMi/1024 {
+			return 0, fmt.Errorf("must be a positive integer Mi or Gi quantity no greater than 16Gi")
+		}
+		quantity *= 1024
+	}
+	if quantity <= 0 || quantity > maxServiceMemoryMi {
+		return 0, fmt.Errorf("must be a positive integer Mi or Gi quantity no greater than 16Gi")
+	}
+	return quantity, nil
+}
+
+func exactInt(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), int64(int(typed)) == typed
+	case float64:
+		converted := int(typed)
+		return converted, float64(converted) == typed
+	case json.Number:
+		parsed, err := strconv.Atoi(typed.String())
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func runtimeSecretEnv(service *store.Service) ([]map[string]any, error) {
@@ -950,6 +1212,9 @@ var privateIPv6EgressExceptions = []any{"::1/128", "fc00::/7", "fe80::/10", "fd0
 var sha256DigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var cronFieldPattern = regexp.MustCompile(`^[0-9A-Za-z*/?,-]+$`)
 var environmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
+var serviceDataMountPathPattern = regexp.MustCompile(`^/data(?:/[A-Za-z0-9_-]+)*$`)
+var serviceCPUQuantityPattern = regexp.MustCompile(`^(?:[1-9]\d*m|(?:0|[1-9]\d*)(?:\.\d{1,3})?)$`)
+var serviceMemoryQuantityPattern = regexp.MustCompile(`^([1-9]\d*)(Mi|Gi)$`)
 var dnsLabelValidationPattern = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`)
 var dnsSubdomainValidationPattern = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$`)
 var traefikMiddlewareValidationPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?@kubernetescrd$`)
