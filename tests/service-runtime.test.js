@@ -5,6 +5,7 @@ import { sanitizeTenantServiceInput } from '../packages/core/src/security.ts';
 import { ServiceUpdateSchema } from '../packages/schemas/src/desired-state-mutations.ts';
 import { previewServiceSettings } from '../packages/core/src/service-settings.ts';
 import { previewRuntimePlan } from '../packages/core/src/preview-deployments.ts';
+import { ControlPlaneStore } from '../packages/core/src/store.ts';
 
 const valid = { name:'trainer',type:'worker',persistence:{sizeGi:10,mountPath:'/data/flyfight'},resources:{requests:{cpu:'1',memory:'2Gi'},limits:{cpu:'2',memory:'4Gi'}} };
 test('persistent service accepts bounded runtime and retains safe input',()=>{
@@ -38,4 +39,11 @@ test('settings schema and preview preserve and validate persistent storage', () 
 test('persistent previews cannot create unaccounted volumes or duplicate trainers', () => {
   assert.throws(() => previewRuntimePlan({service:valid, pullRequestNumber:1}), /do not support preview/);
   assert.equal(previewRuntimePlan({service:valid, pullRequestNumber:1, action:'delete'}).action, 'delete');
+});
+test('persisting runtime settings does not mask desired security fields with an empty state', () => {
+  const store = new ControlPlaneStore();
+  const service = store.createService({projectId:'p1',name:'trainer',persistence:valid.persistence,desiredSpec:{privileged:true}});
+  assert.equal(service.desiredSpec.privileged,true);
+  assert.equal(service.desiredState.privileged,true);
+  assert.deepEqual(service.desiredState.persistence,valid.persistence);
 });

@@ -589,7 +589,7 @@ export class ControlPlaneStore {
     const runtimeSpec = runtimeServiceSpecPatch(rest);
     if (Object.keys(runtimeSpec).length || rest.desiredSpec) {
       rest.desiredSpec = { ...(existing?.desiredSpec || {}), ...(rest.desiredSpec || {}), ...runtimeSpec };
-      rest.desiredState = { ...(existing?.desiredState || {}), ...runtimeSpec };
+      rest.desiredState = { ...(existing?.desiredState || {}), ...rest.desiredSpec, ...runtimeSpec };
     }
     const resolvedImageUrl = imageUrl || image || undefined;
     const timestamp = nowIso();
@@ -648,7 +648,7 @@ export class ControlPlaneStore {
       ...normalized,
       ...(Object.keys(desiredSpecPatch).length ? {
         desiredSpec: { ...(current.desiredSpec || {}), ...desiredSpecPatch },
-        desiredState: { ...(current.desiredState || {}), ...runtimeSpec, ...health },
+        desiredState: { ...(current.desiredState || {}), ...desiredSpecPatch, ...(normalized.desiredState || {}) },
       } : {}),
       updatedAt,
     };
