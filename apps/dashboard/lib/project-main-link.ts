@@ -12,6 +12,8 @@ type ServiceRecord = {
   slug?: string;
   type?: string;
   status?: string;
+  imageUrl?: string | null;
+  image?: string | null;
   deletionRequestedAt?: string | null;
 };
 
@@ -52,6 +54,8 @@ function isAvailableWebService(service: ServiceRecord) {
   const status = String(service.status || '').toUpperCase();
   return String(service.type || 'web').toLowerCase() === 'web'
     && !service.deletionRequestedAt
+    && (Boolean(service.imageUrl || service.image)
+      || ['READY', 'RUNNING', 'HEALTHY'].includes(status))
     && !['DELETE_REQUESTED', 'DELETING', 'DELETED'].includes(status);
 }
 
