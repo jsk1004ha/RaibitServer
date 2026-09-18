@@ -26,6 +26,7 @@ export const ServiceUpdateSchema = z.object({
   port: z.number().int().min(1).max(65535).optional(),
   ...ServiceHealthFields,
   resources: z.object({ requests: quantities.optional(), limits: quantities.optional() }).strict().optional(),
+  persistence: z.object({ sizeGi: z.number().int().min(1).max(100), mountPath: z.string().max(200).regex(/^\/data(?:\/[A-Za-z0-9_-]+)*$/) }).strict().nullable().optional(),
 }).strict().superRefine(refineServiceHealth).superRefine((input, context) => {
   try { parseServiceMutation(input); } catch (error) {
     if (!(error instanceof DesiredStateMutationError) && !(error instanceof HealthPathError)) throw error;

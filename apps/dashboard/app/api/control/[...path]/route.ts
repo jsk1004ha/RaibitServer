@@ -5,6 +5,7 @@ import { githubConflictRecovery } from '../../../../lib/control-plane-errors.js'
 import { OAUTH_BROWSER_COOKIE_NAME } from '@raibitserver/core/oauth-source';
 import { githubOAuthBrowserBinding, githubOAuthBrowserCookieOptions, githubOAuthRelayHeaders } from '../../../../lib/github-oauth-relay';
 import { clearSessionCookie, setSessionCookie } from '../../../../lib/session-cookies.js';
+import { serviceRuntimePayloadFromForm } from '../../../../lib/service-runtime-form.js';
 import {
   GITHUB_OAUTH_STATE_COOKIE_NAME,
   GITHUB_OAUTH_VERIFIER_COOKIE_NAME,
@@ -106,10 +107,12 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
       delete body._confirmProject;
       returnPath = safeReturnPath(browserRequestUrl, requestedReturn, request.headers.get('referer'));
       if (isFormSubmission && upstreamMethod === 'POST' && path === '/projects') body = projectCreatePayloadFromForm(body);
+      if (isFormSubmission && isServiceMutationPath(path, upstreamMethod)) body = serviceRuntimePayloadFromForm(body);
       if (isFormSubmission && upstreamMethod === 'POST' && /\/projects\/[^/]+\/services\/[^/]+\/env$/.test(path)) body = environmentPayloadFromForm(body);
       if (isFormSubmission && upstreamMethod === 'POST' && /\/projects\/[^/]+\/services\/[^/]+\/env-file$/.test(path)) body = environmentFilePayloadFromForm(body);
       if (isFormSubmission) body = resourceRecoveryPayloadFromForm(path, upstreamMethod, body);
       if (isFormSubmission && upstreamMethod === 'POST' && path === '/auth/password-reset/complete') {
+        if (!body) throw codedError('invalid_request_body');
         if (body.confirmPassword !== body.newPassword) return formErrorRedirect(browserRequestUrl, returnPath, 'password_confirmation_mismatch');
         delete body.confirmPassword;
       }
@@ -436,7 +439,22 @@ function requestBodyErrorCode(error: unknown) {
     'invalid_form_body',
     'unsupported_content_type',
     'file_upload_not_supported',
+    'service_runtime_resources_incomplete',
+    'invalid_cpu_request',
+    'invalid_cpu_limit',
+    'invalid_memory_request',
+    'invalid_memory_limit',
+    'persistence_size_required',
+    'invalid_persistence_size',
+    'persistence_mount_path_required',
+    'invalid_persistence_mount_path',
   ]).has(code) ? code : 'invalid_request_body';
+}
+
+function isServiceMutationPath(path: string, method: string) {
+  if (method === 'POST') return /^\/projects\/[^/]+\/services$/.test(path);
+  if (method === 'PATCH') return /^\/services\/[^/]+$/.test(path);
+  return false;
 }
 
 function requestBodyErrorStatus(code: string) {

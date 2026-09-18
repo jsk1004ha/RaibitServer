@@ -22,6 +22,7 @@ type Draft = {
   rootDirectory: string; buildContext: string; dockerfilePath: string; installCommand: string; buildCommand: string;
   startCommand: string; outputDirectory: string; port: string; healthCheckPath: string; livenessPath: string;
   readinessPath: string; publicHealthPath: string; requestCpu: string; requestMemory: string; limitCpu: string; limitMemory: string;
+  persistenceSizeGi: string; persistenceMountPath: string;
 };
 
 type Status = 'loading' | 'ready' | 'pending-preview' | 'pending-save' | 'pending-replacement' | 'saved' | 'stale' | 'permission' | 'failed';
@@ -50,11 +51,13 @@ function quantity(value: unknown, key: 'cpu' | 'memory'): string {
 
 function draftFrom(settings: Settings): Draft {
   const resources = asSettings(settings.resources) ? settings.resources : null;
+  const persistence = asSettings(settings.persistence) ? settings.persistence : null;
   return {
     name: text(settings.name), type: text(settings.type) || 'web', sourceType: text(settings.sourceType) || 'github', repoUrl: text(settings.repoUrl), imageUrl: text(settings.imageUrl ?? settings.image), branch: text(settings.branch),
     rootDirectory: text(settings.rootDirectory), buildContext: text(settings.buildContext), dockerfilePath: text(settings.dockerfilePath), installCommand: text(settings.installCommand), buildCommand: text(settings.buildCommand),
     startCommand: text(settings.startCommand), outputDirectory: text(settings.outputDirectory), port: settings.port === undefined ? '' : String(settings.port), healthCheckPath: text(settings.healthCheckPath), livenessPath: text(settings.livenessPath), readinessPath: text(settings.readinessPath), publicHealthPath: text(settings.publicHealthPath),
     requestCpu: quantity(resources?.requests, 'cpu') || '100m', requestMemory: quantity(resources?.requests, 'memory') || '128Mi', limitCpu: quantity(resources?.limits, 'cpu') || '500m', limitMemory: quantity(resources?.limits, 'memory') || '512Mi',
+    persistenceSizeGi: persistence?.sizeGi === undefined ? '0' : String(persistence.sizeGi), persistenceMountPath: text(persistence?.mountPath) || '/data/flyfight',
   };
 }
 
@@ -89,6 +92,10 @@ function validation(draft: Draft): Readonly<Record<string, string>> {
   }
   if (!errors.requestCpu && !errors.limitCpu && quantityValue(draft.requestCpu, 'cpu') > quantityValue(draft.limitCpu, 'cpu')) errors.requestCpu = 'CPU 요청은 제한보다 클 수 없습니다.';
   if (!errors.requestMemory && !errors.limitMemory && quantityValue(draft.requestMemory, 'memory') > quantityValue(draft.limitMemory, 'memory')) errors.requestMemory = '메모리 요청은 제한보다 클 수 없습니다.';
+  if (!/^\d+$/.test(draft.persistenceSizeGi) || Number(draft.persistenceSizeGi) > 100) errors.persistenceSizeGi = '저장소 크기는 0에서 100 사이의 정수 GiB여야 합니다.';
+  const persistenceEnabled = !errors.persistenceSizeGi && Number(draft.persistenceSizeGi) > 0;
+  if (persistenceEnabled && (!/^\/data(?:\/[A-Za-z0-9_-]+)*$/.test(draft.persistenceMountPath) || draft.persistenceMountPath.length > 200)) errors.persistenceMountPath = '마운트 경로는 /data 또는 /data 아래의 안전한 경로여야 합니다.';
+  if (persistenceEnabled && !['web', 'private', 'worker'].includes(draft.type)) errors.persistenceSizeGi = '영구 저장소는 웹, 비공개 서비스, 워커에서만 사용할 수 있습니다.';
   return errors;
 }
 
@@ -103,6 +110,9 @@ function changesFrom(draft: Draft, initial: Draft, deployed: boolean): Readonly<
   if (draft.requestCpu !== initial.requestCpu || draft.requestMemory !== initial.requestMemory || draft.limitCpu !== initial.limitCpu || draft.limitMemory !== initial.limitMemory) {
     changes.resources = { requests: { cpu: draft.requestCpu, memory: draft.requestMemory }, limits: { cpu: draft.limitCpu, memory: draft.limitMemory } };
   }
+  const initialPersistence = Number(initial.persistenceSizeGi) > 0 ? { sizeGi: Number(initial.persistenceSizeGi), mountPath: initial.persistenceMountPath } : null;
+  const nextPersistence = Number(draft.persistenceSizeGi) > 0 ? { sizeGi: Number(draft.persistenceSizeGi), mountPath: draft.persistenceMountPath } : null;
+  if (JSON.stringify(initialPersistence) !== JSON.stringify(nextPersistence)) changes.persistence = nextPersistence;
   return changes;
 }
 
@@ -130,10 +140,16 @@ function previewDiff(value: unknown): Preview['diff'] {
   return value.flatMap((item) => asSettings(item) ? [{ field: text(item.field) || undefined, before: item.before, after: item.after }] : []);
 }
 
+function diffValue(value: unknown): string {
+  if (value === undefined || value === null) return '—';
+  if (typeof value === 'object') return JSON.stringify(value, null, 2);
+  return String(value);
+}
+
 function Diff({ preview }: Readonly<{ preview: Preview }>) {
   const diff = preview.diff ?? [];
   return <Card size="sm"><CardHeader><CardTitle>저장 전 빌드 계획</CardTitle><CardDescription>이 미리보기는 설정 변경만 비교합니다. 배포를 만들거나 과거 스냅샷을 변경하지 않습니다.</CardDescription></CardHeader><CardContent className="flex flex-col gap-raibit-sm">
-    {diff.length > 0 ? diff.map((item, index) => <div className="grid gap-raibit-xs border-b border-border pb-raibit-sm last:border-0 last:pb-0 sm:grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)]" key={`${item.field ?? 'change'}-${index}`}><strong className="font-mono text-caption">{item.field ?? '설정'}</strong><code className="break-words text-code text-muted-foreground">{String(item.before ?? '—')}</code><code className="break-words text-code">{String(item.after ?? '—')}</code></div>) : <p className="text-muted-foreground">빌드 계획에 반영되는 차이가 없습니다.</p>}
+    {diff.length > 0 ? diff.map((item, index) => <div className="grid gap-raibit-xs border-b border-border pb-raibit-sm last:border-0 last:pb-0 sm:grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)]" key={`${item.field ?? 'change'}-${index}`}><strong className="font-mono text-caption">{item.field ?? '설정'}</strong><code className="whitespace-pre-wrap break-words text-code text-muted-foreground">{diffValue(item.before)}</code><code className="whitespace-pre-wrap break-words text-code">{diffValue(item.after)}</code></div>) : <p className="text-muted-foreground">빌드 계획에 반영되는 차이가 없습니다.</p>}
     {preview.buildPlan ? <pre className="max-h-64 overflow-auto rounded-sm bg-inverse p-raibit-md text-code text-inverse-foreground">{JSON.stringify(preview.buildPlan, null, 2)}</pre> : null}
   </CardContent></Card>;
 }
@@ -193,9 +209,10 @@ export function ServiceSettingsForm({ actionBase, service }: Readonly<{ actionBa
     setReplacementOpen(false); setStatus('saved'); setMessage('새 서비스 교체를 만들었습니다. 기존 서비스와 배포 스냅샷은 보존됩니다.');
   }
 
-  if (!draft || !snapshot) return <Card><CardHeader><CardTitle><h2>{service.name || service.slug || '서비스'} 설정</h2></CardTitle><CardDescription>조건부 저장에 필요한 현재 설정을 불러오는 중입니다.</CardDescription></CardHeader><CardContent>{status === 'loading' ? <Spinner /> : <Alert variant={status === 'permission' ? 'destructive' : 'default'}><AlertTitle>{status === 'permission' ? '권한 확인 필요' : '설정을 불러올 수 없습니다.'}</AlertTitle><AlertDescription>{message}</AlertDescription></Alert>}</CardContent>{status !== 'loading' ? <CardFooter className="justify-end"><Button onClick={() => void reload()} variant="outline">다시 불러오기</Button></CardFooter> : null}</Card>;
+  if (!draft || !initial || !snapshot) return <Card><CardHeader><CardTitle><h2>{service.name || service.slug || '서비스'} 설정</h2></CardTitle><CardDescription>조건부 저장에 필요한 현재 설정을 불러오는 중입니다.</CardDescription></CardHeader><CardContent>{status === 'loading' ? <Spinner /> : <Alert variant={status === 'permission' ? 'destructive' : 'default'}><AlertTitle>{status === 'permission' ? '권한 확인 필요' : '설정을 불러올 수 없습니다.'}</AlertTitle><AlertDescription>{message}</AlertDescription></Alert>}</CardContent>{status !== 'loading' ? <CardFooter className="justify-end"><Button onClick={() => void reload()} variant="outline">다시 불러오기</Button></CardFooter> : null}</Card>;
 
   const immutable = snapshot.deployed;
+  const persistenceLocked = Number(initial.persistenceSizeGi) > 0;
   const busy = status === 'pending-preview' || status === 'pending-save' || status === 'pending-replacement';
   const field = (name: keyof Draft, label: string, options: Readonly<{ type?: 'text' | 'number' | 'url'; disabled?: boolean; help?: string }> = {}) => <Field data-invalid={Boolean(errors[name])} data-disabled={options.disabled}><FieldLabel htmlFor={`service-settings-${name}`}>{label}</FieldLabel><Input aria-invalid={Boolean(errors[name])} disabled={options.disabled || busy} id={`service-settings-${name}`} onChange={(event) => update(name, event.target.value)} type={options.type ?? 'text'} value={draft[name]} />{errors[name] ? <FieldError>{errors[name]}</FieldError> : options.help ? <FieldDescription>{options.help}</FieldDescription> : null}</Field>;
   return <div className="flex flex-col gap-raibit-lg" data-service-settings>
@@ -210,7 +227,7 @@ export function ServiceSettingsForm({ actionBase, service }: Readonly<{ actionBa
       {field('branch', '브랜치')}{field('rootDirectory', '루트 경로')}{field('buildContext', '빌드 컨텍스트')}{field('dockerfilePath', 'Dockerfile 경로')}
       {field('installCommand', '설치 명령')}{field('buildCommand', '빌드 명령')}{field('startCommand', '시작 명령')}{field('outputDirectory', '출력 경로')}{field('port', '포트', { type: 'number' })}
     </FieldGroup></CardContent></Card>
-    <Card><CardHeader><CardTitle>상태 확인과 리소스</CardTitle><CardDescription>상태 경로는 선택 사항입니다. 환경 변수와 비밀값은 별도의 보안 경로에서 관리합니다.</CardDescription></CardHeader><CardContent className="flex flex-col gap-raibit-xl"><FieldSet><FieldLegend>상태 경로</FieldLegend><FieldGroup className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-raibit-lg">{field('healthCheckPath', '공통 상태 경로', { help: '/healthz 같은 안전한 절대 경로' })}{field('livenessPath', 'Liveness 경로')}{field('readinessPath', 'Readiness 경로')}{field('publicHealthPath', '공개 상태 경로', { disabled: draft.type !== 'web' })}</FieldGroup></FieldSet><Separator /><FieldSet><FieldLegend>CPU와 메모리</FieldLegend><FieldGroup className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-raibit-lg">{field('requestCpu', 'CPU 요청')}{field('limitCpu', 'CPU 제한')}{field('requestMemory', '메모리 요청')}{field('limitMemory', '메모리 제한')}</FieldGroup></FieldSet></CardContent><CardFooter className="justify-end gap-raibit-sm"><Button disabled={busy} onClick={() => void reload()} variant="outline">현재 상태 다시 불러오기</Button><Button disabled={!dirty || Object.keys(errors).length > 0 || busy} onClick={() => void previewChanges()} variant="outline">{status === 'pending-preview' ? <><Spinner data-icon="inline-start" />계획 비교 중</> : '빌드 계획 미리보기'}</Button><Button disabled={!saveAllowed} onClick={() => void save()}>{status === 'pending-save' ? <><Spinner data-icon="inline-start" />저장 중</> : '설정 저장'}</Button></CardFooter></Card>
+    <Card><CardHeader><CardTitle>상태 확인과 리소스</CardTitle><CardDescription>상태 경로는 선택 사항입니다. 환경 변수와 비밀값은 별도의 보안 경로에서 관리합니다.</CardDescription></CardHeader><CardContent className="flex flex-col gap-raibit-xl"><FieldSet><FieldLegend>상태 경로</FieldLegend><FieldGroup className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-raibit-lg">{field('healthCheckPath', '공통 상태 경로', { help: '/healthz 같은 안전한 절대 경로' })}{field('livenessPath', 'Liveness 경로')}{field('readinessPath', 'Readiness 경로')}{field('publicHealthPath', '공개 상태 경로', { disabled: draft.type !== 'web' })}</FieldGroup></FieldSet><Separator /><FieldSet><FieldLegend>CPU와 메모리</FieldLegend><FieldGroup className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-raibit-lg">{field('requestCpu', 'CPU 요청')}{field('limitCpu', 'CPU 제한')}{field('requestMemory', '메모리 요청')}{field('limitMemory', '메모리 제한')}</FieldGroup></FieldSet><Separator /><FieldSet><FieldLegend>영구 저장소</FieldLegend><FieldDescription>0 GiB는 비활성화입니다. 활성화하면 서비스는 한 인스턴스와 Recreate 방식으로 구성되고 재배포 때 같은 저장소를 사용합니다. 영구 저장소가 연결된 개별 서비스는 데이터 마이그레이션 전까지 삭제할 수 없습니다. 프로젝트 또는 네임스페이스를 삭제하면 데이터가 제거될 수 있으므로 먼저 백업하세요.</FieldDescription><FieldGroup className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-raibit-lg">{field('persistenceSizeGi', '저장소 크기 (GiB)', { type: 'number', disabled: persistenceLocked, help: persistenceLocked ? '기존 저장소의 크기와 경로는 데이터 마이그레이션 없이 변경할 수 없습니다.' : '1에서 100 GiB, 0은 비활성화' })}{field('persistenceMountPath', '마운트 경로', { disabled: persistenceLocked || Number(draft.persistenceSizeGi) === 0, help: '/data 또는 /data/flyfight 같은 경로' })}</FieldGroup></FieldSet></CardContent><CardFooter className="justify-end gap-raibit-sm"><Button disabled={busy} onClick={() => void reload()} variant="outline">현재 상태 다시 불러오기</Button><Button disabled={!dirty || Object.keys(errors).length > 0 || busy} onClick={() => void previewChanges()} variant="outline">{status === 'pending-preview' ? <><Spinner data-icon="inline-start" />계획 비교 중</> : '빌드 계획 미리보기'}</Button><Button disabled={!saveAllowed} onClick={() => void save()}>{status === 'pending-save' ? <><Spinner data-icon="inline-start" />저장 중</> : '설정 저장'}</Button></CardFooter></Card>
     {preview ? <Diff preview={preview} /> : null}
     {immutable ? <Card className="border-destructive/25"><CardHeader><CardTitle>소스 교체</CardTitle><CardDescription>기존 서비스, 운영 중인 워크로드 및 모든 배포 스냅샷은 그대로 보존됩니다. 새 서비스를 만들어 소스를 교체합니다.</CardDescription></CardHeader><CardFooter className="justify-end"><Button disabled={busy || Object.keys(errors).length > 0} onClick={() => setReplacementOpen(true)} variant="destructive">새 서비스 교체 만들기</Button></CardFooter></Card> : null}
     <Dialog onOpenChange={setReplacementOpen} open={replacementOpen}><DialogContent><DialogHeader><DialogTitle>새 서비스 교체 만들기</DialogTitle><DialogDescription>기존 서비스는 보존되며, 이 동작은 기존 배포 또는 스냅샷을 수정하지 않습니다.</DialogDescription></DialogHeader><DialogFooter><Button onClick={() => setReplacementOpen(false)} variant="outline">취소</Button><Button disabled={busy} onClick={() => void replace()} variant="destructive">{status === 'pending-replacement' ? <><Spinner data-icon="inline-start" />만드는 중</> : '기존 서비스 보존 후 만들기'}</Button></DialogFooter></DialogContent></Dialog>

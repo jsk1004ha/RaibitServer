@@ -1,10 +1,11 @@
 import { resolveBuildStrategy } from './build-strategy.ts';
 import { parseServiceMutation, serviceMutationState } from './desired-state-mutations.ts';
+import { validateServiceRuntimeUpdate } from './service-runtime.ts';
 
 const settingFields = [
   'name', 'type', 'sourceType', 'repoUrl', 'image', 'imageUrl', 'branch', 'rootDirectory', 'buildContext',
   'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'port', 'healthCheckPath',
-  'livenessPath', 'readinessPath', 'publicHealthPath', 'resources',
+  'livenessPath', 'readinessPath', 'publicHealthPath', 'resources', 'persistence',
 ] as const;
 
 export class ServiceSettingsError extends Error {
@@ -46,6 +47,7 @@ export function previewServiceSettings(
   assertExpectedServiceVersion(service, input.expectedUpdatedAt);
   const before = serviceSettingsSnapshot(service, context.deployed);
   const changes = serviceMutationState(service, parseServiceMutation(input.changes), context);
+  validateServiceRuntimeUpdate(service, changes);
   const afterService = { ...service, ...changes, desiredSpec: { ...record(service.desiredSpec), ...changes }, desiredState: { ...record(service.desiredState), ...changes } };
   const after = serviceSettingsSnapshot(afterService, context.deployed);
   const diff = Object.keys(changes).sort().map((field) => ({ field, before: before.settings[field] ?? null, after: after.settings[field] ?? null }));

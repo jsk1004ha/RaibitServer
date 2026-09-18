@@ -1,7 +1,7 @@
 import { HEALTH_PATH_FIELDS, parseHealthPaths } from './deployment-health-contract.ts';
 
 export const SERVICE_SETTINGS_LIMITS = { cpuMillicores: 500, memoryMiB: 512 } as const;
-const editable = new Set(['name', 'type', 'sourceType', 'repoUrl', 'image', 'imageUrl', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'port', 'healthCheck', 'resources', ...HEALTH_PATH_FIELDS]);
+const editable = new Set(['name', 'type', 'sourceType', 'repoUrl', 'image', 'imageUrl', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'port', 'healthCheck', 'resources', 'persistence', ...HEALTH_PATH_FIELDS]);
 const identity = new Set(['id', 'projectId', 'organizationId', 'organizationSlug', 'slug', 'repositoryUrl', 'githubRepositoryId', 'githubInstallationId', 'githubIntegrationId', 'githubRepository', 'sourceAccess']);
 const resourceKeys = new Set(['name', 'type', 'engine', 'provider', 'plan', 'region', 'version', 'storageMb', 'storageGb', 'databaseName', 'database', 'username', 'bucket', 'collection', 'topic', 'backup', 'desiredSpec']);
 const resourceSpecKeys = new Set(['storageMb', 'storageGb', 'databaseName', 'database', 'username', 'bucket', 'collection', 'topic', 'schemas', 'tables', 'collections', 'documents', 'keys', 'values', 'ttl', 'buckets', 'objects', 'subjects']);
@@ -44,7 +44,7 @@ export function parseServiceMutation(input: unknown) {
   const parsed = record(input, 'service');
   keys(parsed, editable);
   for (const [key, value] of Object.entries(parsed)) {
-    if (['resources', 'healthCheck', 'port', ...HEALTH_PATH_FIELDS].includes(key)) continue;
+    if (['resources', 'persistence', 'healthCheck', 'port', ...HEALTH_PATH_FIELDS].includes(key)) continue;
     text(value, key, key === 'name' ? 128 : key.endsWith('Command') ? 4096 : 1024, key.endsWith('Command'));
     if (['rootDirectory', 'buildContext', 'dockerfilePath', 'outputDirectory'].includes(key)) {
       const normalized = String(value).replaceAll('\\', '/');
@@ -68,6 +68,13 @@ export function parseServiceMutation(input: unknown) {
     const requests = optionalRecord(resources.requests);
     const limits = optionalRecord(resources.limits);
     for (const unit of ['cpu', 'memory']) if (requests[unit] !== undefined && limits[unit] !== undefined && settingQuantity(requests[unit], unit) > settingQuantity(limits[unit], unit)) invalid(`resources.requests.${unit}`);
+  }
+  if (parsed.persistence !== undefined && parsed.persistence !== null) {
+    const persistence = record(parsed.persistence, 'persistence');
+    keys(persistence, new Set(['sizeGi', 'mountPath']));
+    if (typeof persistence.sizeGi !== 'number' || !Number.isInteger(persistence.sizeGi) || persistence.sizeGi < 1 || persistence.sizeGi > 100) invalid('persistence.sizeGi');
+    if (typeof persistence.mountPath !== 'string' || persistence.mountPath.length > 200 || !/^\/data(?:\/[A-Za-z0-9_-]+)*$/.test(persistence.mountPath)) invalid('persistence.mountPath');
+    parsed.persistence = persistence;
   }
   return parsed;
 }

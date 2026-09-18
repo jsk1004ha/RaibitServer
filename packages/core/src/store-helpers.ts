@@ -195,13 +195,24 @@ export function activityLimit(value: any, fallback = 200) {
 }
 
 export function serviceCpuMillicores(service: AnyRecord) {
-  const spec = service.desiredSpec || service.desiredState || service;
+  const spec = effectiveServiceSpec(service);
   return parseCpuMillicores(spec.cpu || spec.cpuRequest || spec.resources?.requests?.cpu || spec.resources?.limits?.cpu);
 }
 
 export function serviceMemoryMb(service: AnyRecord) {
-  const spec = service.desiredSpec || service.desiredState || service;
+  const spec = effectiveServiceSpec(service);
   return parseMemoryMb(spec.memory || spec.memoryMb || spec.memoryRequest || spec.resources?.requests?.memory || spec.resources?.limits?.memory);
+}
+
+export function serviceStorageMb(service: AnyRecord) {
+  const persistence = effectiveServiceSpec(service).persistence;
+  return persistence && Number.isInteger(persistence.sizeGi) ? persistence.sizeGi * 1024 : 0;
+}
+
+function effectiveServiceSpec(service: AnyRecord = {}) {
+  const desiredSpec = service.desiredSpec && typeof service.desiredSpec === 'object' && !Array.isArray(service.desiredSpec) ? service.desiredSpec : {};
+  const desiredState = service.desiredState && typeof service.desiredState === 'object' && !Array.isArray(service.desiredState) ? service.desiredState : {};
+  return { ...desiredSpec, ...desiredState, ...service };
 }
 
 export function dateMs(value: any) {

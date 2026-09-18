@@ -433,6 +433,210 @@ func TestRuntimeTemporaryStorageIsBounded(t *testing.T) {
 	}
 }
 
+func TestPersistentServiceCompilesStablePVCAndSingleInstanceRuntime(t *testing.T) {
+	spec := workloadSpec("web", "dep-storage", map[string]any{
+		"persistence": map[string]any{"sizeGi": float64(25), "mountPath": "/data/flyfight"},
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": "750m", "memory": "1Gi"},
+			"limits":   map[string]any{"cpu": "2", "memory": "4Gi"},
+		},
+	}, nil)
+	spec.Replicas = 4
+	plan := NewDeploymentPlan(spec)
+	if !plan.Safe {
+		t.Fatalf("persistent service should compile safely: %s", plan.Error)
+	}
+	pvc := findManifest(t, plan.Manifests, "PersistentVolumeClaim", "service-data")
+	pvcMetadata := pvc["metadata"].(map[string]any)
+	pvcLabels := pvcMetadata["labels"].(map[string]any)
+	if _, exists := pvcLabels["raibitserver.io/deployment-id"]; exists {
+		t.Fatalf("PVC must not be owned by a deployment: %#v", pvcLabels)
+	}
+	if _, exists := pvcLabels["raibitserver.io/deployment"]; exists {
+		t.Fatalf("PVC must not carry a deployment label: %#v", pvcLabels)
+	}
+	if pvcLabels["raibitserver.io/service-id"] != "service-1" {
+		t.Fatalf("PVC must retain stable service ownership: %#v", pvcLabels)
+	}
+	pvcSpec := pvc["spec"].(map[string]any)
+	if _, exists := pvcSpec["storageClassName"]; exists {
+		t.Fatalf("PVC must use the cluster default storage class: %#v", pvcSpec)
+	}
+	if got := pvcSpec["accessModes"].([]any); len(got) != 1 || got[0] != "ReadWriteOnce" {
+		t.Fatalf("PVC accessModes = %#v, want ReadWriteOnce", got)
+	}
+	storage := pvcSpec["resources"].(map[string]any)["requests"].(map[string]any)["storage"]
+	if storage != "25Gi" {
+		t.Fatalf("PVC storage = %#v, want 25Gi", storage)
+	}
+
+	deployment := findManifest(t, plan.Manifests, "Deployment", "service")
+	deploymentSpec := deployment["spec"].(map[string]any)
+	if deploymentSpec["replicas"] != 1 {
+		t.Fatalf("persistent service replicas = %#v, want 1", deploymentSpec["replicas"])
+	}
+	strategy := deploymentSpec["strategy"].(map[string]any)
+	if strategy["type"] != "Recreate" || len(strategy) != 1 {
+		t.Fatalf("persistent service strategy = %#v, want exact Recreate", strategy)
+	}
+	podSpec := deploymentSpec["template"].(map[string]any)["spec"].(map[string]any)
+	if podSpec["terminationGracePeriodSeconds"] != 300 {
+		t.Fatalf("termination grace = %#v, want 300", podSpec["terminationGracePeriodSeconds"])
+	}
+	if podSpec["securityContext"].(map[string]any)["fsGroup"] != 10001 {
+		t.Fatalf("persistent pod fsGroup = %#v, want 10001", podSpec["securityContext"])
+	}
+	volumes := podSpec["volumes"].([]any)
+	dataVolume := volumes[1].(map[string]any)
+	if dataVolume["persistentVolumeClaim"].(map[string]any)["claimName"] != "service-data" {
+		t.Fatalf("data volume = %#v", dataVolume)
+	}
+	container := podSpec["containers"].([]any)[0].(map[string]any)
+	mounts := container["volumeMounts"].([]any)
+	if mounts[1].(map[string]any)["name"] != "data" || mounts[1].(map[string]any)["mountPath"] != "/data/flyfight" {
+		t.Fatalf("persistent mount = %#v", mounts)
+	}
+	resources := container["resources"].(map[string]any)
+	requests := resources["requests"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	if requests["cpu"] != "750m" || requests["memory"] != "1Gi" || requests["ephemeral-storage"] != "64Mi" {
+		t.Fatalf("resource requests = %#v", requests)
+	}
+	if limits["cpu"] != "2" || limits["memory"] != "4Gi" || limits["ephemeral-storage"] != "256Mi" {
+		t.Fatalf("resource limits = %#v", limits)
+	}
+	for _, manifest := range CleanupManifests(plan) {
+		if manifest["kind"] == "PersistentVolumeClaim" {
+			t.Fatalf("ordinary cleanup must preserve persistent data: %#v", manifest)
+		}
+	}
+}
+
+func TestPersistentServicePVCNameMatchesTypeScriptDerivedName(t *testing.T) {
+	spec := AppServiceSpec{
+		Name: strings.Repeat("a", 63), Namespace: "project", Image: "registry.local/service:1", Port: 8080,
+		Replicas: 1, ProjectID: "project-1", ServiceID: "service-1", ProjectSlug: "project", ServiceType: "worker", DeploymentID: "dep-1",
+		Persistence: &ServicePersistence{SizeGi: 1, MountPath: "/data"},
+	}
+	plan := NewDeploymentPlan(spec)
+	if !plan.Safe {
+		t.Fatalf("long persistent service should compile safely: %s", plan.Error)
+	}
+	want := strings.Repeat("a", 50) + "-dcac8d5c2ee7"
+	if got := manifestName(t, plan.Manifests, "PersistentVolumeClaim"); got != want {
+		t.Fatalf("PVC name = %q, want TypeScript parity %q", got, want)
+	}
+}
+
+func TestPersistentRuntimeRejectsUnsafeOrUnsupportedConfiguration(t *testing.T) {
+	tests := []struct {
+		name        string
+		serviceType string
+		desiredSpec map[string]any
+		wantError   string
+	}{
+		{name: "cron", serviceType: "cron", desiredSpec: map[string]any{"persistence": map[string]any{"sizeGi": 1, "mountPath": "/data"}}, wantError: "supported only"},
+		{name: "size zero", serviceType: "web", desiredSpec: map[string]any{"persistence": map[string]any{"sizeGi": 0, "mountPath": "/data"}}, wantError: "sizeGi"},
+		{name: "path traversal", serviceType: "web", desiredSpec: map[string]any{"persistence": map[string]any{"sizeGi": 1, "mountPath": "/data/../etc"}}, wantError: "mountPath"},
+		{name: "host path field", serviceType: "web", desiredSpec: map[string]any{"persistence": map[string]any{"sizeGi": 1, "mountPath": "/data", "hostPath": "/srv"}}, wantError: "unsupported field"},
+		{name: "arbitrary resource", serviceType: "web", desiredSpec: map[string]any{"resources": map[string]any{"limits": map[string]any{"nvidia.com/gpu": "1"}}}, wantError: "unsupported resource"},
+		{name: "cpu cap", serviceType: "web", desiredSpec: map[string]any{"resources": map[string]any{"limits": map[string]any{"cpu": "8001m"}}}, wantError: "no greater than 8 cores"},
+		{name: "memory cap", serviceType: "web", desiredSpec: map[string]any{"resources": map[string]any{"limits": map[string]any{"memory": "17Gi"}}}, wantError: "no greater than 16Gi"},
+		{name: "request above limit", serviceType: "web", desiredSpec: map[string]any{"resources": map[string]any{"requests": map[string]any{"cpu": "1"}, "limits": map[string]any{"cpu": "500m"}}}, wantError: "must not exceed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := NewDeploymentPlan(workloadSpec(tc.serviceType, "dep-invalid", tc.desiredSpec, nil))
+			if plan.Safe || !strings.Contains(plan.Error, tc.wantError) {
+				t.Fatalf("plan = safe:%v error:%q, want error containing %q", plan.Safe, plan.Error, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestPersistentPreviewDeploymentIsRejected(t *testing.T) {
+	spec := workloadSpec("web", "dep-preview-storage", map[string]any{
+		"persistence": map[string]any{"sizeGi": 1, "mountPath": "/data"},
+	}, nil)
+	spec.Preview = true
+	plan := NewDeploymentPlan(spec)
+	if plan.Safe || !strings.Contains(plan.Error, "preview") {
+		t.Fatalf("persistent preview plan = safe:%v error:%q, want rejection", plan.Safe, plan.Error)
+	}
+}
+
+func TestDeploymentSnapshotPreservesPersistentRuntimeConfiguration(t *testing.T) {
+	project := &store.Project{ID: "project-1", OrganizationID: "org-1", Name: "Project", Slug: "project"}
+	service := &store.Service{
+		ID: "service-1", ProjectID: project.ID, Name: "service", Slug: "service", Type: "web", ImageURL: "registry.local/service:1", Port: 9000, Replicas: 3,
+		DesiredSpec: map[string]any{
+			"persistence": map[string]any{"sizeGi": 7, "mountPath": "/data/flyfight"},
+			"resources":   map[string]any{"limits": map[string]any{"cpu": "8", "memory": "16Gi"}},
+		},
+	}
+	deployment := &store.Deployment{
+		ID: "dep-snapshot", ServiceID: service.ID, ProjectID: project.ID, ImageURL: "registry.local/service:1", SnapshotVersion: 1,
+		DesiredSpecSnapshot: json.RawMessage(`{"type":"web","port":8080,"replicas":5,"persistence":{"sizeGi":7,"mountPath":"/data/flyfight"},"resources":{"requests":{"cpu":"250m","memory":"256Mi"},"limits":{"cpu":"1500m","memory":"2Gi"}}}`),
+	}
+	plan := NewDeploymentPlan(SpecFromState(project, service, deployment, "example.test"))
+	if !plan.Safe {
+		t.Fatalf("snapshot-backed persistent plan should be safe: %s", plan.Error)
+	}
+	pvc := findManifest(t, plan.Manifests, "PersistentVolumeClaim", "service-data")
+	storage := pvc["spec"].(map[string]any)["resources"].(map[string]any)["requests"].(map[string]any)["storage"]
+	if storage != "7Gi" {
+		t.Fatalf("snapshot PVC storage = %#v, want 7Gi (live state must not leak)", storage)
+	}
+	deploymentManifest := findManifest(t, plan.Manifests, "Deployment", "service")
+	podSpec := deploymentManifest["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	container := podSpec["containers"].([]any)[0].(map[string]any)
+	mounts := container["volumeMounts"].([]any)
+	if mounts[1].(map[string]any)["mountPath"] != "/data/flyfight" {
+		t.Fatalf("snapshot mount = %#v, want /data/flyfight", mounts)
+	}
+	resources := container["resources"].(map[string]any)
+	requests := resources["requests"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	if requests["cpu"] != "250m" || requests["memory"] != "256Mi" || limits["cpu"] != "1500m" || limits["memory"] != "2Gi" {
+		t.Fatalf("snapshot resources were not preserved: requests=%#v limits=%#v", requests, limits)
+	}
+	if deploymentManifest["spec"].(map[string]any)["replicas"] != 1 {
+		t.Fatalf("snapshot persistence must still enforce one replica")
+	}
+}
+
+func TestOldDeploymentSnapshotRetainsLiveImmutablePersistence(t *testing.T) {
+	project := &store.Project{ID: "project-1", OrganizationID: "org-1", Name: "Project", Slug: "project"}
+	service := &store.Service{
+		ID: "service-1", ProjectID: project.ID, Name: "service", Slug: "service", Type: "web", ImageURL: "registry.local/service:1", Port: 9000, Replicas: 3,
+		DesiredSpec: map[string]any{"persistence": map[string]any{"sizeGi": 7, "mountPath": "/data/flyfight"}},
+	}
+	deployment := &store.Deployment{
+		ID: "dep-old-snapshot", ServiceID: service.ID, ProjectID: project.ID, ImageURL: "registry.local/service:1", SnapshotVersion: 1,
+		DesiredSpecSnapshot: json.RawMessage(`{"type":"web","port":8080,"replicas":5}`),
+	}
+	plan := NewDeploymentPlan(SpecFromState(project, service, deployment, "example.test"))
+	if !plan.Safe {
+		t.Fatalf("old snapshot should inherit immutable persistence: %s", plan.Error)
+	}
+	pvc := findManifest(t, plan.Manifests, "PersistentVolumeClaim", "service-data")
+	storage := pvc["spec"].(map[string]any)["resources"].(map[string]any)["requests"].(map[string]any)["storage"]
+	if storage != "7Gi" {
+		t.Fatalf("old snapshot PVC storage = %#v, want 7Gi", storage)
+	}
+	deploymentManifest := findManifest(t, plan.Manifests, "Deployment", "service")
+	deploymentSpec := deploymentManifest["spec"].(map[string]any)
+	if deploymentSpec["replicas"] != 1 || deploymentSpec["strategy"].(map[string]any)["type"] != "Recreate" {
+		t.Fatalf("old snapshot lost persistent deployment invariants: %#v", deploymentSpec)
+	}
+	podSpec := deploymentSpec["template"].(map[string]any)["spec"].(map[string]any)
+	container := podSpec["containers"].([]any)[0].(map[string]any)
+	mounts := container["volumeMounts"].([]any)
+	if mounts[1].(map[string]any)["mountPath"] != "/data/flyfight" {
+		t.Fatalf("old snapshot mount = %#v, want /data/flyfight", mounts)
+	}
+}
+
 func TestNetworkPolicyUsesTrustedIngressGatewayNamespace(t *testing.T) {
 	manifests := CompileServiceManifests(AppServiceSpec{
 		Name:             "web",

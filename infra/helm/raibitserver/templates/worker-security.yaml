@@ -70,6 +70,9 @@ rules:
     resources: ["resourcequotas"]
     verbs: ["get", "list", "watch", "create", "patch", "update"]
   - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
@@ -248,6 +251,105 @@ spec:
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
+  name: {{ include "raibitserver.fullname" . }}-orchestrator-service-pvc-boundary
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["persistentvolumeclaims"]
+  matchConditions:
+    - name: orchestrator-service-account
+      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-orchestrator'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+  variables:
+    - name: target
+      expression: "object"
+    - name: appName
+      expression: "variables.target.metadata.labels['app.kubernetes.io/name']"
+    - name: storage
+      expression: "variables.target.spec.resources.requests['storage']"
+  validations:
+    - expression: >-
+        has(namespaceObject.metadata.labels) &&
+        namespaceObject.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        namespaceObject.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        namespaceObject.metadata.labels['raibitserver.io/namespace-kind'] == 'application' &&
+        namespaceObject.metadata.labels['pod-security.kubernetes.io/enforce'] == 'restricted'
+      message: "the orchestrator may create service storage only inside application tenant namespaces"
+    - expression: >-
+        has(variables.target.metadata.labels) &&
+        variables.target.metadata.labels.size() in [7, 10] &&
+        variables.target.metadata.labels.all(key, key in [
+          'app.kubernetes.io/name', 'app.kubernetes.io/managed-by', 'raibitserver.io/managed',
+          'raibitserver.io/project', 'raibitserver.io/service', 'raibitserver.io/project-id',
+          'raibitserver.io/service-id', 'raibitserver.io/preview', 'raibitserver.io/pull-request',
+          'raibitserver.io/base-service']) &&
+        variables.target.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        variables.target.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        variables.target.metadata.labels['raibitserver.io/project'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/service'] == variables.appName &&
+        variables.target.metadata.labels['raibitserver.io/project-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/service-id'] != '' &&
+        variables.target.metadata.labels['raibitserver.io/project-id'] == namespaceObject.metadata.labels['raibitserver.io/project-id'] &&
+        (variables.target.metadata.labels.size() == 7 ||
+         (variables.target.metadata.labels['raibitserver.io/preview'] == 'true' &&
+          variables.target.metadata.labels['raibitserver.io/pull-request'].matches('^[1-9][0-9]*$') &&
+          variables.target.metadata.labels['raibitserver.io/base-service'] != '')) &&
+        !('raibitserver.io/deployment' in variables.target.metadata.labels) &&
+        !('raibitserver.io/deployment-id' in variables.target.metadata.labels)
+      message: "service PVCs require the stable compiler-owned project and service identity"
+    - expression: >-
+        (variables.appName.size() <= 58 && variables.target.metadata.name == variables.appName + '-data') ||
+        (variables.appName.size() > 58 &&
+         variables.target.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?-[a-f0-9]{12}$') &&
+         variables.appName.startsWith(variables.target.metadata.name.substring(0, variables.target.metadata.name.size() - 13)))
+      message: "service PVC names must use the compiler-derived service data name"
+    - expression: >-
+        has(variables.target.spec.accessModes) && variables.target.spec.accessModes == ['ReadWriteOnce'] &&
+        (!has(variables.target.spec.volumeMode) || variables.target.spec.volumeMode == 'Filesystem') &&
+        (!has(variables.target.spec.storageClassName) ||
+         (variables.target.spec.storageClassName != '' &&
+          variables.target.spec.storageClassName.matches('^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'))) &&
+        !has(variables.target.spec.selector) && !has(variables.target.spec.dataSource) && !has(variables.target.spec.dataSourceRef) &&
+        has(variables.target.spec.resources) && has(variables.target.spec.resources.requests) &&
+        variables.target.spec.resources.requests.size() == 1 &&
+        !has(variables.target.spec.resources.limits) && isQuantity(variables.storage) &&
+        quantity(variables.storage).compareTo(quantity('1Gi')) >= 0 &&
+        quantity(variables.storage).compareTo(quantity('100Gi')) <= 0 &&
+        (request.operation != 'CREATE' || !has(variables.target.spec.volumeName))
+      message: "service PVCs require default-class ReadWriteOnce filesystem storage between 1Gi and 100Gi"
+    - expression: >-
+        request.operation != 'UPDATE' ||
+        (oldObject.metadata.name == object.metadata.name && oldObject.metadata.labels == object.metadata.labels &&
+         oldObject.spec.resources.requests.storage == object.spec.resources.requests.storage &&
+         oldObject.spec.accessModes == object.spec.accessModes &&
+         (has(oldObject.spec.volumeMode) == has(object.spec.volumeMode)) &&
+         (!has(oldObject.spec.volumeMode) || oldObject.spec.volumeMode == object.spec.volumeMode) &&
+         (has(oldObject.spec.storageClassName) == has(object.spec.storageClassName)) &&
+         (!has(oldObject.spec.storageClassName) || oldObject.spec.storageClassName == object.spec.storageClassName) &&
+         (has(oldObject.spec.selector) == has(object.spec.selector)) &&
+         (!has(oldObject.spec.selector) || oldObject.spec.selector == object.spec.selector) &&
+         (has(oldObject.spec.dataSource) == has(object.spec.dataSource)) &&
+         (!has(oldObject.spec.dataSource) || oldObject.spec.dataSource == object.spec.dataSource) &&
+         (has(oldObject.spec.dataSourceRef) == has(object.spec.dataSourceRef)) &&
+         (!has(oldObject.spec.dataSourceRef) || oldObject.spec.dataSourceRef == object.spec.dataSourceRef) &&
+         (has(oldObject.spec.volumeName) == has(object.spec.volumeName)) &&
+         (!has(oldObject.spec.volumeName) || oldObject.spec.volumeName == object.spec.volumeName))
+      message: "service PVC identity and storage binding are immutable"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-orchestrator-service-pvc-boundary
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-orchestrator-service-pvc-boundary
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
   name: {{ include "raibitserver.fullname" . }}-orchestrator-workload-boundary
 spec:
   failurePolicy: Fail
@@ -282,6 +384,8 @@ spec:
       expression: "variables.target.kind == 'Ingress' && has(variables.target.metadata.labels) && 'raibitserver.io/preview-route' in variables.target.metadata.labels && variables.target.metadata.labels['raibitserver.io/preview-route'] == 'true'"
     - name: previewBackendService
       expression: "variables.isPreviewRoute ? variables.target.metadata.labels['raibitserver.io/preview-backend-service'] : ''"
+    - name: hasDataVolume
+      expression: "variables.isPodWorkload && has(variables.podSpec.volumes) && variables.podSpec.volumes.exists(volume, volume.name == 'data')"
   validations:
     - expression: >-
         has(namespaceObject.metadata.labels) &&
@@ -358,16 +462,45 @@ spec:
     - expression: >-
         !variables.isPodWorkload ||
         (has(variables.container.resources) && variables.container.resources.requests.size() == 3 && variables.container.resources.limits.size() == 3 &&
-        variables.container.resources.requests['cpu'] == '100m' && variables.container.resources.requests['memory'] == '128Mi' &&
+        isQuantity(variables.container.resources.requests['cpu']) &&
+        quantity(variables.container.resources.requests['cpu']).compareTo(quantity('0')) > 0 &&
+        quantity(variables.container.resources.requests['cpu']).compareTo(quantity('8000m')) <= 0 &&
+        isQuantity(variables.container.resources.limits['cpu']) &&
+        quantity(variables.container.resources.limits['cpu']).compareTo(quantity('0')) > 0 &&
+        quantity(variables.container.resources.limits['cpu']).compareTo(quantity('8000m')) <= 0 &&
+        quantity(variables.container.resources.requests['cpu']).compareTo(quantity(variables.container.resources.limits['cpu'])) <= 0 &&
+        isQuantity(variables.container.resources.requests['memory']) &&
+        quantity(variables.container.resources.requests['memory']).compareTo(quantity('0')) > 0 &&
+        quantity(variables.container.resources.requests['memory']).compareTo(quantity('16384Mi')) <= 0 &&
+        isQuantity(variables.container.resources.limits['memory']) &&
+        quantity(variables.container.resources.limits['memory']).compareTo(quantity('0')) > 0 &&
+        quantity(variables.container.resources.limits['memory']).compareTo(quantity('16384Mi')) <= 0 &&
+        quantity(variables.container.resources.requests['memory']).compareTo(quantity(variables.container.resources.limits['memory'])) <= 0 &&
         variables.container.resources.requests['ephemeral-storage'] == '64Mi' &&
-        variables.container.resources.limits['cpu'] == '500m' && variables.container.resources.limits['memory'] == '512Mi' &&
         variables.container.resources.limits['ephemeral-storage'] == '256Mi' &&
-        variables.podSpec.volumes.size() == 1 && variables.podSpec.volumes[0].name == 'tmp' && has(variables.podSpec.volumes[0].emptyDir) &&
-        variables.podSpec.volumes[0].emptyDir.sizeLimit == '128Mi' &&
-        (!has(variables.podSpec.volumes[0].emptyDir.medium) || variables.podSpec.volumes[0].emptyDir.medium == '') &&
-        variables.container.volumeMounts.size() == 1 && variables.container.volumeMounts[0].name == 'tmp' && variables.container.volumeMounts[0].mountPath == '/tmp' &&
-        !has(variables.container.volumeMounts[0].subPath) && !has(variables.container.volumeMounts[0].subPathExpr))
-      message: "orchestrator workloads require bounded resources and only the compiler-owned tmp volume"
+        variables.podSpec.volumes.exists_one(volume,
+          volume.name == 'tmp' && has(volume.emptyDir) && volume.emptyDir.sizeLimit == '128Mi' &&
+          (!has(volume.emptyDir.medium) || volume.emptyDir.medium == '')) &&
+        variables.container.volumeMounts.exists_one(mount,
+          mount.name == 'tmp' && mount.mountPath == '/tmp' &&
+          !has(mount.subPath) && !has(mount.subPathExpr)) &&
+        ((!variables.hasDataVolume && variables.podSpec.volumes.size() == 1 && variables.container.volumeMounts.size() == 1 &&
+          !has(variables.podSpec.securityContext.fsGroup)) ||
+         (variables.hasDataVolume && variables.target.kind == 'Deployment' &&
+          variables.podSpec.volumes.size() == 2 && variables.container.volumeMounts.size() == 2 &&
+          variables.podSpec.securityContext.fsGroup == 10001 &&
+          variables.podSpec.volumes.exists_one(volume,
+            volume.name == 'data' && has(volume.persistentVolumeClaim) &&
+            ((!has(volume.persistentVolumeClaim.readOnly)) || volume.persistentVolumeClaim.readOnly == false) &&
+            ((variables.appName.size() <= 58 && volume.persistentVolumeClaim.claimName == variables.appName + '-data') ||
+             (variables.appName.size() > 58 &&
+              volume.persistentVolumeClaim.claimName.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?-[a-f0-9]{12}$') &&
+              variables.appName.startsWith(volume.persistentVolumeClaim.claimName.substring(0, volume.persistentVolumeClaim.claimName.size() - 13))))) &&
+          variables.container.volumeMounts.exists_one(mount,
+            mount.name == 'data' && mount.mountPath.matches('^/data(/[A-Za-z0-9_-]+)*$') &&
+            ((!has(mount.readOnly)) || mount.readOnly == false) &&
+            !has(mount.subPath) && !has(mount.subPathExpr)))))
+      message: "orchestrator workloads require bounded compute and compiler-owned tmp or service data volumes"
     - expression: >-
         !variables.isPodWorkload || !has(variables.container.env) ||
         (variables.container.env.size() <= 128 && variables.container.env.all(env,
@@ -383,7 +516,11 @@ spec:
         variables.target.kind != 'Deployment' ||
         (variables.target.spec.replicas >= 0 && variables.target.spec.replicas <= 100 &&
         variables.target.spec.selector.matchLabels.size() == 1 && variables.target.spec.selector.matchLabels['app.kubernetes.io/name'] == variables.appName &&
-        (!has(variables.target.spec.selector.matchExpressions) || variables.target.spec.selector.matchExpressions.size() == 0))
+        (!has(variables.target.spec.selector.matchExpressions) || variables.target.spec.selector.matchExpressions.size() == 0) &&
+        (!variables.hasDataVolume ||
+         (variables.target.spec.replicas == 1 && variables.target.spec.strategy.type == 'Recreate' &&
+          !has(variables.target.spec.strategy.rollingUpdate) &&
+          variables.podSpec.terminationGracePeriodSeconds == 300)))
       message: "orchestrator Deployments require a bounded replica count and exact app selector"
     - expression: >-
         variables.target.kind != 'Job' ||

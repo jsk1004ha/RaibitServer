@@ -315,10 +315,16 @@ for (const adapter of ['memory', 'Prisma contract fake']) test(`resource quota r
     const store = new ControlPlaneStore(); const { service, user } = quotaFixture(store, scenario, index);
     let row = { id: service.id, projectId: service.projectId, name: service.name, status: 'CREATED', desiredState: scenario.retained ? { resources: retainedResources } : {} };
     let writes = 0;
+    const quota = { maxCpuMillicores: 8000, maxMemoryMb: 16384, maxObjectStorageMb: 102400, ...(scenario.quota || {}) };
     const tx = {
       service: { findUnique: async () => structuredClone(row), update: async ({ data }) => { writes++; row = { ...row, ...data }; return row; } },
       project: { findUnique: async () => ({ id: service.projectId, status: 'ACTIVE' }) },
-      deployment: { findFirst: async () => null }, quota: { findFirst: async () => scenario.quota },
+      deployment: { findFirst: async () => null },
+      user: { findUnique: async () => ({ id: user.id, role: 'USER', accountType: 'NON_CLUB', approvalStatus: 'APPROVED' }) },
+      quota: { findFirst: async () => quota, upsert: async () => quota },
+      $queryRawUnsafe: async (sql) => /pg_advisory_xact_lock/i.test(sql)
+        ? [{ locked: 1 }]
+        : [{ maxProjects: 1, maxServices: 1, maxDeploymentsPerDay: 0, maxPreviewDeployments: 0, services: [structuredClone(row)], resources: [], deployments: [], usageRecords: [] }],
     };
     const repository = new PrismaControlPlaneRepository({ $transaction: async (callback) => callback(tx) });
     const snapshot = () => digest(adapter === 'memory' ? store.snapshot() : { row, writes });

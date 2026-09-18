@@ -14,6 +14,10 @@ export function previewWorkloadName(service: AnyRecord = {}, pullRequestNumber: 
 }
 
 export function previewRuntimePlan(input: AnyRecord = {}) {
+  const runtime = { ...(input.service?.desiredSpec || {}), ...(input.service?.desiredState || {}), ...(input.service || {}) };
+  if (runtime.persistence && input.action !== 'delete') {
+    throw Object.assign(new Error('Persistent services do not support preview deployments; create a separately quota-managed service'), { statusCode: 400 });
+  }
   const {
     service,
     project,

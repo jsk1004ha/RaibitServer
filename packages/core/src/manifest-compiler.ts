@@ -7,6 +7,7 @@ import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
 import { requireResourceCapability } from './resource-capabilities.ts';
 import { slugify } from './ids.ts';
 import { boundedDnsLabel, domainPlanForProject, serviceHostname, tenantProjectLabel } from './domain-router.ts';
+import { validateServiceRuntime } from './service-runtime.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -37,6 +38,7 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   const resourceEnvByName = Object.fromEntries(resources.map((resource) => [resource.name, connectionEnvForResource(resource, projectSlug)]));
 
   for (const service of services) {
+    validateServiceRuntime(service);
     const serviceName = kubernetesServiceName(service);
     const serviceRouteName = service.slug || service.name || serviceName;
     const fullService = {
@@ -94,6 +96,7 @@ function compileService({ namespace, projectSlug, organizationRouteSlug, project
 
   if (Object.keys(secret).length) out.push(secretManifest(namespace, derivedServiceObjectName(service, 'env'), labels, secret));
   if (Object.keys(plain).length) out.push(configMapManifest(namespace, derivedServiceObjectName(service, 'config'), labels, plain));
+  if (service.persistence) out.push(persistentVolumeClaimManifest(namespace, service, labels));
 
   if (type === SERVICE_TYPES.CRON) {
     out.push(cronJobManifest(namespace, service, labels, image, port, plain, secret));
@@ -111,7 +114,7 @@ function compileService({ namespace, projectSlug, organizationRouteSlug, project
   if (type === SERVICE_TYPES.WEB) {
     out.push(ingressManifest(namespace, service, serviceRouteName, organizationRouteSlug, projectRouteSlug, baseDomain, labels, port, ingressErrorOptions));
   }
-  if (service.scaling?.maxReplicas && Number(service.scaling.maxReplicas) > Number(service.scaling.minReplicas || 1)) {
+  if (!service.persistence && service.scaling?.maxReplicas && Number(service.scaling.maxReplicas) > Number(service.scaling.minReplicas || 1)) {
     out.push(hpaManifest(namespace, service, service.scaling));
   }
   out.push(pdbManifest(namespace, service, labels, service.availability));
@@ -172,7 +175,10 @@ function containerFor(service: AnyRecord, image: string, port: number, plain: An
         'ephemeral-storage': '256Mi',
       },
     },
-    volumeMounts: [{ name: 'tmp', mountPath: '/tmp' }],
+    volumeMounts: [
+      { name: 'tmp', mountPath: '/tmp' },
+      ...(service.persistence ? [{ name: 'data', mountPath: service.persistence.mountPath }] : []),
+    ],
     securityContext: secureContainerDefaults(service),
     ...serviceHealthProbes(service, port),
   };
@@ -183,14 +189,18 @@ function podSpec(service: AnyRecord, image: string, port: number, plain: AnyReco
     securityContext: DEFAULT_POD_SECURITY_CONTEXT,
     restartPolicy,
     containers: [containerFor(service, image, port, plain, secret)],
-    volumes: [{ name: 'tmp', emptyDir: { sizeLimit: '128Mi' } }],
+    volumes: [
+      { name: 'tmp', emptyDir: { sizeLimit: '128Mi' } },
+      ...(service.persistence ? [{ name: 'data', persistentVolumeClaim: { claimName: derivedServiceObjectName(service, 'data') } }] : []),
+    ],
+    ...(service.persistence ? { terminationGracePeriodSeconds: 300 } : {}),
     automountServiceAccountToken: false,
   };
 }
 
 function deploymentManifest(namespace: string, service: AnyRecord, labels: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord): AnyRecord {
   const serviceName = kubernetesServiceName(service);
-  const replicas = service.sleepPolicy === 'scale-to-zero' ? 0 : Number(service.scaling?.minReplicas ?? service.replicas ?? 1);
+  const replicas = service.persistence ? 1 : service.sleepPolicy === 'scale-to-zero' ? 0 : Number(service.scaling?.minReplicas ?? service.replicas ?? 1);
   return {
     apiVersion: 'apps/v1',
     kind: 'Deployment',
@@ -198,11 +208,29 @@ function deploymentManifest(namespace: string, service: AnyRecord, labels: AnyRe
     spec: {
       replicas,
       selector: { matchLabels: { 'app.kubernetes.io/name': serviceName } },
-      strategy: { type: 'RollingUpdate', rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } },
+      strategy: service.persistence
+        ? { type: 'Recreate' }
+        : { type: 'RollingUpdate', rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } },
       template: {
         metadata: { labels, annotations: { 'raibitserver.io/sleep-policy': service.sleepPolicy || 'always-on' } },
         spec: podSpec(service, image, port, plain, secret),
       },
+    },
+  };
+}
+
+function persistentVolumeClaimManifest(namespace: string, service: AnyRecord, labels: AnyRecord): AnyRecord {
+  return {
+    apiVersion: 'v1',
+    kind: 'PersistentVolumeClaim',
+    metadata: {
+      name: derivedServiceObjectName(service, 'data'),
+      namespace,
+      labels,
+    },
+    spec: {
+      accessModes: ['ReadWriteOnce'],
+      resources: { requests: { storage: `${service.persistence.sizeGi}Gi` } },
     },
   };
 }

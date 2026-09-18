@@ -400,7 +400,7 @@ test('orchestrator cluster authority is admission-confined to compiler-owned app
   assert.match(workerSecurity, /seccompProfile[\s\S]*RuntimeDefault/);
   assert.match(workerSecurity, /resources\.requests\.size\(\) == 3[\s\S]*requests\['ephemeral-storage'\] == '64Mi'/);
   assert.match(workerSecurity, /resources\.limits\.size\(\) == 3[\s\S]*limits\['ephemeral-storage'\] == '256Mi'/);
-  assert.match(workerSecurity, /emptyDir\.sizeLimit == '128Mi'[\s\S]*!has\(variables\.podSpec\.volumes\[0\]\.emptyDir\.medium\)/);
+  assert.match(workerSecurity, /volume\.name == 'tmp'[\s\S]*volume\.emptyDir\.sizeLimit == '128Mi'[\s\S]*!has\(volume\.emptyDir\.medium\)/);
   assert.match(workloadPolicy, /has\(env\.value\)[\s\S]*!has\(env\.valueFrom\)[\s\S]*env\.value\.size\(\) <= 4096/, 'plain runtime environment values must be bounded');
   assert.match(workloadPolicy, /!has\(env\.value\)[\s\S]*has\(env\.valueFrom\.secretKeyRef\)/, 'secret runtime environment values must remain explicit Secret references');
   assert.match(workerSecurity, /@sha256:\[a-f0-9\]\{64\}/);
