@@ -45,6 +45,7 @@ test('service PVC admission pins identity, dynamic provisioning shape, size, and
   assert.match(pvc, /quantity\(variables\.storage\)\.compareTo\(quantity\('1Gi'\)\) >= 0/);
   assert.match(pvc, /quantity\(variables\.storage\)\.compareTo\(quantity\('100Gi'\)\) <= 0/);
   assert.match(pvc, /oldObject\.metadata\.labels == object\.metadata\.labels/);
+  assert.ok(pvc.includes('oldObject.spec.resources.requests.storage == object.spec.resources.requests.storage'));
   assert.match(pvc, /oldObject\.spec\.storageClassName == object\.spec\.storageClassName/);
   assert.match(pvc, /oldObject\.spec\.volumeName == object\.spec\.volumeName/);
 });

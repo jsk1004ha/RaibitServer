@@ -323,6 +323,7 @@ spec:
     - expression: >-
         request.operation != 'UPDATE' ||
         (oldObject.metadata.name == object.metadata.name && oldObject.metadata.labels == object.metadata.labels &&
+         oldObject.spec.resources.requests.storage == object.spec.resources.requests.storage &&
          oldObject.spec.accessModes == object.spec.accessModes &&
          (has(oldObject.spec.volumeMode) == has(object.spec.volumeMode)) &&
          (!has(oldObject.spec.volumeMode) || oldObject.spec.volumeMode == object.spec.volumeMode) &&

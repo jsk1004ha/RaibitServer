@@ -565,6 +565,78 @@ func TestPersistentPreviewDeploymentIsRejected(t *testing.T) {
 	}
 }
 
+func TestDeploymentSnapshotPreservesPersistentRuntimeConfiguration(t *testing.T) {
+	project := &store.Project{ID: "project-1", OrganizationID: "org-1", Name: "Project", Slug: "project"}
+	service := &store.Service{
+		ID: "service-1", ProjectID: project.ID, Name: "service", Slug: "service", Type: "web", ImageURL: "registry.local/service:1", Port: 9000, Replicas: 3,
+		DesiredSpec: map[string]any{
+			"persistence": map[string]any{"sizeGi": 7, "mountPath": "/data/flyfight"},
+			"resources":   map[string]any{"limits": map[string]any{"cpu": "8", "memory": "16Gi"}},
+		},
+	}
+	deployment := &store.Deployment{
+		ID: "dep-snapshot", ServiceID: service.ID, ProjectID: project.ID, ImageURL: "registry.local/service:1", SnapshotVersion: 1,
+		DesiredSpecSnapshot: json.RawMessage(`{"type":"web","port":8080,"replicas":5,"persistence":{"sizeGi":7,"mountPath":"/data/flyfight"},"resources":{"requests":{"cpu":"250m","memory":"256Mi"},"limits":{"cpu":"1500m","memory":"2Gi"}}}`),
+	}
+	plan := NewDeploymentPlan(SpecFromState(project, service, deployment, "example.test"))
+	if !plan.Safe {
+		t.Fatalf("snapshot-backed persistent plan should be safe: %s", plan.Error)
+	}
+	pvc := findManifest(t, plan.Manifests, "PersistentVolumeClaim", "service-data")
+	storage := pvc["spec"].(map[string]any)["resources"].(map[string]any)["requests"].(map[string]any)["storage"]
+	if storage != "7Gi" {
+		t.Fatalf("snapshot PVC storage = %#v, want 7Gi (live state must not leak)", storage)
+	}
+	deploymentManifest := findManifest(t, plan.Manifests, "Deployment", "service")
+	podSpec := deploymentManifest["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	container := podSpec["containers"].([]any)[0].(map[string]any)
+	mounts := container["volumeMounts"].([]any)
+	if mounts[1].(map[string]any)["mountPath"] != "/data/flyfight" {
+		t.Fatalf("snapshot mount = %#v, want /data/flyfight", mounts)
+	}
+	resources := container["resources"].(map[string]any)
+	requests := resources["requests"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	if requests["cpu"] != "250m" || requests["memory"] != "256Mi" || limits["cpu"] != "1500m" || limits["memory"] != "2Gi" {
+		t.Fatalf("snapshot resources were not preserved: requests=%#v limits=%#v", requests, limits)
+	}
+	if deploymentManifest["spec"].(map[string]any)["replicas"] != 1 {
+		t.Fatalf("snapshot persistence must still enforce one replica")
+	}
+}
+
+func TestOldDeploymentSnapshotRetainsLiveImmutablePersistence(t *testing.T) {
+	project := &store.Project{ID: "project-1", OrganizationID: "org-1", Name: "Project", Slug: "project"}
+	service := &store.Service{
+		ID: "service-1", ProjectID: project.ID, Name: "service", Slug: "service", Type: "web", ImageURL: "registry.local/service:1", Port: 9000, Replicas: 3,
+		DesiredSpec: map[string]any{"persistence": map[string]any{"sizeGi": 7, "mountPath": "/data/flyfight"}},
+	}
+	deployment := &store.Deployment{
+		ID: "dep-old-snapshot", ServiceID: service.ID, ProjectID: project.ID, ImageURL: "registry.local/service:1", SnapshotVersion: 1,
+		DesiredSpecSnapshot: json.RawMessage(`{"type":"web","port":8080,"replicas":5}`),
+	}
+	plan := NewDeploymentPlan(SpecFromState(project, service, deployment, "example.test"))
+	if !plan.Safe {
+		t.Fatalf("old snapshot should inherit immutable persistence: %s", plan.Error)
+	}
+	pvc := findManifest(t, plan.Manifests, "PersistentVolumeClaim", "service-data")
+	storage := pvc["spec"].(map[string]any)["resources"].(map[string]any)["requests"].(map[string]any)["storage"]
+	if storage != "7Gi" {
+		t.Fatalf("old snapshot PVC storage = %#v, want 7Gi", storage)
+	}
+	deploymentManifest := findManifest(t, plan.Manifests, "Deployment", "service")
+	deploymentSpec := deploymentManifest["spec"].(map[string]any)
+	if deploymentSpec["replicas"] != 1 || deploymentSpec["strategy"].(map[string]any)["type"] != "Recreate" {
+		t.Fatalf("old snapshot lost persistent deployment invariants: %#v", deploymentSpec)
+	}
+	podSpec := deploymentSpec["template"].(map[string]any)["spec"].(map[string]any)
+	container := podSpec["containers"].([]any)[0].(map[string]any)
+	mounts := container["volumeMounts"].([]any)
+	if mounts[1].(map[string]any)["mountPath"] != "/data/flyfight" {
+		t.Fatalf("old snapshot mount = %#v, want /data/flyfight", mounts)
+	}
+}
+
 func TestNetworkPolicyUsesTrustedIngressGatewayNamespace(t *testing.T) {
 	manifests := CompileServiceManifests(AppServiceSpec{
 		Name:             "web",

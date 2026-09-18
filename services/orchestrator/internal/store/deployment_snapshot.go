@@ -38,6 +38,8 @@ type runtimeSnapshot struct {
 	AllowPublicEgress  bool                `json:"allowPublicEgress"`
 	PublicEgress       bool                `json:"publicEgress"`
 	AllowTenantIngress bool                `json:"allowTenantIngress"`
+	Persistence        json.RawMessage     `json:"persistence"`
+	Resources          json.RawMessage     `json:"resources"`
 	Egress             struct {
 		PublicInternet bool `json:"publicInternet"`
 	} `json:"egress"`
@@ -61,11 +63,11 @@ func (deployment *Deployment) RuntimeService(live *Service) (*Service, error) {
 		return nil, ErrDeploymentSnapshot
 	}
 	selected := make(map[string]json.RawMessage)
-	for _, key := range []string{"type", "port", "replicas", "command", "args", "schedule", "env", "secretEnv", "allowPublicEgress", "publicEgress", "egress", "allowTenantIngress", "healthCheckPath", "livenessPath", "readinessPath", "publicHealthPath", "healthCheck"} {
+	for _, key := range []string{"type", "port", "replicas", "command", "args", "schedule", "env", "secretEnv", "allowPublicEgress", "publicEgress", "egress", "allowTenantIngress", "healthCheckPath", "livenessPath", "readinessPath", "publicHealthPath", "healthCheck", "persistence", "resources"} {
 		if value, exists := fields[key]; exists {
 			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 				switch key {
-				case "port", "replicas", "allowPublicEgress", "publicEgress", "egress", "allowTenantIngress", "healthCheckPath", "livenessPath", "readinessPath", "publicHealthPath", "healthCheck":
+				case "port", "replicas", "allowPublicEgress", "publicEgress", "egress", "allowTenantIngress", "healthCheckPath", "livenessPath", "readinessPath", "publicHealthPath", "healthCheck", "persistence", "resources":
 					continue
 				default:
 					return nil, ErrDeploymentSnapshot
@@ -73,6 +75,24 @@ func (deployment *Deployment) RuntimeService(live *Service) (*Service, error) {
 			}
 			selected[key] = value
 		}
+	}
+	livePersistence, liveHasPersistence, err := runtimePersistenceFromService(live)
+	if err != nil {
+		return nil, ErrDeploymentSnapshot
+	}
+	snapshotPersistence, snapshotHasPersistence := selected["persistence"]
+	switch {
+	case liveHasPersistence && snapshotHasPersistence:
+		if !jsonValuesEqual(livePersistence, snapshotPersistence) {
+			return nil, ErrDeploymentSnapshot
+		}
+	case liveHasPersistence:
+		// Persistence is service identity state. Historical snapshots created
+		// before it was enabled must still mount the service's current claim.
+		selected["persistence"] = livePersistence
+	case snapshotHasPersistence:
+		// A snapshot may not resurrect storage that the live service does not own.
+		return nil, ErrDeploymentSnapshot
 	}
 	encoded, err := json.Marshal(selected)
 	if err != nil {
@@ -128,6 +148,39 @@ func (deployment *Deployment) RuntimeService(live *Service) (*Service, error) {
 		return nil, ErrDeploymentSnapshot
 	}
 	return &view, nil
+}
+
+func runtimePersistenceFromService(service *Service) (json.RawMessage, bool, error) {
+	if service == nil {
+		return nil, false, nil
+	}
+	var value any
+	found := false
+	if service.DesiredSpec != nil {
+		value, found = service.DesiredSpec["persistence"]
+	}
+	if !found && service.DesiredState != nil {
+		value, found = service.DesiredState["persistence"]
+	}
+	if !found || value == nil {
+		return nil, false, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false, err
+	}
+	return encoded, true, nil
+}
+
+func jsonValuesEqual(left, right json.RawMessage) bool {
+	var leftValue any
+	var rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+		return false
+	}
+	leftCanonical, leftErr := json.Marshal(leftValue)
+	rightCanonical, rightErr := json.Marshal(rightValue)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftCanonical, rightCanonical)
 }
 
 func snapshotJSONFromRecord(row record) json.RawMessage {

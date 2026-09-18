@@ -78,5 +78,7 @@ test('latest service settings flow previews and saves persistence through canoni
   assert.match(source, /persistenceSizeGi: string; persistenceMountPath: string/);
   assert.match(source, /changes\.persistence = nextPersistence/);
   assert.match(source, /FieldLegend>영구 저장소<\/FieldLegend>/);
-  assert.match(source, /서비스 삭제 시 저장소 데이터는 자동 삭제되지 않습니다/);
+  assert.match(source, /JSON\.stringify\(value, null, 2\)/);
+  assert.match(source, /영구 저장소가 연결된 개별 서비스는 데이터 마이그레이션 전까지 삭제할 수 없습니다/);
+  assert.match(source, /프로젝트 또는 네임스페이스를 삭제하면 데이터가 제거될 수 있으므로 먼저 백업하세요/);
 });

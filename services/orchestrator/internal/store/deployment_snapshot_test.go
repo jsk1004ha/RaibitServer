@@ -73,3 +73,11 @@ func TestSnapshotProjectionDoesNotMutateLiveAuthority(t *testing.T) {
 		t.Fatal("projection shares mutable state or retains non-runtime fields")
 	}
 }
+
+func TestSnapshotProjectionRejectsConflictingImmutablePersistence(t *testing.T) {
+	live := &Service{DesiredSpec: map[string]any{"persistence": map[string]any{"sizeGi": 7, "mountPath": "/data/flyfight"}}}
+	deployment := &Deployment{SnapshotVersion: 1, DesiredSpecSnapshot: json.RawMessage(`{"type":"web","persistence":{"sizeGi":8,"mountPath":"/data/other"}}`)}
+	if _, err := deployment.RuntimeService(live); !errors.Is(err, ErrDeploymentSnapshot) {
+		t.Fatalf("conflicting persistence accepted: %v", err)
+	}
+}
