@@ -1042,16 +1042,25 @@ spec:
         'volume.kubernetes.io/selected-node', 'volume.kubernetes.io/storage-provisioner',
         'volume.beta.kubernetes.io/storage-provisioner', 'volume.kubernetes.io/storage-resizer',
         'volume.kubernetes.io/migrated-to']
+    - name: isServicePvc
+      expression: >-
+        has(oldObject.metadata.labels) &&
+        'raibitserver.io/service-id' in oldObject.metadata.labels &&
+        oldObject.metadata.labels['raibitserver.io/service-id'] != '' &&
+        !('raibitserver.io/provider' in oldObject.metadata.labels) &&
+        !('raibitserver.io/resource-id' in oldObject.metadata.labels)
   validations:
     - expression: "variables.isProvisioner || variables.isStorageController"
       message: "managed PVC updates are limited to the provisioner and Kubernetes storage controllers"
     - expression: >-
         has(oldObject.metadata.labels) && has(object.metadata.labels) &&
-        ['app.kubernetes.io/name', 'app.kubernetes.io/managed-by', 'raibitserver.io/managed', 'raibitserver.io/project-id', 'raibitserver.io/resource-id', 'raibitserver.io/provider'].all(key,
+        (variables.isServicePvc ?
+        ['app.kubernetes.io/name', 'app.kubernetes.io/managed-by', 'raibitserver.io/managed', 'raibitserver.io/project-id', 'raibitserver.io/service-id', 'raibitserver.io/service', 'raibitserver.io/project'] :
+        ['app.kubernetes.io/name', 'app.kubernetes.io/managed-by', 'raibitserver.io/managed', 'raibitserver.io/project-id', 'raibitserver.io/resource-id', 'raibitserver.io/provider']).all(key,
         key in object.metadata.labels && key in oldObject.metadata.labels && object.metadata.labels[key] == oldObject.metadata.labels[key])
       message: "managed PVC identity labels are immutable"
     - expression: >-
-        variables.isProvisioner ||
+        (!variables.isServicePvc && variables.isProvisioner) ||
         (object.metadata.labels == oldObject.metadata.labels &&
         object.spec.accessModes == oldObject.spec.accessModes && object.spec.resources == oldObject.spec.resources &&
         ((!has(object.spec.selector) && !has(oldObject.spec.selector)) || (has(object.spec.selector) && has(oldObject.spec.selector) && object.spec.selector == oldObject.spec.selector)) &&

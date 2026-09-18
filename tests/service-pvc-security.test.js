@@ -50,6 +50,23 @@ test('service PVC admission pins identity, dynamic provisioning shape, size, and
   assert.match(pvc, /oldObject\.spec\.volumeName == object\.spec\.volumeName/);
 });
 
+test('storage-controller ownership guard handles service identity without dropping provider protection', async () => {
+  const source = (await fs.readFile(securityPath, 'utf8')).replace(/\r/g, '');
+  const pvc = policyBlock(source, 'provisioner-provider-pvc-ownership');
+  assert.match(pvc, /name: isServicePvc/);
+  assert.match(pvc, /!\('raibitserver\.io\/provider' in oldObject\.metadata\.labels\)/);
+  assert.match(pvc, /!\('raibitserver\.io\/resource-id' in oldObject\.metadata\.labels\)/);
+  assert.match(pvc, /variables\.isServicePvc \?/);
+  assert.match(pvc, /'raibitserver\.io\/service-id', 'raibitserver\.io\/service', 'raibitserver\.io\/project'/);
+  assert.match(pvc, /'raibitserver\.io\/resource-id', 'raibitserver\.io\/provider'/);
+  assert.match(pvc, /key in object\.metadata\.labels && key in oldObject\.metadata\.labels && object\.metadata\.labels\[key\] == oldObject\.metadata\.labels\[key\]/);
+  assert.match(pvc, /\(!variables\.isServicePvc && variables\.isProvisioner\) \|\|/);
+  assert.match(pvc, /object\.metadata\.labels == oldObject\.metadata\.labels/);
+  assert.match(pvc, /object\.spec\.resources == oldObject\.spec\.resources/);
+  assert.match(pvc, /storage controllers may update only binding fields/);
+  assert.doesNotMatch(pvc, /matchExpressions:/, 'both service and provider PVC updates must remain guarded');
+});
+
 test('workload admission allows bounded compute and only an optional safe data mount', async () => {
   const source = (await fs.readFile(securityPath, 'utf8')).replace(/\r/g, '');
   const workload = policyBlock(source, 'orchestrator-workload-boundary');
