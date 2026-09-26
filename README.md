@@ -428,6 +428,7 @@ DB, Redis, provider credential endpoint는 public internet에 직접 노출하�
 - audit log, workflow job, deployment event, preview cleanup event를 일정 기간 보관합니다.
 - `/health` 또는 ingress health check, worker backlog, failed workflow, quota violation, GitHub webhook 401/5xx를 모니터링합니다.
 - worker/API 실패는 표준 `errorCode`와 `lastErrorSpec`/deployment event metadata로 남겨 대시보드와 CLI가 같은 사용자 안내 문구와 retry 가능 여부를 표시할 수 있게 합니다.
+- 단일 서버에서는 [`install-auto-update.sh`](deploy/production/install-auto-update.sh)가 설치하는 `raibitserver-boot-recovery.service`가 재부팅 후 Docker·K3s와 선택된 호스트 PostgreSQL·tunnel을 시작하고, Kubernetes workload와 API의 DB 질의를 확인합니다. 실패하면 다시 시도하며 자세한 설정과 확인 명령은 [production 배포 가이드](deploy/production/README.md)를 따릅니다.
 - 복구 리허설은 “DB restore → API boot → worker reconcile → 기존 서비스 URL 정상화” 순서로 확인합니다.
 - 복구 리소스의 식별 라벨은 전체 SHA-256을 손실 없이 담은 `rj1-` + 소문자 base32 형식입니다. 기존 canonical identity는 Job annotation에 보존하고 완료 관측 시 라벨과 일치하는지 확인하므로 receipt/API/DB의 식별값은 바뀌지 않습니다.
 

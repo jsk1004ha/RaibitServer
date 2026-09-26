@@ -419,6 +419,9 @@ cleanup() {
   if [[ -n "${UPDATER_TMP:-}" ]]; then
     rm -f -- "$UPDATER_TMP"
   fi
+  if [[ -n "${RECOVERY_TMP:-}" ]]; then
+    rm -f -- "$RECOVERY_TMP"
+  fi
   rm -rf "$RUN_DIR"
 }
 trap cleanup EXIT
@@ -872,6 +875,25 @@ bash -n "$UPDATER_TMP" \
   || fail "copied updater failed Bash syntax validation"
 mv -- "$UPDATER_TMP" "$UPDATER_LIBEXEC_PATH"
 log "refreshed production updater from ${TARGET_SHA}"
+
+RECOVERY_SOURCE="${WORKTREE}/deploy/production/boot-recovery.sh"
+RECOVERY_INSTALLED="${UPDATER_LIBEXEC_DIR}/raibitserver-production-boot-recovery"
+if [[ -e "$RECOVERY_SOURCE" || -L "$RECOVERY_SOURCE" ]]; then
+  [[ -f "$RECOVERY_SOURCE" && ! -L "$RECOVERY_SOURCE" ]] \
+    || fail "approved checkout boot recovery script must be a regular non-symlink file"
+  [[ ! -L "$RECOVERY_INSTALLED" ]] \
+    || fail "refusing to replace symlinked boot recovery target"
+  bash -n "$RECOVERY_SOURCE" \
+    || fail "approved checkout boot recovery script failed Bash syntax validation"
+  RECOVERY_TMP="$(mktemp "${UPDATER_LIBEXEC_DIR}/.raibitserver-production-boot-recovery.XXXXXX")"
+  cp -- "$RECOVERY_SOURCE" "$RECOVERY_TMP"
+  chmod 0755 "$RECOVERY_TMP"
+  bash -n "$RECOVERY_TMP" || fail "copied boot recovery script failed Bash syntax validation"
+  mv -- "$RECOVERY_TMP" "$RECOVERY_INSTALLED"
+  log "refreshed production boot recovery from ${TARGET_SHA}"
+else
+  log "approved checkout predates boot recovery; preserving installed script"
+fi
 
 printf '%s\n' "$TARGET_SHA" >"${STATE_DIR}/deployed-sha.tmp"
 mv "${STATE_DIR}/deployed-sha.tmp" "${STATE_DIR}/deployed-sha"

@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: raibitserver
       POSTGRES_PASSWORD: raibitserver
@@ -9,10 +10,12 @@ services:
       - "5432:5432"
   redis:
     image: redis:7
+    restart: unless-stopped
     ports:
       - "6379:6379"
   minio:
     image: minio/minio:latest
+    restart: unless-stopped
     command: server /data --console-address :9001
     environment:
       MINIO_ROOT_USER: raibitserver

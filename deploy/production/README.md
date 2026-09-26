@@ -203,13 +203,19 @@ CI가 아직 실행 중이면 다음 timer 주기까지 기다립니다. CI가 �
 sudo bash deploy/production/install-auto-update.sh raibit1
 ```
 
-설치 후 systemd timer는 boot 후 첫 확인을 수행하고, 각 실행이 끝난 뒤 약 5분 간격으로 다시 `main`을 확인합니다. 첫 확인은 설치 직후에도 비동기로 시작됩니다.
+설치 후 `raibitserver-boot-recovery.service`가 부팅 시 Docker와 K3s를 시작하고, 설치 시 활성화되어 있던 호스트 PostgreSQL 16 instance와 `cloudflared`가 있으면 함께 시작합니다. K3s 노드, API·dashboard·orchestrator·provisioner Deployment, API Pod의 실제 PostgreSQL `SELECT 1`을 확인하며 실패 시 1분 뒤 다시 시도합니다. 업데이트 서비스도 이 검사를 먼저 통과해야 실행됩니다. 복구 검사는 인터넷이나 GitHub CI 없이 현재 Kubernetes desired state와 영속 저장소를 사용합니다. K3s가 Pod를 다시 띄운 뒤 orchestrator와 provisioner가 DB의 desired state를 재조정합니다.
+
+systemd timer는 boot 후 첫 업데이트 확인을 수행하고, 각 실행이 끝난 뒤 약 5분 간격으로 다시 `main`을 확인합니다. 첫 복구와 업데이트 확인은 설치 직후에도 비동기로 시작됩니다. 이미 설치된 서버에도 새 부팅 복구 unit을 설치하려면 위 설치 명령을 한 번 다시 실행해야 합니다.
 
 ```sh
 systemctl status raibitserver-auto-update.timer
 systemctl status raibitserver-auto-update.service
+systemctl status raibitserver-boot-recovery.service
+journalctl -u raibitserver-boot-recovery.service -b
 journalctl -u raibitserver-auto-update.service -f
 ```
+
+PostgreSQL이나 tunnel이 별도의 systemd unit 이름을 쓰면 설치 전에 `RAIBITSERVER_BOOT_POSTGRES_SERVICE` 또는 `RAIBITSERVER_BOOT_TUNNEL_SERVICE`를 지정합니다. 명시한 unit은 설치되어 있으면 현재 활성화 여부와 관계없이 복구 대상에 포함합니다. 외부 관리형 DB나 tunnel을 사용하지 않을 때는 해당 값을 `none`으로 지정할 수 있습니다. 기본 unit은 설치 시점에 활성화 또는 enable되어 있을 때만 포함합니다. 전원 차단으로 손상된 DB 파일이나 볼륨 자체는 이 절차가 복구하지 못하므로 백업과 복구 리허설은 별도로 유지해야 합니다.
 
 updater는 사람이 사용하는 repository checkout을 `git reset`하지 않습니다. 별도의 managed checkout을 사용합니다.
 
