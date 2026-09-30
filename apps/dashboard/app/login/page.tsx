@@ -6,11 +6,12 @@ import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLeg
 import { Input } from '../../components/ui/input';
 import { Brand } from '../../components/brand';
 import { PasswordRecoveryForm } from '../../components/password-recovery-form';
+import { EmailVerificationForm } from '../../components/email-verification-form';
 import { ThemeMenu } from '../../components/theme-menu';
 import { apiAction } from '../../lib/api';
 
 const modes = ['login', 'signup', 'verify', 'forgot', 'reset'] as const;
-const navigationModes = ['login', 'signup', 'verify'] as const;
+const navigationModes = ['login', 'signup'] as const;
 
 type AuthMode = typeof modes[number];
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -35,6 +36,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const messageId = error || notice ? 'auth-message' : undefined;
   const publicHomeHref = process.env.NODE_ENV === 'production' ? 'https://raibit.kr/' : '/';
   const copy = authCopy[mode];
+  const githubLoginConfigured = /^[a-f0-9]{64}$/.test(process.env.RAIBITSERVER_OAUTH_RELAY_SECRET ?? '');
 
   return (
     <main id="main-content" className="grid min-h-dvh bg-background lg:grid-cols-2">
@@ -66,7 +68,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               <CardDescription>{copy.description}</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-6">
-              <nav aria-label="인증 메뉴" className="flex flex-wrap gap-4 border-b border-border pb-3 text-sm">
+              {mode === 'login' || mode === 'signup' ? <nav aria-label="인증 메뉴" className="flex flex-wrap gap-4 border-b border-border pb-3 text-sm">
                 {navigationModes.map((item) => (
                   <a
                     aria-current={mode === item ? 'page' : undefined}
@@ -77,7 +79,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                     {authCopy[item].title}
                   </a>
                 ))}
-              </nav>
+              </nav> : null}
 
               {error ? <Alert className="auth-message border-destructive/40 bg-destructive/10 text-foreground [&_[data-slot=alert-description]]:text-foreground" id="auth-message" variant="destructive"><AlertTitle>확인해 주세요</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
               {notice ? <Alert className="auth-message" id="auth-message" role="status" variant="notice"><AlertTitle>안내</AlertTitle><AlertDescription>{notice}</AlertDescription></Alert> : null}
@@ -91,8 +93,12 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 </FieldGroup>
                 <div aria-hidden="true" className="flex items-center gap-3 text-xs text-muted-foreground"><span className="h-px flex-1 bg-border" /><span>또는</span><span className="h-px flex-1 bg-border" /></div>
                 <div className="flex flex-col gap-2">
-                  <a className={buttonVariants({ variant: 'outline', className: 'w-full' })} href={apiAction('/auth/github/login')}><GitBranch aria-hidden="true" />GitHub로 로그인</a>
-                  <p className="text-xs leading-relaxed text-muted-foreground break-keep">가입 승인된 계정과 GitHub의 인증 이메일이 같으면 프로필 사진도 함께 연결됩니다.</p>
+                  {githubLoginConfigured
+                    ? <a className={buttonVariants({ variant: 'outline', className: 'w-full' })} href={apiAction('/auth/github/login')}><GitBranch aria-hidden="true" />GitHub로 로그인</a>
+                    : <Button aria-describedby="github-login-unavailable" className="w-full" disabled type="button" variant="outline"><GitBranch aria-hidden="true" />GitHub로 로그인</Button>}
+                  {githubLoginConfigured
+                    ? <p className="text-xs leading-relaxed text-muted-foreground break-keep">가입 승인된 계정과 GitHub의 인증 이메일이 같으면 프로필 사진도 함께 연결됩니다.</p>
+                    : <p className="text-xs leading-relaxed text-muted-foreground break-keep" id="github-login-unavailable">GitHub 로그인은 관리자 설정을 기다리고 있습니다. 이메일과 비밀번호로 로그인해 주세요.</p>}
                 </div>
               </form> : null}
 
@@ -117,21 +123,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 </FieldGroup>
               </form> : null}
 
-              {mode === 'verify' ? <>
-                <form method="post" action={apiAction('/auth/email/verify')} className="auth-form">
-                  <input name="_returnTo" type="hidden" value={next} />
-                  <FieldGroup>
-                    <Field><FieldLabel htmlFor="verify-email">이메일</FieldLabel><Input aria-describedby={messageId} autoComplete="email" defaultValue={email} id="verify-email" name="email" required type="email" /></Field>
-                    <Field><FieldLabel htmlFor="verify-code">6자리 인증 코드</FieldLabel><Input aria-describedby={messageId} id="verify-code" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required /></Field>
-                    <Button type="submit">인증하고 계속하기</Button>
-                  </FieldGroup>
-                </form>
-                <form method="post" action={apiAction('/auth/email/resend')} className="auth-resend">
-                  <input name="_returnTo" type="hidden" value={`/login?mode=verify&email=${encodeURIComponent(email)}`} />
-                  <input name="email" type="hidden" value={email} />
-                  <Button type="submit" variant="outline">인증 코드 다시 보내기</Button>
-                </form>
-              </> : null}
+              {mode === 'verify' ? <EmailVerificationForm initialEmail={email} next={next} messageId={messageId} verifyAction={apiAction('/auth/email/verify')} resendAction={apiAction('/auth/email/resend')} /> : null}
 
               {mode === 'forgot' || mode === 'reset' ? <PasswordRecoveryForm mode={mode} requestAction={apiAction('/auth/password-reset/request')} completeAction={apiAction('/auth/password-reset/complete')} /> : null}
 
@@ -169,7 +161,7 @@ function errorMessage(code: string): string {
     session_reauthentication_required: '계정 또는 조직 권한이 변경되어 다시 로그인해야 합니다.',
     github_account_not_registered: 'GitHub 인증 이메일과 일치하는 승인 계정을 찾지 못했습니다.',
     github_oauth_denied: 'GitHub 로그인이 취소되었습니다.',
-    github_oauth_not_configured: 'GitHub 로그인이 아직 설정되지 않았습니다.',
+    github_oauth_not_configured: '서버의 GitHub 로그인 설정이 준비되지 않았습니다. 이메일과 비밀번호로 로그인하고, GitHub 로그인이 필요하면 관리자에게 문의해 주세요.',
     github_oauth_state_invalid: 'GitHub 로그인 요청이 만료되었습니다. 다시 시도해 주세요.',
     github_verified_email_required: 'GitHub에서 인증된 이메일을 확인할 수 없습니다.',
     invalid_or_expired_email_verification_code: '인증 코드가 올바르지 않거나 만료되었습니다.',

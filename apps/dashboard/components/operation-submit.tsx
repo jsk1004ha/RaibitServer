@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { controlPlaneErrorCode } from '@/lib/control-plane-errors.js';
 import { operationResult, type OperationSuccess } from '@/lib/operation-result';
+import { deploymentReceiptHref } from '@/lib/operations-ux';
 
 type PublicOperationError = Readonly<{
   code: string;
@@ -72,9 +73,13 @@ async function responsePayload(response: Response): Promise<unknown> {
 
 export function sameOriginStreamHref(value: string | undefined): string | null {
   if (!value) return null;
+  if (/^\/(?![/\\])/.test(value) && !/[\\\u0000-\u0020\u007f]/.test(value)) {
+    const url = new URL(value, 'https://console.invalid');
+    return url.pathname.startsWith('//') ? null : `${url.pathname}${url.search}${url.hash}`;
+  }
   try {
     const url = new URL(value, window.location.origin);
-    return url.origin === window.location.origin && /^https?:$/.test(url.protocol)
+    return url.origin === window.location.origin && /^https?:$/.test(url.protocol) && !url.pathname.startsWith('//')
       ? `${url.pathname}${url.search}${url.hash}`
       : null;
   } catch {
@@ -111,6 +116,8 @@ export function OperationSubmit({
   const [state, setState] = useState<SubmitState>({ kind: 'idle' });
   const busy = state.kind === 'pending';
   const streamHref = state.kind === 'success' && state.result.kind === 'operation' ? sameOriginStreamHref(state.result.result.streamHref) : null;
+  const deploymentHref = state.kind === 'success' && state.result.kind === 'operation' && state.result.result.deploymentId
+    ? deploymentReceiptHref(returnTo, state.result.result.deploymentId) : null;
 
   useEffect(() => {
     if (busy || !focusOrigin.current) return;
@@ -168,7 +175,7 @@ export function OperationSubmit({
       {children}
       <div aria-atomic="true" aria-live="polite" className="flex min-w-0 flex-col gap-raibit-sm">
         {busy ? <p role="status" className="text-sm text-muted-foreground">{pendingLabel}</p> : null}
-        {state.kind === 'success' ? <div ref={successFeedback} tabIndex={-1}>{state.result.kind === 'operation' ? <Alert variant="notice"><AlertTitle>작업 요청을 접수했습니다.</AlertTitle><AlertDescription className="break-words [overflow-wrap:anywhere]">작업 ID: <span className="font-mono">{state.result.result.operationId}</span>{state.result.result.deploymentId ? <span className="block">새 배포: <a className="font-mono" href={returnTo}>{state.result.result.deploymentId}</a></span> : null}{state.result.result.status ? <span className="block">서버 확인 상태: {state.result.result.status}</span> : null}{streamHref ? <a className="mt-raibit-xs block w-fit" href={streamHref}>작업 스트림 열기</a> : null}</AlertDescription></Alert> : <Alert variant="notice"><AlertTitle>계획 미리보기를 준비했습니다.</AlertTitle><AlertDescription className="break-words [overflow-wrap:anywhere]">저장된 상태와 실행 대기열은 변경하지 않았습니다.<span className="block">공급자: {state.result.result.provider}</span><span className="block">서버 확인 상태: {state.result.result.status}</span></AlertDescription></Alert>}</div> : null}
+        {state.kind === 'success' ? <div ref={successFeedback} tabIndex={-1}>{state.result.kind === 'operation' ? <Alert variant="notice"><AlertTitle>작업 요청을 접수했습니다.</AlertTitle><AlertDescription className="break-words [overflow-wrap:anywhere]">작업 ID: <span className="font-mono">{state.result.result.operationId}</span>{state.result.result.deploymentId ? <span className="block">{deploymentHref ? <a href={deploymentHref}>새 배포 진행 상황 보기</a> : <span>새 배포 ID: {state.result.result.deploymentId}</span>}</span> : null}{state.result.result.status ? <span className="block">서버 확인 상태: {state.result.result.status}</span> : null}{streamHref ? <a className="mt-raibit-xs block w-fit" href={streamHref}>작업 스트림 열기</a> : null}</AlertDescription></Alert> : <Alert variant="notice"><AlertTitle>계획 미리보기를 준비했습니다.</AlertTitle><AlertDescription className="break-words [overflow-wrap:anywhere]">저장된 상태와 실행 대기열은 변경하지 않았습니다.<span className="block">공급자: {state.result.result.provider}</span><span className="block">서버 확인 상태: {state.result.result.status}</span></AlertDescription></Alert>}</div> : null}
         {state.kind === 'error' ? <Alert variant="destructive"><AlertTitle>{state.error.code === 'forbidden' || state.error.code === 'permission_denied' || state.error.code === 'authentication_required' ? '권한 확인 필요' : state.error.retryable ? '다시 시도할 수 있습니다' : '작업 요청을 확인하세요'}</AlertTitle><AlertDescription className="break-words [overflow-wrap:anywhere]">{state.error.message}<span className="block font-mono text-xs">{state.error.code}</span>{state.error.retryable ? <span className="block">현재 상태를 확인한 뒤 다시 시도할 수 있습니다.</span> : null}</AlertDescription></Alert> : null}
       </div>
       <button aria-busy={busy} className={submitClassName} disabled={disabled || busy} type="submit">{busy ? pendingLabel : submitLabel}</button>

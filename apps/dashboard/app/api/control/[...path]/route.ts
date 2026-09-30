@@ -194,7 +194,10 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
   if (!upstream.ok) {
     const code = publicUpstreamErrorCode(payload, upstream.status);
     if (isFormSubmission) {
-      const response = formErrorRedirect(browserRequestUrl, returnPath, code);
+      const errorPath = path === '/auth/login' && code === 'email_not_verified'
+        ? `${signupVerificationPath(body?.email)}&next=${encodeURIComponent(returnPath)}`
+        : returnPath;
+      const response = formErrorRedirect(browserRequestUrl, errorPath, code);
       if (upstream.status === 401) clearSessionCookie(response);
       return response;
     }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { collectLoadIssues, dashboardApiContext, getJson } from '../../../../../../../lib/api';
-import { ConsoleShell, LoadErrorSummary, MetricStrip, SectionNav, StatusBadge } from '../../../../../../../components/console-ui';
+import { ConsoleShell, LoadErrorSummary, SectionNav, StatusBadge } from '../../../../../../../components/console-ui';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -8,6 +8,8 @@ import { decodeDeploymentRouteSegment, encodeDeploymentRouteSegment } from '@/li
 import { DeploymentRecoveryAction } from '@/components/project-hub/deployment-recovery-action';
 import { deploymentHistoryFromDetail } from '@/components/project-hub/deployment-history-model';
 import { DeploymentActivityStream } from '@/components/project-hub/deployment-stream';
+import { DeploymentRefresh } from '@/components/project-hub/deployment-refresh';
+import { deploymentLabel } from '@/lib/operations-ux';
 
 const views = ['overview', 'logs', 'events'] as const;
 type DeploymentView = typeof views[number];
@@ -35,7 +37,7 @@ function DeploymentStream({ rows, field, label, empty }: {
   return <div aria-label={label} className="log-viewer max-h-128 rounded-none border-0 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50" role="log" tabIndex={0}>
     {rows.length ? <ol className="divide-y divide-inverse-raised font-mono text-xs">{rows.map((row, index) => {
       const content = field === 'line' ? row.line : row.message;
-      return <li className="grid min-w-0 gap-1 px-4 py-3 sm:grid-cols-[8rem_5rem_minmax(0,1fr)] sm:gap-3" key={String(row.id ?? index)}><time className="text-inverse-foreground/70">{String(row.createdAt || row.timestamp || '이벤트')}</time><span className="text-inverse-foreground/80">{String(row.level || row.type || '정보')}</span><span className="min-w-0 break-all whitespace-pre-wrap">{String(content || row.message || row.line || JSON.stringify(row))}</span></li>;
+      return <li className="grid min-w-0 gap-1 px-4 py-3 sm:grid-cols-[8rem_5rem_minmax(0,1fr)] sm:gap-3" key={String(row.id ?? index)}><time className="text-inverse-foreground/70">{String(row.createdAt || row.timestamp || '이벤트')}</time><span className="text-inverse-foreground/80">{String(row.level || row.type || '정보')}</span><span className="min-w-0 break-keep whitespace-pre-wrap [overflow-wrap:anywhere]">{String(content || row.message || row.line || JSON.stringify(row))}</span></li>;
     })}</ol> : <p className="px-4 py-8 text-center text-sm text-inverse-foreground/70">{empty}</p>}
   </div>;
 }
@@ -71,7 +73,6 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
       <section className="mx-auto flex w-full max-w-6xl min-w-0 flex-col gap-6 px-4 py-6 md:px-6 md:py-8" data-od-id="deployment-detail">
         <header className="flex min-w-0 flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">
-            <p className="mb-1 text-xs font-medium text-muted-foreground">배포 ID · <span className="break-all font-mono">{decodedDeploymentId}</span></p>
             <h1 className="text-3xl leading-tight font-medium tracking-tight text-foreground">배포 상세</h1>
             <p className="mt-2 text-sm text-muted-foreground">상태, 빌드 출력과 복구 작업을 한곳에서 확인합니다.</p>
           </div>
@@ -84,14 +85,28 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
         <SectionNav items={navItems} current={view} label="배포 상세 화면" />
 
         {view === 'overview' ? <div className="flex min-w-0 flex-col gap-4">
-          <MetricStrip items={[{ label: '상태', value: history?.status || 'unknown', detail: '서버 확인', tone: 'ok' }, { label: '환경', value: history?.environment || detail.deploymentType || 'unknown', detail: '배포 대상', tone: 'info' }, { label: '실패', value: history?.health.healthFailureCode || detail.errorCode || '없음', detail: detail.errorMessage || '오류 없음', tone: history?.health.healthFailureCode || detail.errorCode || detail.errorMessage ? 'danger' : 'ok' }]} />
-          <Card>
-            <CardHeader className="border-b"><CardTitle><h2>이미지 정보</h2></CardTitle><CardDescription>상태는 빌더와 오케스트레이터가 갱신합니다.</CardDescription><CardAction><span className="text-xs text-muted-foreground">워커 관리</span></CardAction></CardHeader>
+          <dl aria-label="배포 요약" className="grid min-w-0 grid-cols-1 gap-raibit-lg lg:grid-cols-3">
+            {[
+              { label: '상태', value: deploymentLabel(history?.status), helper: '마지막 확인 상태' },
+              { label: '환경', value: deploymentLabel(history?.environment || detail.deploymentType), helper: '배포 대상' },
+              { label: '오류', value: history?.health.healthFailureCode || detail.errorCode || detail.errorMessage ? '확인 필요' : '없음', helper: detail.errorMessage || (history?.health.healthFailureCode || detail.errorCode ? '빌드 로그와 배포 이벤트에서 원인을 확인하세요.' : '현재 보고된 오류 없음') },
+            ].map((item) => <div className="flex min-w-0 flex-col gap-raibit-sm rounded-lg border border-border bg-card p-raibit-lg [overflow-wrap:anywhere]" key={item.label}>
+              <dt className="text-sm text-muted-foreground">{item.label}</dt>
+              <dd className="min-w-0 whitespace-normal text-lg leading-snug font-medium text-card-foreground">{item.value}</dd>
+              <dd className="min-w-0 whitespace-normal text-sm leading-relaxed text-muted-foreground">{item.helper}</dd>
+            </div>)}
+          </dl>
+          <p className="text-sm text-muted-foreground">진행 상황은 <a className="underline underline-offset-4" href={`${base}?view=logs`}>빌드 로그</a>와 <a className="underline underline-offset-4" href={`${base}?view=events`}>배포 이벤트</a>에서 확인할 수 있습니다.</p>
+          <details className="min-w-0 rounded-lg border border-border p-raibit-lg">
+            <summary className="cursor-pointer text-sm font-medium">기술 세부 정보</summary>
+          <Card className="mt-raibit-lg">
+            <CardHeader className="border-b"><CardTitle><h2>배포 기록</h2></CardTitle><CardDescription>문제 분석에 필요한 코드, 이미지와 실행 기록입니다.</CardDescription></CardHeader>
             <CardContent className="overflow-x-auto px-0">
               <Table>
                 <TableHeader><TableRow><TableHead className="pl-4">항목</TableHead><TableHead>현재 값</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {[
+                    ['배포 ID', decodedDeploymentId],
                     ['소스 커밋', history?.source.commitSha || '대기 중'],
                     ['이미지 다이제스트', history?.source.imageDigest || detail.imageDigest || '대기 중'],
                     ['스냅샷 버전', history?.source.snapshotVersion ?? '대기 중'],
@@ -106,6 +121,7 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
               </Table>
             </CardContent>
           </Card>
+          </details>
           <Card>
             <CardHeader className="border-b"><CardTitle><h2>복구 및 재실행</h2></CardTitle><CardDescription>표시되는 상태는 서버가 확인한 값입니다. 요청 직후 완료 상태를 추정하지 않습니다.</CardDescription></CardHeader>
             <CardContent className="flex flex-col gap-raibit-lg">
@@ -114,6 +130,7 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
             </CardContent>
           </Card>
         </div> : null}
+        {view === 'logs' || view === 'events' ? <DeploymentRefresh key={`${decodedDeploymentId}:${view}`} status={history?.status || detail.status} /> : null}
         {view === 'logs' ? <Card>
           <CardHeader className="border-b"><CardTitle><h2>빌드 로그</h2></CardTitle><CardDescription>민감한 값은 서버에서 마스킹된 출력입니다.</CardDescription><CardAction><span className="text-xs text-muted-foreground">마스킹됨</span></CardAction></CardHeader>
           <CardContent className="p-0"><DeploymentStream rows={logs.body?.logs || []} field="line" label="마스킹된 빌드 로그" empty="표시할 빌드 로그가 없습니다." /></CardContent>

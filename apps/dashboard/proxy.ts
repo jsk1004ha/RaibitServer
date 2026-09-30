@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { WORKSPACE_PREFERENCE_COOKIE } from './lib/console-navigation.ts';
 import {
   consoleOriginHref,
   dashboardRequestUrl,
@@ -27,6 +28,13 @@ function parseBasicHeader(header: string | null) {
 
 export function proxy(request: NextRequest) {
   const response = routeRequest(request);
+  const workspace = /^\/org\/([a-zA-Z0-9_-]{1,200})(?:\/|$)/.exec(request.nextUrl.pathname)?.[1];
+  if (workspace && response.headers.get('x-middleware-next') === '1'
+    && !request.headers.has('next-router-prefetch') && request.headers.get('purpose') !== 'prefetch') {
+    response.cookies.set(WORKSPACE_PREFERENCE_COOKIE, workspace, {
+      httpOnly: true, sameSite: 'lax', secure: request.nextUrl.protocol === 'https:', path: '/', maxAge: 60 * 60 * 24 * 30,
+    });
+  }
   if (request.cookies.has(LEGACY_SESSION_COOKIE_NAME)) expireLegacySessionCookie(response);
   return response;
 }
@@ -153,6 +161,7 @@ function safeOriginalPath(value: string) {
 
 function isConsolePage(pathname: string) {
   if (isLoginPage(pathname)) return false;
+  if (pathname === '/guide' || pathname.startsWith('/guide/') || pathname === '/support') return false;
   if (pathname.startsWith('/api/')) return false;
   return !/\.(?:avif|css|gif|ico|jpe?g|js|png|svg|webp|woff2?)$/i.test(pathname);
 }
@@ -252,8 +261,8 @@ function isProtectedPage(pathname: string) {
     || pathname.startsWith('/admin/')
     || pathname === '/github'
     || pathname.startsWith('/github/')
-    || pathname === '/guide'
-    || pathname.startsWith('/guide/')
+    || pathname === '/account'
+    || pathname.startsWith('/account/')
     || pathname === '/org'
     || pathname.startsWith('/org/');
 }

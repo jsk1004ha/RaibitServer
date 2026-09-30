@@ -2,19 +2,37 @@ import { expect, test } from '../helpers/fixtures';
 import { captureScreenshot, expectAccessible, expectRoute, installSession, nativeFormData } from '../helpers/contracts';
 
 const fixtureEnabled = process.env.RAIBITSERVER_E2E_FIXTURES === '1';
-const viewports = [{ width: 375, height: 812 }, { width: 1280, height: 800 }] as const;
+const viewports = [{ width: 375, height: 812 }, { width: 768, height: 900 }, { width: 1280, height: 800 }] as const;
 
 test.describe('@t10-auth-flows', () => {
   test.skip(!fixtureEnabled, 'requires RAIBITSERVER_E2E_FIXTURES=1');
 
+  test('unverified login continues to verification without a standalone tab', async ({ page }) => {
+    await page.goto('/login?next=%2Forg%2Fraibit%2Fprojects');
+    await page.getByLabel('이메일').fill('unverified@fixture.test');
+    await page.getByLabel('비밀번호').fill('fixture-unverified-pass');
+    await page.getByRole('button', { name: '콘솔에 로그인', exact: true }).click();
+    await expectRoute(page, '/login', { mode: 'verify', email: 'unverified@fixture.test', next: '/org/raibit/projects', error: 'email_not_verified' });
+    await expect(page.getByLabel('이메일')).toHaveValue('unverified@fixture.test');
+    await expect(page.getByRole('navigation', { name: '인증 메뉴' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '인증 코드 다시 보내기' })).toBeVisible();
+  });
+
   test('server-rendered login, signup, and verification forms preserve navigation and FormData', async ({ page, request }, testInfo) => {
+    test.slow();
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
       await page.goto('/login?next=%2Forg%2Fraibit%2Fprojects');
       await expect(page.getByRole('heading', { name: '콘솔에 로그인' })).toBeVisible();
       await expect(page.getByRole('navigation', { name: '인증 메뉴' }).getByRole('link', { name: '가입 신청' })).toHaveAttribute('href', /mode=signup/);
+      await expect(page.getByRole('navigation', { name: '인증 메뉴' }).getByRole('link', { name: '이메일 인증' })).toHaveCount(0);
       await expectAccessible(page);
       await captureScreenshot(page, testInfo, `t10-login-${viewport.width}`);
+      for (const mode of ['signup', 'verify']) {
+        await page.goto(`/login?mode=${mode}&email=signup%40fixture.test`);
+        await expect(page.getByRole('link', { name: '이메일 인증', exact: true })).toHaveCount(0);
+        await captureScreenshot(page, testInfo, `t10-${mode}-${viewport.width}`);
+      }
     }
 
     await page.goto('/login?next=%2Forg%2Fraibit%2Fprojects');
@@ -46,6 +64,7 @@ test.describe('@t10-auth-flows', () => {
     expect(new URL(page.url()).search).toBe('?mode=verify&email=signup%40fixture.test&notice=saved');
 
     await page.goto('/login?mode=verify&email=verify%40fixture.test&next=%2Fconsole');
+    await expect(page.getByRole('navigation', { name: '인증 메뉴' })).toHaveCount(0);
     await page.getByLabel('6자리 인증 코드').fill('123456');
     expect(await nativeFormData(page, 'form.auth-form')).toEqual([
       ['_returnTo', '/console'],
@@ -69,7 +88,7 @@ test.describe('@t10-auth-flows', () => {
     await installSession(page.context(), 'fixture-user-populated');
     await page.goto('/login?mode=verify&email=verify%40fixture.test&next=%2Fconsole');
     expect(await nativeFormData(page, 'form.auth-resend')).toEqual([
-      ['_returnTo', '/login?mode=verify&email=verify%40fixture.test'],
+      ['_returnTo', '/login?mode=verify&email=verify%40fixture.test&next=%2Fconsole'],
       ['email', 'verify@fixture.test'],
     ]);
     await page.getByRole('button', { name: '인증 코드 다시 보내기' }).press('Enter');

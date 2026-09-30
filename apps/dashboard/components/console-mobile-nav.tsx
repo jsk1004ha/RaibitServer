@@ -44,7 +44,7 @@ export function ConsoleMobileNav({ active, eyebrow, logoutAction, navItems, orgL
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
           <div className="flex flex-col gap-3 border-b border-border px-2 pb-4">
             <div className="min-w-0"><p className="text-xs text-muted-foreground">{orgLabel}</p><OrganizationSwitcher currentOrganizationId={organizationRouteValue} memberships={organizationMemberships} /></div>
-            <div className="min-w-0"><p className="text-xs text-muted-foreground">{projectLabel}</p><p className="truncate text-sm text-foreground" title={projectValue}>{projectValue}</p></div>
+            {active !== 'account' ? <div className="min-w-0"><p className="text-xs text-muted-foreground">{projectLabel}</p><p className="truncate text-sm text-foreground" title={projectValue}>{projectValue}</p></div> : null}
           </div>
           <nav className="flex flex-col gap-1 py-3" aria-label="모바일 콘솔 메뉴">
             <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">{eyebrow}</p>

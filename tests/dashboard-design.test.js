@@ -9,6 +9,76 @@ import { RESOURCE_CAPABILITIES } from '../packages/core/src/resource-capabilitie
 const read = (path) => fs.readFile(new URL(path, import.meta.url), 'utf8');
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+async function componentHarness(path, exportName) {
+  const dashboardRequire = createRequire(new URL('../apps/dashboard/package.json', import.meta.url));
+  const React = dashboardRequire('react');
+  let state;
+  const reference = { current: null };
+  const exports = {};
+  const source = await read(path);
+  const compiled = ts.transpileModule(source, { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
+  } }).outputText;
+  const requireComponent = (id) => {
+    if (id === 'react') return { ...React, useState: (initial) => {
+      if (state === undefined) state = initial;
+      return [state, (value) => { state = value; }];
+    }, useRef: () => reference };
+    if (id === 'react/jsx-runtime') return dashboardRequire(id);
+    return { Field: 'div', FieldDescription: 'p', FieldGroup: 'div', FieldLabel: 'label', Input: 'input', Select: 'select', Button: 'button' };
+  };
+  new Function('require', 'exports', compiled)(requireComponent, exports);
+  return { render: (props) => exports[exportName](props), reference };
+}
+
+function elements(tree, predicate, disabled = false) {
+  return (Array.isArray(tree) ? tree : [tree]).flatMap((node) => {
+    if (!node || typeof node !== 'object' || !node.props) return [];
+    const unavailable = disabled || Boolean(node.props.disabled);
+    return [...(predicate(node, unavailable) ? [node] : []), ...elements(node.props.children, predicate, unavailable)];
+  });
+}
+
+test('creation source choice disables irrelevant native payload fields for projects and services', async () => {
+  for (const imageField of ['image', 'imageUrl']) {
+    const harness = await componentHarness('../apps/dashboard/components/creation-source-fields.tsx', 'CreationSourceFields');
+    const repository = harness.render({ imageField });
+    const enabledNames = (tree) => elements(tree, (node, disabled) => !disabled && Boolean(node.props.name)).map(node => node.props.name);
+    assert.deepEqual(enabledNames(repository), ['sourceType', 'repoUrl', 'branch', 'dockerfilePath', 'buildContext']);
+    assert.equal(elements(repository, node => node.props.name === 'repoUrl')[0].props.required, true);
+    elements(repository, node => node.props.name === 'sourceType')[0].props.onChange({ target: { value: 'image' } });
+    const image = harness.render({ imageField });
+    assert.deepEqual(enabledNames(image), ['sourceType', imageField]);
+    assert.equal(elements(image, node => node.props.name === imageField)[0].props.required, true);
+    assert.deepEqual(elements(image, node => node.type === 'fieldset').map(node => [node.props.hidden, node.props.disabled]), [[true, true], [false, false]]);
+    elements(image, node => node.props.name === 'sourceType')[0].props.onChange({ target: { value: 'github' } });
+    assert.deepEqual(enabledNames(harness.render({ imageField })), enabledNames(repository));
+  }
+});
+
+test('verification and resend submit the edited email and retain the intended destination', async () => {
+  const harness = await componentHarness('../apps/dashboard/components/email-verification-form.tsx', 'EmailVerificationForm');
+  const props = { initialEmail: 'old@example.com', next: '/org/team/projects', verifyAction: '/api/control/auth/email/verify', resendAction: '/api/control/auth/email/resend' };
+  const initial = harness.render(props);
+  elements(initial, node => node.props.id === 'verify-email')[0].props.onChange({ target: { value: 'new+tag@example.com' } });
+  const edited = harness.render(props);
+  assert.deepEqual(elements(edited, node => node.props.name === 'email').map(node => node.props.value), ['new+tag@example.com', 'new+tag@example.com']);
+  const forms = elements(edited, node => node.type === 'form');
+  assert.deepEqual(forms.map(node => [node.props.method, node.props.action]), [['post', props.verifyAction], ['post', props.resendAction]]);
+  const returns = elements(edited, node => node.props.name === '_returnTo').map(node => node.props.value);
+  assert.equal(returns[0], props.next);
+  const resend = new URL(returns[1], 'https://console.example');
+  assert.equal(resend.searchParams.get('email'), 'new+tag@example.com');
+  assert.equal(resend.searchParams.get('next'), props.next);
+  assert.equal(resend.searchParams.get('mode'), 'verify');
+  for (const valid of [false, true]) {
+    let prevented = false;
+    harness.reference.current = { reportValidity: () => valid };
+    forms[1].props.onSubmit({ preventDefault: () => { prevented = true; } });
+    assert.equal(prevented, !valid);
+  }
+});
+
 
 test('approved RAIBIT visual contract identifies the redesign and its target surfaces', async () => {
   const design = await read('../DESIGN.md');
@@ -43,7 +113,6 @@ test('native POST contracts preserve return targets, override fields, and confir
   assert.match(accountMenu, /<form action=\{logoutAction\} method="post"><input name="_returnTo" type="hidden" value="\/login" \/>/);
   for (const marker of [
     'name="_returnTo" type="hidden" value={next}',
-    'name="_returnTo" type="hidden" value="/login?mode=verify"',
   ]) assert.ok(login.includes(marker), `${marker} auth return target missing`);
   for (const marker of [
     'name="_returnTo" type="hidden" value={`${data.base}?view=services`}', 'name="deploymentType" type="hidden" value="production"',
@@ -61,7 +130,7 @@ test('native POST contracts preserve return targets, override fields, and confir
     'name="confirmed" value="true"', 'ResourceProvisionActions', 'name="serviceId"', 'name="envPrefix"',
   ]) assert.ok(resource.includes(marker), `${marker} resource mutation contract missing`);
   for (const marker of [
-    'returnTo="/github?step=attach"', 'returnTo="/github?step=sync"',
+    'returnTo="/github?step=attach"', 'returnTo={`/github?step=sync${targetSuffix}`}',
     'selectedRepository.fullName', 'encodeURIComponent(selectedRepository.fullName)',
   ]) assert.ok(github.includes(marker), `${marker} GitHub mutation contract missing`);
   assert.match(githubMutation, /<input name="_returnTo" type="hidden" value=\{returnTo\} \/>/);
@@ -118,7 +187,7 @@ test('shared dashboard primitives keep localized deterministic route and securit
     assert.ok(shell.includes(`icon: '${icon}'`), `${icon} navigation icon missing`);
   }
   assert.match(shell, /active\s*=\s*'overview'/);
-  assert.match(shell, /resolveOrganizationRouteValue/);
+  assert.match(shell, /selectedWorkspace\(\{ requested: requestedOrganizationId, subject, memberships: organizationMemberships \}\)/);
   assert.match(shell, /const\s+current\s*=\s*active\s*===\s*item\.id/);
   assert.match(shell, /const\s+current\s*=\s*active\s*===\s*item\.id[\s\S]*aria-current=\{current \? 'page' : undefined\}/);
   for (const [index, [path, active]] of callerContracts.entries()) {
@@ -267,25 +336,29 @@ test('project workflows preserve their server-orchestrated actions after feature
     read('../apps/dashboard/components/project-hub/settings.tsx'),
     read('../apps/dashboard/components/project-hub/shared.tsx'),
   ]);
-  const createSource = `${createProject}\n${wizard}`;
-  const projectDetail = [projectRoute, projectHub, projectModel, overview, services, operations, environment, settings, shared].join('\n');
+  const sourceFields = await read('../apps/dashboard/components/creation-source-fields.tsx');
+  const createSource = `${createProject}\n${wizard}\n${sourceFields}`;
+  const projectDetail = [projectRoute, projectHub, projectModel, overview, services, operations, environment, settings, shared, sourceFields].join('\n');
 
   for (const marker of [
-    '프로젝트 만들기', '프로젝트 기본 정보', '저장소 연결', '첫 서비스', '관리형 리소스', '프로젝트 이름', '조직',
-    '저장소 URL', '브랜치', 'Dockerfile 경로', '빌드 컨텍스트', '서비스 유형',
-    '데이터베이스', '캐시', '이전', '다음',
+    '프로젝트 만들기', '이름과 코드 연결', '코드 가져올 곳', '서비스 설정 (선택)', '프로젝트 이름',
+    '저장소 URL', '브랜치', 'Dockerfile 경로', '빌드 기준 폴더', '서비스 유형',
+    '데이터베이스', '캐시', '주소 이름 변경 (선택)',
   ]) {
     assert.ok(createSource.includes(marker), `${marker} create-project marker missing`);
   }
   assert.ok(createProject.includes('<ConsoleShell active="create-project"'));
   assert.ok(createProject.includes("<ProjectCreateWizard action={apiAction('/projects')} orgSlug={orgSlug} />"));
-  assert.match(wizard, /<form\s+ref=\{formRef\}\s+method="post"\s+action=\{action\}/);
-  for (const name of ['name', 'slug', 'serviceName', 'repoUrl', 'branch', 'sourceType', 'image', 'dockerfilePath', 'buildContext', 'type', 'database', 'cache']) {
+  assert.match(wizard, /<form\s+method="post"\s+action=\{action\}/);
+  assert.match(wizard, /<CreationSourceFields imageField="image"/);
+  assert.match(services, /<CreationSourceFields imageField="imageUrl"/);
+  assert.match(sourceFields, /name=\{imageField\}/);
+  for (const name of ['name', 'slug', 'serviceName', 'repoUrl', 'branch', 'sourceType', 'dockerfilePath', 'buildContext', 'type', 'database', 'cache']) {
     assert.ok(createSource.includes(`name="${name}"`), `${name} create-project field missing`);
   }
   assert.doesNotMatch(createSource, /name="organizationId"/);
   for (const contract of [
-    'value={orgSlug}', 'defaultValue="github"', 'value="github"', 'value="image"',
+    "initialSource = 'github'", 'value="github"', 'value="image"',
     'defaultValue="web"', 'value="web"', 'value="worker"', 'value="cron"', 'value="job"',
   ]) {
     assert.ok(createSource.includes(contract), `${contract} create-project value/default missing`);
@@ -331,7 +404,7 @@ test('project workflows preserve their server-orchestrated actions after feature
   assert.ok(projectDetail.includes('name="deploymentType" type="hidden" value="preview"'));
   assert.ok(projectDetail.includes('href={`${data.base}/deployments/${deployment.id}`}'));
   assert.ok(projectDetail.includes('href={`${data.base}/resources/${resource.id}/console`}'));
-  for (const name of ['name', 'type', 'sourceType', 'repoUrl', 'branch', 'imageUrl', 'dockerfilePath', 'buildContext', 'engine']) {
+  for (const name of ['name', 'type', 'sourceType', 'repoUrl', 'branch', 'dockerfilePath', 'buildContext', 'engine']) {
     assert.ok(projectDetail.includes(`name="${name}"`), `${name} project-detail field missing`);
   }
   for (const deferred of ['loadProjectConsole(projectId)', 'data.resources.map']) {
@@ -378,29 +451,28 @@ test('dynamic project routes await Next 16 params before rendering route-bound U
   }
 });
 
-test('project workflow controls derive tenant scope server-side and expose accessible sequential navigation', async () => {
+test('project workflow controls derive tenant scope server-side and expose optional native form sections', async () => {
   const [createProject, wizard, projectDetail] = await Promise.all([
     read('../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx'),
     read('../apps/dashboard/components/project-create-wizard.tsx'),
     read('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx'),
   ]);
 
-  assert.ok(wizard.includes('id="project-organization" value={orgSlug} readOnly aria-describedby="organization-scope-note"'));
-  assert.ok(wizard.includes('로그인 권한으로 확인'));
+  assert.match(wizard, /name="_returnTo" value=\{`\/org\/\$\{orgSlug\}\/projects`\}/);
   assert.doesNotMatch(wizard, /<input[^>]*name="organizationId"/);
-  assert.match(wizard, /<SectionNavigationScroll as="ol"[^>]*>/);
-  assert.ok(wizard.includes('hidden={step !== 0}'));
-  assert.ok(wizard.includes('hidden={step !== 3}'));
-  assert.ok(wizard.includes('disabled={index > step}'));
+  assert.equal((wizard.match(/<details>/g) || []).length, 3);
+  assert.match(wizard, /onInvalidCapture=[\s\S]*closest\('details'\)\?\.setAttribute\('open', ''\)/);
+  assert.doesNotMatch(wizard, /disabled=\{index > step\}|id="project-organization"/);
 
   const [projectHub, services, operations] = await Promise.all([
     read('../apps/dashboard/components/project-hub/project-hub.tsx'),
     read('../apps/dashboard/components/project-hub/services.tsx'),
     read('../apps/dashboard/components/project-hub/operations.tsx'),
   ]);
-  const projectFeatures = `${projectHub}\n${services}\n${operations}`;
+  const sourceFields = await read('../apps/dashboard/components/creation-source-fields.tsx');
+  const projectFeatures = `${projectHub}\n${services}\n${operations}\n${sourceFields}`;
   assert.ok(projectHub.includes('projectNavigation(data.base)'));
-  for (const field of ['name="name"', 'name="type"', 'name="sourceType"', 'name="repoUrl"', 'name="branch"', 'name="imageUrl"', 'name="dockerfilePath"', 'name="buildContext"', 'name="engine"']) {
+  for (const field of ['name="name"', 'name="type"', 'name="sourceType"', 'name="repoUrl"', 'name="branch"', 'name={imageField}', 'name="dockerfilePath"', 'name="buildContext"', 'name="engine"']) {
     assert.ok(projectFeatures.includes(field), `${field} explicit form field missing`);
   }
   for (const option of [
@@ -463,13 +535,13 @@ test('deployment detail awaits route params and keeps operational controls on a 
   assert.ok(deploymentRecovery.includes('name="snapshotVersion"'));
   assert.ok(deploymentRecovery.includes('name="confirmed"'));
   assert.match(deployment, /const base = `\/org\/\$\{orgSlug\}\/projects\/\$\{projectId\}\/deployments\/\$\{encodedDeploymentId\}`;/);
-  assert.match(deployment, /배포 ID · <span[^>]*>\{decodedDeploymentId\}<\/span>/);
+  assert.match(deployment, /<details[\s\S]*\['배포 ID', decodedDeploymentId\][\s\S]*<\/details>/);
   assert.doesNotMatch(deployment, /(?:getJson|apiAction)\(`\/deployments\/\$\{deploymentId\}/);
   assert.doesNotMatch(deployment, /deployments\/\$\{encodeURIComponent\(deploymentId\)\}/);
   assert.doesNotMatch(deployment, /encodeURIComponent\(encodeDeploymentRouteSegment\(/);
   for (const marker of [
-    '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트',
-    '배포 목록', '상태는 빌더와 오케스트레이터가 갱신합니다.', 'detail.errorCode', 'detail.errorMessage', 'SectionNav', "view === 'logs'", "view === 'events'",
+    '배포 상세', '기술 세부 정보', '빌드 로그', '배포 이벤트',
+    '배포 목록', 'DeploymentRefresh', 'detail.errorCode', 'detail.errorMessage', 'SectionNav', "view === 'logs'", "view === 'events'",
   ]) {
     assert.ok(deployment.includes(marker), `${marker} deployment marker missing`);
   }
@@ -484,7 +556,7 @@ test('deployment detail awaits route params and keeps operational controls on a 
   assert.match(deployment, /className="log-viewer[^\"]*focus-visible:outline-none[^\"]*focus-visible:ring-3/);
   assert.match(deployment, /text-inverse-foreground/);
   assert.match(deployment, /font-mono\s+text-xs/);
-  assert.match(deployment, /break-all\s+whitespace-pre-wrap/);
+  assert.match(deployment, /break-keep\s+whitespace-pre-wrap\s+\[overflow-wrap:anywhere\]/);
   assert.match(deployment, /<DeploymentStream rows=\{logs\.body\?\.logs \|\| \[\]\} field="line" label="마스킹된 빌드 로그"/);
   assert.match(deployment, /<DeploymentStream rows=\{events\.body\?\.events \|\| \[\]\} field="message" label="배포 이벤트 기록"/);
   assert.doesNotMatch(deployment, /<LogViewer\b/);
@@ -577,8 +649,8 @@ test('guide keeps detailed help in one topic per screen', async () => {
     read('../apps/dashboard/proxy.ts'),
   ]);
   for (const marker of [
-    "const topics = ['projects', 'source', 'environment', 'deployments', 'resources', 'github', 'administration'] as const",
-    '프로젝트 시작', '소스 자동 인식', '환경 변수와 비밀키', 'AI 배포와 수동 배포', '관리형 리소스', 'GitHub 연결', '사용자 승인과 밴',
+    "const topics = ['organizations', 'projects', 'source', 'environment', 'deployments', 'resources', 'github', 'administration'] as const",
+    '처음이라면 여기부터', '프로젝트 시작', '소스 자동 인식', '환경 변수와 비밀키', '배포하고 로그 확인하기', '관리형 리소스', 'GitHub 연결', '사용자 승인과 밴',
     '/guide?topic=projects', '/guide?topic=source', '/guide?topic=environment', '/guide?topic=deployments', '/guide?topic=resources', '/guide?topic=github', '/guide?topic=administration',
     '<ConsoleShell active="guide"', 'navItems.map((item)', "aria-current={current ? 'page' : undefined}",
   ]) {
@@ -637,7 +709,7 @@ test('GitHub console keeps integration contracts behind a Korean workflow', asyn
   for (const heading of ['GitHub App 연결', '저장소 선택', '서비스 연결', '저장소 동기화']) {
     assert.ok(github.includes(`<h2>${heading}</h2>`), `${heading} GitHub section missing`);
   }
-  for (const path of ['/github/install', '/github/repositories/import', '`/projects/${firstService.projectId}/services/${firstService.id}/github`', '`/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync`']) {
+  for (const path of ['/github/install', '/github/repositories/import', '`/projects/${encodeURIComponent(selectedService.projectId)}/services/${encodeURIComponent(selectedService.id)}/github`', '`/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync`']) {
     assert.ok(github.includes(path), `${path} GitHub action path missing`);
   }
   for (const field of ['projectId', 'integrationId', 'repositoryId', 'serviceName', 'branch']) {
@@ -646,12 +718,12 @@ test('GitHub console keeps integration contracts behind a Korean workflow', asyn
   for (const identifier of ['selectedRepository.fullName', 'encodeURIComponent(selectedRepository.fullName)', 'integrationId', 'repositoryId', 'repository.private']) {
     assert.ok(github.includes(identifier), `${identifier} GitHub evidence missing`);
   }
-  assert.ok(github.includes('`/projects/${firstService.projectId}/services/${firstService.id}/github`'), 'attach action must pair a service with its own project');
+  assert.ok(github.includes('`/projects/${encodeURIComponent(selectedService.projectId)}/services/${encodeURIComponent(selectedService.id)}/github`'), 'attach action must pair the selected service with its own project');
   assert.ok(!github.includes('`/projects/${firstProject.id}/services/${firstService.id}/github`'), 'attach action must not cross-pair independent project and service rows');
-  assert.ok(github.includes('canAttachRepository ? ('));
+  assert.ok(github.includes('canAttachRepository && selectedService ? ('));
   assert.match(githubMutation, /<Button aria-busy=\{busy\} disabled=\{disabled \|\| busy\} type="submit">/);
   assert.ok(github.includes('submitLabel="연결"'));
-  assert.ok(github.includes('연결할 서비스와 저장소가 필요합니다.'));
+  assert.ok(github.includes('먼저 연결할 서비스를 선택하세요.'));
   assert.ok(github.includes('canSyncRepository ? ('));
   assert.ok(github.includes('submitLabel="동기화"'));
   assert.ok(github.includes('동기화할 저장소가 없습니다.'));
@@ -701,6 +773,8 @@ test('login keeps each auth activity focused and uses the same-origin control BF
     read('../apps/dashboard/lib/api.ts'),
     read('../apps/dashboard/lib/api-action.ts'),
   ]);
+  const verification = await read('../apps/dashboard/components/email-verification-form.tsx');
+  const authForms = `${login}\n${verification}`;
 
   assert.doesNotMatch(login, /dashboardApiContext/);
   for (const endpoint of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend']) {
@@ -710,19 +784,19 @@ test('login keeps each auth activity focused and uses the same-origin control BF
   assert.ok(apiAction.includes('return `/api/control'));
   assert.doesNotMatch(login, /\/api\/(?:session|control-plane)/);
   for (const field of ['name', 'studentId', 'clubMemberClaim', 'email', 'password', 'code']) {
-    assert.ok(login.includes(`name="${field}"`), `${field} auth field missing`);
+    assert.ok(authForms.includes(`name="${field}"`), `${field} auth field missing`);
   }
   assert.ok(!login.includes('name="organizationSlug"'), 'signup should not ask users to create a workspace');
   assert.ok(login.includes("const modes = ['login', 'signup', 'verify', 'forgot', 'reset'] as const"));
-  assert.ok(login.includes("const navigationModes = ['login', 'signup', 'verify'] as const"));
+  assert.ok(login.includes("const navigationModes = ['login', 'signup'] as const"));
   assert.ok(login.includes("mode === 'login' ? <form"));
   assert.ok(login.includes("mode === 'signup' ? <form"));
-  assert.ok(login.includes("mode === 'verify' ? <>"));
+  assert.ok(login.includes("mode === 'verify' ? <EmailVerificationForm"));
   assert.ok(login.includes("mode === 'forgot' || mode === 'reset' ? <PasswordRecoveryForm"));
   assert.ok(login.includes('관리자 확인을 위해 정확한 정보를 입력해 주세요.'));
   assert.ok(login.includes('name="password" type="password" autoComplete="current-password"'));
   assert.ok(login.includes('name="password" type="password" autoComplete="new-password"'));
-  assert.ok(login.includes('name="code" inputMode="numeric" autoComplete="one-time-code"'));
+  assert.ok(verification.includes('name="code" inputMode="numeric" autoComplete="one-time-code"'));
 });
 
 

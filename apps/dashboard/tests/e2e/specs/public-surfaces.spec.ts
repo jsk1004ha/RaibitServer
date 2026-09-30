@@ -99,6 +99,7 @@ test.describe("@t9-public-surfaces", () => {
             expect(loginBox.y).toBeGreaterThan(themeBox.y);
             expect(consoleBox.y).toBeGreaterThan(themeBox.y);
           } else {
+            expect(themeBox.x - (consoleBox.x + consoleBox.width)).toBeGreaterThanOrEqual(16);
             for (const box of [themeBox, navigationBox, loginBox, consoleBox]) {
               expect(Math.abs((brandBox.y + brandBox.height / 2) - (box.y + box.height / 2))).toBeLessThanOrEqual(2);
             }
@@ -107,7 +108,7 @@ test.describe("@t9-public-surfaces", () => {
           const skipLink = page.getByRole("link", { name: "본문으로 건너뛰기" });
           await skipLink.focus();
           await expect(skipLink).toBeFocused();
-          for (const item of [brand, themeMenu, navigation.getByRole("link", { name: "운영 현황" }), navigation.getByRole("link", { name: "지원", exact: true }), login, consoleLink]) {
+          for (const item of [brand, navigation.getByRole("link", { name: "운영 현황" }), navigation.getByRole("link", { name: "지원", exact: true }), login, consoleLink, themeMenu]) {
             await page.keyboard.press("Tab");
             await expect(item).toBeFocused();
           }

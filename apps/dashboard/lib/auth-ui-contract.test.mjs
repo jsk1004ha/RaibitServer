@@ -34,7 +34,8 @@ test('auth UI keeps server-rendered native form contracts for every activity', a
   assert.match(page, /name="clubMemberClaim" required type="radio" value="1"/);
   assert.match(page, /name="clubMemberClaim" required type="radio" value="0"/);
   assert.match(page, /name="password" type="password" autoComplete="new-password" minLength=\{8\} required/);
-  assert.match(page, /name="code" inputMode="numeric" autoComplete="one-time-code" pattern="\[0-9\]\{6\}" maxLength=\{6\} required/);
+  const verification = await readFile(new URL('../components/email-verification-form.tsx', import.meta.url), 'utf8');
+  assert.match(verification, /name="code" inputMode="numeric" autoComplete="one-time-code" pattern="\[0-9\]\{6\}" maxLength=\{6\} required/);
   assert.doesNotMatch(page, /name="organizationSlug"/);
   assert.doesNotMatch(page, /useState|onChange=/);
 });

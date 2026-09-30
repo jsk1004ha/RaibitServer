@@ -12,7 +12,7 @@ test('Given the GitHub workflow page, when its forms are inspected, then every s
 
   for (const contract of [
     ['import', '/github/repositories/import', ['_returnTo', 'integrationId', 'repositoryId', 'projectId', 'serviceName']],
-    ['attach', '/services/${firstService.id}/github', ['_returnTo', 'integrationId', 'repositoryId', 'branch']],
+    ['attach', '/projects/${encodeURIComponent(selectedService.projectId)}/services/${encodeURIComponent(selectedService.id)}/github', ['_returnTo', 'integrationId', 'repositoryId', 'branch']],
     ['sync', '/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync', ['_returnTo']],
   ]) {
     const [label, endpoint, fields] = contract;
@@ -22,6 +22,9 @@ test('Given the GitHub workflow page, when its forms are inspected, then every s
 
   assert.match(source, /const selectedInstallation = state\.installations\.find[\s\S]*\|\| state\.installations\[0\]/);
   assert.match(source, /const selectedRepository = selectedRepositories\.find\(\(repository: GitHubRepository\) => repository\.accessState !== 'REVOKED'\)/);
+  assert.match(source, /resolveGitHubAttachTarget\(\{ query, services: state\.services, authorizedProjectIds \}\)/);
+  assert.match(source, /canAttachRepository && selectedService/);
+  assert.match(source, /name="serviceId" required defaultValue=\{selectedService\?\.id \|\| ''\}/);
   assert.match(mutation, /<input name="_returnTo" type="hidden" value=\{returnTo\} \/>/);
   assert.doesNotMatch(source, /name=["'](?:token|installationId|repoUrl)["']/);
 });
