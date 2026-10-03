@@ -22,14 +22,23 @@ func (r *ServiceReconciler) observePreviewInventory(ctx context.Context, plan ku
 	if err != nil {
 		return nil, err
 	}
-	objects := make([]store.PreviewOwnedObject, 0, 3)
-	for _, kind := range []string{"Deployment", "Service", "Ingress"} {
-		resource := strings.ToLower(kind) + "/" + runtime.WorkloadName
+	objects := make([]store.PreviewOwnedObject, 0, len(plan.Manifests))
+	for _, manifest := range plan.Manifests {
+		kind, _ := manifest["kind"].(string)
+		if kind != "Deployment" && kind != "Service" && kind != "NetworkPolicy" && kind != "Ingress" {
+			continue
+		}
+		metadata, ok := manifest["metadata"].(map[string]any)
+		name, nameOK := metadata["name"].(string)
+		if !ok || !nameOK || name == "" {
+			return nil, store.ErrPreviewContract
+		}
+		resource := strings.ToLower(kind) + "/" + name
 		result, err := r.runKubectl(ctx, []string{"get", resource, "--namespace", runtime.Namespace, "-o", "json"})
 		if err != nil {
 			return nil, fmt.Errorf("observe preview %s: %w", strings.ToLower(kind), err)
 		}
-		object, err := kube.ObservePreviewObject([]byte(result.Stdout), runtime, plan.Service.ProjectID, plan.Service.ServiceID, kind)
+		object, err := kube.ObservePreviewObject([]byte(result.Stdout), runtime, plan.Service.ProjectID, plan.Service.ServiceID, kind, name)
 		if err != nil {
 			return nil, err
 		}
@@ -53,7 +62,7 @@ func (r *ServiceReconciler) cleanupOwnedPreview(ctx context.Context, _ *store.Pr
 	}
 	commands := make([]string, 0, len(objects)*3)
 	for _, object := range objects {
-		if object.Namespace != runtime.Namespace || object.Name != runtime.WorkloadName {
+		if object.Namespace != runtime.Namespace {
 			return result, store.ErrPreviewContract
 		}
 		getResult, getErr := r.runKubectl(ctx, []string{"get", strings.ToLower(object.Kind) + "/" + object.Name, "--namespace", object.Namespace, "--ignore-not-found=true", "-o", "json"})
@@ -64,7 +73,7 @@ func (r *ServiceReconciler) cleanupOwnedPreview(ctx context.Context, _ *store.Pr
 		if strings.TrimSpace(getResult.Stdout) == "" {
 			continue
 		}
-		actual, observeErr := kube.ObservePreviewObject([]byte(getResult.Stdout), runtime, deployment.ProjectID, deployment.ServiceID, object.Kind)
+		actual, observeErr := kube.ObservePreviewObject([]byte(getResult.Stdout), runtime, deployment.ProjectID, deployment.ServiceID, object.Kind, object.Name)
 		if observeErr != nil {
 			return result, observeErr
 		}
@@ -89,7 +98,7 @@ func (r *ServiceReconciler) cleanupOwnedPreview(ctx context.Context, _ *store.Pr
 			return result, errors.Join(deleteErr, afterErr)
 		}
 		if strings.TrimSpace(after.Stdout) != "" {
-			remaining, observeErr := kube.ObservePreviewObject([]byte(after.Stdout), runtime, deployment.ProjectID, deployment.ServiceID, object.Kind)
+			remaining, observeErr := kube.ObservePreviewObject([]byte(after.Stdout), runtime, deployment.ProjectID, deployment.ServiceID, object.Kind, object.Name)
 			if observeErr != nil || remaining.UID == object.UID {
 				return result, errors.Join(deleteErr, kube.ErrPreviewObject)
 			}

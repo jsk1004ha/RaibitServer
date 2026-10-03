@@ -146,6 +146,8 @@ func previewObjectPath(object store.PreviewOwnedObject) string {
 		return "/api/v1/namespaces/" + namespace + "/services/" + name
 	case "Ingress":
 		return "/apis/networking.k8s.io/v1/namespaces/" + namespace + "/ingresses/" + name
+	case "NetworkPolicy":
+		return "/apis/networking.k8s.io/v1/namespaces/" + namespace + "/networkpolicies/" + name
 	default:
 		return ""
 	}

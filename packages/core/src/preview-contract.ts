@@ -30,7 +30,7 @@ export type PreviewObservation = Readonly<{
   baseRef: string; updatedAt: string; observedAt: string;
 }>;
 export type PreviewOwnedObject = Readonly<{
-  group: string; version: 'v1'; kind: 'Deployment' | 'Service' | 'Ingress'; namespace: string;
+  group: string; version: 'v1'; kind: 'Deployment' | 'Service' | 'Ingress' | 'NetworkPolicy'; namespace: string;
   name: string; uid: string; resourceVersion?: string;
 }>;
 
@@ -184,8 +184,8 @@ export function parsePreviewInventory(input: unknown): readonly PreviewOwnedObje
   return input.map((entry: unknown): PreviewOwnedObject => {
     const value = exact(entry, ['group', 'version', 'kind', 'namespace', 'name', 'uid', 'resourceVersion']);
     const kind = value.kind;
-    if (kind !== 'Deployment' && kind !== 'Service' && kind !== 'Ingress') return invalid();
-    const group = { Deployment: 'apps', Service: '', Ingress: 'networking.k8s.io' }[kind];
+    if (kind !== 'Deployment' && kind !== 'Service' && kind !== 'Ingress' && kind !== 'NetworkPolicy') return invalid();
+    const group = { Deployment: 'apps', Service: '', Ingress: 'networking.k8s.io', NetworkPolicy: 'networking.k8s.io' }[kind];
     if (value.group !== group || value.version !== 'v1') return invalid();
     const result: PreviewOwnedObject = {
       group, version: 'v1' as const, kind, namespace: text(value.namespace, dnsLabelPattern, 63),

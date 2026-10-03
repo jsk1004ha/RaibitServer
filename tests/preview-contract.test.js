@@ -154,7 +154,7 @@ test('accepts inventory when exactly 32 unique owned objects are supplied', () =
   assert.deepEqual(schemas.PreviewInventorySchema.parse(value), value);
 });
 
-for (const [kind, group] of [['Deployment', 'apps'], ['Service', ''], ['Ingress', 'networking.k8s.io']]) {
+for (const [kind, group] of [['Deployment', 'apps'], ['Service', ''], ['Ingress', 'networking.k8s.io'], ['NetworkPolicy', 'networking.k8s.io']]) {
   test(`parses owned inventory when kind is ${kind}`, () => {
     // Given
     const value = [{ ...owned(), kind, group, resourceVersion: '123' }];
@@ -168,6 +168,7 @@ for (const [kind, group] of [['Deployment', 'apps'], ['Service', ''], ['Ingress'
 for (const [name, value] of [
   ...['Namespace', 'Secret', 'Certificate'].map((kind) => [kind, [{ ...owned(), kind }]]),
   ['missing UID', [{ ...owned(), uid: '' }]], ['wrong API group', [{ ...owned(), group: '' }]],
+  ['wrong NetworkPolicy API group', [{ ...owned(), kind: 'NetworkPolicy', group: 'apps' }]],
   ['unknown property', [{ ...owned(), selector: 'tenant=true' }]], ['duplicate identity', [owned(), owned()]],
   ['over 32 objects', Array.from({ length: 33 }, (_, index) => ({ ...owned(), name: `object-${index}` }))],
 ]) {

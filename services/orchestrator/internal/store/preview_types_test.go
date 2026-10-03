@@ -46,7 +46,7 @@ func TestPreviewIdentityFixture_matches_frozen_typescript_blob(t *testing.T) {
 
 func TestParsePreviewInventory_rejects_shared_or_name_only_objects(t *testing.T) {
 	for name, raw := range map[string]json.RawMessage{
-		"shared":    json.RawMessage(`[{"group":"networking.k8s.io","version":"v1","kind":"NetworkPolicy","namespace":"acme--demo","name":"shared","uid":"uid-1"}]`),
+		"shared":    json.RawMessage(`[{"group":"","version":"v1","kind":"Namespace","namespace":"acme--demo","name":"shared","uid":"uid-1"}]`),
 		"name-only": json.RawMessage(`[{"group":"apps","version":"v1","kind":"Deployment","namespace":"acme--demo","name":"candidate","uid":""}]`),
 	} {
 		t.Run(name, func(t *testing.T) {

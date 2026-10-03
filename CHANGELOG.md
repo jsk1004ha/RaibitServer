@@ -6,6 +6,7 @@
 
 ### 보안
 
+- preview candidate의 workload별 기본 및 public-egress NetworkPolicy를 배포 소유 객체로 유지하고, UID 기반 inventory와 fenced cleanup에 포함해 preview pod의 네트워크 격리가 누락되지 않도록 수정했습니다.
 - managed resource provisioner가 deterministic `provider-managed-*` placeholder를 live Kubernetes Secret으로 apply하지 않도록 변경하고, provider-generated credential 계약만 기록하도록 수정했습니다.
 - tenant-controlled image pre-pull 요청이 DaemonSet을 만들지 않도록 비활성화했습니다.
 - TypeScript Buildx executor가 tenant service의 `metadataFile` 필드를 무시하고 executor-provided metadata path만 사용하도록 수정했습니다.

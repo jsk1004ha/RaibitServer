@@ -31,7 +31,7 @@ export const PreviewObservationSchema = z.strictObject({
   headSha: sha, headRef: ref, baseRef: ref, updatedAt: timestamp, observedAt: timestamp,
 });
 export const PreviewOwnedObjectSchema = z.strictObject({
-  group: z.string(), version: z.literal('v1'), kind: z.enum(['Deployment', 'Service', 'Ingress']),
+  group: z.string(), version: z.literal('v1'), kind: z.enum(['Deployment', 'Service', 'Ingress', 'NetworkPolicy']),
   namespace: dnsLabel, name: dnsLabel, uid: identity, resourceVersion: z.string().max(128).regex(/^[1-9][0-9]*$/).optional(),
-}).refine((value) => value.group === { Deployment: 'apps', Service: '', Ingress: 'networking.k8s.io' }[value.kind]);
+}).refine((value) => value.group === { Deployment: 'apps', Service: '', Ingress: 'networking.k8s.io', NetworkPolicy: 'networking.k8s.io' }[value.kind]);
 export const PreviewInventorySchema = z.array(PreviewOwnedObjectSchema).max(32).refine((values) => new Set(values.map((value) => `${value.group}/${value.kind}/${value.namespace}/${value.name}`)).size === values.length);

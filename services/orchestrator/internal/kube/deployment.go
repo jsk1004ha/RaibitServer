@@ -155,10 +155,10 @@ func NewDeploymentPlan(spec AppServiceSpec, options ...DeploymentOptions) Deploy
 }
 
 func previewCandidateManifests(manifests []map[string]any) []map[string]any {
-	owned := make([]map[string]any, 0, 3)
+	owned := make([]map[string]any, 0, 5)
 	for _, manifest := range manifests {
 		switch manifest["kind"] {
-		case "Deployment", "Service", "Ingress":
+		case "Deployment", "Service", "NetworkPolicy", "Ingress":
 			owned = append(owned, manifest)
 		}
 	}
