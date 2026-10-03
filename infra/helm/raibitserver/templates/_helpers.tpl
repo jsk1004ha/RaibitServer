@@ -20,3 +20,18 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
+
+{{- define "raibitserver.operationalEnv" -}}
+- name: RAIBITSERVER_OPERATIONAL_FEATURES_ENABLED
+  value: {{ ternary "1" "0" .Values.operational.enabled | quote }}
+- name: RAIBITSERVER_OPERATIONAL_IMPLEMENTATION_AVAILABLE
+  value: {{ ternary "1" "0" .Values.operational.implementationAvailable | quote }}
+- name: RAIBITSERVER_OPERATIONAL_PROTOCOL_VERSION
+  value: {{ .Values.operational.protocolVersion | quote }}
+- name: RAIBITSERVER_OPERATIONAL_CONTRACT_DIGEST
+  value: {{ .Values.operational.contractDigest | quote }}
+- name: RAIBITSERVER_RELEASE_REVISION
+  value: {{ .Values.operational.releaseRevision | quote }}
+- name: RAIBITSERVER_RELEASE_SOURCE_CLEAN
+  value: {{ ternary "1" "0" .Values.operational.releaseSourceClean | quote }}
+{{- end -}}

@@ -17,7 +17,11 @@ func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Pr
 	if err != nil {
 		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err)
 	}
-	spec := kube.SpecFromState(project, service, deployment, r.config.BaseDomain)
+	projection, err := r.projectTemplateRuntime(ctx, project, service, deployment)
+	if err != nil {
+		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err)
+	}
+	spec := kube.SpecFromState(project, service, projection.Deployment, r.config.BaseDomain)
 	spec.Image = image
 	plan := r.newDeploymentPlan(spec)
 	if !plan.Safe {
@@ -33,6 +37,9 @@ func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Pr
 		return nil, err
 	}
 	_ = r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "orchestrator.apply.started", Message: "applying Kubernetes desired state", Metadata: map[string]any{"manifestFile": manifestFile, "rollback": rollback, "dryRun": r.config.DryRun, "workloadKind": plan.Kind, "workloadName": plan.WorkloadName}})
+	if err := projection.CheckAuthority(ctx); err != nil {
+		return nil, err
+	}
 	applyResult, err := r.runKubectl(ctx, []string{"apply", "--server-side", "-f", manifestFile})
 	commands := []string{applyResult.Command}
 	_ = r.appendCommandRuntimeLogs(ctx, service.ID, deployment, "kubectl-apply", applyResult)
@@ -40,6 +47,9 @@ func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Pr
 		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, DryRun: r.config.DryRun, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, err)
 	}
 	if pruneSelector != "" {
+		if err := projection.CheckAuthority(ctx); err != nil {
+			return nil, err
+		}
 		pruneResult, pruneErr := r.runKubectl(ctx, []string{
 			"delete", productionReconcileResourceKinds,
 			"--namespace", plan.Service.Namespace,
@@ -74,6 +84,9 @@ func (r *ServiceReconciler) applyAndWatch(ctx context.Context, project *store.Pr
 	owned, inventoryErr := r.observePreviewInventory(ctx, plan, deployment)
 	if inventoryErr != nil {
 		return &ReconcileResult{Processed: 1, DeploymentID: deployment.ID, ManifestFile: manifestFile, Commands: commands, Status: store.DeploymentStatusFailed}, r.persistFailure(ctx, deployment, inventoryErr)
+	}
+	if err := projection.CollectUnused(ctx); err != nil {
+		return nil, err
 	}
 	_, err = r.store.CompleteRollout(ctx, store.RolloutCompletion{Lease: deployment.Lease(), Now: r.now().UTC(), Observation: observation, ImageURL: spec.Image, LeaseDuration: r.config.ClaimLease, PreviewOwned: owned})
 	if err != nil {

@@ -1,0 +1,136 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-template-secrets
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-orchestrator-template-secret-binding
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["rolebindings"]
+  matchConditions:
+    - name: orchestrator-service-account
+      expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-orchestrator'" .Release.Namespace (include "raibitserver.fullname" .) | quote }}
+  validations:
+    - expression: "request.operation == 'CREATE'"
+      message: "the orchestrator may only create template Secret access bindings"
+    - expression: >-
+        namespaceObject != null && namespaceObject.metadata.name == request.namespace &&
+        has(namespaceObject.metadata.labels) &&
+        namespaceObject.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        namespaceObject.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        namespaceObject.metadata.labels['raibitserver.io/namespace-kind'] == 'application' &&
+        namespaceObject.metadata.labels['raibitserver.io/project-id'] != '' &&
+        ['enforce', 'audit', 'warn'].all(level,
+          namespaceObject.metadata.labels['pod-security.kubernetes.io/' + level] == 'restricted')
+      message: "template Secret access may be bound only inside a managed application namespace"
+    - expression: >-
+        object.metadata.name == 'raibitserver-template-secrets' && object.metadata.namespace == request.namespace &&
+        has(object.metadata.labels) && object.metadata.labels.size() == 3 &&
+        object.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        object.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        object.metadata.labels['raibitserver.io/project-id'] == namespaceObject.metadata.labels['raibitserver.io/project-id'] &&
+        (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0) &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      message: "template Secret access requires the exact bootstrap binding name and project identity"
+    - expression: {{ printf "object.roleRef.apiGroup == 'rbac.authorization.k8s.io' && object.roleRef.kind == 'ClusterRole' && object.roleRef.name == '%s-template-secrets'" (include "raibitserver.fullname" .) | quote }}
+      message: "the orchestrator may bind only the dedicated template Secret ClusterRole"
+    - expression: {{ printf "has(object.subjects) && object.subjects.size() == 1 && object.subjects[0].kind == 'ServiceAccount' && object.subjects[0].name == '%s-orchestrator' && object.subjects[0].namespace == '%s' && (!has(object.subjects[0].apiGroup) || object.subjects[0].apiGroup == '')" (include "raibitserver.fullname" .) .Release.Namespace | quote }}
+      message: "template Secret access must target only the chart-managed orchestrator ServiceAccount"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-orchestrator-template-secret-binding
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-orchestrator-template-secret-binding
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-orchestrator-template-secrets
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["secrets"]
+  matchConditions:
+    - name: orchestrator-or-reserved-template-secret
+      expression: >-
+        {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-orchestrator'" .Release.Namespace (include "raibitserver.fullname" .) }} ||
+        [object, oldObject].exists(target, target != null &&
+          (target.metadata.name.startsWith('rb-template-') ||
+           (has(target.metadata.labels) && 'app.kubernetes.io/managed-by' in target.metadata.labels &&
+            target.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver-template-runtime')))
+  variables:
+    - name: target
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: namespaceCleanup
+      expression: >-
+        request.operation == 'DELETE' && namespaceObject != null && has(namespaceObject.metadata.deletionTimestamp) &&
+        namespaceObject.metadata.deletionTimestamp != null &&
+        request.userInfo.username in ['system:kube-controller-manager',
+          'system:serviceaccount:kube-system:namespace-controller',
+          'system:serviceaccount:kube-system:generic-garbage-collector']
+  validations:
+    - expression: >-
+        {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s-orchestrator'" .Release.Namespace (include "raibitserver.fullname" .) }} || variables.namespaceCleanup
+      message: "template runtime Secrets are reserved for the orchestrator and native namespace cleanup"
+    - expression: "request.operation in ['CREATE', 'DELETE']"
+      message: "template runtime Secrets may only be created or deleted"
+    - expression: >-
+        namespaceObject != null && namespaceObject.metadata.name == request.namespace &&
+        has(namespaceObject.metadata.labels) &&
+        namespaceObject.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver' &&
+        namespaceObject.metadata.labels['raibitserver.io/managed'] == 'true' &&
+        namespaceObject.metadata.labels['raibitserver.io/namespace-kind'] == 'application' &&
+        namespaceObject.metadata.labels['raibitserver.io/project-id'] != '' &&
+        ['enforce', 'audit', 'warn'].all(level,
+          namespaceObject.metadata.labels['pod-security.kubernetes.io/' + level] == 'restricted')
+      message: "template runtime Secrets require a managed application namespace with restricted Pod Security"
+    - expression: >-
+        variables.target.metadata.namespace == request.namespace &&
+        has(variables.target.metadata.labels) && variables.target.metadata.labels.size() == 6 &&
+        variables.target.metadata.labels['app.kubernetes.io/managed-by'] == 'raibitserver-template-runtime' &&
+        ['project-id', 'environment-id', 'service-id', 'deployment-id'].all(identity,
+          variables.target.metadata.labels['raibitserver.io/' + identity] != '') &&
+        variables.target.metadata.labels['raibitserver.io/project-id'] == namespaceObject.metadata.labels['raibitserver.io/project-id'] &&
+        variables.target.metadata.labels['raibitserver.io/template-secret-id'].matches('^[a-f0-9]{40}$') &&
+        variables.target.metadata.name == 'rb-template-' + variables.target.metadata.labels['raibitserver.io/template-secret-id']
+      message: "the orchestrator may mutate only exact template runtime Secret names and tenant identity labels"
+    - expression: >-
+        variables.target.type == 'Opaque' && has(variables.target.immutable) && variables.target.immutable == true &&
+        has(variables.target.data) && variables.target.data.size() > 0 &&
+        (!has(variables.target.metadata.ownerReferences) || variables.target.metadata.ownerReferences.size() == 0) &&
+        (!has(variables.target.metadata.finalizers) || variables.target.metadata.finalizers.size() == 0)
+      message: "template runtime Secrets must be immutable Opaque data without owner references or finalizers"
+    - expression: >-
+        request.operation != 'DELETE' || variables.namespaceCleanup ||
+        (has(request.options) && has(request.options.preconditions) && has(request.options.preconditions.uid) &&
+        request.options.preconditions.uid == oldObject.metadata.uid &&
+        has(request.options.preconditions.resourceVersion) && request.options.preconditions.resourceVersion == oldObject.metadata.resourceVersion &&
+        (!has(request.options.ignoreStoreReadErrorWithClusterBreakingPotential) || request.options.ignoreStoreReadErrorWithClusterBreakingPotential == false))
+      message: "template runtime Secret deletion requires the exact observed UID and resource version"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "raibitserver.fullname" . }}-orchestrator-template-secrets
+spec:
+  policyName: {{ include "raibitserver.fullname" . }}-orchestrator-template-secrets
+  validationActions: ["Deny"]

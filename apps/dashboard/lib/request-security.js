@@ -241,7 +241,7 @@ export function withFlashMessage(requestUrl, returnPath, kind, value) {
 export function publicUpstreamErrorCode(payload, status) {
 	const message = typeof payload?.message === 'string' ? payload.message : '';
 	if (status === 401 && ['account is not approved', 'account is banned', 'session has been revoked'].includes(message)) return 'session_reauthentication_required';
-	for (const candidate of [payload?.error, payload?.message]) {
+	for (const candidate of [payload?.code, payload?.error, payload?.message]) {
 		if (
 			typeof candidate === 'string'
 			&& /^[A-Za-z0-9_.:-]{1,80}$/.test(candidate)
@@ -253,6 +253,17 @@ export function publicUpstreamErrorCode(payload, status) {
 
 export function upstreamPath(segments) {
   return `/${segments.map((segment) => encodeURIComponent(segment)).join('/')}`;
+}
+
+export function templateMutationQuery(path, searchParams) {
+  if (!/^\/projects\/[^/]+\/template-installations(?:\/preflight)?$/.test(path) && !/^\/template-installations\/[^/]+\/retry$/.test(path)) return '';
+  const query = new URLSearchParams();
+  for (const [key, value] of searchParams) {
+    if (!['environmentId', 'environmentKind'].includes(key) || query.has(key)) throw boundaryError('invalid_environment_selector');
+    if (key === 'environmentId' ? !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value) : !['prod', 'dev'].includes(value)) throw boundaryError('invalid_environment_selector');
+    query.set(key, value);
+  }
+  return query.size ? `?${query.toString()}` : '';
 }
 
 export function extractSessionToken(payload) {

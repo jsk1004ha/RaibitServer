@@ -206,6 +206,9 @@ func TestRunOnceRenewsProjectDeletionLeaseWhileKubectlIsRunning(t *testing.T) {
 		started: started,
 		release: release,
 		stdoutFor: func(commandText string) string {
+			if strings.Contains(commandText, "get namespaces ") {
+				return `{"items":[]}`
+			}
 			if strings.Contains(commandText, "get namespace/org-1--demo") {
 				return `{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"org-1--demo","uid":"11111111-2222-3333-4444-555555555555","labels":{"app.kubernetes.io/managed-by":"raibitserver","raibitserver.io/managed":"true","raibitserver.io/namespace-kind":"application","raibitserver.io/project-id":"prj_1"}}}`
 			}
@@ -530,6 +533,9 @@ func TestRunOnceFinalizesChildFreeProjectDeletion(t *testing.T) {
 		"services": []any{}, "resources": []any{}, "deployments": []any{},
 	})
 	runner := &fakeRunner{stdoutFor: func(commandText string) string {
+		if strings.Contains(commandText, "get namespaces ") {
+			return `{"items":[]}`
+		}
 		if strings.Contains(commandText, "get namespace/org-1--demo") {
 			return `{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"org-1--demo","uid":"11111111-2222-3333-4444-555555555555","labels":{"app.kubernetes.io/managed-by":"raibitserver","raibitserver.io/managed":"true","raibitserver.io/namespace-kind":"application","raibitserver.io/project-id":"prj_1"}}}`
 		}

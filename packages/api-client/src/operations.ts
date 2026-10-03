@@ -9,7 +9,10 @@ export class ApiOperationError extends Error {
   readonly terminal: boolean;
   readonly permission: boolean;
   constructor(status: number, body: z.output<typeof ErrorBody>) {
-    super(`RAIBITSERVER API ${status}: ${body.message}`);
+    const message = 'message' in body ? body.message : undefined;
+    const code = 'code' in body ? body.code : undefined;
+    const error = 'error' in body ? body.error : undefined;
+    super(`RAIBITSERVER API ${status}: ${message ?? code ?? (typeof error === 'string' ? error : error?.code)}`);
     this.status = status;
     this.body = body;
     this.permission = status === 401 || status === 403 || ('permission' in body && body.permission === true);
@@ -90,6 +93,23 @@ export function createOperationsClient(transport: OperationTransport) {
     };
   }
   return {
+    'templates-list': bind(apiOperations['templates-list']),
+    'templates-get': bind(apiOperations['templates-get']),
+    'templates-source': bind(apiOperations['templates-source']),
+    'template-installations-list': bind(apiOperations['template-installations-list']),
+    'template-installations-preflight': bind(apiOperations['template-installations-preflight']),
+    'template-installations-create': bind(apiOperations['template-installations-create']),
+    'template-installations-get': bind(apiOperations['template-installations-get']),
+    'template-installations-retry': bind(apiOperations['template-installations-retry']),
+    'discord-get': bind(apiOperations['discord-get']),
+    'discord-configure': bind(apiOperations['discord-configure']),
+    'discord-disable': bind(apiOperations['discord-disable']),
+    'discord-delete': bind(apiOperations['discord-delete']),
+    'discord-test': bind(apiOperations['discord-test']),
+    'discord-deliveries': bind(apiOperations['discord-deliveries']),
+    'resource-backup-policy-get': bind(apiOperations['resource-backup-policy-get']),
+    'resource-backup-policy-update': bind(apiOperations['resource-backup-policy-update']),
+    'resource-backup-runs': bind(apiOperations['resource-backup-runs']),
     'domain-rentals-list': bind(apiOperations['domain-rentals-list']),
     'domain-rentals-create': bind(apiOperations['domain-rentals-create']),
     'domain-rentals-update': bind(apiOperations['domain-rentals-update']),
@@ -127,6 +147,9 @@ export function createOperationsClient(transport: OperationTransport) {
     'project-settings-update': bind(apiOperations['project-settings-update']),
     'project-settings-delete': bind(apiOperations['project-settings-delete']),
     'projects-overview': bind(apiOperations['projects-overview']),
+    'projects-environments': bind(apiOperations['projects-environments']),
+    'projects-environments-post': bind(apiOperations['projects-environments-post']),
+    'projects-environments-delete': bind(apiOperations['projects-environments-delete']),
     'services-list': bind(apiOperations['services-list']),
     'services-create': bind(apiOperations['services-create']),
     'services-get': bind(apiOperations['services-get']),

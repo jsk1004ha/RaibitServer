@@ -1,3 +1,25 @@
+{{- range $name := list "enabled" "implementationAvailable" "releaseSourceClean" -}}
+{{- if not (kindIs "bool" (index $.Values.operational $name)) -}}
+{{- fail (printf "operational.%s must be a boolean" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.operational.enabled -}}
+{{- if not .Values.operational.implementationAvailable -}}
+{{- fail "operational.enabled requires operational.implementationAvailable=true" -}}
+{{- end -}}
+{{- if ne (toString .Values.operational.protocolVersion) "2" -}}
+{{- fail "operational.enabled requires operational.protocolVersion=2" -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-f0-9]{64}$" (toString .Values.operational.contractDigest)) -}}
+{{- fail "operational.enabled requires operational.contractDigest to be 64 lowercase hexadecimal characters" -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-f0-9]{40}$" (toString .Values.operational.releaseRevision)) -}}
+{{- fail "operational.enabled requires operational.releaseRevision to be a 40-character lowercase Git SHA" -}}
+{{- end -}}
+{{- if not .Values.operational.releaseSourceClean -}}
+{{- fail "operational.enabled requires operational.releaseSourceClean=true" -}}
+{{- end -}}
+{{- end -}}
 {{- if not (regexMatch "^[0-9]*[1-9][0-9]*$" (toString .Values.provisioner.healthIntervalSeconds)) -}}
 {{- fail "provisioner.healthIntervalSeconds must be a positive integer" -}}
 {{- end -}}

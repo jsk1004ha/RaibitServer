@@ -29,6 +29,15 @@ spec:
           image: "{{ .Values.image.registry }}/raibitserver/orchestrator{{ if .Values.image.digests.orchestrator }}@{{ .Values.image.digests.orchestrator }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- include "raibitserver.operationalEnv" . | nindent 12 }}
+            - name: RAIBITSERVER_TEMPLATE_SECRET_CLUSTER_ROLE
+              value: {{ printf "%s-template-secrets" (include "raibitserver.fullname" .) | quote }}
+            - name: RAIBITSERVER_ORCHESTRATOR_SERVICE_ACCOUNT
+              value: {{ printf "%s-orchestrator" (include "raibitserver.fullname" .) | quote }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: RAIBITSERVER_DRY_RUN
               value: {{ ternary "0" "1" .Values.orchestrator.execute | quote }}
             - name: RAIBITSERVER_EXECUTE
@@ -59,6 +68,13 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.database.existingSecret | quote }}
                   key: {{ .Values.database.urlKey | quote }}
+            {{- if .Values.operational.enabled }}
+            - name: RAIBITSERVER_SECRET_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.runtimeSecrets.existingSecret | quote }}
+                  key: RAIBITSERVER_SECRET_ENCRYPTION_KEY
+            {{- end }}
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: 500m, memory: 512Mi }

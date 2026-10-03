@@ -76,7 +76,8 @@ test('auth fixture ledger keeps non-secret form values while masking credentials
   const [source, redaction] = await Promise.all([fixture(), fixtureRedaction()]);
 
   assert.match(source, /import \{ redactFixtureRequestBody \} from '\.\/redact\.mjs';/);
-  assert.match(source, /body: redactFixtureRequestBody\(body, url\.pathname\)/);
+  assert.match(source, /body: redactFixtureRequestBody\(recordedBody, url\.pathname\)/);
+  assert.match(source, /const recordedBody = url\.pathname\.includes\('\/template-installations'\)[\s\S]*Object\.keys\(body\.inputs\)\.map\(\(key\) => \[key, '\[MASKED\]'\]\)[\s\S]*: body;/);
   assert.match(redaction, /const OTP_PATHS = new Set\(\['\/api\/auth\/email\/verify'\]\);/);
   assert.match(redaction, /key === 'code' && OTP_PATHS\.has\(pathname\)/);
   assert.match(redaction, /SENSITIVE_KEY\.test\(key\) \|\| \(key === 'code' && OTP_PATHS\.has\(pathname\)\) \? '\[MASKED\]' : redactFixtureRequestBody\(entry, pathname\)/);

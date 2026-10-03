@@ -35,6 +35,7 @@ spec:
           image: "{{ .Values.image.registry }}/raibitserver/api{{ if .Values.image.digests.api }}@{{ .Values.image.digests.api }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- include "raibitserver.operationalEnv" . | nindent 12 }}
             - { name: NODE_ENV, value: production }
             {{- $rentals := include "raibitserver.domainRentals.config" . | fromJson }}
             - name: RAIBITSERVER_DOMAIN_RENTAL_BASE_DOMAIN

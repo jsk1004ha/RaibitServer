@@ -113,8 +113,11 @@ test('Go orchestrator statically preserves workload-kind parity and batch readin
 });
 
 test('orchestrator RBAC and cleanup stay within the exact workload reconciliation boundary', async () => {
-  const rbac = await fs.readFile('infra/helm/raibitserver/templates/worker-security.yaml', 'utf8');
-  const reconciler = await fs.readFile('services/orchestrator/internal/reconciler/reconciler.go', 'utf8');
+  const [rbac, reconciler, templateSecurity] = await Promise.all([
+    fs.readFile('infra/helm/raibitserver/templates/worker-security.yaml', 'utf8'),
+    fs.readFile('services/orchestrator/internal/reconciler/reconciler.go', 'utf8'),
+    fs.readFile('infra/helm/raibitserver/templates/template-runtime-security.yaml', 'utf8'),
+  ]);
   const normalized = rbac.replace(/\r/g, '');
   const orchestratorRole = normalized.match(
     /kind: ClusterRole\nmetadata:\n\s+name: .*?-orchestrator\nrules:[\s\S]*?(?=\n---\napiVersion: rbac\.authorization\.k8s\.io\/v1\nkind: ClusterRoleBinding)/,
@@ -122,9 +125,23 @@ test('orchestrator RBAC and cleanup stay within the exact workload reconciliatio
 
   assert.ok(orchestratorRole, 'orchestrator ClusterRole must be rendered as a bounded block');
   assert.match(orchestratorRole, /resources: \["events"\]\n\s+verbs: \["get", "list", "watch"\]/);
-  for (const resource of ['pods', 'pods/log', 'secrets', 'configmaps', 'horizontalpodautoscalers', 'poddisruptionbudgets']) {
-    assert.doesNotMatch(orchestratorRole, new RegExp(`resources: \\[[^\\]]*"${resource.replace('/', '\\/')}"`), `${resource} must not be granted to the orchestrator`);
+  const rules = [...orchestratorRole.matchAll(/apiGroups: (\[[^\n]+\])\n\s+resources: (\[[^\n]+\])\n\s+verbs: (\[[^\n]+\])/g)]
+    .map(([, apiGroups, resources, verbs]) => ({ apiGroups: JSON.parse(apiGroups), resources: JSON.parse(resources), verbs: JSON.parse(verbs) }));
+  for (const resource of ['pods', 'replicasets', 'statefulsets', 'daemonsets']) {
+    const reads = rules.filter((rule) => rule.resources.includes(resource));
+    assert.equal(reads.length, 1, `${resource} must have exactly one runtime inventory rule`);
+    assert.deepEqual(reads[0].verbs, ['get', 'list'], `${resource} inventory must remain read-only`);
+    assert.deepEqual(reads[0].apiGroups, [resource === 'pods' ? '' : 'apps']);
   }
+  for (const resource of ['*', 'pods/log', 'pods/exec', 'pods/attach', 'pods/portforward', 'secrets', 'configmaps', 'horizontalpodautoscalers', 'poddisruptionbudgets']) {
+    assert.doesNotMatch(orchestratorRole, new RegExp(`resources: \\[[^\\]]*"${resource.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`), `${resource} must not be granted to the orchestrator`);
+  }
+  assert.match(orchestratorRole, /resources: \["clusterroles"\]\n\s+resourceNames: \[.*%s-template-secrets.*\]\n\s+verbs: \["bind"\]/);
+  assert.doesNotMatch(templateSecurity, /kind: ClusterRoleBinding/, 'Secret permissions must be bound only per tenant namespace');
+  assert.match(templateSecurity, /object\.metadata\.namespace == request\.namespace/);
+  assert.match(templateSecurity, /object\.metadata\.labels\['raibitserver\.io\/project-id'\] == namespaceObject\.metadata\.labels\['raibitserver\.io\/project-id'\]/);
+  assert.match(templateSecurity, /object\.roleRef\.name == '%s-template-secrets'/);
+  assert.match(templateSecurity, /object\.subjects\.size\(\) == 1/);
   assert.match(
     reconciler,
     /const serviceDeletionResourceKinds = "deployments,cronjobs,jobs,services,ingresses,networkpolicies"/,

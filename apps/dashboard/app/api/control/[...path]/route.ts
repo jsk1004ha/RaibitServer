@@ -6,6 +6,7 @@ import { OAUTH_BROWSER_COOKIE_NAME } from '@raibitserver/core/oauth-source';
 import { githubOAuthBrowserBinding, githubOAuthBrowserCookieOptions, githubOAuthRelayHeaders } from '../../../../lib/github-oauth-relay';
 import { clearSessionCookie, setSessionCookie } from '../../../../lib/session-cookies.js';
 import { serviceRuntimePayloadFromForm } from '../../../../lib/service-runtime-form.js';
+import { templateResponseSchema } from '../../../../lib/template-responses';
 import {
   GITHUB_OAUTH_STATE_COOKIE_NAME,
   GITHUB_OAUTH_VERIFIER_COOKIE_NAME,
@@ -28,6 +29,7 @@ import {
   readBoundedBody,
   responseStatusAllowsBody,
   safeReturnPath,
+  templateMutationQuery,
   upstreamPath,
   withFlashMessage,
 } from '../../../../lib/request-security.js';
@@ -123,7 +125,12 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
     }
   }
 
-  const query = upstreamMethod === 'GET' ? request.nextUrl.search : '';
+  let query: string;
+  try {
+    query = upstreamMethod === 'GET' ? request.nextUrl.search : templateMutationQuery(path, request.nextUrl.searchParams);
+  } catch {
+    return NextResponse.json({ error: 'invalid_environment_selector' }, { status: 400 });
+  }
   const requestedAccept = request.headers.get('accept') || '';
   let upstream: Response;
   try {
@@ -190,6 +197,10 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
   const responseText = new TextDecoder().decode(responseBytes);
   const parsed = parseJson(responseText);
   const payload = parsed.payload;
+  const templateSchema = templateResponseSchema(path, upstreamMethod);
+  if (upstream.ok && templateSchema && !templateSchema.safeParse(payload).success) {
+    return NextResponse.json({ error: 'invalid_control_plane_response' }, { status: 502, headers: { 'cache-control': 'no-store' } });
+  }
   const safePayload = browserSafePayload(payload);
   if (!upstream.ok) {
     const code = publicUpstreamErrorCode(payload, upstream.status);

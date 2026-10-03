@@ -17,6 +17,7 @@ export function projectNavigation(base: string) {
   return [
     { id: 'overview', label: '현황', description: '프로젝트 상태', href: `${base}?view=overview` },
     { id: 'services', label: '서비스', description: '실행 단위', href: `${base}?view=services` },
+    { id: 'templates', label: '템플릿', description: '시작 구성 설치', href: `${base}?view=templates` },
     { id: 'deployments', label: '배포', description: '배포 기록', href: `${base}?view=deployments` },
     { id: 'agent', label: 'AI 배포', description: '위협 점검·자동 실행', href: `${base}?view=agent` },
     { id: 'resources', label: '리소스', description: '데이터 계층', href: `${base}?view=resources` },

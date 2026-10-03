@@ -1,4 +1,5 @@
 [
+  {"operation":"template-installations-create","body":{"installation":{"id":"installation","projectId":"project","environmentId":"environment","environmentKind":"prod","version":1,"catalogId":"fastapi","catalogVersion":"v1"},"progress":{"status":"ready","completed":1,"total":1},"services":[],"resources":[],"inputs":{"DISCORD_TOKEN":"must-not-be-public"}}},
   {"operation":"health","body":{"status":"broken","service":"raibitserver-api","uptimeSeconds":1}},
   {"operation":"projects-list","body":{"projects":[],"nextCursor":123}},
   {"operation":"deployments-get","body":{"id":"deployment","serviceId":"service","status":"invented-status"}},

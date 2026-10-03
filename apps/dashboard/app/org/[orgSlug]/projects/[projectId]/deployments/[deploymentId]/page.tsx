@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { notFound } from 'next/navigation';
+import { EnvironmentSelectorSchema } from '@raibitserver/schemas';
 import { collectLoadIssues, dashboardApiContext, getJson } from '../../../../../../../lib/api';
 import { ConsoleShell, LoadErrorSummary, MetricStrip, SectionNav, StatusBadge } from '../../../../../../../components/console-ui';
 import { buttonVariants } from '@/components/ui/button';
@@ -46,14 +48,18 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
   const encodedDeploymentId = encodeDeploymentRouteSegment(deploymentId);
   const requestedView = String(query.view || 'overview');
   const view: DeploymentView = isDeploymentView(requestedView) ? requestedView : 'overview';
+  const selector = EnvironmentSelectorSchema.safeParse(query.environmentId === undefined ? {} : { environmentId: query.environmentId });
+  if (!selector.success) notFound();
+  const environmentQuery = selector.data.environmentId ? `?environmentId=${encodeURIComponent(selector.data.environmentId)}` : '';
+  const environmentNavigation = environmentQuery.replace('?', '&');
   const context = await dashboardApiContext();
   const [deployment, logs, events] = await Promise.all([
-    getJson(`/deployments/${encodedDeploymentId}`, { id: decodedDeploymentId, status: 'unknown' }, context),
+    getJson(`/deployments/${encodedDeploymentId}${environmentQuery}`, { id: decodedDeploymentId, status: 'unknown' }, context),
     view === 'logs'
-      ? getJson(`/deployments/${encodedDeploymentId}/logs`, { logs: [] }, context)
+      ? getJson(`/deployments/${encodedDeploymentId}/logs${environmentQuery}`, { logs: [] }, context)
       : Promise.resolve({ ok: true, status: 200, body: { logs: [] } }),
     view === 'events'
-      ? getJson(`/deployments/${encodedDeploymentId}/events`, { events: [] }, context)
+      ? getJson(`/deployments/${encodedDeploymentId}/events${environmentQuery}`, { events: [] }, context)
       : Promise.resolve({ ok: true, status: 200, body: { events: [] } }),
   ]);
   const detail = deployment.body || {};
@@ -61,9 +67,9 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
   const loadErrors = collectLoadIssues([['배포 정보', deployment], ['빌드 로그', logs], ['배포 이벤트', events]]);
   const base = `/org/${orgSlug}/projects/${projectId}/deployments/${encodedDeploymentId}`;
   const navItems = [
-    { id: 'overview', label: '개요', description: '상태와 이미지', href: `${base}?view=overview` },
-    { id: 'logs', label: '빌드 로그', description: '마스킹된 출력', href: `${base}?view=logs` },
-    { id: 'events', label: '배포 이벤트', description: '상태 기록', href: `${base}?view=events` },
+    { id: 'overview', label: '개요', description: '상태와 이미지', href: `${base}?view=overview${environmentNavigation}` },
+    { id: 'logs', label: '빌드 로그', description: '마스킹된 출력', href: `${base}?view=logs${environmentNavigation}` },
+    { id: 'events', label: '배포 이벤트', description: '상태 기록', href: `${base}?view=events${environmentNavigation}` },
   ];
 
   return (
@@ -110,7 +116,7 @@ export default async function DeploymentDetailPage({ params, searchParams }: { p
             <CardHeader className="border-b"><CardTitle><h2>복구 및 재실행</h2></CardTitle><CardDescription>표시되는 상태는 서버가 확인한 값입니다. 요청 직후 완료 상태를 추정하지 않습니다.</CardDescription></CardHeader>
             <CardContent className="flex flex-col gap-raibit-lg">
               {history?.permissions.execute && history.eligibleAction ? <DeploymentRecoveryAction action={history.eligibleAction} idempotencyKey={history.eligibleAction.type === 'retry' || history.eligibleAction.type === 'redeploy' ? randomUUID() : null} returnTo={`${base}?view=overview`} /> : <p className="text-sm text-muted-foreground">{history?.permissions.execute ? history.recovery.reason || '현재 서버 상태에서는 안전한 복구 작업을 요청할 수 없습니다.' : '이 배포에 대한 실행 권한이 없습니다.'}</p>}
-              <DeploymentActivityStream initialStatus={history?.status} streamHref={`/api/control/deployments/${encodedDeploymentId}/stream`} />
+              <DeploymentActivityStream initialStatus={history?.status} streamHref={`/api/control/deployments/${encodedDeploymentId}/stream${environmentQuery}`} />
             </CardContent>
           </Card>
         </div> : null}

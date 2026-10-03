@@ -42,7 +42,8 @@ test('persistent previews cannot create unaccounted volumes or duplicate trainer
 });
 test('persisting runtime settings does not mask desired security fields with an empty state', () => {
   const store = new ControlPlaneStore();
-  const service = store.createService({projectId:'p1',name:'trainer',persistence:valid.persistence,desiredSpec:{privileged:true}});
+  const project = store.createProject({organizationId:'org-runtime',name:'runtime'});
+  const service = store.createService({projectId:project.id,name:'trainer',persistence:valid.persistence,desiredSpec:{privileged:true}});
   assert.equal(service.desiredSpec.privileged,true);
   assert.equal(service.desiredState.privileged,true);
   assert.deepEqual(service.desiredState.persistence,valid.persistence);

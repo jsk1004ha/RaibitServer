@@ -33,6 +33,7 @@ type Config struct {
 	Timeout                 time.Duration
 	WorkerID                string
 	ClaimLease              time.Duration
+	DevelopmentEnvironments bool
 }
 
 type ServiceReconciler struct {
@@ -114,7 +115,7 @@ func (r *ServiceReconciler) RunOnceResult(ctx context.Context) (*ReconcileResult
 		fmt.Printf("raibitserver orchestrator dryRun=%t action=reconcile-desired-state reason=no-control-plane-store\n", r.config.DryRun)
 		return &ReconcileResult{Processed: 0, DryRun: r.config.DryRun, Reason: "no-control-plane-store"}, nil
 	}
-	claimOptions := store.ClaimOptions{WorkerID: r.config.WorkerID, Lease: r.config.ClaimLease}
+	claimOptions := store.ClaimOptions{WorkerID: r.config.WorkerID, Lease: r.config.ClaimLease, AllowDevelopment: r.config.DevelopmentEnvironments}
 	service, err := r.store.ClaimNextServiceDeletion(ctx, claimOptions)
 	if err != nil {
 		return nil, err
@@ -195,7 +196,7 @@ func (r *ServiceReconciler) reconcileProjectDeletion(ctx context.Context, projec
 	var commands []string
 	lease, err := r.reconcileDeletionWithHeartbeat(ctx, project.DeletionLease(), r.store.RenewProjectDeletionLease, func(processCtx context.Context, fence func(context.Context) error) error {
 		var cleanupErr error
-		commands, cleanupErr = r.cleanupProjectKubernetes(processCtx, project, namespace, fence)
+		commands, cleanupErr = r.cleanupProjectNamespaces(processCtx, project, namespace, fence)
 		return cleanupErr
 	})
 	result := &ReconcileResult{
@@ -236,11 +237,18 @@ func (r *ServiceReconciler) cleanupServiceKubernetes(ctx context.Context, projec
 	selector := "raibitserver.io/project-id=" + project.ID + ",raibitserver.io/service-id=" + service.ID
 	result, err := r.runKubectl(ctx, []string{
 		"delete", serviceDeletionResourceKinds, "--namespace", namespace, "--selector", selector,
-		"--ignore-not-found=true", "--wait=true",
+		"--ignore-not-found=true", "--wait=true", "--cascade=foreground",
 	})
 	commands := []string{result.Command}
 	if err != nil {
 		return commands, err
+	}
+	if beforeDelete != nil {
+		source, _ := r.store.(store.TemplateRuntimeSource)
+		request := TemplateRuntimeProjectionRequest{Source: source, Runner: r.runner, OutputDir: r.config.OutputDir, Kubeconfig: r.config.Kubeconfig, KubeContext: r.config.KubeContext, DryRun: r.config.DryRun, Timeout: r.config.Timeout}
+		if err := collectTemplateSecrets(ctx, request, namespace, project.ID, service.EnvironmentID, service.ID, "", beforeDelete); err != nil {
+			return commands, err
+		}
 	}
 	return commands, nil
 }
@@ -332,7 +340,7 @@ func deletionNamespace(project *store.Project, service *store.Service) string {
 	if service == nil {
 		service = &store.Service{ID: "project-deletion", ProjectID: project.ID, Name: "project-deletion", Slug: "project-deletion", Type: "worker"}
 	}
-	return kube.SpecFromState(project, service, &store.Deployment{ID: "deletion-namespace"}, "raibitserver.local").Namespace
+	return kube.SpecFromState(project, service, &store.Deployment{ID: "deletion-namespace", ServiceID: service.ID, ProjectID: service.ProjectID, EnvironmentID: service.EnvironmentID}, "raibitserver.local").Namespace
 }
 
 func (r *ServiceReconciler) abortIfParentDeleting(ctx context.Context, project *store.Project, service *store.Service, deployment *store.Deployment, manifestFile string, priorCommands []string) (*ReconcileResult, error) {

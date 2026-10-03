@@ -52,8 +52,10 @@ test('PostgreSQL console rejects request-supplied URLs and non-admin mutations',
 
 test('resource creation strips provider connection and credential fields from tenant input', async () => {
   const store = new ControlPlaneStore();
+  const organization = store.createOrganization({ name: 'Console tests', slug: 'console-tests' });
+  const project = store.createProject({ organizationId: organization.id, name: 'Console', slug: 'console' });
   const resource = store.createResource({
-    projectId: 'prj_1',
+    projectId: project.id,
     name: 'pg',
     engine: 'postgresql',
     providerConnection: { databaseUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil' },
@@ -121,7 +123,9 @@ test('developer can browse schema but cannot read DB row data by default', async
 
 test('provider-owned connection secrets cannot be injected into control-plane console state', async () => {
   const store = new ControlPlaneStore();
-  const resource = store.createResource({ projectId: 'prj_1', name: 'pg-secret', engine: 'postgresql' });
+  const organization = store.createOrganization({ name: 'Console tests', slug: 'console-tests' });
+  const project = store.createProject({ organizationId: organization.id, name: 'Console', slug: 'console' });
+  const resource = store.createResource({ projectId: project.id, name: 'pg-secret', engine: 'postgresql' });
   assert.throws(
     () => store.attachProviderConnectionSecret({
       resourceId: resource.id,

@@ -64,7 +64,10 @@ test('deployment route IDs decode at most once and use one canonical encoded pat
   return read(sourcePath).then((source) => {
     assert.match(source, /const decodedDeploymentId = decodeDeploymentRouteSegment\(deploymentId\)/);
     assert.match(source, /const encodedDeploymentId = encodeDeploymentRouteSegment\(deploymentId\)/);
-    assert.match(source, /getJson\(`\/deployments\/\$\{encodedDeploymentId\}`/);
+    assert.match(source, /getJson\(`\/deployments\/\$\{encodedDeploymentId\}\$\{environmentQuery\}`/);
+    assert.match(source, /EnvironmentSelectorSchema\.safeParse\(/);
+    assert.match(source, /if \(!selector\.success\) notFound\(\)/);
+    assert.match(source, /\?environmentId=\$\{encodeURIComponent\(selector\.data\.environmentId\)\}/);
     assert.match(source, /DeploymentRecoveryAction/);
     assert.match(source, /history\.eligibleAction/);
     assert.match(source, /deployments\/\$\{encodedDeploymentId\}`/);

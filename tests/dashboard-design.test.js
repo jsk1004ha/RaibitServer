@@ -450,12 +450,16 @@ test('deployment detail awaits route params and keeps operational controls on a 
   assert.match(deployment, /const encodedDeploymentId = encodeDeploymentRouteSegment\(deploymentId\);/);
   for (const apiMarker of [
     'dashboardApiContext()',
-    'getJson(`/deployments/${encodedDeploymentId}`',
-    'getJson(`/deployments/${encodedDeploymentId}/logs`',
-    'getJson(`/deployments/${encodedDeploymentId}/events`',
+    'getJson(`/deployments/${encodedDeploymentId}${environmentQuery}`',
+    'getJson(`/deployments/${encodedDeploymentId}/logs${environmentQuery}`',
+    'getJson(`/deployments/${encodedDeploymentId}/events${environmentQuery}`',
   ]) {
     assert.ok(deployment.includes(apiMarker), `${apiMarker} deployment operation missing`);
   }
+  assert.match(deployment, /EnvironmentSelectorSchema\.safeParse\(/);
+  assert.match(deployment, /if \(!selector\.success\) notFound\(\)/);
+  assert.match(deployment, /\?environmentId=\$\{encodeURIComponent\(selector\.data\.environmentId\)\}/);
+  assert.match(deployment, /\/stream\$\{environmentQuery\}/);
   const deploymentRecovery = await read('../apps/dashboard/components/project-hub/deployment-recovery-action.tsx');
   assert.ok(deployment.includes('DeploymentRecoveryAction'));
   assert.ok(deploymentRecovery.includes('action={`/api/control${action.href}`}'));

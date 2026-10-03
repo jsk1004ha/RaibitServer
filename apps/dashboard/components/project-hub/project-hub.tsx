@@ -10,6 +10,7 @@ import { ServicesView } from './services';
 import { SettingsView } from './settings';
 import { LoadIssues, ProjectStatusBadge } from './shared';
 import type { ProjectHubData } from './types';
+import { TemplatesView } from './templates';
 
 export function ProjectHub({ data, orgSlug }: Readonly<{ data: ProjectHubData; orgSlug: string }>) {
   const current = data.view === 'edit-service' || data.view === 'new-service' ? 'services' : data.view === 'new-resource' ? 'resources' : data.view;
@@ -29,6 +30,7 @@ export function ProjectHub({ data, orgSlug }: Readonly<{ data: ProjectHubData; o
       <div className="w-full min-w-0 max-w-full">
         {data.view === 'overview' ? <OverviewView data={data} /> : null}
         {['services', 'new-service', 'edit-service'].includes(data.view) ? <ServicesView data={data} /> : null}
+        {data.view === 'templates' && data.templateData ? <TemplatesView key={`${data.projectId}:${data.templateData.catalog?.catalogDigest || ''}`} base={data.base} projectId={data.projectId} deletionPending={data.deletionPending} {...data.templateData} /> : null}
         {data.view === 'deployments' ? <DeploymentsView data={data} /> : null}
         {data.view === 'agent' ? <AgentView data={data} /> : null}
         {['resources', 'new-resource'].includes(data.view) ? <ResourcesView data={data} /> : null}

@@ -114,6 +114,8 @@ export function deploymentSuccessor(source: LineageSource | null, input: Deploym
   if (!eligible) throw new DeploymentOperationError('SOURCE_INELIGIBLE');
   if (!source.snapshotVersion || !source.desiredSpecSnapshot || typeof source.desiredSpecSnapshot !== 'object' || Array.isArray(source.desiredSpecSnapshot)) throw new DeploymentOperationError('SNAPSHOT_UNAVAILABLE');
   if (source.snapshotVersion !== 1 || input.snapshotVersion !== source.snapshotVersion) throw new DeploymentOperationError('STALE_SNAPSHOT');
+  // Installation retry retains the template's owned deployment, job and resource dependencies.
+  if (String(source.desiredSpecSnapshot.sourceType).trim().toLowerCase() === 'template') throw new DeploymentOperationError('SOURCE_INELIGIBLE');
   const kind = sourceKind(source, source.desiredSpecSnapshot);
   const commit = kind === 'git' ? immutableGitCommit(source) : null;
   const image = kind === 'image' ? immutableImage(source) : { imageUrl: source.imageUrl ?? null, imageDigest: source.imageDigest ?? null };

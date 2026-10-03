@@ -5,6 +5,7 @@ import { bootLineageApi, imageIdentityRegression } from './fixtures/deployment-r
 import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
 import { apiOperations, createOpenApiDocument } from '../packages/schemas/src/api-contract.ts';
 import { deploymentSuccessor, parseDeploymentOperationBody } from '../packages/core/src/deployment-operations.ts';
+import { deploymentHistoryRow } from '../packages/core/src/deployment-history.ts';
 
 async function fixture() {
   const repository = new InMemoryControlPlaneRepository();
@@ -61,6 +62,32 @@ test('deployment retry adversarial matrix', async () => {
   assert.equal(repository.store.workflowJobs.length, 0);
   await repository.createDeploymentOperation(input);
   await assert.rejects(repository.createDeploymentOperation({ ...input, snapshotVersion: 2 }), error => error.code === 'IDEMPOTENCY_CONFLICT' && error.statusCode === 409);
+});
+
+test('template snapshots reject generic recovery in history and both HTTP adapters before writes', async t => {
+  for (const transport of ['core', 'nest']) await t.test(transport, async t => {
+    const { repository, service, project, post } = await bootLineageApi(t, transport);
+    const snapshot = { sourceType: 'template', buildMode: 'dockerfile', source: { type: 'template', catalogId: 'next-postgres', catalogVersion: 'v1' }, secretRefs: [{ name: 'DATABASE_URL', secretRef: 'secret:template-database' }] };
+    const source = await repository.createDeployment({ id: 'template-source', serviceId: service.id, projectId: project.id, status: 'BUILD_FAILED', snapshotVersion: 1, desiredSpecSnapshot: snapshot });
+    const row = repository.store.deployments.get(source.id);
+    for (const status of ['BUILD_FAILED', 'READY']) {
+      row.status = status;
+      const before = JSON.stringify([...repository.store.deployments]);
+      const events = JSON.stringify(repository.store.listDeploymentEvents(source.id));
+      const history = deploymentHistoryRow({ deployment: row, service, serviceDeployments: [row], execute: true });
+      assert.equal(history.eligibleAction, null);
+      assert.equal(history.recovery.retryable, false);
+      const paths = [`/services/${service.id}/redeploy`, ...(status === 'BUILD_FAILED' ? [`/deployments/${source.id}/retry`] : [])];
+      for (const path of paths) {
+        const result = await post(path, { requestIdempotencyKey: `template-${status}`, snapshotVersion: 1 });
+        assert.equal(result.status, 409, JSON.stringify(result));
+        assert.equal(result.body.code, 'SOURCE_INELIGIBLE');
+      }
+      assert.equal(JSON.stringify([...repository.store.deployments]), before);
+      assert.equal(JSON.stringify(repository.store.listDeploymentEvents(source.id)), events);
+      assert.equal(repository.store.workflowJobs.length, 0);
+    }
+  });
 });
 
 for (const transport of ['core', 'nest']) {

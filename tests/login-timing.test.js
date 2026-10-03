@@ -253,6 +253,7 @@ async function loadNestService(repository) {
   const core = new Proxy({
     ResourceCapabilityUnavailable,
     ResourceIntentInvalid,
+    TemplateInstallationError: UnmatchedCoreError,
     OrganizationCreationError: UnmatchedCoreError,
     ProjectSettingsError: UnmatchedCoreError,
     GitHubSourceConflict: UnmatchedCoreError,

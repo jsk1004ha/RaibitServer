@@ -1,8 +1,8 @@
 import type { DashboardLoadIssue } from '@/lib/api';
-import type { ResourceAvailability } from '@raibitserver/schemas';
+import type { EnvironmentView, ResourceAvailability, TemplateCatalogResponse, TemplateInstallationResponse } from '@raibitserver/schemas';
 import type { DeploymentHistoryPage } from './deployment-history-model';
 
-export const projectViews = ['overview', 'services', 'new-service', 'edit-service', 'deployments', 'agent', 'resources', 'new-resource', 'environment', 'logs', 'domains', 'settings'] as const;
+export const projectViews = ['overview', 'services', 'new-service', 'edit-service', 'templates', 'deployments', 'agent', 'resources', 'new-resource', 'environment', 'logs', 'domains', 'settings'] as const;
 export type ProjectView = (typeof projectViews)[number];
 
 export type ProjectRecord = Readonly<{
@@ -177,5 +177,11 @@ export type ProjectHubData = Readonly<{
   selectedService: ServiceRecord | null;
   serviceSettings: ServiceRecord | null;
   services: readonly ServiceRecord[];
+  templateData?: Readonly<{
+    catalog: TemplateCatalogResponse | null;
+    environments: readonly EnvironmentView[];
+    installations: readonly TemplateInstallationResponse[];
+    installationsLoaded: boolean;
+  }> | null;
   view: ProjectView;
 }>;

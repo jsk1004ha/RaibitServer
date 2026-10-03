@@ -1,4 +1,11 @@
 production: false
+operational:
+  enabled: false
+  implementationAvailable: false
+  protocolVersion: 1
+  contractDigest: ""
+  releaseRevision: ""
+  releaseSourceClean: false
 nameOverride: ""
 fullnameOverride: ""
 image:

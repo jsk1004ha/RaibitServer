@@ -15,7 +15,7 @@ registerHooks({
       return { url: 'data:text/javascript,export async function dashboardApiContext(){return {baseUrl:process.env.RAIBIT_TEST_OAUTH_API_URL,headers:{}}}', shortCircuit: true };
     }
     if (specifier === 'next/server') return next('next/server.js', context);
-    if (specifier === '../../../../lib/github-oauth-relay') return next(`${specifier}.ts`, context);
+    if (specifier === '../../../../lib/github-oauth-relay' || specifier === '../../../../lib/template-responses') return next(`${specifier}.ts`, context);
     return next(specifier, context);
   },
   load(url, context, next) {

@@ -59,7 +59,7 @@ jobs:
       - run: pnpm e2e:dry
 
   session-cookie-browser:
-    name: Session cookies / HTTPS browser
+    name: Session cookies / template browser
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -78,6 +78,19 @@ jobs:
         run: node --test apps/dashboard/tests/e2e/specs/pr17-session-cookie-browser.spec.mjs
         env:
           RAIBIT_PR17_HEADLESS: '1'
+      - name: Template install, reload, retry and mobile browser flows
+        run: pnpm --filter @raibitserver/dashboard test:e2e tests/e2e/specs/template-installations.spec.ts
+        env:
+          RAIBITSERVER_E2E_FIXTURES: '1'
+          RAIBITSERVER_PLAYWRIGHT_OUTPUT_DIR: ${{ runner.temp }}/template-browser
+      - name: Upload template browser evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-browser-evidence
+          path: ${{ runner.temp }}/template-browser/
+          if-no-files-found: warn
+          retention-days: 7
 
   postgres-integration:
     name: PostgreSQL / Prisma integration
@@ -156,6 +169,10 @@ jobs:
         run: node --import ./tests/fixtures/resource-runtime.mjs --test tests/resource-capability-boundary.test.js
         env:
           RAIBITSERVER_REQUIRE_POSTGRES_TESTS: '1'
+      - name: Template installation atomicity and retry PostgreSQL boundaries
+        run: node --import ./tests/fixtures/resource-runtime.mjs --test tests/operational/template-installation-postgres.test.mjs
+        env:
+          RAIBITSERVER_REQUIRE_POSTGRES_TESTS: '1'
       - run: (cd services/builder && go test -count=1 -run '^TestPostgres' ./internal/controlplane)
       - run: (cd services/orchestrator && go test -count=1 -run '^TestPostgres' ./internal/store)
       - run: (cd services/provisioner && go test -count=1 -run '^TestPostgres' ./internal/reconciler)
@@ -222,6 +239,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: node -e "import('yaml').then(({default:YAML})=>{const fs=require('node:fs'); YAML.parse(fs.readFileSync('openapi/raibitserver.yaml','utf8')); for (const f of ['infra/k8s/appservice-crd.yaml','infra/operators/manageddatabase-crd.yaml','infra/operators/managedresources-crd.yaml']) { const docs=YAML.parseAllDocuments(fs.readFileSync(f,'utf8')); for (const doc of docs) { if (doc.errors.length) throw doc.errors[0]; } } console.log('yaml-ok')})"
       - run: sh scripts/verify-helm.sh
+      - name: Verify template operational activation remains explicit
+        run: node --test tests/helm-operational.test.js
 
   recovery-native-api:
     name: Recovery admission / native TTL API

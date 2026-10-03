@@ -25,13 +25,25 @@ import {
   sessionCookieOptions,
   safeReturnPath,
 	withFlashMessage,
+  templateMutationQuery,
   upstreamPath,
 } from './request-security.js';
+
+test('template mutations retain only bounded environment selectors and reject secret-bearing query fields', () => {
+  assert.equal(templateMutationQuery('/projects/p1/template-installations', new URLSearchParams('environmentId=env_dev')), '?environmentId=env_dev');
+  assert.equal(templateMutationQuery('/projects/p1/template-installations/preflight', new URLSearchParams('environmentKind=prod')), '?environmentKind=prod');
+  assert.equal(templateMutationQuery('/template-installations/install_1/retry', new URLSearchParams('environmentId=env_dev')), '?environmentId=env_dev');
+  assert.equal(templateMutationQuery('/projects/p1/services', new URLSearchParams('environmentKind=dev')), '');
+  for (const query of ['DISCORD_TOKEN=value', 'environmentKind=preview', 'environmentId=one&environmentId=two', 'environmentId=bad/value']) {
+    assert.throws(() => templateMutationQuery('/projects/p1/template-installations', new URLSearchParams(query)), { code: 'invalid_environment_selector' });
+  }
+});
 
 test('Given an upstream failure, when its code is a bounded safe identifier, then the public proxy preserves it', () => {
 	assert.equal(publicUpstreamErrorCode({ error: 'invalid_credentials' }, 401), 'invalid_credentials');
 	assert.equal(publicUpstreamErrorCode({ message: 'fixture_route_not_found' }, 404), 'fixture_route_not_found');
 	assert.equal(publicUpstreamErrorCode({ error: 'provider.rate-limit:exceeded' }, 429), 'provider.rate-limit:exceeded');
+	assert.equal(publicUpstreamErrorCode({ code: 'TEMPLATE_SLUG_CONFLICT' }, 409), 'TEMPLATE_SLUG_CONFLICT');
 });
 
 test('Given an upstream failure, when its message is unsafe or unbounded, then the public proxy exposes only the status fallback', () => {

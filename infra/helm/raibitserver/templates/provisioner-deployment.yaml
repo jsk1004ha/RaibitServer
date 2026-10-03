@@ -48,6 +48,7 @@ spec:
           image: "{{ .Values.image.registry }}/raibitserver/provisioner{{ if .Values.image.digests.provisioner }}@{{ .Values.image.digests.provisioner }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- include "raibitserver.operationalEnv" . | nindent 12 }}
             - name: RAIBITSERVER_RESOURCE_ENVIRONMENT
               value: {{ ternary "release" "local" .Values.production | quote }}
             - name: RAIBITSERVER_DRY_RUN

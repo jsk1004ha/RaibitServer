@@ -5,6 +5,7 @@ import { deploymentHistoryPage } from '../../../../../components/project-hub/dep
 import type { EnvironmentEntry, ProjectDomainRole, RuntimeLog, ServiceRecord } from '../../../../../components/project-hub/types';
 import { collectLoadIssues, getJson, loadProjectConsole, postJson } from '../../../../../lib/api';
 import { projectMainLink } from '../../../../../lib/project-main-link';
+import { EnvironmentListViewSchema, TemplateCatalogResponseSchema, TemplateInstallationListResponseSchema } from '@raibitserver/schemas';
 
 type ProjectPageProps = Readonly<{
   params: Promise<{ orgSlug: string; projectId: string }>;
@@ -15,6 +16,14 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
   const [{ orgSlug, projectId }, query] = await Promise.all([params, searchParams]);
   const view = projectView(queryText(query.view) || 'overview');
   const state = await loadProjectConsole(projectId);
+  const templateResults = view === 'templates' ? await Promise.all([
+    getJson('/templates', null, state.context),
+    getJson(`/projects/${encodeURIComponent(projectId)}/environments`, null, state.context),
+    getJson(`/projects/${encodeURIComponent(projectId)}/template-installations?environmentKind=prod`, null, state.context),
+  ]) : null;
+  const templateCatalog = TemplateCatalogResponseSchema.safeParse(templateResults?.[0].body);
+  const templateEnvironments = EnvironmentListViewSchema.safeParse(templateResults?.[1].body);
+  const templateInstallations = TemplateInstallationListResponseSchema.safeParse(templateResults?.[2].body);
   const deploymentHistoryQuery = new URLSearchParams();
   for (const key of ['serviceId', 'environment', 'status', 'trigger', 'from', 'to', 'cursor', 'limit']) {
     const value = queryText(query[key]);
@@ -62,6 +71,12 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
     ...(environment ? collectLoadIssues([['환경 변수', environment]]) : []),
     ...(agentPlanResult ? collectLoadIssues([['AI 배포 계획', agentPlanResult]]) : []),
     ...(deploymentHistoryResult ? collectLoadIssues([['배포 내역', deploymentHistoryResult]]) : []),
+    ...(templateResults ? collectLoadIssues(templateResults.map((result, index) => {
+      const valid = [templateCatalog.success, templateEnvironments.success, templateInstallations.success][index];
+      return [['템플릿 목록', '설치 환경', '템플릿 설치 내역'][index], result.ok && !valid
+        ? { ...result, ok: false, status: 502, error: '서버 응답을 확인할 수 없습니다.' }
+        : result] as [string, typeof result];
+    })) : []),
   ];
   const projectName = state.project.name || state.project.slug || projectId;
   const organizationLabel = state.project.organization?.name || state.project.organizationSlug || '내 조직';
@@ -104,6 +119,12 @@ export default async function ProjectDetailPage({ params, searchParams }: Projec
     selectedService,
     serviceSettings,
     services: state.services,
+    templateData: templateResults ? {
+      catalog: templateCatalog.success ? templateCatalog.data : null,
+      environments: templateEnvironments.success ? templateEnvironments.data.environments : [],
+      installations: templateInstallations.success ? templateInstallations.data.installations : [],
+      installationsLoaded: templateResults[2].ok && templateInstallations.success,
+    } : null,
     view,
   };
 

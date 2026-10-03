@@ -195,6 +195,7 @@ spec:
           ports:
             - { name: dispatch, containerPort: {{ .Values.builder.dispatch.port }}, protocol: TCP }
           env:
+            {{- include "raibitserver.operationalEnv" . | nindent 12 }}
             - { name: RAIBITSERVER_BUILDER_ROLE, value: dispatcher }
             - { name: RAIBITSERVER_PRODUCTION, value: {{ ternary "1" "0" .Values.production | quote }} }
             - { name: RAIBITSERVER_CONTROL_PLANE_STORE, value: postgresql }

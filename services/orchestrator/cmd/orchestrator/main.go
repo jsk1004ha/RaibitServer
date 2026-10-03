@@ -19,7 +19,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	cfg := orchestratorconfig.FromEnv()
-	reconcilerConfig := reconciler.Config{DryRun: cfg.DryRun, Kubeconfig: cfg.Kubeconfig, KubeContext: cfg.KubeContext, OutputDir: cfg.OutputDir, BaseDomain: cfg.BaseDomain, IngressGatewayNamespace: cfg.IngressGatewayNamespace, IngressClassName: cfg.IngressClassName, IngressCustomHTTPErrors: cfg.IngressCustomHTTPErrors, IngressErrorMiddleware: cfg.IngressErrorMiddleware, Timeout: cfg.Timeout, WorkerID: cfg.WorkerID, ClaimLease: cfg.ClaimLease}
+	reconcilerConfig := reconciler.Config{DryRun: cfg.DryRun, Kubeconfig: cfg.Kubeconfig, KubeContext: cfg.KubeContext, OutputDir: cfg.OutputDir, BaseDomain: cfg.BaseDomain, IngressGatewayNamespace: cfg.IngressGatewayNamespace, IngressClassName: cfg.IngressClassName, IngressCustomHTTPErrors: cfg.IngressCustomHTTPErrors, IngressErrorMiddleware: cfg.IngressErrorMiddleware, Timeout: cfg.Timeout, WorkerID: cfg.WorkerID, ClaimLease: cfg.ClaimLease, DevelopmentEnvironments: cfg.DevelopmentEnvironments}
 	var r *reconciler.ServiceReconciler
 	var domainController *controller.DomainController
 	var closeStore func() error
@@ -49,10 +49,14 @@ func main() {
 		domainResult, domainErr := domainController.RunOnce(ctx)
 		if domainErr != nil {
 			fmt.Fprintf(os.Stderr, "domain reconcile failed: %v\n", domainErr)
-			if !persistent { os.Exit(1) }
+			if !persistent {
+				os.Exit(1)
+			}
 		} else if domainResult.Processed {
 			_ = json.NewEncoder(os.Stdout).Encode(domainResult)
-			if !persistent { return }
+			if !persistent {
+				return
+			}
 		}
 		result, err := r.RunOnceResult(ctx)
 		if err != nil {

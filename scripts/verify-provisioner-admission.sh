@@ -28,5 +28,6 @@ test -s "$PROBE_DIR/recovery.json"
 
 cd "$ROOT_DIR"
 for render in "$@"; do
+  "$NODE" tests/fixtures/template-runtime-security-cel.mjs "$(node_path "$render")" "$(node_path "$PROBE_DIR/cel-evaluate.exe")"
   "$NODE" tests/fixtures/provisioner-security-cel.mjs "$(node_path "$render")" "$(node_path "$PROBE_DIR/cel-evaluate.exe")" "$(node_path "$PROBE_DIR/recovery.json")"
 done

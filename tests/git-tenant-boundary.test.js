@@ -128,7 +128,8 @@ test('tenant service payloads cannot self-assert a GitHub installation binding',
 
 test('Prisma repository boundary enforces verified same-organization authoritative GitHub records', async () => {
   const project = { id: 'project-a', organizationId: 'organization-a', status: 'ACTIVE' };
-  const service = { id: 'service-a', projectId: project.id, project, sourceType: 'image', repoUrl: null, githubRepositoryId: null, desiredState: {}, status: 'CREATED' };
+  const environment = { id: 'env_prod_project-a', projectId: project.id, kind: 'prod', status: 'active' };
+  let service = { id: 'service-a', projectId: project.id, project, name: 'web', slug: 'web', sourceType: 'image', repoUrl: null, githubRepositoryId: null, desiredState: {}, status: 'CREATED', environmentBinding: { environmentId: environment.id, projectId: project.id, logicalSlug: 'web', environment } };
   const integrations = {
     verified: { id: 'verified', organizationId: project.organizationId, installationId: 'installation-a', accountLogin: 'alice', defaultBranch: 'main', verifiedAt: new Date() },
     unverified: { id: 'unverified', organizationId: project.organizationId, installationId: 'installation-u', accountLogin: 'mallory', verifiedAt: null },
@@ -138,12 +139,14 @@ test('Prisma repository boundary enforces verified same-organization authoritati
   let updateData = null;
   const prisma = {
     $transaction: async (callback) => callback(prisma),
+    $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
     deployment: { findFirst: async () => null },
     service: {
       findUnique: async () => service,
       update: async ({ data }) => {
         updateData = data;
-        return { ...service, ...data };
+        service = { ...service, ...data };
+        return service;
       },
     },
     gitHubIntegration: { findUnique: async ({ where }) => integrations[where.id] || null },
@@ -184,14 +187,18 @@ test('Prisma repository boundary enforces verified same-organization authoritati
 });
 
 test('Prisma direct service mutations cannot self-assert a GitHub binding', async () => {
-  let upsertCalled = false;
+  let writeCalled = false;
+  const environment = { id: 'env_prod_project-a', projectId: 'project-a', kind: 'prod', status: 'active' };
   const current = { id: 'service-a', projectId: 'project-a', status: 'CREATED', desiredState: {}, repoUrl: null, githubRepositoryId: null };
   const tx = {
+    $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
     project: { findUnique: async () => ({ id: 'project-a', status: 'ACTIVE' }) },
+    environment: { findUnique: async ({ where }) => { assert.deepEqual(where, { projectId_kind: { projectId: 'project-a', kind: 'prod' } }); return environment; } },
+    environmentService: { findUnique: async ({ where }) => { assert.deepEqual(where, { environmentId_logicalSlug: { environmentId: environment.id, logicalSlug: 'forged' } }); return null; } },
     service: {
       findUnique: async ({ where }) => (where.id ? current : null),
-      upsert: async () => { upsertCalled = true; return {}; },
-      update: async () => { upsertCalled = true; return {}; },
+      create: async () => { writeCalled = true; return {}; },
+      update: async () => { writeCalled = true; return {}; },
     },
   };
   const repository = new PrismaControlPlaneRepository({ $transaction: async (callback) => callback(tx) });
@@ -203,7 +210,7 @@ test('Prisma direct service mutations cannot self-assert a GitHub binding', asyn
     repository.updateService('service-a', { githubInstallationId: 'installation-a', githubRepositoryId: '101' }),
     /verified attach or import flow/i,
   );
-  assert.equal(upsertCalled, false);
+  assert.equal(writeCalled, false);
 });
 
 test('signed GitHub installation events are the production trust path for installation and repository catalog records', () => {
@@ -290,6 +297,7 @@ test('Prisma GitHub webhook lookup fails closed when the authoritative repositor
   let queriedServices = false;
   const prisma = {
     $transaction: async (callback) => callback(prisma),
+    $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
     webhookEvent: {
       findUnique: async () => null,
       create: async ({ data }) => ({ id: 'webhook-1', ...data }),
