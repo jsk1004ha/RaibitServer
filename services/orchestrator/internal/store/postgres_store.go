@@ -22,14 +22,19 @@ SELECT d.id, d."serviceId", d."projectId", d.status, d."deploymentType", d."trig
        d."reconcileAction", d."reconcileLockedBy", d."reconcileLockedAt", d."reconcileAttempts",
        d."desiredSpecSnapshot", d."snapshotVersion", d."sourceDeploymentId", d."retryOfDeploymentId",
        d."publicHealthStatus",d."healthCheckedAt",d."healthFailureCode",d."observedGeneration",
-       d."previewLineageId",d."previewGeneration",d."previewRuntime",d."previewOwnedObjects"
+       d."previewLineageId",d."previewGeneration",d."previewRuntime",d."previewOwnedObjects",d."environmentId",
+       binding."logicalSlug", environment.kind
 FROM "Deployment" d
 JOIN "Service" s ON s.id = d."serviceId"
 JOIN "Project" p ON p.id = d."projectId"
+LEFT JOIN "EnvironmentService" binding ON binding."serviceId" = d."serviceId"
+LEFT JOIN "Environment" environment ON environment.id = binding."environmentId" AND environment."projectId" = binding."projectId"
 WHERE (d.status IN ($1, $2, $3, $4)
    OR (d.status = $5 AND d."reconcileLockedAt" <= $6 AND d."reconcileAction" IN ($7, $8, $9)))
   AND UPPER(s.status) NOT IN ('DELETE_REQUESTED', 'DELETING', 'DELETED')
   AND UPPER(p.status) NOT IN ('DELETE_REQUESTED', 'DELETING', 'DELETED')
+  AND (binding."serviceId" IS NULL OR (binding."projectId" = d."projectId" AND environment.id IS NOT NULL))
+  AND (COALESCE(environment.kind, 'prod') = 'prod' OR $10)
 ORDER BY d."createdAt" ASC, d.id ASC
 FOR UPDATE OF d SKIP LOCKED
 LIMIT 1`
@@ -37,10 +42,15 @@ LIMIT 1`
 const claimServiceDeletionSQL = `
 SELECT s.id, s."projectId", s.name, s.slug, s.type, s."imageUrl", s.port,
        s."desiredSpec", s."desiredState", s.status, s."deletionRequestedAt", s."updatedAt",
-       s."healthCheckPath",s."livenessPath",s."readinessPath",s."publicHealthPath"
+       s."healthCheckPath",s."livenessPath",s."readinessPath",s."publicHealthPath",
+       binding."logicalSlug", binding."environmentId", environment.kind
 FROM "Service" s
-WHERE s.status = 'DELETE_REQUESTED'
-   OR (s.status = 'DELETING' AND s."updatedAt" <= $1)
+LEFT JOIN "EnvironmentService" binding ON binding."serviceId" = s.id
+LEFT JOIN "Environment" environment ON environment.id = binding."environmentId" AND environment."projectId" = binding."projectId"
+WHERE (binding."serviceId" IS NULL OR (binding."projectId" = s."projectId" AND environment.id IS NOT NULL))
+  AND (COALESCE(environment.kind, 'prod') = 'prod' OR $2)
+  AND (s.status = 'DELETE_REQUESTED'
+   OR (s.status = 'DELETING' AND s."updatedAt" <= $1))
 ORDER BY s."deletionRequestedAt" ASC NULLS LAST, s."createdAt" ASC, s.id ASC
 FOR UPDATE OF s SKIP LOCKED
 LIMIT 1`
@@ -116,6 +126,34 @@ type PostgresStore struct {
 
 func NewPostgresStore(db *sql.DB) *PostgresStore { return &PostgresStore{db: db} }
 
+func (s *PostgresStore) beginOperationalTx(ctx context.Context, options *sql.TxOptions) (*sql.Tx, error) {
+	tx, err := s.db.BeginTx(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, operationalProtocolSessionSQL); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	return tx, nil
+}
+
+func (s *PostgresStore) execOperational(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	tx, err := s.beginOperationalTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func OpenPostgresStore(ctx context.Context, dsn string) (*PostgresStore, func() error, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, nil, errors.New("PostgreSQL control-plane DSN is required")
@@ -133,12 +171,12 @@ func OpenPostgresStore(ctx context.Context, dsn string) (*PostgresStore, func() 
 
 func (s *PostgresStore) ClaimNextServiceDeletion(ctx context.Context, options ClaimOptions) (*Service, error) {
 	claimNow, lease := deletionClaimClock(options)
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := s.beginOperationalTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	service, err := scanPostgresService(tx.QueryRowContext(ctx, claimServiceDeletionSQL, claimNow.Add(-lease)))
+	service, err := scanPostgresService(tx.QueryRowContext(ctx, claimServiceDeletionSQL, claimNow.Add(-lease), options.AllowDevelopment))
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -167,7 +205,7 @@ func (s *PostgresStore) ClaimNextServiceDeletion(ctx context.Context, options Cl
 
 func (s *PostgresStore) ClaimNextProjectDeletion(ctx context.Context, options ClaimOptions) (*Project, error) {
 	claimNow, lease := deletionClaimClock(options)
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := s.beginOperationalTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +321,7 @@ func (s *PostgresStore) ClaimNextDeployment(ctx context.Context, options ClaimOp
 	if workerID == "" {
 		workerID = "raibitserver-orchestrator"
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := s.beginOperationalTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +330,7 @@ func (s *PostgresStore) ClaimNextDeployment(ctx context.Context, options ClaimOp
 	deployment, err := scanPostgresDeployment(tx.QueryRowContext(ctx, claimDeploymentSQL,
 		DeploymentStatusImageReady, DeploymentStatusRollbackRequested, DeploymentStatusCleanupRequested,
 		"CLEANUP_REQUESTED", DeploymentStatusDeploying, claimNow.Add(-staleAfter),
-		DeploymentActionApply, DeploymentActionRollback, DeploymentActionCleanup))
+		DeploymentActionApply, DeploymentActionRollback, DeploymentActionCleanup, options.AllowDevelopment))
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -350,7 +388,12 @@ func (s *PostgresStore) RenewDeploymentLease(ctx context.Context, lease Deployme
 	if renewedAt.IsZero() {
 		renewedAt = time.Now().UTC()
 	}
-	result, err := s.db.ExecContext(ctx, renewDeploymentLeaseSQL, renewedAt, lease.DeploymentID, DeploymentStatusDeploying, lease.WorkerID, lease.Attempt, lease.Action)
+	tx, err := s.beginOperationalTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, renewDeploymentLeaseSQL, renewedAt, lease.DeploymentID, DeploymentStatusDeploying, lease.WorkerID, lease.Attempt, lease.Action)
 	if err != nil {
 		return err
 	}
@@ -361,7 +404,7 @@ func (s *PostgresStore) RenewDeploymentLease(ctx context.Context, lease Deployme
 	if updated != 1 {
 		return ErrDeploymentLeaseLost
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *PostgresStore) GetProject(ctx context.Context, projectID string) (*Project, error) {
@@ -374,9 +417,13 @@ func (s *PostgresStore) GetProject(ctx context.Context, projectID string) (*Proj
 
 func (s *PostgresStore) GetService(ctx context.Context, serviceID string) (*Service, error) {
 	service, err := scanPostgresService(s.db.QueryRowContext(ctx, `
-SELECT id, "projectId", name, slug, type, "imageUrl", port, "desiredSpec", "desiredState", status, "deletionRequestedAt", "updatedAt",
- "healthCheckPath","livenessPath","readinessPath","publicHealthPath"
-FROM "Service" WHERE id = $1`, serviceID))
+SELECT s.id, s."projectId", s.name, s.slug, s.type, s."imageUrl", s.port, s."desiredSpec", s."desiredState", s.status, s."deletionRequestedAt", s."updatedAt",
+ s."healthCheckPath",s."livenessPath",s."readinessPath",s."publicHealthPath",
+ binding."logicalSlug",binding."environmentId",environment.kind
+FROM "Service" s
+LEFT JOIN "EnvironmentService" binding ON binding."serviceId" = s.id
+LEFT JOIN "Environment" environment ON environment.id = binding."environmentId" AND environment."projectId" = binding."projectId"
+WHERE s.id = $1 AND (binding."serviceId" IS NULL OR (binding."projectId" = s."projectId" AND environment.id IS NOT NULL))`, serviceID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, notFound("service", serviceID)
 	}
@@ -409,12 +456,23 @@ func (s *PostgresStore) TransitionDeployment(ctx context.Context, lease Deployme
           "reconcileAction", "reconcileLockedBy", "reconcileLockedAt", "reconcileAttempts",
           "desiredSpecSnapshot", "snapshotVersion", "sourceDeploymentId", "retryOfDeploymentId",
           "publicHealthStatus","healthCheckedAt","healthFailureCode","observedGeneration",
-          "previewLineageId","previewGeneration","previewRuntime","previewOwnedObjects"`
-	deployment, err := scanPostgresDeployment(s.db.QueryRowContext(ctx, query, args...))
+          "previewLineageId","previewGeneration","previewRuntime","previewOwnedObjects","environmentId",NULL,NULL`
+	tx, err := s.beginOperationalTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	deployment, err := scanPostgresDeployment(tx.QueryRowContext(ctx, query, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrDeploymentLeaseLost
 	}
-	return deployment, err
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return deployment, nil
 }
 
 func (s *PostgresStore) AppendDeploymentEvent(ctx context.Context, input DeploymentEventInput) error {
@@ -478,10 +536,12 @@ func scanPostgresService(row rowScanner) (*Service, error) {
 	var port sql.NullInt64
 	var desiredSpec, desiredState []byte
 	var deletionRequestedAt sql.NullTime
+	var logicalSlug, environmentID, environmentKind sql.NullString
 	if err := row.Scan(
 		&service.ID, &service.ProjectID, &service.Name, &service.Slug, &service.Type, &imageURL, &port,
 		&desiredSpec, &desiredState, &service.Status, &deletionRequestedAt, &service.UpdatedAt,
 		&healthCheckPath, &livenessPath, &readinessPath, &publicHealthPath,
+		&logicalSlug, &environmentID, &environmentKind,
 	); err != nil {
 		return nil, err
 	}
@@ -490,6 +550,9 @@ func scanPostgresService(row rowScanner) (*Service, error) {
 	service.LivenessPath = livenessPath.String
 	service.ReadinessPath = readinessPath.String
 	service.PublicHealthPath = publicHealthPath.String
+	service.LogicalSlug = logicalSlug.String
+	service.EnvironmentID = environmentID.String
+	service.EnvironmentKind = EnvironmentKind(environmentKind.String)
 	if port.Valid {
 		service.Port = int(port.Int64)
 	}
@@ -536,12 +599,14 @@ func scanPostgresDeployment(row rowScanner) (*Deployment, error) {
 	var sourceDeploymentID, retryOfDeploymentID, previewLineageID sql.NullString
 	var previewGeneration sql.NullInt64
 	var previewRuntime, previewOwnedObjects []byte
+	var environmentID, logicalSlug, environmentKind sql.NullString
 	err := row.Scan(&deployment.ID, &deployment.ServiceID, &deployment.ProjectID, &deployment.Status, &deployment.DeploymentType,
 		&deployment.TriggerType, &deployment.Branch, &commitSHA, &imageURL, &imageDigest, &previewURL, &pullRequestNumber,
 		&reconcileAction, &reconcileLockedBy, &reconcileLockedAt, &deployment.ReconcileAttempts,
 		&snapshot, &snapshotVersion, &sourceDeploymentID, &retryOfDeploymentID,
 		&publicHealthStatus, &healthCheckedAt, &healthFailureCode, &observedGeneration,
-		&previewLineageID, &previewGeneration, &previewRuntime, &previewOwnedObjects)
+		&previewLineageID, &previewGeneration, &previewRuntime, &previewOwnedObjects,
+		&environmentID, &logicalSlug, &environmentKind)
 	if err != nil {
 		return nil, err
 	}
@@ -564,6 +629,7 @@ func scanPostgresDeployment(row rowScanner) (*Deployment, error) {
 	deployment.SourceDeploymentID = nullString(sourceDeploymentID)
 	deployment.RetryOfDeploymentID = nullString(retryOfDeploymentID)
 	deployment.PreviewLineageID = nullString(previewLineageID)
+	deployment.EnvironmentID = nullString(environmentID)
 	if previewGeneration.Valid {
 		deployment.PreviewGeneration = int(previewGeneration.Int64)
 	}

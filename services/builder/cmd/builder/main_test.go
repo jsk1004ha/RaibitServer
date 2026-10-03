@@ -64,3 +64,27 @@ func TestDispatcherRejectsBuildExecutionEnvironment(t *testing.T) {
 		t.Fatalf("trusted dispatcher must not share the tenant command execution path, got %v", err)
 	}
 }
+
+func TestOperationalProtocolTwoRequiresDispatcher(t *testing.T) {
+	for _, role := range []string{"", "executor"} {
+		env := map[string]string{
+			"RAIBITSERVER_BUILDER_ROLE":                 role,
+			"RAIBITSERVER_OPERATIONAL_PROTOCOL_VERSION": "2",
+			"RAIBITSERVER_CONTROL_PLANE_REMOTE_URL":     "https://builder-dispatcher:8443",
+		}
+		if err := validateRoleEnvironment(env); err == nil || !strings.Contains(err.Error(), "protocol 2 requires the trusted dispatcher role") {
+			t.Fatalf("role %q accepted protocol 2 outside dispatcher: %v", role, err)
+		}
+	}
+}
+
+func TestOperationalProtocolRejectsUnknownVersion(t *testing.T) {
+	env := map[string]string{
+		"RAIBITSERVER_BUILDER_ROLE":                 "dispatcher",
+		"RAIBITSERVER_CONTROL_PLANE_DATABASE_URL":   "postgresql://control-plane.invalid/db",
+		"RAIBITSERVER_OPERATIONAL_PROTOCOL_VERSION": "3",
+	}
+	if err := validateRoleEnvironment(env); err == nil || !strings.Contains(err.Error(), "operational protocol version must be 1 or 2") {
+		t.Fatalf("unknown operational protocol accepted: %v", err)
+	}
+}

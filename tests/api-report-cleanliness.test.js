@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { apiOperations } from '../packages/schemas/src/api-contract.ts';
 
 test('Given a clean checkout and no report override, when real Nest parity runs, then it leaves git status clean', async () => {
   const sandbox = await mkdtemp(path.join(tmpdir(), 'raibit-parity-'));
@@ -29,7 +30,9 @@ test('Given a clean checkout and no report override, when real Nest parity runs,
     }
     assert.equal(result.status, 0, result.stdout + result.stderr);
     // The four standalone rental operations also run real HTTP CRUD scenarios.
-    assert.match(result.stdout, /checked=113; HTTP=48; cleanup=true/, 'the child must execute real Nest parity, not skip nested tests');
+    const fixtures = JSON.parse(await readFile(new URL('./fixtures/openapi/semantic-parity.json', import.meta.url), 'utf8'));
+    const expectedHttpCount = fixtures.http.length + 1; // Includes the additional deployments cursor-page request.
+    assert.match(result.stdout, new RegExp(`checked=${Object.keys(apiOperations).length}; HTTP=${expectedHttpCount}; cleanup=true`), 'the child must execute real Nest parity, not skip nested tests');
     const reportLine = result.stdout.split('\n').find((line) => line.startsWith('{"apiOperationParity":'));
     assert.ok(reportLine, 'the child must emit structured parity evidence');
     const report = JSON.parse(reportLine).apiOperationParity;

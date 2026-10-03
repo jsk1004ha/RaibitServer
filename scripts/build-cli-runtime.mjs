@@ -61,17 +61,21 @@ try {
     compile(parsed.fileNames, { ...parsed.options, ...common, strict: false, rootDir: path.join(root, 'apps/cli/src'), outDir: path.join(build, 'cli') });
     compile([path.join(root, 'packages/api-client/src/index.ts')], { ...common, rootDir: path.join(root, 'packages/api-client/src'), outDir: path.join(build, 'client') });
   }
+  const schemaExports = JSON.parse(readFileSync(path.join(schemas, 'package.json'), 'utf8')).exports;
+  const runtimeSchemaExports = Object.fromEntries(Object.entries(schemaExports).map(([key, entry]) => {
+    if (typeof entry !== 'string' || !entry.startsWith('./src/') || !entry.endsWith('.ts')) {
+      throw new Error(`Unsupported schema export: ${key}`);
+    }
+    return [key, entry.replace('./src/', './dist/schemas/src/').replace(/\.ts$/, '.js')];
+  }));
+  if (runtimeSchemaExports['.'] !== './dist/schemas/src/index.js') throw new Error('Missing schema root export');
   // Keep the relative schema graph intact, including pure core imports and JSON.
-  compile([path.join(root, 'packages/schemas/src/index.ts')], { ...common, rootDir: path.join(root, 'packages'), outDir: path.join(build, 'schemas') });
+  compile(Object.values(schemaExports).map(entry => path.join(root, 'packages/schemas', entry)), { ...common, rootDir: path.join(root, 'packages'), outDir: path.join(build, 'schemas') });
   if (!schemasOnly) {
     install(target, './dist/index.js', path.join(build, 'cli'));
     install(client, './dist/index.js', path.join(build, 'client'));
   }
-  install(schemas, './dist/schemas/src/index.js', path.join(build, 'schemas'), {
-    '.': './dist/schemas/src/index.js',
-    './deployment-health-contract': './dist/schemas/src/deployment-health-contract.js',
-    './desired-state-validation': './dist/schemas/src/desired-state-validation.js',
-  });
+  install(schemas, './dist/schemas/src/index.js', path.join(build, 'schemas'), runtimeSchemaExports);
 } finally {
   rmSync(build, { recursive: true, force: true });
 }

@@ -38,19 +38,19 @@ export class ResourceConsoleController {
 
   @RequirePermission('db:data:read')
   @Post('query')
-  query(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.resourcesService.queryResource(resourceId, input || {}, req.raibitSubject);
+  query(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Query() selector: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.queryResource(resourceId, input || {}, req.raibitSubject, selector);
   }
 
   @RequirePermission('db:query:write')
   @Post('command')
-  command(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.resourcesService.commandResource(resourceId, input || {}, req.raibitSubject);
+  command(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Query() selector: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.commandResource(resourceId, input || {}, req.raibitSubject, selector);
   }
 
   @RequirePermission('db:data:read')
   @Post('browse')
-  browse(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.resourcesService.browseResource(resourceId, input || {}, req.raibitSubject);
+  browse(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Query() selector: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.browseResource(resourceId, input || {}, req.raibitSubject, selector);
   }
 }

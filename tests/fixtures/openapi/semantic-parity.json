@@ -1,5 +1,10 @@
 {
   "wireBodies": {
+    "discord-configure": {"webhookUrl":"https://discord.com/api/webhooks/123/fixture-not-a-real-secret","expectedVersion":0,"environments":["prod"],"events":["deployment.failed"]},
+    "discord-disable": {"expectedVersion":1},
+    "discord-delete": {"expectedVersion":1},
+    "discord-test": {"expectedVersion":1,"environmentId":"env-prod","environmentKind":"prod"},
+    "resource-backup-policy-update": {"requiredProtocolVersion":2,"resourceId":"resource","environmentId":"env-prod","environmentKind":"prod","enabled":true,"timezone":"Asia/Seoul","localMinute":180,"origin":"scheduled","retention":{"mode":"success-count","count":7},"expectedVersion":1},
     "domain-rentals-create": {"name":"parity-rental","targetUrl":"https://example.org/docs?x=1#intro"},
     "domain-rentals-update": {"expectedVersion":1,"enabled":false},
     "domain-rentals-delete": {"expectedVersion":2},
@@ -52,6 +57,8 @@
     "admin-quota-post": {"maxServices":4,"accountType":"NON_CLUB"}
   },
   "wireQueries": {
+    "discord-deliveries":{"cursor":"cursor +/?","limit":2},
+    "resource-backup-runs":{"limit":2},
     "auth-github-login":{"codeChallenge":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
     "auth-github-callback":{"state":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","codeVerifier":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","code":"parity-code"},
     "github-authorize":{"installation_id":"123","setup_action":"install","state":"state +/?"},
@@ -63,9 +70,18 @@
     "github-integrations-list":{"organizationId":"organization +/?"}
   },
   "responseFixtures": [
+    {"operation":"discord-get","body":{"configured":false}},
+    {"operation":"discord-configure","body":{"id":"destination","projectId":"project","version":1,"enabled":true,"environments":["prod"],"events":["deployment.failed"],"createdAt":"2026-09-06T00:00:00.000Z","updatedAt":"2026-09-06T00:00:00.000Z","webhookConfigured":true}},
+    {"operation":"discord-disable","body":{"id":"destination","projectId":"project","version":2,"enabled":false,"environments":["prod"],"events":["deployment.failed"],"createdAt":"2026-09-06T00:00:00.000Z","updatedAt":"2026-09-06T00:00:00.000Z","webhookConfigured":true}},
+    {"operation":"discord-delete","body":{"deleted":true,"version":3}},
+    {"operation":"discord-test","body":{"intentId":"intent","destinationVersion":1,"status":"pending","queued":true,"sentInRequest":false}},
+    {"operation":"discord-deliveries","body":{"rows":[{"id":"intent","destinationVersion":1,"eventCode":"deployment.failed","subjectId":"discord-test","subjectGenerationOrIncidentSequence":1,"status":"pending","createdAt":"2026-09-06T00:00:00.000Z","updatedAt":"2026-09-06T00:00:00.000Z"}],"nextCursor":null}},
+    {"operation":"resource-backup-policy-get","body":{"id":"policy","organizationId":"org","projectId":"project","environmentId":"env-prod","resourceId":"resource","createdByUserId":"owner","version":1,"enabled":false,"timezone":"Asia/Seoul","localMinute":180,"nextRunAt":null,"createdAt":"2026-09-06T00:00:00.000Z","updatedAt":"2026-09-06T00:00:00.000Z"}},
+    {"operation":"resource-backup-policy-update","body":{"id":"policy","organizationId":"org","projectId":"project","environmentId":"env-prod","resourceId":"resource","createdByUserId":"owner","version":2,"enabled":true,"timezone":"Asia/Seoul","localMinute":180,"nextRunAt":"2026-09-06T18:00:00.000Z","createdAt":"2026-09-06T00:00:00.000Z","updatedAt":"2026-09-06T00:00:00.000Z"}},
+    {"operation":"resource-backup-runs","body":{"runs":[{"id":"run","policyId":"policy","policyVersion":2,"resourceId":"resource","environmentId":"env-prod","scheduledAtUtc":"2026-09-06T18:00:00.000Z","origin":"scheduled","status":"READY","skipReason":null,"backupId":"backup","startedAt":"2026-09-06T18:00:00.000Z","finishedAt":"2026-09-06T18:01:00.000Z","errorCode":null,"createdAt":"2026-09-06T18:00:00.000Z","policySnapshot":{"requiredProtocolVersion":2,"resourceId":"resource","environmentId":"env-prod","environmentKind":"prod","enabled":true,"timezone":"Asia/Seoul","localMinute":180,"origin":"scheduled","retention":{"mode":"success-count","count":7},"expectedVersion":1}}],"nextCursor":null}},
     {"operation":"health","body":{"status":"ok","service":"raibitserver-api","uptimeSeconds":1}},
     {"operation":"projects-list","body":{"projects":[{"id":"project","name":"Parity","organizationId":"org","slug":"parity"}],"nextCursor":null}},
-    {"operation":"deployments-get","body":{"id":"deployment","projectId":"project","serviceId":"service","service":{"id":"service","name":"Web","slug":"web"},"environment":"production","status":"READY","trigger":"manual","createdAt":"2026-09-06T00:00:00.000Z","updatedAt":"2026-09-06T00:00:00.000Z","imageDigest":null,"errorCode":null,"errorMessage":null,"source":{"commitSha":null,"imageDigest":null,"snapshotVersion":1},"lineage":{"sourceDeploymentId":null,"retryOfDeploymentId":null,"rollbackOfDeploymentId":null,"previousDeploymentId":null,"previewLineageId":null,"previewGeneration":null},"operation":{"requestedByUserId":null,"requestIdempotencyKey":null},"health":{"rolloutStatus":"READY","publicHealthStatus":"UNKNOWN","healthCheckedAt":null,"healthFailureCode":null,"observedGeneration":null},"recovery":{"retryable":false,"reason":"STATUS_NOT_RETRYABLE"},"permissions":{"execute":true},"eligibleAction":null}},
+    {"operation":"deployments-get","body":{"id":"deployment","projectId":"project","environmentId":"environment","environmentKind":"prod","serviceId":"service","service":{"id":"service","name":"Web","slug":"web"},"environment":"production","status":"READY","trigger":"manual","createdAt":"2026-09-06T00:00:00.000Z","updatedAt":"2026-09-06T00:00:00.000Z","imageDigest":null,"errorCode":null,"errorMessage":null,"source":{"commitSha":null,"imageDigest":null,"snapshotVersion":1},"lineage":{"sourceDeploymentId":null,"retryOfDeploymentId":null,"rollbackOfDeploymentId":null,"previousDeploymentId":null,"previewLineageId":null,"previewGeneration":null},"operation":{"requestedByUserId":null,"requestIdempotencyKey":null},"health":{"rolloutStatus":"READY","publicHealthStatus":"UNKNOWN","healthCheckedAt":null,"healthFailureCode":null,"observedGeneration":null},"recovery":{"retryable":false,"reason":"STATUS_NOT_RETRYABLE"},"permissions":{"execute":true},"eligibleAction":null}},
     {"operation":"services-logs-stream","body":{"service":null,"logs":[{"id":"log","line":"ready","timestamp":"2026-09-02T00:00:00Z"}],"serviceCursor":"v1","logCursor":null,"stream":{"retryMs":3000,"heartbeatMs":15000,"maxLifetimeMs":900000,"slowClientTimeoutMs":5000}}},
     {"operation":"auth-github-login","body":{"provider":"github","configured":true,"oauthUrl":"https://github.com/login/oauth/authorize","state":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","mode":"redirect"}}
   ],
@@ -81,6 +97,8 @@
     {"operation":"domain-rentals-delete","method":"POST","path":"/domain-rentals/{rentalId}/delete","body":{"expectedVersion":2},"status":200},
     {"operation":"auth-me","method":"GET","path":"/auth/me","status":200},
     {"operation":"projects-create","method":"POST","path":"/projects","body":{"name":"Parity"},"status":201,"save":"projectId"},
+    {"operation":"discord-get","method":"GET","path":"/projects/{projectId}/integrations/discord","status":503},
+    {"operation":"discord-deliveries","method":"GET","path":"/projects/{projectId}/integrations/discord/deliveries","status":503},
     {"operation":"projects-list","method":"GET","path":"/projects?limit=1","status":200},
     {"operation":"services-create","method":"POST","path":"/projects/{projectId}/services","body":{"name":"web","type":"web","sourceType":"image","image":"nginx:alpine","port":8080},"status":201,"save":"serviceId"},
     {"operation":"services-list","method":"GET","path":"/projects/{projectId}/services?limit=1","status":200},
@@ -98,6 +116,8 @@
     {"operation":"environment-list","method":"GET","path":"/projects/{projectId}/services/{serviceId}/env","status":200},
     {"operation":"environment-upload","method":"POST","path":"/projects/{projectId}/services/{serviceId}/env-file","body":{"filename":".env","content":"PUBLIC_VALUE=ok"},"status":201},
     {"operation":"resources-create","method":"POST","path":"/projects/{projectId}/resources","body":{"name":"data","engine":"postgresql"},"status":201,"save":"resourceId"},
+    {"operation":"resource-backup-policy-get","method":"GET","path":"/resources/{resourceId}/backup-policy","status":503},
+    {"operation":"resource-backup-runs","method":"GET","path":"/resources/{resourceId}/backup-runs","status":503},
     {"operation":"resources-list","method":"GET","path":"/projects/{projectId}/resources?limit=1","status":200},
     {"operation":"resources-get","method":"GET","path":"/resources/{resourceId}","status":200},
     {"operation":"resources-provision","method":"POST","path":"/resources/{resourceId}/provision","body":{"intent":"preview-plan"},"status":201},

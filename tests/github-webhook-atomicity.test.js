@@ -77,9 +77,11 @@ test('GitHub delivery is accepted without enqueueing work when its integration o
 
 test('Prisma GitHub delivery commits its marker, deployment, and job atomically and can replay after rollback', async () => {
   const project = { id: 'project-1', organizationId: 'organization-1', slug: 'web', status: 'ACTIVE' };
+  const environment = { id: 'env_prod_project-1', projectId: project.id, kind: 'prod', status: 'active' };
   const integration = { id: 'integration-1', organizationId: project.organizationId, userId: 'user-1', installationId: '900', verifiedAt: new Date(), accountLogin: 'alice' };
   const service = {
-    id: 'service-1', projectId: project.id, project, branch: 'main', githubRepositoryId: '101', repoUrl: 'https://github.com/alice/web.git', status: 'CREATED',
+    id: 'service-1', projectId: project.id, project, slug: 'web', branch: 'main', githubRepositoryId: '101', repoUrl: 'https://github.com/alice/web.git', status: 'CREATED',
+    environmentBinding: { environmentId: environment.id, projectId: project.id, logicalSlug: 'web', environment },
     desiredState: { githubIntegrationId: integration.id, githubInstallationId: '900', githubRepositoryId: '101', githubRepository: 'alice/web', github: { integrationId: integration.id, installationId: '900', repositoryId: '101', repository: 'alice/web' } },
   };
   const state = { webhooks: new Map(), deployments: new Map(), jobs: new Map(), audits: new Map(), failWorkflow: true };
@@ -97,7 +99,7 @@ test('Prisma GitHub delivery commits its marker, deployment, and job atomically 
       const saved = snapshot();
       try { return await callback(prisma); } catch (error) { restore(saved); throw error; }
     },
-    $executeRawUnsafe: async () => 1,
+    $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
     $queryRawUnsafe: async () => [{ maxProjects: 1, maxServices: 1, maxDeploymentsPerDay: 0, maxPreviewDeployments: 0, services: [], resources: [], deployments: [], usageRecords: [] }],
     webhookEvent: {
       findUnique: async ({ where }) => state.webhooks.get(where.deliveryId) || null,
@@ -138,12 +140,17 @@ test('Prisma GitHub delivery commits its marker, deployment, and job atomically 
   assert.equal(state.webhooks.size, 0);
   assert.equal(state.deployments.size, 0);
   assert.equal(state.jobs.size, 0);
+  assert.equal(state.audits.size, 0);
 
   const retried = await repository.handleGitHubWebhook(signedInput('prisma-retryable-delivery'));
   assert.equal(retried.duplicate, false);
   assert.equal(state.webhooks.size, 1);
   assert.equal(state.deployments.size, 1);
   assert.equal(state.jobs.size, 1);
+  assert.equal([...state.deployments.values()][0].environmentId, environment.id);
+  assert.equal([...state.deployments.values()][0].desiredSpecSnapshot.environmentId, environment.id);
+  assert.equal([...state.jobs.values()][0].environmentId, environment.id);
+  assert.equal([...state.jobs.values()][0].payload.environmentId, environment.id);
   assert.equal([...state.webhooks.values()][0].handled, true);
   assert.equal([...state.audits.values()][0].actorUserId, null, 'external webhook actors must not violate the AuditLog User foreign key');
   const duplicate = await repository.handleGitHubWebhook(signedInput('prisma-retryable-delivery'));

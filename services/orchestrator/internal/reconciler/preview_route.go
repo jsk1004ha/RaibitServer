@@ -18,7 +18,7 @@ import (
 )
 
 func (r *ServiceReconciler) runNextPreviewRoute(ctx context.Context) (*ReconcileResult, error) {
-	work, err := r.store.ClaimNextPreviewRoute(ctx, store.ClaimOptions{WorkerID: r.config.WorkerID, Lease: 60 * time.Second, Now: r.now().UTC()})
+	work, err := r.store.ClaimNextPreviewRoute(ctx, store.ClaimOptions{WorkerID: r.config.WorkerID, Lease: 60 * time.Second, Now: r.now().UTC(), AllowDevelopment: r.config.DevelopmentEnvironments})
 	if err != nil || work == nil {
 		return nil, err
 	}
