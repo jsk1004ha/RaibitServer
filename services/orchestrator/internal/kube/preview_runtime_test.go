@@ -25,8 +25,24 @@ func TestSpecFromState_uses_candidate_runtime_probe_identity(t *testing.T) {
 		t.Fatalf("candidate spec=%#v", spec)
 	}
 	plan := NewDeploymentPlan(spec)
-	if len(plan.Manifests) != 3 || plan.Manifests[0]["kind"] != "Deployment" || plan.Manifests[1]["kind"] != "Service" || plan.Manifests[2]["kind"] != "Ingress" {
-		t.Fatalf("candidate must mutate only its three owned objects: %#v", plan.Manifests)
+	if len(plan.Manifests) != 4 || plan.Manifests[0]["kind"] != "Deployment" || plan.Manifests[1]["kind"] != "Service" || plan.Manifests[2]["kind"] != "NetworkPolicy" || plan.Manifests[3]["kind"] != "Ingress" {
+		t.Fatalf("candidate must include its workload network isolation policy: %#v", plan.Manifests)
+	}
+	policy := plan.Manifests[2]["spec"].(map[string]any)
+	selector := policy["podSelector"].(map[string]any)["matchLabels"].(map[string]any)
+	if selector["app.kubernetes.io/name"] != "pr-7-web-candidate" {
+		t.Fatalf("candidate policy selector=%#v", selector)
+	}
+	spec.PublicEgress = true
+	publicPlan := NewDeploymentPlan(spec)
+	policyCount := 0
+	for _, manifest := range publicPlan.Manifests {
+		if manifest["kind"] == "NetworkPolicy" {
+			policyCount++
+		}
+	}
+	if len(publicPlan.Manifests) != 5 || policyCount != 2 {
+		t.Fatalf("candidate public egress policies=%#v", publicPlan.Manifests)
 	}
 }
 

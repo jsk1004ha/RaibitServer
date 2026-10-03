@@ -166,6 +166,8 @@ func validPreviewOwnedObject(object PreviewOwnedObject) bool {
 		return true
 	case object.Group == "networking.k8s.io" && object.Version == "v1" && object.Kind == "Ingress":
 		return true
+	case object.Group == "networking.k8s.io" && object.Version == "v1" && object.Kind == "NetworkPolicy":
+		return true
 	default:
 		return false
 	}

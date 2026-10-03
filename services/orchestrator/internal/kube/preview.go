@@ -42,12 +42,17 @@ type previewObjectJSON struct {
 	} `json:"spec"`
 }
 
-func ObservePreviewObject(raw []byte, runtime store.PreviewRuntime, projectID, serviceID, kind string) (store.PreviewOwnedObject, error) {
+func ObservePreviewObject(raw []byte, runtime store.PreviewRuntime, projectID, serviceID, kind string, names ...string) (store.PreviewOwnedObject, error) {
 	object, err := parsePreviewObject(raw)
 	if err != nil {
 		return store.PreviewOwnedObject{}, err
 	}
 	expectedName := runtime.WorkloadName
+	if len(names) == 1 {
+		expectedName = names[0]
+	} else if len(names) > 1 {
+		return store.PreviewOwnedObject{}, ErrPreviewObject
+	}
 	group := ""
 	apiVersion := "v1"
 	switch kind {
@@ -56,6 +61,9 @@ func ObservePreviewObject(raw []byte, runtime store.PreviewRuntime, projectID, s
 		apiVersion = "apps/v1"
 	case "Service":
 	case "Ingress":
+		group = "networking.k8s.io"
+		apiVersion = "networking.k8s.io/v1"
+	case "NetworkPolicy":
 		group = "networking.k8s.io"
 		apiVersion = "networking.k8s.io/v1"
 	default:
