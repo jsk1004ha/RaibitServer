@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { OperationSubmit } from '@/components/operation-submit';
+import { CreationSourceFields } from '@/components/creation-source-fields';
 import { ServiceSettingsForm } from './service-settings';
 import { HubEmpty, ProjectStatusBadge } from './shared';
 import type { ProjectHubData, ServiceRecord } from './types';
@@ -13,46 +14,25 @@ import type { ProjectHubData, ServiceRecord } from './types';
 const serviceTypes = [
   ['web', '웹'], ['private', '비공개 서비스'], ['worker', '워커'], ['cron', '예약 작업'], ['job', '일회성 작업'],
 ] as const;
-const createSourceTypes = [
-  ['github', 'GitHub'], ['image', '빌드된 이미지'], ['local', '로컬 Dockerfile'],
-] as const;
-const editSourceTypes = [
-  ['github', 'GitHub'], ['gitlab', 'GitLab'], ['zip', 'ZIP'], ['image', '빌드된 이미지'], ['local', '로컬 Dockerfile'],
-] as const;
-const buildModes = [
-  ['auto', '자동'], ['dockerfile', 'Dockerfile'], ['buildpack', 'Buildpack'], ['framework', '프레임워크'], ['custom', '직접 설정'], ['prebuilt-image', '빌드된 이미지'], ['generated', '자동 생성'],
-] as const;
-
-function TextField({ defaultValue, label, max, min, name, placeholder, required, type = 'text' }: Readonly<{ defaultValue?: string | number; label: string; max?: number; min?: number; name: string; placeholder?: string; required?: boolean; type?: 'text' | 'url' | 'number' }>) {
-  return <Field><FieldLabel htmlFor={`service-${name}`}>{label}</FieldLabel><Input defaultValue={defaultValue} id={`service-${name}`} max={max} min={min} name={name} placeholder={placeholder} required={required} type={type} /></Field>;
-}
-
-function ServiceFields({ service }: Readonly<{ service?: ServiceRecord | null }>) {
-  return (
-    <FieldGroup className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-raibit-lg">
-      <TextField defaultValue={service?.name} label="서비스 이름" name="name" placeholder="예: web" required />
-      <Field><FieldLabel htmlFor="service-type">서비스 유형</FieldLabel><Select defaultValue={String(service?.type || 'web').toLowerCase()} id="service-type" name="type">{serviceTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
-      <Field><FieldLabel htmlFor="service-sourceType">소스 유형</FieldLabel><Select defaultValue={String(service?.sourceType || 'github').toLowerCase()} id="service-sourceType" name="sourceType">{(service ? editSourceTypes : createSourceTypes).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
-      {service ? <Field><FieldLabel htmlFor="service-buildMode">빌드 방식</FieldLabel><Select defaultValue={String(service.buildMode || 'auto').toLowerCase().replaceAll('_', '-')} id="service-buildMode" name="buildMode">{buildModes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field> : null}
-      <TextField defaultValue={service?.repoUrl} label="저장소 URL" name="repoUrl" placeholder="https://github.com/org/repo.git" type="url" />
-      <TextField defaultValue={service?.branch} label="브랜치" name="branch" placeholder="main" />
-      {service ? <TextField defaultValue={service.rootDirectory} label="루트 경로" name="rootDirectory" placeholder="." /> : null}
-      <TextField defaultValue={service?.buildContext} label="빌드 컨텍스트" name="buildContext" placeholder="." />
-      <TextField defaultValue={service?.dockerfilePath} label="Dockerfile 경로" name="dockerfilePath" placeholder="Dockerfile" />
-      <TextField defaultValue={service?.imageUrl || service?.image} label="이미지" name="imageUrl" placeholder="registry.example.com/team/web:tag" />
-      {service ? <><TextField defaultValue={service.installCommand} label="설치 명령" name="installCommand" placeholder="npm ci" /><TextField defaultValue={service.buildCommand} label="빌드 명령" name="buildCommand" placeholder="npm run build" /><TextField defaultValue={service.startCommand} label="시작 명령" name="startCommand" placeholder="npm start" /><TextField defaultValue={service.outputDirectory} label="출력 경로" name="outputDirectory" placeholder="dist" /><TextField defaultValue={service.port} label="포트" max={65535} min={1} name="port" placeholder="3000" type="number" /></> : null}
-    </FieldGroup>
-  );
+function ServiceFields() {
+  return <FieldGroup>
+    <Field><FieldLabel htmlFor="service-name">서비스 이름</FieldLabel><Input id="service-name" name="name" placeholder="예: web" required /></Field>
+    <CreationSourceFields imageField="imageUrl" />
+    <details>
+      <summary className="cursor-pointer rounded-sm py-raibit-sm text-sm font-medium focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/25">서비스 유형 변경 (선택)</summary>
+      <Field className="mt-raibit-md"><FieldLabel htmlFor="service-type">서비스 유형</FieldLabel><Select defaultValue="web" id="service-type" name="type">{serviceTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
+    </details>
+  </FieldGroup>;
 }
 
 function ServiceForm({ data, service }: Readonly<{ data: ProjectHubData; service?: ServiceRecord | null }>) {
   if (service) return <ServiceSettingsForm actionBase={apiAction(`/services/${service.id}/settings`)} service={service} />;
   return (
     <Card className="mx-auto w-full max-w-5xl">
-      <CardHeader><CardTitle><h2>서비스 만들기</h2></CardTitle><CardDescription>컨테이너 실행 단위</CardDescription></CardHeader>
+      <CardHeader><CardTitle><h2>서비스 만들기</h2></CardTitle><CardDescription>이름과 배포할 코드 또는 이미지를 연결하세요.</CardDescription></CardHeader>
       <form action={apiAction(`/projects/${data.projectId}/services`)} method="post">
         <input name="_returnTo" type="hidden" value={`${data.base}?view=services`} />
-        <CardContent><ServiceFields service={service} /></CardContent>
+        <CardContent><ServiceFields /></CardContent>
         <CardFooter className="mt-raibit-xl justify-end gap-raibit-sm bg-muted/40"><a className={buttonVariants({ variant: 'ghost' })} href={`${data.base}?view=services`}>취소</a><button className={buttonVariants()} type="submit">서비스 만들기</button></CardFooter>
       </form>
     </Card>

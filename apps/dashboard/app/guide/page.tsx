@@ -1,7 +1,8 @@
 import { ArrowRightIcon, BookOpenIcon, InfoIcon } from 'lucide-react';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ConsoleShell } from '../../components/console-ui';
+import { PublicHeader } from '../../components/public-header';
+import { selectedWorkspace } from '../../lib/workspace-context';
 import { dashboardApiContext, getJson } from '../../lib/api';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -10,14 +11,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { cn } from '@/lib/utils';
 import { SectionNavigationScroll } from '../../components/section-navigation-scroll';
 
-const topics = ['projects', 'source', 'environment', 'deployments', 'resources', 'github', 'administration'] as const;
+const topics = ['organizations', 'projects', 'source', 'environment', 'deployments', 'resources', 'github', 'administration'] as const;
 type GuideTopic = typeof topics[number];
 
 const navItems = [
-  { id: 'projects', label: '프로젝트', description: '4단계 시작', href: '/guide?topic=projects' },
+  { id: 'organizations', label: '처음 시작하기', description: '작업 공간 이해하기', href: '/guide?topic=organizations' },
+  { id: 'projects', label: '프로젝트', description: '이름과 코드 선택', href: '/guide?topic=projects' },
   { id: 'source', label: '자동 인식', description: '파일·프레임워크', href: '/guide?topic=source' },
   { id: 'environment', label: '비밀키', description: '환경 변수', href: '/guide?topic=environment' },
-  { id: 'deployments', label: '배포', description: 'AI·로그', href: '/guide?topic=deployments' },
+  { id: 'deployments', label: '배포와 로그', description: '실행·오류 확인', href: '/guide?topic=deployments' },
   { id: 'resources', label: '리소스', description: 'DB·캐시', href: '/guide?topic=resources' },
   { id: 'github', label: 'GitHub', description: '저장소·PR', href: '/guide?topic=github' },
   { id: 'administration', label: '관리', description: '승인·밴', href: '/guide?topic=administration' },
@@ -33,20 +35,36 @@ type Guide = {
 };
 
 const guides: Record<GuideTopic, Guide> = {
-  projects: {
-    title: '프로젝트 시작',
-    summary: '처음 만드는 사람을 위한 4단계 안내',
+  organizations: {
+    title: '처음이라면 여기부터',
+    summary: '작업 공간 → 프로젝트 → 서비스',
     paragraphs: [
-      '프로젝트는 웹 서비스 하나만 뜻하지 않습니다. 웹, 비공개 API, 워커와 예약 작업, 데이터베이스와 캐시를 한곳에서 관리하는 묶음입니다. 처음에는 대표 서비스 하나와 꼭 필요한 리소스만 만든 뒤 나중에 추가해도 됩니다.',
-      '만들기 화면은 프로젝트, 저장소, 서비스, 리소스의 네 단계로 진행됩니다. 1~3단계의 다음 버튼과 Enter 입력은 화면만 이동하고, 4단계에서 프로젝트 만들기를 눌러야 서버로 제출됩니다.',
+      '라이빗은 만든 웹사이트나 봇을 서버에서 실행하고 관리하는 서비스입니다. 가입 신청과 이메일 인증을 마친 뒤 관리자의 승인을 받으면 프로젝트를 만들 수 있습니다.',
+      '작업 공간은 프로젝트와 팀원을 함께 관리하는 곳입니다. 혼자 쓰더라도 작업 공간 안에 프로젝트를 만들고, 함께 개발할 때는 같은 공간에 팀원을 초대합니다. GitHub의 조직과는 별개입니다.',
     ],
     steps: [
-      { title: '이름과 슬러그 정하기', detail: '사람이 알아보기 쉬운 이름을 입력합니다. 슬러그를 비우면 서버가 안전한 식별자를 만들며 조직 범위는 로그인 권한으로 확인합니다.' },
-      { title: '저장소 연결하기', detail: '대부분은 GitHub 저장소 URL과 main 브랜치만 입력하면 됩니다. 이미 만들어진 이미지가 있다면 이미지 방식을 선택합니다.' },
-      { title: '첫 서비스 고르기', detail: '웹/API는 web, 내부 전용 서버는 private, 백그라운드 처리는 worker, 예약 작업은 cron, 일회성 처리는 job을 선택합니다.' },
-      { title: '리소스 확인하고 생성하기', detail: 'PostgreSQL·MySQL·MongoDB와 Redis·Valkey 중 필요한 것만 고릅니다. 추가 안 함을 선택해도 나중에 리소스 화면에서 만들 수 있습니다.' },
+      { title: '작업 공간 확인하기', detail: '왼쪽 위에서 현재 공간을 확인합니다. 여러 공간에 참여했다면 메뉴에서 바꿀 수 있습니다. 모바일에서는 콘솔 메뉴를 먼저 여세요.' },
+      { title: '프로젝트 만들기', detail: '새 프로젝트를 누르고 이름과 코드 저장소를 입력합니다. 동아리 홈페이지, 개인 봇처럼 함께 관리할 단위로 나누세요.' },
+      { title: '실행할 서비스 설정하기', detail: '프로젝트 안에 웹사이트나 봇을 서비스로 추가합니다. 데이터베이스가 필요할 때만 리소스를 추가하세요.' },
+      { title: '배포하고 주소 열기', detail: '필요한 환경 변수를 저장하고 배포합니다. 완료되면 웹 서비스 주소를 열고, 문제가 있으면 배포 내역과 로그를 확인하세요.' },
     ],
-    note: '4 / 4 화면에 도착하기 전에는 프로젝트가 생성되지 않습니다. 예전 화면이 보이면 새 Dashboard 배포와 브라우저 캐시를 확인하세요.',
+    note: '작업 공간을 바꿔도 프로젝트가 이동하지는 않습니다. 새 작업 공간이 꼭 필요한 게 아니라면 현재 공간을 그대로 사용하면 됩니다. 접근할 공간이 보이지 않으면 관리자에게 초대를 요청하세요.',
+    next: { label: '내 프로젝트 확인하기', destination: 'projects' },
+  },
+  projects: {
+    title: '프로젝트 시작',
+    summary: '이름과 실행할 코드만 준비하세요',
+    paragraphs: [
+      '프로젝트는 웹 서비스 하나만 뜻하지 않습니다. 웹, 비공개 API, 워커와 예약 작업, 데이터베이스와 캐시를 한곳에서 관리하는 묶음입니다. 처음에는 대표 서비스 하나와 꼭 필요한 리소스만 만든 뒤 나중에 추가해도 됩니다.',
+      '새 프로젝트 화면에서 이름과 코드를 가져올 곳을 선택합니다. 필요한 설정만 입력한 뒤 프로젝트 만들기를 누르면 생성됩니다.',
+    ],
+    steps: [
+      { title: '이름 정하기', detail: '동아리 홈페이지처럼 알아보기 쉬운 이름을 입력합니다. 주소 이름은 자동으로 제안되며 필요하면 바꿀 수 있습니다.' },
+      { title: '저장소 연결하기', detail: '대부분은 GitHub 저장소 URL과 main 브랜치만 입력하면 됩니다. 이미 만들어진 이미지가 있다면 이미지 방식을 선택합니다.' },
+      { title: '필요한 설정만 추가하기', detail: '기본 설정으로 시작할 수 있습니다. 실행 방식이나 빌드 명령을 바꾸거나 데이터베이스가 필요할 때만 추가 설정을 여세요.' },
+      { title: '프로젝트 만들기', detail: '입력한 내용을 확인하고 프로젝트 만들기를 누릅니다. 데이터베이스와 서비스는 나중에도 추가할 수 있습니다.' },
+    ],
+    note: '프로젝트를 만드는 것과 배포하는 것은 다릅니다. 생성 후 필요한 환경 변수를 먼저 넣고 배포를 시작하세요.',
     next: { label: '프로젝트 목록 열기', destination: 'projects' },
   },
   source: {
@@ -75,58 +93,58 @@ const guides: Record<GuideTopic, Guide> = {
     steps: [
       { title: '서비스 선택', detail: '같은 프로젝트라도 서비스마다 필요한 값이 다르므로 상단에서 대상 서비스를 정확히 선택합니다.' },
       { title: '키와 값 입력', detail: '키는 API_TOKEN처럼 영문자와 숫자, 밑줄을 사용합니다. 민감한 값이면 암호화 저장 옵션을 켭니다.' },
-      { title: '.env 한꺼번에 가져오기', detail: '한 줄에 KEY=value 하나씩 붙여 넣습니다. 실제 파일을 브라우저 밖으로 전송하지 않고 입력한 텍스트만 API에 보냅니다.' },
+      { title: '.env 한꺼번에 가져오기', detail: '한 줄에 KEY=value 하나씩 붙여 넣습니다. 저장 전에 변수 이름과 값을 확인하세요.' },
       { title: '교체 후 배포', detail: '비밀값 수정 화면은 기존 원문을 다시 보여 주지 않습니다. 새 값을 입력해 교체한 뒤 서비스를 재배포합니다.' },
     ],
-    note: '플랫폼 자체의 JWT, 암호화 키, registry와 signing credential은 tenant 화면이 아니라 서버 secret manager 또는 Kubernetes Secret으로 관리합니다.',
+    note: '비밀번호나 API 키를 코드 저장소에 올리지 마세요. 이미 공개했다면 환경 변수로 옮기는 것뿐 아니라 해당 서비스에서 키를 새로 발급해야 합니다.',
     next: { label: '프로젝트 목록 열기', destination: 'projects' },
   },
   deployments: {
-    title: 'AI 배포와 수동 배포',
-    summary: '위협 점검부터 상태·로그 확인까지',
+    title: '배포하고 로그 확인하기',
+    summary: '코드를 실행하고 문제가 생긴 지점 찾기',
     paragraphs: [
-      'AI 배포 탭은 외부 AI가 없어도 동작합니다. 내장된 결정적 규칙이 workload 권한, 이미지 digest, 저장소 URL, 위험 명령, 평문 비밀키를 먼저 검사합니다. critical 또는 high 위험이 하나라도 있으면 자동 실행 버튼을 차단합니다.',
-      '외부 AI를 연결한 경우에도 전달되는 내용은 서비스 이름·유형과 위협 코드 같은 제한된 메타데이터뿐입니다. AI는 안전한 서비스의 순서를 제안할 수 있지만 서버의 보안 판정을 바꾸거나 secret을 볼 수 없습니다.',
+      '배포는 저장소의 코드를 빌드하고 서버에서 실행하는 과정입니다. 코드를 수정한 뒤에는 다시 배포해야 실행 중인 서비스에 반영됩니다.',
+      '배포 내역에서는 빌드와 실행 상태를, 로그에서는 서비스가 출력한 내용을 확인합니다. 여러 서비스가 있다면 먼저 확인할 서비스를 선택하세요.',
     ],
     steps: [
-      { title: 'AI 배포 계획 열기', detail: '프로젝트의 AI 배포 탭에서 서비스별 배포 가능 여부와 위협 코드를 확인합니다.' },
-      { title: '차단 원인 수정', detail: '평문 secret은 환경 변수 보관함으로 옮기고, 이미지는 sha256 digest로 고정하며, 위험 명령과 과도한 권한을 제거합니다.' },
-      { title: '검증된 계획 실행', detail: '실행 직전에 서버가 설정을 다시 읽어 검사합니다. 계획을 본 뒤 설정이 위험하게 바뀌었다면 배포하지 않습니다.' },
-      { title: '배포와 로그 확인', detail: '배포 탭에서 build event와 image를 확인하고, 실행 중 문제는 로그 탭에서 봅니다. 한 서비스만 배포할 때는 서비스 목록의 운영 배포 또는 미리보기를 사용합니다.' },
+      { title: '배포 전 설정 확인', detail: '저장소와 브랜치, 시작 명령, 포트, 필요한 환경 변수가 맞는지 확인합니다.' },
+      { title: '서비스 배포하기', detail: '서비스에서 운영 배포를 선택합니다. 운영 중인 서비스와 분리해 확인하려면 미리보기를 사용하세요.' },
+      { title: '완료 상태 확인', detail: '배포 내역에서 진행 상태를 확인하고, 준비가 완료되면 서비스 주소를 열어 실제로 사용해 보세요.' },
+      { title: '실패 지점 찾기', detail: '빌드 실패라면 설치·빌드 로그를, 실행 후 종료된다면 서비스 로그와 환경 변수를 확인합니다. 오류 메시지와 배포 시각을 함께 남기면 문의할 때 도움이 됩니다.' },
     ],
-    note: '배포 실패는 먼저 빌드 로그, root directory와 Dockerfile 경로, 필수 환경 변수, quota와 보안 차단 순서로 확인하세요.',
+    note: 'AI 배포는 추가 점검을 돕는 기능입니다. 일반 배포를 시작하기 위해 외부 AI를 연결할 필요는 없습니다.',
     next: { label: '프로젝트 목록 열기', destination: 'projects' },
   },
   resources: {
     title: '관리형 리소스',
     summary: 'DB·캐시·스토리지를 서비스에 연결하기',
     paragraphs: [
-      '리소스는 docker-compose에 임의 컨테이너를 추가하는 기능이 아닙니다. PostgreSQL, Redis, Object Storage 같은 카탈로그 항목을 선택하면 API가 원하는 상태를 기록하고 provisioner가 실제 상태를 맞춥니다.',
-      '연결 정보는 공개 가능한 endpoint와 Secret reference로 나뉩니다. 자격 증명 원문을 일반 로그나 control-plane 응답에 복사하지 않으며, DB console의 schema 보기, row 읽기, 쓰기 권한도 따로 검사합니다.',
+      '리소스는 서비스에서 사용할 데이터베이스, 캐시, 파일 저장 공간입니다. 단순한 정적 웹사이트라면 추가하지 않아도 됩니다.',
+      '프로젝트의 리소스 화면에서 필요한 종류를 선택하고 준비 상태를 확인하세요. 생성 후 연결 정보를 서비스의 환경 변수에 설정해야 코드에서 사용할 수 있습니다.',
     ],
     steps: [
       { title: '엔진과 이름 선택', detail: '프로젝트 리소스 탭에서 필요한 엔진을 고르고 서비스에서 구분하기 쉬운 이름을 입력합니다.' },
-      { title: '준비 상태 기다리기', detail: 'provisioner가 자격 증명, storage와 endpoint, 인증 probe를 확인해 READY로 바꿀 때까지 기다립니다.' },
-      { title: '서비스 연결 확인', detail: '서비스에는 허용된 환경 변수 키별 Secret reference만 연결되는지 확인합니다.' },
-      { title: '백업과 권한 준비', detail: 'production 전에는 백업, 복구, 용량 제한과 DB console 권한을 별도로 정합니다.' },
+      { title: '준비 상태 기다리기', detail: '리소스가 준비 완료 상태가 될 때까지 기다립니다. 오류가 표시되면 상세 화면의 안내를 확인하세요.' },
+      { title: '서비스에 연결하기', detail: '연결 안내에 따라 서비스 환경 변수를 설정하고 재배포합니다. 연결 비밀번호를 로그나 공개 저장소에 남기지 마세요.' },
+      { title: '데이터 보관 확인', detail: '중요한 데이터를 넣기 전 백업 방법과 용량 제한을 확인하세요. 리소스를 삭제하기 전에는 필요한 데이터를 따로 보관해야 합니다.' },
     ],
-    note: '엔진별 live 지원 범위가 다릅니다. 화면에 항목이 있다는 사실만으로 production provider가 완성된 것으로 판단하지 마세요.',
+    note: '사용할 수 있는 리소스 종류는 서버 설정에 따라 다릅니다. 준비되지 않거나 생성이 막히면 관리자에게 문의하세요.',
     next: { label: '프로젝트 목록 열기', destination: 'projects' },
   },
   github: {
     title: 'GitHub 연결',
     summary: '설치·가져오기·PR 미리보기',
     paragraphs: [
-      'GitHub App은 계정 전체 권한 대신 배포할 저장소만 선택해 설치하는 방식을 권장합니다. callback에서 조직 소유권을 다시 확인하고, webhook은 shared secret으로 HMAC을 검증합니다.',
-      '연결된 저장소의 push는 운영 workflow를, pull request는 별도 미리보기 workflow를 만들 수 있습니다. 미리보기는 운영 서비스와 다른 단일-label 주소를 사용하고 PR이 닫히면 정리 작업을 예약합니다.',
+      '저장소 연결은 GitHub의 코드를 가져와 배포하기 위한 기능입니다. 로그인 화면의 GitHub로 로그인과는 별개이므로 이메일로 로그인한 계정도 저장소를 연결할 수 있습니다.',
+      'GitHub 연결 화면에서 앱을 설치하고 사용할 저장소를 선택하세요. 다른 사람의 저장소라면 먼저 저장소 관리자에게 설치 권한을 요청해야 할 수 있습니다.',
     ],
     steps: [
       { title: 'GitHub App 설치', detail: '개인 계정 또는 조직을 선택하고 RAIBITSERVER가 사용할 저장소만 허용합니다.' },
-      { title: '저장소 가져오기', detail: '설치가 확인된 저장소 목록에서 대상을 고릅니다. 브라우저 폼으로 token이나 installation ID를 직접 보내지 않습니다.' },
-      { title: '서비스에 연결', detail: '프로젝트와 서비스를 고른 뒤 저장소 metadata를 동기화합니다.' },
-      { title: 'Webhook과 미리보기 확인', detail: 'push와 pull_request event가 서명 검증을 통과했는지 보고 preview 주소와 cleanup event를 확인합니다.' },
+      { title: '저장소 고르기', detail: '접근을 허용한 저장소 목록에서 배포할 저장소를 선택합니다. 목록에 없으면 GitHub 앱의 저장소 접근 권한을 확인하세요.' },
+      { title: '서비스에 연결', detail: '코드를 사용할 프로젝트와 서비스를 선택하고 브랜치와 빌드 설정을 확인합니다.' },
+      { title: '변경 사항 배포', detail: '코드를 올린 뒤 새 배포가 시작되는지 확인합니다. 자동 배포가 설정되지 않았다면 서비스 화면에서 직접 배포하세요.' },
     ],
-    note: '저장소 권한은 필요한 범위만 선택하고 webhook secret이 비어 있는 production 요청은 항상 거부해야 합니다.',
+    note: 'GitHub 연결 설정이 없다는 안내는 서버 관리자 설정이 필요하다는 뜻입니다. 반복해서 연결을 눌러도 해결되지 않으므로 관리자에게 문의하세요.',
     next: { label: '저장소 연결 시작', destination: 'github' },
   },
   administration: {
@@ -134,10 +152,10 @@ const guides: Record<GuideTopic, Guide> = {
     summary: '계정 접근을 안전하게 운영하기',
     paragraphs: [
       '새 가입자는 이메일 인증 뒤 승인 대기 상태가 됩니다. 관리자는 신청자의 이름, 학번, 이메일과 동아리원 신청 여부를 보고 클럽 회원 또는 일반 사용자로 승인할 수 있습니다.',
-      '이용 제한이 필요하면 사유와 선택적 만료 시각을 기록해 밴합니다. 밴 즉시 session version이 바뀌어 기존 로그인 세션이 무효화되고, 로그인과 보호된 작업이 모두 차단됩니다.',
+      '이용 제한이 필요하면 사유와 해제 시각을 기록합니다. 제한된 계정은 로그아웃되며, 제한을 해제하기 전까지 다시 이용할 수 없습니다.',
     ],
     steps: [
-      { title: '신청 정보 확인', detail: '표시된 신원 정보가 운영 규칙과 맞는지 확인합니다. 승인 유형에 따라 quota와 역할 범위가 달라질 수 있습니다.' },
+      { title: '신청 정보 확인', detail: '표시된 신원 정보가 운영 규칙과 맞는지 확인합니다. 승인 유형에 따라 사용량 한도와 권한이 달라질 수 있습니다.' },
       { title: '승인 또는 거절', detail: '클럽 회원 승인, 일반 사용자 승인, 확인 절차가 있는 거절 중 하나를 선택합니다.' },
       { title: '필요한 계정 밴', detail: '500자 이하의 구체적인 사유를 적고, 임시 제한이면 미래의 해제 시각을 입력합니다. 비우면 영구 제한입니다.' },
       { title: '감사 기록과 해제', detail: '관리 작업과 사유를 감사 로그에서 확인합니다. 문제가 해결되면 밴 해제로 새 로그인을 허용합니다.' },
@@ -149,43 +167,39 @@ const guides: Record<GuideTopic, Guide> = {
 
 export default async function GuidePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const context = await dashboardApiContext();
-  if (!context.token) redirect('/login?error=session_expired&next=/guide');
-  const [query, me, projectsResult] = await Promise.all([
+  const [query, me] = await Promise.all([
     searchParams,
-    getJson('/auth/me', { user: null, subject: null }, context),
-    getJson('/projects', { projects: [] }, context),
+    context.token ? getJson('/auth/me', { user: null, subject: null }, context) : Promise.resolve(null),
   ]);
-  if (!me.ok) redirect('/login?error=session_expired&next=/guide');
-  const requestedTopic = String(query.topic || 'projects');
-  const topic: GuideTopic = topics.includes(requestedTopic as GuideTopic) ? requestedTopic as GuideTopic : 'projects';
+  const requestedTopic = String(query.topic || 'organizations');
+  const topic: GuideTopic = topics.includes(requestedTopic as GuideTopic) ? requestedTopic as GuideTopic : 'organizations';
   const guide = guides[topic];
-  const subject = me.body?.subject;
-  const firstProject = projectsResult.body?.projects?.[0];
-  const orgSlug = firstProject?.organizationSlug || firstProject?.organizationId || subject?.organizationSlug || subject?.organizationId || 'default';
+  const authenticated = Boolean(me?.ok);
+  const orgSlug = me?.ok ? await selectedWorkspace({ subject: me.body?.subject, memberships: me.body?.memberships }) : '';
   const nextHref = guide.next.destination === 'projects'
-    ? `/org/${encodeURIComponent(orgSlug)}/projects`
+    ? orgSlug ? `/org/${encodeURIComponent(orgSlug)}/projects` : '/console'
     : guide.next.destination === 'admin' ? '/admin' : topic === 'source' ? '/github?step=attach' : '/github?step=connect';
-  return (
-    <ConsoleShell active="guide" orgValue={orgSlug} orgRouteValue={orgSlug}>
+  const content = (
       <section className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
-        <header className="border-b border-border pb-6"><p className="mb-1.5 text-xs font-medium text-muted-foreground">RAIBIT GUIDE</p><h1 className="text-2xl font-medium tracking-tight text-foreground md:text-[1.75rem]">사용 안내</h1><p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">Dockerfile 우선 배포부터 운영 관리까지, 필요한 주제를 URL로 바로 열어 확인합니다.</p></header>
-        {!projectsResult.ok ? <Alert variant="destructive"><AlertTitle>프로젝트 정보를 불러오지 못했습니다.</AlertTitle><AlertDescription>안내 내용은 계속 볼 수 있습니다. 프로젝트 상태는 잠시 후 다시 확인해 주세요.</AlertDescription></Alert> : null}
+        <header className="border-b border-border pb-6"><p className="mb-1.5 text-xs font-medium text-muted-foreground">RAIBIT GUIDE</p><h1 className="text-2xl font-medium tracking-tight text-foreground md:text-[1.75rem]">사용 안내</h1><p className="mt-1.5 max-w-2xl text-sm text-muted-foreground break-keep">처음 시작하는 방법부터 배포 오류 확인까지. 지금 하려는 작업을 골라 따라 해 보세요.</p></header>
         <div className="grid min-w-0 gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
           <nav aria-label="사용 안내 주제" className="min-w-0"><SectionNavigationScroll as="ul" current={topic} viewportClassName="gap-2 pb-1 lg:flex-col lg:overflow-visible">{navItems.map((item) => { const current = item.id === topic; return <li key={item.id} className="min-w-36 lg:min-w-0"><Link className={cn('flex min-h-14 flex-col justify-center rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/25', current ? 'border-primary bg-primary-soft text-primary' : 'border-border bg-card text-foreground hover:bg-muted')} aria-current={current ? 'page' : undefined} href={item.href}><strong className="font-medium">{item.label}</strong><span className={cn('text-xs', current ? 'text-primary' : 'text-muted-foreground')}>{item.description}</span></Link></li>; })}</SectionNavigationScroll></nav>
           <article className="flex min-w-0 flex-col gap-5">
             <Card>
-              <CardHeader className="border-b"><Badge variant="secondary" className="mb-1">{guide.summary}</Badge><CardTitle><h2 className="text-xl md:text-2xl">{guide.title}</h2></CardTitle><CardDescription>현재 조직: <span className="break-all font-medium text-foreground">{orgSlug}</span></CardDescription></CardHeader>
+              <CardHeader className="border-b"><Badge variant="secondary" className="mb-1">{guide.summary}</Badge><CardTitle><h2 className="text-xl md:text-2xl break-keep">{guide.title}</h2></CardTitle><CardDescription>{authenticated ? '왼쪽 위에서 작업 공간을 선택하고 해당 프로젝트로 이동할 수 있습니다.' : '가입 전에 준비할 내용과 이용 순서를 확인하세요.'}</CardDescription></CardHeader>
               <CardContent className="flex flex-col gap-6">
                 <section className="flex flex-col gap-3 text-sm leading-7 text-foreground" aria-label={`${guide.title} 설명`}>{guide.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}</section>
                 <ol className="grid gap-3">{guide.steps.map((step, index) => <li key={step.title} className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-md border border-border bg-background p-4"><span className="flex size-7 items-center justify-center rounded-full bg-primary-soft text-xs font-medium text-primary" aria-hidden="true">{index + 1}</span><div className="min-w-0"><strong className="text-sm font-medium text-foreground">{step.title}</strong><p className="mt-1 text-sm leading-6 text-muted-foreground">{step.detail}</p></div></li>)}</ol>
                 <Alert variant="notice"><InfoIcon /><AlertTitle>알아두기</AlertTitle><AlertDescription>{guide.note}</AlertDescription></Alert>
               </CardContent>
             </Card>
-            <div className="flex flex-wrap gap-2"><Link className={buttonVariants()} href={nextHref}>{guide.next.label}<ArrowRightIcon data-icon="inline-end" /></Link><a className={buttonVariants({ variant: 'outline' })} href="https://github.com/jsk1004ha/RaibitServer/blob/main/docs/handbook/README.md"><BookOpenIcon data-icon="inline-start" />전체 사용 설명서</a></div>
+            <div className="flex flex-wrap gap-2"><Link className={buttonVariants()} href={authenticated ? nextHref : '/login?mode=signup'}>{authenticated ? guide.next.label : '가입 신청하기'}<ArrowRightIcon data-icon="inline-end" /></Link><a className={buttonVariants({ variant: 'outline' })} href="https://github.com/jsk1004ha/RaibitServer/blob/main/docs/handbook/README.md"><BookOpenIcon data-icon="inline-start" />전체 사용 설명서</a><Link className={buttonVariants({ variant: 'outline' })} href="/support">문의하기</Link></div>
             <p className="sr-only">선택한 안내 주제는 주소에 저장되어 브라우저 뒤로 가기와 앞으로 가기로 이동할 수 있습니다.</p>
           </article>
         </div>
       </section>
-    </ConsoleShell>
   );
+  return authenticated
+    ? <ConsoleShell active="guide" orgRouteValue={orgSlug} projectValue="사용 안내">{content}</ConsoleShell>
+    : <><PublicHeader currentPath="/guide" /><main id="main-content">{content}</main></>;
 }

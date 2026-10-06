@@ -13,10 +13,10 @@ const actionLabels: Readonly<Record<DeploymentHistoryAction['type'], string>> = 
 };
 
 const actionDescriptions: Readonly<Record<DeploymentHistoryAction['type'], string>> = {
-  retry: '같은 불변 스냅샷으로 후속 배포를 하나만 요청합니다.',
+  retry: '같은 코드와 설정으로 다시 배포합니다.',
   redeploy: '현재 서비스 구성을 새 배포로 요청합니다.',
   cancel: '진행 중인 배포의 중단을 요청합니다.',
-  rollback: '서버가 확인한 이전 READY 배포를 대상으로 롤백을 요청합니다.',
+  rollback: '이전에 정상 실행된 배포로 되돌립니다.',
 };
 
 export function DeploymentRecoveryAction({ action, idempotencyKey, returnTo }: Readonly<{

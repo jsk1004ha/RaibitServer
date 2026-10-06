@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ActionLink, Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
@@ -9,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { redirect } from 'next/navigation';
 import { apiAction, loadGitHubConsole } from '../../lib/api';
 import { scopedProjectHrefs } from '../../lib/github-project-link-contract.mjs';
+import { resolveGitHubAttachTarget } from '../../lib/github-attach-target';
 import { ConsoleShell, LoadErrorSummary, SectionNav } from '../../components/console-ui';
 import { GitHubCatalogRefresh } from '../../components/github-catalog-refresh';
 import { GitHubLifecycleControls, type GitHubLifecycleIntegration, type GitHubLifecycleStatus } from '../../components/github-lifecycle-controls';
@@ -38,7 +40,7 @@ type GitHubRepository = {
   readonly installationId?: string;
 };
 
-type GitHubProject = { readonly id?: string; readonly name?: string; readonly slug?: string; readonly organizationSlug?: string };
+type GitHubProject = { readonly id?: string; readonly name?: string; readonly slug?: string; readonly organizationSlug?: string; readonly organizationId?: string };
 
 type GitHubRepositoryCatalog = {
   readonly installationId: string;
@@ -69,8 +71,6 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
     .find((row) => String(row.installationId) === String(selectedInstallation?.installationId))
     ?.repositories || [];
   const selectedRepository = selectedRepositories.find((repository: GitHubRepository) => repository.accessState !== 'REVOKED');
-  const firstService = state.services[0];
-  const serviceProject = state.projects.find((project: GitHubProject) => String(project.id) === String(firstService?.projectId));
   const integrationId = selectedInstallation?.integrationId || '';
   const repositoryId = selectedRepository?.githubRepoId || selectedRepository?.id || '';
   const lifecycleIntegrations: readonly GitHubLifecycleIntegration[] = state.integrations.flatMap((integration: unknown) => {
@@ -80,16 +80,26 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
   const selectedIntegration = lifecycleIntegrations.find((integration) => integration.id === integrationId);
   const sourceAvailable = Boolean(selectedIntegration?.connected && selectedIntegration.credentialIssuance === 'allowed' && selectedIntegration.status === 'ACTIVE');
   const canImportRepository = Boolean(state.projects[0]?.id && integrationId && repositoryId && sourceAvailable);
-  const canAttachRepository = Boolean(firstService?.projectId && firstService?.id && integrationId && repositoryId && sourceAvailable);
   const canSyncRepository = Boolean(selectedRepository?.fullName && sourceAvailable);
   const canRefreshCatalog = Boolean(catalog && selectedIntegration && sourceAvailable && canDisconnectIntegration(selectedIntegration, state.memberships, state.subject));
   const projectHrefs = scopedProjectHrefs({ memberships: state.memberships, projects: state.projects, subject: state.subject });
+  const authorizedProjectIds = Object.keys(projectHrefs);
+  const attachTarget = resolveGitHubAttachTarget({ query, services: state.services, authorizedProjectIds });
+  const selectedService = attachTarget.selectedService;
+  const canAttachRepository = Boolean(selectedService && integrationId && repositoryId && sourceAvailable);
+  const targetParams = new URLSearchParams();
+  for (const key of ['projectId', 'serviceId'] as const) {
+    const value = query[key];
+    if (Array.isArray(value)) value.forEach((entry) => targetParams.append(key, entry));
+    else if (value !== undefined) targetParams.set(key, value);
+  }
+  const targetSuffix = targetParams.size ? `&${targetParams.toString()}` : '';
   const repositoryDefaultBranches = repositoryDefaultBranchesFor(selectedRepositories);
   const navItems = [
-    { id: 'connect', label: 'GitHub 연결', description: 'App 설치', href: '/github?step=connect' },
-    { id: 'import', label: '저장소 선택', description: '프로젝트 추가', href: '/github?step=import' },
-    { id: 'attach', label: '서비스 연결', description: '실행 단위', href: '/github?step=attach' },
-    { id: 'sync', label: '동기화', description: '연동 상태', href: '/github?step=sync' },
+    { id: 'connect', label: 'GitHub 연결', description: 'App 설치', href: `/github?step=connect${targetSuffix}` },
+    { id: 'import', label: '저장소 선택', description: '프로젝트 추가', href: `/github?step=import${targetSuffix}` },
+    { id: 'attach', label: '서비스 연결', description: '실행 단위', href: `/github?step=attach${targetSuffix}` },
+    { id: 'sync', label: '동기화', description: '연동 상태', href: `/github?step=sync${targetSuffix}` },
   ];
 
   return (
@@ -153,18 +163,29 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
           <Card>
             <CardHeader><CardTitle><h2>서비스 연결</h2></CardTitle><CardDescription>기존 서비스가 사용할 저장소와 기본 브랜치를 지정합니다.</CardDescription></CardHeader>
             <CardContent className="flex flex-col gap-6">
-              <InstallationChooser installations={state.installations} selectedId={selectedInstallation?.installationId} step="attach" />
-              {canAttachRepository ? (
-                <GitHubSourceMutation action={apiAction(`/projects/${firstService.projectId}/services/${firstService.id}/github`, state.context)} branchInputId="github-attach-branch" pendingLabel="서비스 연결 중" projectHrefs={projectHrefs} repositoryDefaultBranches={repositoryDefaultBranches} returnTo="/github?step=sync" submitLabel="연결">
+              <InstallationChooser installations={state.installations} selectedId={selectedInstallation?.installationId} step="attach" targetSuffix={targetSuffix} />
+              {attachTarget.error ? <Alert variant="destructive" id="github-target-error"><AlertTitle>연결 대상을 확인해 주세요</AlertTitle><AlertDescription>{attachTarget.error}</AlertDescription></Alert> : (
+                <form method="get" action="/github">
+                  <input name="step" type="hidden" value="attach" />
+                  {selectedInstallation?.installationId ? <input name="installation" type="hidden" value={selectedInstallation.installationId} /> : null}
+                  {attachTarget.projectId ? <input name="projectId" type="hidden" value={attachTarget.projectId} /> : null}
+                  <FieldGroup>
+                    <Field><FieldLabel htmlFor="github-attach-service">연결할 서비스</FieldLabel><select className={selectClassName} id="github-attach-service" name="serviceId" required defaultValue={selectedService?.id || ''} disabled={!attachTarget.services.length}><option disabled value="">서비스를 선택하세요</option>{attachTarget.services.map((service) => <option key={service.id} value={service.id}>{service.projectName || service.projectId} / {service.name || service.id}</option>)}</select></Field>
+                    <Button type="submit" variant="outline" disabled={!attachTarget.services.length}>서비스 선택</Button>
+                  </FieldGroup>
+                </form>
+              )}
+              {canAttachRepository && selectedService ? (
+                <GitHubSourceMutation action={apiAction(`/projects/${encodeURIComponent(selectedService.projectId)}/services/${encodeURIComponent(selectedService.id)}/github`, state.context)} branchInputId="github-attach-branch" pendingLabel="서비스 연결 중" projectHrefs={projectHrefs} repositoryDefaultBranches={repositoryDefaultBranches} returnTo={`/github?step=sync${targetSuffix}`} submitLabel="연결">
                   <input type="hidden" name="integrationId" value={integrationId} />{catalog ? <input type="hidden" name="expectedCatalogGeneration" value={catalog.generation} /> : null}{selectedRepository?.defaultBranch ? <input type="hidden" name="expectedDefaultBranch" value={selectedRepository.defaultBranch} /> : null}
                   <FieldSet><FieldGroup>
-                    <div className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm"><span className="text-muted-foreground">연결 대상</span><p className="mt-1 font-medium text-foreground"><strong>{serviceProject?.name || firstService.projectId}</strong> / {firstService.name || firstService.id}</p></div>
+                    <div className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm"><span className="text-muted-foreground">연결 대상</span><p className="mt-1 font-medium text-foreground"><strong>{selectedService.projectName || selectedService.projectId}</strong> / {selectedService.name || selectedService.id}</p></div>
                     <Field><FieldLabel htmlFor="github-attach-repository">저장소</FieldLabel><select className={selectClassName} id="github-attach-repository" name="repositoryId" defaultValue={repositoryId}>{selectedRepositories.filter((repository: GitHubRepository) => repository.accessState !== 'REVOKED').map((repository: GitHubRepository) => <option key={repository.githubRepoId || repository.id} value={repository.githubRepoId || repository.id}>{repository.fullName} · {repository.private ? '비공개' : '공개'}</option>)}</select></Field>
                     <Field><FieldLabel htmlFor="github-attach-branch">브랜치</FieldLabel><Input id="github-attach-branch" name="branch" defaultValue={selectedRepository?.defaultBranch || 'main'} /></Field>
                     <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end"><ActionLink className="justify-center sm:mr-auto" href="/github?step=import">이전</ActionLink></div>
                   </FieldGroup></FieldSet>
                 </GitHubSourceMutation>
-              ) : <EmptyGitHubStep message="연결할 서비스와 저장소가 필요합니다." />}
+              ) : !attachTarget.error ? <EmptyGitHubStep message={selectedService ? '연결 가능한 GitHub 계정과 저장소가 필요합니다.' : '먼저 연결할 서비스를 선택하세요.'} /> : null}
             </CardContent>
           </Card>
         ) : null}
@@ -190,12 +211,12 @@ export default async function GitHubPage({ searchParams }: { searchParams: Promi
   );
 }
 
-function InstallationChooser({ installations, selectedId, step }: { installations: readonly Record<string, unknown>[]; selectedId?: string; step: GitHubStep }) {
+function InstallationChooser({ installations, selectedId, step, targetSuffix = '' }: { installations: readonly Record<string, unknown>[]; selectedId?: string; step: GitHubStep; targetSuffix?: string }) {
   if (installations.length < 2) return null;
   return <nav className="flex gap-2 overflow-x-auto pb-1" aria-label="GitHub 계정">{installations.map((installation) => {
     const installationId = String(installation.installationId || '');
     const active = installationId === String(selectedId);
-    return <a key={installationId} className={cn(buttonVariants({ variant: active ? 'secondary' : 'outline' }), 'h-auto min-w-36 flex-col items-start py-2')} aria-current={active ? 'page' : undefined} href={`/github?step=${step}&installation=${encodeURIComponent(installationId)}`}><strong className="max-w-full truncate">{String(installation.accountLogin || 'GitHub 계정')}</strong><span className="text-xs font-normal text-muted-foreground">저장소 {Number(installation.repositoryCount || 0)}개</span></a>;
+    return <a key={installationId} className={cn(buttonVariants({ variant: active ? 'secondary' : 'outline' }), 'h-auto min-w-36 flex-col items-start py-2')} aria-current={active ? 'page' : undefined} href={`/github?step=${step}&installation=${encodeURIComponent(installationId)}${targetSuffix}`}><strong className="max-w-full truncate">{String(installation.accountLogin || 'GitHub 계정')}</strong><span className="text-xs font-normal text-muted-foreground">저장소 {Number(installation.repositoryCount || 0)}개</span></a>;
   })}</nav>;
 }
 

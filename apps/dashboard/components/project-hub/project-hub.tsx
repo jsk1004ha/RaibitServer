@@ -19,7 +19,7 @@ export function ProjectHub({ data, orgSlug }: Readonly<{ data: ProjectHubData; o
       <LoadIssues issues={data.loadErrors} />
       <div
         aria-label="프로젝트 화면 탐색 스크롤"
-        className="block w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/25 [&>nav]:relative [&>nav]:w-max [&>nav]:min-w-full [&>nav>div]:w-max [&>nav>div]:min-w-full [&>nav>div]:overflow-visible"
+        className="block w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/25 [&>nav]:relative [&>nav]:w-max [&>nav]:min-w-full [&>nav>div]:w-max [&>nav>div]:min-w-full [&>nav>div]:overflow-visible [&_[data-horizontal-scroll-hint]]:sticky [&_[data-horizontal-scroll-hint]]:left-0 [&_[data-horizontal-scroll-hint]]:w-fit"
         data-project-nav-viewport
         role="region"
         tabIndex={0}

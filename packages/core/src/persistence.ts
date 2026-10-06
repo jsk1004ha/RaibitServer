@@ -1013,7 +1013,8 @@ export class PrismaControlPlaneRepository {
   }
 
   async listMembershipsForUser(userId: string) {
-    return this.prisma.membership.findMany({ where: { userId } });
+    const memberships = await this.prisma.membership.findMany({ where: { userId }, include: { organization: { select: { name: true, slug: true } } } });
+    return memberships.map(({ organization, ...membership }) => ({ ...membership, organizationName: organization.name, organizationSlug: organization.slug }));
   }
 
   async replaceOrganizationInvite(input: ReplaceOrganizationInviteInput) { return new PostgresOrganizationInviteRepository(this.prisma).replaceOrganizationInvite(input); }
