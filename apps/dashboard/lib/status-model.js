@@ -32,10 +32,11 @@ export function createSystemStatusSnapshot({
   githubRepository = DEFAULT_GITHUB_REPOSITORY,
 }) {
   const apiOperational = healthResultIsOperational(apiResult);
-  const dataOperational = Boolean(dataResult?.ok);
+  const dataOperational = Boolean(dataResult?.ok) && Array.isArray(dataResult.body?.sites);
+  const dataOutage = !dataOperational && (!apiOperational || dataResult?.status === 0 || dataResult?.status >= 500);
   const status = apiOperational && dataOperational
     ? 'operational'
-    : !apiOperational && !dataOperational
+    : !apiOperational || dataOutage
       ? 'outage'
       : 'degraded';
 
@@ -49,7 +50,7 @@ export function createSystemStatusSnapshot({
       {
         id: 'dashboard',
         name: '웹 콘솔',
-        detail: '화면 및 로그인',
+        detail: '웹 화면',
         status: 'operational',
         latencyMs: null,
       },
@@ -63,9 +64,9 @@ export function createSystemStatusSnapshot({
       {
         id: 'data-store',
         name: '데이터 저장소',
-        detail: '프로젝트 데이터',
-        status: dataOperational ? 'operational' : apiOperational ? 'degraded' : 'outage',
-        latencyMs: normalizedLatency(dataLatencyMs),
+        detail: dataOperational ? '프로젝트 데이터' : dataOutage ? '프로젝트 데이터 조회 실패' : '프로젝트 데이터 확인 불가',
+        status: dataOperational ? 'operational' : dataOutage ? 'outage' : 'degraded',
+        latencyMs: dataOperational ? normalizedLatency(dataLatencyMs) : null,
       },
     ],
   };

@@ -22,6 +22,8 @@ import {
   isGitHubOAuthCodeVerifier,
   isGitHubOAuthState,
   isSameOriginMutation,
+  loginFailurePath,
+  loginReturnState,
   projectCreatePayloadFromForm,
   resourceRecoveryPayloadFromForm,
   publicUpstreamErrorCode,
@@ -123,6 +125,8 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
     }
   }
 
+  const successReturnPath = path === '/auth/login' ? loginReturnState(browserRequestUrl, returnPath).next : returnPath;
+  if (path === '/auth/login') returnPath = loginFailurePath(browserRequestUrl, successReturnPath);
   const query = upstreamMethod === 'GET' ? request.nextUrl.search : '';
   const requestedAccept = request.headers.get('accept') || '';
   let upstream: Response;
@@ -212,7 +216,7 @@ async function proxyRequest(request: NextRequest, routeContext: RouteContext, me
         ? '/login?mode=reset'
         : path === '/auth/password-reset/complete'
           ? '/login?mode=login'
-      : returnPath;
+      : successReturnPath;
     const successNotice = path === '/auth/password-reset/request'
       ? 'password_reset_requested'
       : path === '/auth/password-reset/complete'

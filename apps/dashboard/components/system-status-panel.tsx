@@ -10,14 +10,14 @@ import type { SystemStatusSnapshot, SystemStatusTone } from "../lib/system-statu
 // prettier-ignore
 const overallCopy = {
   operational: { title: "모든 시스템 정상", detail: "RAIBIT SERVER가 정상 작동 중입니다." },
-  degraded: { title: "일부 확인 필요", detail: "일부 기능이 지연되고 있습니다." },
+  degraded: { title: "일부 확인 필요", detail: "일부 기능의 상태를 확인할 수 없습니다." },
   outage: { title: "시스템 장애", detail: "핵심 기능을 확인하고 있습니다." },
 } as const satisfies Record<SystemStatusTone, Readonly<{ title: string; detail: string }>>;
 
 // prettier-ignore
 const statusPresentation = {
   operational: { label: "정상", variant: "default" },
-  degraded: { label: "지연", variant: "secondary" },
+  degraded: { label: "확인 필요", variant: "secondary" },
   outage: { label: "장애", variant: "destructive" },
 } as const satisfies Record<SystemStatusTone, Readonly<{ label: string; variant: "default" | "secondary" | "destructive" }>>;
 

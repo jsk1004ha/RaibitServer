@@ -48,6 +48,37 @@ test('health check requires a successful response with a known healthy status', 
   assert.equal(healthResultIsOperational({ ok: false, body: { status: 'ok' } }), false);
 });
 
+test('fast failed storage queries are outages, not latency measurements', () => {
+  const snapshot = createSystemStatusSnapshot({
+    apiResult: { ok: true, status: 200, body: { status: 'ok' } },
+    dataResult: { ok: false, status: 500, body: { sites: [] } },
+    dataLatencyMs: 5,
+  });
+  const data = snapshot.components.find((component) => component.id === 'data-store');
+  assert.equal(snapshot.status, 'outage');
+  assert.equal(data.status, 'outage');
+  assert.equal(data.latencyMs, null);
+  assert.match(data.detail, /조회 실패/);
+  assert.equal(snapshot.components[0].detail, '웹 화면');
+});
+
+test('storage authorization failures and malformed responses cannot imply a healthy data store', () => {
+  for (const dataResult of [
+    { ok: false, status: 401, body: { sites: [] } },
+    { ok: true, status: 200, body: null },
+    { ok: true, status: 200, body: {} },
+  ]) {
+    const snapshot = createSystemStatusSnapshot({
+      apiResult: { ok: true, body: { status: 'ok' } }, dataResult, dataLatencyMs: 5,
+    });
+    const data = snapshot.components.find((component) => component.id === 'data-store');
+    assert.equal(snapshot.status, 'degraded');
+    assert.equal(data.status, 'degraded');
+    assert.equal(data.latencyMs, null);
+    assert.match(data.detail, /확인 불가/);
+  }
+});
+
 test('status model never turns invalid deployment metadata into a link', () => {
   const snapshot = createSystemStatusSnapshot({
     apiResult: { ok: true, body: { status: 'ok' } },

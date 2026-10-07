@@ -8,6 +8,8 @@ import { Brand } from '../../components/brand';
 import { PasswordRecoveryForm } from '../../components/password-recovery-form';
 import { ThemeMenu } from '../../components/theme-menu';
 import { apiAction } from '../../lib/api';
+import { loginServerErrorMessage } from '../../lib/login-errors.js';
+import { loginReturnState } from '../../lib/request-security.js';
 
 const modes = ['login', 'signup', 'verify', 'forgot', 'reset'] as const;
 const navigationModes = ['login', 'signup', 'verify'] as const;
@@ -29,8 +31,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const requestedMode = queryValue(query.mode, 'login');
   const mode = isAuthMode(requestedMode) ? requestedMode : 'login';
   const email = requestedMode === 'forgot' || requestedMode === 'reset' ? '' : queryValue(query.email, '');
-  const next = queryValue(query.next, '/console');
-  const error = errorMessage(queryValue(query.error, ''));
+  const returnState = loginReturnState('http://localhost', queryValue(query.next, '/console'));
+  const next = returnState.next;
+  const error = errorMessage(queryValue(query.error, returnState.error));
   const notice = noticeMessage(queryValue(query.notice, ''));
   const messageId = error || notice ? 'auth-message' : undefined;
   const publicHomeHref = process.env.NODE_ENV === 'production' ? 'https://raibit.kr/' : '/';
@@ -177,7 +180,7 @@ function errorMessage(code: string): string {
     password_confirmation_mismatch: '새 비밀번호와 확인 입력이 일치하지 않습니다.',
     request_failed: '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
   };
-  return messages[code] || (code ? '요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.' : '');
+  return loginServerErrorMessage(code) || messages[code] || (code ? '요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.' : '');
 }
 
 function noticeMessage(code: string): string {

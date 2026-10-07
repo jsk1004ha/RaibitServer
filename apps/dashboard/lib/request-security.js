@@ -227,6 +227,23 @@ export function resourceRecoveryPayloadFromForm(path, method, body = {}) {
 	return normalized;
 }
 
+export function loginReturnState(requestUrl, returnPath) {
+  const fallback = new URL('/console', requestUrl).toString();
+  const target = new URL(safeReturnPath(requestUrl, returnPath, fallback), requestUrl);
+  const error = target.searchParams.get('error') || '';
+  target.searchParams.delete('error');
+  target.searchParams.delete('notice');
+  return {
+    next: target.pathname === '/login' ? '/console' : `${target.pathname}${target.search}${target.hash}`,
+    error,
+  };
+}
+
+export function loginFailurePath(requestUrl, returnPath) {
+  const { next } = loginReturnState(requestUrl, returnPath);
+  return `/login?${new URLSearchParams({ next })}`;
+}
+
 export function withFlashMessage(requestUrl, returnPath, kind, value) {
 	const safePath = safeReturnPath(requestUrl, returnPath, null);
 	const request = new URL(requestUrl);

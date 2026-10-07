@@ -488,6 +488,7 @@ RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로
 ## 문제 해결
 
 자주 발생하는 문제는 [troubleshooting](docs/troubleshooting.md)에 정리되어 있습니다.
+콘솔 로그인 500과 데이터 저장소 장애가 함께 발생하면 API 프로세스 상태와 실제 DB 조회 결과를 구분해 확인합니다. 상태 화면은 실패한 데이터 조회를 지연 시간으로 표시하지 않습니다.
 
 - `pnpm install --frozen-lockfile` 실패: Node.js 24+와 pnpm 11.1.2를 확인합니다.
 - Production API 부팅 실패: `DATABASE_URL`, auth secret, encryption key를 확인합니다.

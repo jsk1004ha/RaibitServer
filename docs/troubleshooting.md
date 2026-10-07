@@ -41,6 +41,22 @@ JWT_SECRET 또는 RAIBITSERVER_AUTH_JWT_SECRET
 
 Production persistence는 Prisma/PostgreSQL을 기본으로 사용합니다. In-memory repository는 dev/test fallback 전용이며, production에서는 명시적 opt-in 없이 사용하지 않습니다.
 
+## 콘솔 로그인이 `request_failed_500`으로 실패하고 데이터 저장소에 장애가 표시됨
+
+`GET /api/health`의 200 응답은 API 프로세스가 응답한다는 뜻입니다. 이 경로는 데이터베이스를 조회하지 않으므로 로그인이나 데이터 저장소의 정상 동작을 보장하지 않습니다. 로그인은 계정 확인 전에 DB의 인증 요청 제한 기록을 조회하며, 공개 프로젝트 조회도 같은 저장소를 사용합니다.
+
+상태 화면은 프로젝트 조회의 5xx 또는 연결 실패를 `장애`로 표시합니다. 실패한 요청의 응답 시간은 데이터 조회 속도로 표시하지 않습니다. 권한 오류나 예상과 다른 응답은 `확인 필요`로 표시합니다. 로그인 실패는 오류를 `/login?error=...&next=...`에 표시하고, 성공 후 이동 주소에서는 이전 오류와 알림을 제거합니다.
+
+운영 서버에서 API 로그와 PostgreSQL listener를 먼저 확인합니다. 로그나 명령 출력에 DB URL, 비밀번호, 세션 토큰을 공유하지 마세요.
+
+```sh
+kubectl -n raibitserver-system logs -l app.kubernetes.io/component=api --since=10m --tail=100
+sudo systemctl status postgresql@16-main --no-pager
+sudo ss -ltnp 'sport = :5432'
+```
+
+`P1001`/`ECONNREFUSED`와 사설 IP listener 누락이 확인되면 아래 PostgreSQL 연결 복구 절차를 사용합니다. 스키마나 인증 오류라면 해당 배포 버전의 migration과 Secret 연결을 확인합니다. 오류가 사라진 뒤에는 실제 프로젝트 조회, 유효한 계정의 로그인, 상태 화면 갱신을 모두 검증합니다. 잘못된 계정의 403 응답만으로 실제 로그인 성공을 판정하지 않습니다.
+
 ## Helm migration이 `P1001` 또는 `ECONNREFUSED`로 실패함
 
 ### 증상
