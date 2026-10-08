@@ -7,6 +7,7 @@ import test from 'node:test';
 
 const updaterPath = new URL('../deploy/production/auto-update.sh', import.meta.url);
 const installerPath = new URL('../deploy/production/install-auto-update.sh', import.meta.url);
+const bootRecoveryPath = new URL('../deploy/production/boot-recovery.sh', import.meta.url);
 const registryBootstrapPath = new URL('../deploy/production/bootstrap-workload-registry.sh', import.meta.url);
 const registryGatewayReconcilerPath = new URL('../deploy/production/reconcile-workload-registry-gateway.sh', import.meta.url);
 const registryGatewayCheckerPath = new URL('../deploy/production/check-workload-registry-gateway.sh', import.meta.url);
@@ -33,6 +34,7 @@ function bashSyntax(path) {
 test('production auto-update shell scripts have valid bash syntax', () => {
   bashSyntax(updaterPath);
   bashSyntax(installerPath);
+  bashSyntax(bootRecoveryPath);
   bashSyntax(registryBootstrapPath);
   bashSyntax(registryGatewayReconcilerPath);
   bashSyntax(registryGatewayCheckerPath);
@@ -414,6 +416,7 @@ test('production updater self-refreshes atomically only after rollout succeeds',
   assert.match(updater, /bash -n "\$UPDATER_SOURCE"/);
   assert.match(updater, /mktemp "\$\{UPDATER_LIBEXEC_DIR\}\/\.raibitserver-production-auto-update\.XXXXXX"/);
   assert.match(updater, /mv -- "\$UPDATER_TMP" "\$UPDATER_LIBEXEC_PATH"/);
+  assert.match(updater, /approved checkout predates boot recovery; preserving installed script/);
 
   const rollout = updater.indexOf('rollout status deployment/raibitserver-dashboard');
   const refresh = updater.indexOf('mv -- "$UPDATER_TMP" "$UPDATER_LIBEXEC_PATH"');
