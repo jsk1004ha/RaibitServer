@@ -35,6 +35,9 @@ func previewBindingActive(row *previewClaimRow) bool {
 	if !row.verified || deletingStatus(row.projectStatus) || deletingStatus(row.serviceStatus) || row.repository != row.repositoryOwner+"/"+row.repositoryName {
 		return false
 	}
+	if row.logicalSlug == "" || (row.environmentKind != EnvironmentProduction && row.environmentKind != EnvironmentDevelopment) || (row.environmentKind == EnvironmentDevelopment && row.environmentID == "") {
+		return false
+	}
 	var desired struct {
 		GitHub struct {
 			IntegrationID  string `json:"integrationId"`
@@ -60,7 +63,7 @@ func previewClaimLeaseMatches(row *previewClaimRow, claim PreviewResolutionClaim
 }
 
 func previewClaimMatchesRow(row *previewClaimRow, claim PreviewResolutionClaim) bool {
-	return row.lineageVersion == claim.Target.LineageVersion && row.installationID == claim.Target.InstallationID && row.repositoryID == claim.Target.RepositoryID && row.repository == claim.Target.Repository && row.pullNumber == claim.Target.PullRequestNumber
+	return row.lineageVersion == claim.Target.LineageVersion && row.environmentID == claim.Target.EnvironmentID && row.environmentKind == claim.Target.EnvironmentKind && row.logicalSlug == claim.Target.LogicalSlug && row.installationID == claim.Target.InstallationID && row.repositoryID == claim.Target.RepositoryID && row.repository == claim.Target.Repository && row.pullNumber == claim.Target.PullRequestNumber
 }
 
 func validPreviewObservation(observation PreviewResolutionObservation) bool {

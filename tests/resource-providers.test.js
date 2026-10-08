@@ -78,7 +78,9 @@ test('shared SQL and document provider plans create tenant primitives instead of
 
 test('PostgreSQL provider dry-run keeps the resource provisioning and does not report a live connection', async () => {
   const store = new ControlPlaneStore();
-  const resource = store.createResource({ projectId: 'prj_1', name: 'pg-provider', engine: 'postgresql', provider: 'postgresql-direct', databaseName: 'appdb', username: 'app_user' });
+  const organization = store.createOrganization({ name: 'Provider tests', slug: 'provider-tests' });
+  const project = store.createProject({ organizationId: organization.id, name: 'Provider', slug: 'provider' });
+  const resource = store.createResource({ projectId: project.id, name: 'pg-provider', engine: 'postgresql', provider: 'postgresql-direct', databaseName: 'appdb', username: 'app_user' });
   const originalSecretName = resource.connectionSecretName;
   const before = store.snapshot();
   const provisioned = await store.provisionResourceProvider({ resourceId: resource.id, intent: 'preview-plan', actorUserId: 'provider-test' });

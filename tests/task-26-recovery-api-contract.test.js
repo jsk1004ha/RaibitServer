@@ -75,7 +75,7 @@ test('Given the recovery transport contract, When OpenAPI is generated, Then the
     assert.deepEqual(Object.keys(item.operation.responses).filter((status) => Number(status) >= 400 && status !== 'default').sort(), ['400', '403', '404', '409']);
   }
   const listParameters = generated.paths['/resources/{resourceId}/backups'].get.parameters.filter((parameter) => parameter.in === 'query');
-  assert.deepEqual(listParameters.map((parameter) => parameter.name).sort(), ['cursor', 'limit']);
+  assert.deepEqual(listParameters.map((parameter) => parameter.name).sort(), ['cursor', 'environment', 'environmentId', 'environmentKind', 'limit']);
   assert.equal(generated.paths['/backups/{backupId}'].delete.requestBody.required, true);
 });
 

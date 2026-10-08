@@ -69,9 +69,10 @@ type ReconcileStore interface {
 }
 
 type ClaimOptions struct {
-	WorkerID string
-	Lease    time.Duration
-	Now      time.Time
+	WorkerID         string
+	Lease            time.Duration
+	Now              time.Time
+	AllowDevelopment bool
 }
 
 type DeploymentLease struct {
@@ -130,6 +131,9 @@ type Service struct {
 	Status              string
 	DeletionRequestedAt time.Time
 	UpdatedAt           time.Time
+	LogicalSlug         string
+	EnvironmentID       string
+	EnvironmentKind     EnvironmentKind
 }
 
 func (service *Service) DeletionLease() DeletionLease {
@@ -169,6 +173,7 @@ type Deployment struct {
 	PreviewGeneration   int
 	PreviewRuntimeJSON  json.RawMessage
 	PreviewOwnedJSON    json.RawMessage
+	EnvironmentID       string
 }
 
 func (deployment *Deployment) Lease() DeploymentLease {
@@ -272,13 +277,19 @@ func (s *FileStore) ClaimNextServiceDeletion(ctx context.Context, options ClaimO
 		if !deletionRecordClaimable(row, claimNow, lease) {
 			continue
 		}
+		_, environment := serviceEnvironmentInState(state, stringField(row, "id"))
+		if !options.AllowDevelopment && strings.EqualFold(stringField(environment, "kind"), string(EnvironmentKindDev)) {
+			continue
+		}
 		row["status"] = DeletionStatusDeleting
 		row["updatedAt"] = claimNow.Format(time.RFC3339Nano)
 		setRecordSlice(state, "services", rows)
 		if err := s.save(state); err != nil {
 			return nil, err
 		}
-		return serviceFromRecord(row), nil
+		service := serviceFromRecord(row)
+		bindServiceEnvironment(state, service)
+		return service, nil
 	}
 	return nil, nil
 }
@@ -478,6 +489,15 @@ func (s *FileStore) ClaimNextDeployment(ctx context.Context, options ClaimOption
 		if parentsDeletingInState(state, stringField(row, "projectId"), stringField(row, "serviceId")) {
 			continue
 		}
+		binding, environment := serviceEnvironmentInState(state, stringField(row, "serviceId"))
+		kind := coalesceString(stringField(environment, "kind"), stringField(row, "environmentKind"), string(EnvironmentKindProd))
+		if !options.AllowDevelopment && strings.EqualFold(kind, string(EnvironmentKindDev)) {
+			continue
+		}
+		if binding != nil {
+			row["environmentId"] = stringField(binding, "environmentId")
+			row["environmentKind"] = kind
+		}
 		action, ready := deploymentActionForClaim(row, claimNow, lease)
 		if !ready {
 			continue
@@ -540,7 +560,27 @@ func (s *FileStore) GetService(ctx context.Context, serviceID string) (*Service,
 	if row == nil {
 		return nil, notFound("service", serviceID)
 	}
-	return serviceFromRecord(row), nil
+	service := serviceFromRecord(row)
+	bindServiceEnvironment(state, service)
+	return service, nil
+}
+
+func bindServiceEnvironment(state record, service *Service) {
+	binding, environment := serviceEnvironmentInState(state, service.ID)
+	if binding != nil {
+		service.LogicalSlug = stringField(binding, "logicalSlug")
+		service.EnvironmentID = stringField(binding, "environmentId")
+		service.EnvironmentKind = EnvironmentKind(coalesceString(stringField(environment, "kind"), string(EnvironmentKindProd)))
+	}
+}
+
+func serviceEnvironmentInState(state record, serviceID string) (record, record) {
+	for _, binding := range recordSlice(state, "environmentServices") {
+		if stringField(binding, "serviceId") == serviceID {
+			return binding, findRecord(recordSlice(state, "environments"), stringField(binding, "environmentId"))
+		}
+	}
+	return nil, nil
 }
 
 func (s *FileStore) UpdateDeployment(ctx context.Context, deploymentID string, updates map[string]any) (*Deployment, error) {
@@ -738,6 +778,7 @@ func serviceFromRecord(row record) *Service {
 		ImageURL: coalesceString(stringField(row, "imageUrl"), stringField(row, "image"), stringField(desiredState, "imageUrl"), stringField(desiredState, "image")),
 		Port:     intField(row, "port"), Replicas: intField(desiredState, "replicas"), BaseDomain: coalesceString(stringField(row, "baseDomain"), stringField(desiredState, "baseDomain")), DesiredSpec: desiredSpec, DesiredState: desiredState,
 		Status: stringField(row, "status"), DeletionRequestedAt: parseTimestamp(stringField(row, "deletionRequestedAt")), UpdatedAt: parseTimestamp(stringField(row, "updatedAt")),
+		LogicalSlug: stringField(row, "logicalSlug"), EnvironmentID: stringField(row, "environmentId"), EnvironmentKind: EnvironmentKind(stringField(row, "environmentKind")),
 	}
 	if service.Port == 0 {
 		service.Port = intField(desiredState, "port")
@@ -752,7 +793,7 @@ func serviceFromRecord(row record) *Service {
 }
 
 func deploymentFromRecord(row record) *Deployment {
-	return &Deployment{PublicHealthStatus: defaultString(stringField(row, "publicHealthStatus"), "UNKNOWN"), HealthCheckedAt: parseTimestamp(stringField(row, "healthCheckedAt")), HealthFailureCode: stringField(row, "healthFailureCode"), ObservedGeneration: intField(row, "observedGeneration"), ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts"), DesiredSpecSnapshot: snapshotJSONFromRecord(row), SnapshotVersion: snapshotVersionFromRecord(row), SourceDeploymentID: stringField(row, "sourceDeploymentId"), RetryOfDeploymentID: stringField(row, "retryOfDeploymentId"), PreviewLineageID: stringField(row, "previewLineageId"), PreviewGeneration: intField(row, "previewGeneration"), PreviewRuntimeJSON: rawJSONFromRecord(row, "previewRuntime"), PreviewOwnedJSON: rawJSONFromRecord(row, "previewOwnedObjects")}
+	return &Deployment{PublicHealthStatus: defaultString(stringField(row, "publicHealthStatus"), "UNKNOWN"), HealthCheckedAt: parseTimestamp(stringField(row, "healthCheckedAt")), HealthFailureCode: stringField(row, "healthFailureCode"), ObservedGeneration: intField(row, "observedGeneration"), ID: stringField(row, "id"), ServiceID: stringField(row, "serviceId"), ProjectID: stringField(row, "projectId"), EnvironmentID: stringField(row, "environmentId"), Status: stringField(row, "status"), DeploymentType: stringField(row, "deploymentType"), TriggerType: stringField(row, "triggerType"), Branch: stringField(row, "branch"), CommitSHA: coalesceString(stringField(row, "commitSha"), stringField(row, "commitHash")), ImageURL: stringField(row, "imageUrl"), ImageDigest: stringField(row, "imageDigest"), PreviewURL: stringField(row, "previewUrl"), PreviousImageURL: coalesceString(stringField(row, "previousImageUrl"), stringField(mapField(row, "desiredState"), "previousImageUrl")), PullRequestNumber: intField(row, "pullRequestNumber"), ReconcileAction: stringField(row, "reconcileAction"), ReconcileLockedBy: stringField(row, "reconcileLockedBy"), ReconcileLockedAt: parseTimestamp(stringField(row, "reconcileLockedAt")), ReconcileAttempts: intField(row, "reconcileAttempts"), DesiredSpecSnapshot: snapshotJSONFromRecord(row), SnapshotVersion: snapshotVersionFromRecord(row), SourceDeploymentID: stringField(row, "sourceDeploymentId"), RetryOfDeploymentID: stringField(row, "retryOfDeploymentId"), PreviewLineageID: stringField(row, "previewLineageId"), PreviewGeneration: intField(row, "previewGeneration"), PreviewRuntimeJSON: rawJSONFromRecord(row, "previewRuntime"), PreviewOwnedJSON: rawJSONFromRecord(row, "previewOwnedObjects")}
 }
 
 func rawJSONFromRecord(row record, key string) json.RawMessage {

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { canCancelDeployment, isDeploymentTerminal, normalizeDeploymentStatus } from './deployments.ts';
 import { deploymentSuccessor, DeploymentOperationError, type LineageSource } from './deployment-operations.ts';
+import { productionEnvironmentId } from './operational-persistence.ts';
 
 export type DeploymentHistoryQuery = {
   readonly serviceId?: string;
@@ -16,6 +17,8 @@ export type DeploymentHistoryQuery = {
 export type DeploymentHistoryScope = {
   readonly organizationId: string;
   readonly projectId: string;
+  readonly environmentId?: string;
+  readonly environmentKind?: 'prod' | 'dev';
   readonly cursorSecret: string;
 };
 
@@ -96,6 +99,8 @@ export function deploymentHistoryRow(input: {
   const action = eligibleHistoryAction(row, input.serviceDeployments, input.execute, snapshotVersion);
   return {
     id: String(row.id), projectId: String(row.projectId),
+    environmentId: String(row.environmentId || productionEnvironmentId(String(row.projectId))),
+    environmentKind: row.environmentKind === 'dev' ? 'dev' : 'prod',
     service: { id: String(input.service.id), name: String(input.service.name), slug: String(input.service.slug) },
     environment: environment(row.deploymentType), status, trigger: String(row.triggerType || 'manual'),
     createdAt: timestamp(row.createdAt), updatedAt: timestamp(row.updatedAt),
@@ -116,7 +121,7 @@ export function deploymentHistoryRow(input: {
 }
 
 export function encodeDeploymentHistoryCursor(positionInput: HistoryPosition, scope: DeploymentHistoryScope, query: DeploymentHistoryQuery): string {
-  const payload = { v: 1, o: scope.organizationId, p: scope.projectId, f: filterFingerprint(query), at: positionInput.at, id: positionInput.id };
+  const payload = { v: 2, o: scope.organizationId, p: scope.projectId, e: scope.environmentId ?? productionEnvironmentId(scope.projectId), f: filterFingerprint(query), at: positionInput.at, id: positionInput.id };
   const material = JSON.stringify(payload);
   const signature = crypto.createHmac('sha256', cursorKey(scope.cursorSecret)).update(material).digest('base64url');
   return Buffer.from(JSON.stringify({ ...payload, h: signature }), 'utf8').toString('base64url');
@@ -125,7 +130,7 @@ export function encodeDeploymentHistoryCursor(positionInput: HistoryPosition, sc
 export function decodeDeploymentHistoryCursor(value: string, scope: DeploymentHistoryScope, query: DeploymentHistoryQuery): HistoryPosition {
   try {
     const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
-    if (!isCursor(parsed) || parsed.o !== scope.organizationId || parsed.p !== scope.projectId || parsed.f !== filterFingerprint(query)) throw new DeploymentHistoryError();
+    if (!isCursor(parsed) || parsed.o !== scope.organizationId || parsed.p !== scope.projectId || parsed.e !== (scope.environmentId ?? productionEnvironmentId(scope.projectId)) || parsed.f !== filterFingerprint(query)) throw new DeploymentHistoryError();
     const { h, ...payload } = parsed;
     const expected = crypto.createHmac('sha256', cursorKey(scope.cursorSecret)).update(JSON.stringify(payload)).digest();
     const actual = Buffer.from(h, 'base64url');
@@ -238,8 +243,8 @@ function nullableTimestamp(value: unknown): string | null { return value ? times
 function nullableString(value: unknown): string | null { return value === undefined || value === null || value === '' ? null : String(value); }
 function positiveInteger(value: unknown): number | null { return Number.isInteger(value) && Number(value) > 0 ? Number(value) : null; }
 function nonnegativeInteger(value: unknown): number | null { return Number.isInteger(value) && Number(value) >= 0 ? Number(value) : null; }
-function isCursor(value: unknown): value is { readonly v: 1; readonly o: string; readonly p: string; readonly f: string; readonly at: string; readonly id: string; readonly h: string } {
+function isCursor(value: unknown): value is { readonly v: 2; readonly o: string; readonly p: string; readonly e: string; readonly f: string; readonly at: string; readonly id: string; readonly h: string } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value).sort().join(',');
-  return keys === 'at,f,h,id,o,p,v' && Reflect.get(value, 'v') === 1 && ['o', 'p', 'f', 'at', 'id', 'h'].every((key) => typeof Reflect.get(value, key) === 'string');
+  return keys === 'at,e,f,h,id,o,p,v' && Reflect.get(value, 'v') === 2 && ['o', 'p', 'e', 'f', 'at', 'id', 'h'].every((key) => typeof Reflect.get(value, key) === 'string');
 }

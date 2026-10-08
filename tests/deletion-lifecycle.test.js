@@ -178,13 +178,20 @@ test('Prisma race-prone mutations share the serializable tombstone boundary', as
 
 function deletionPrisma() {
   const hardDeletes = [];
+  let protocolEnabled = false;
   const state = {
     projects: [{ id: 'project-1', organizationId: 'org-1', name: 'Demo', slug: 'demo', status: 'ACTIVE', deletionRequestedAt: null }],
+    environments: [{ id: 'env_prod_project-1', projectId: 'project-1', kind: 'prod', status: 'active' }],
     services: [
-      { id: 'service-1', projectId: 'project-1', status: 'READY', deletionRequestedAt: null },
-      { id: 'service-2', projectId: 'project-1', status: 'CREATED', deletionRequestedAt: null },
+      { id: 'service-1', projectId: 'project-1', name: 'service-1', slug: 'service-1', status: 'READY', deletionRequestedAt: null },
+      { id: 'service-2', projectId: 'project-1', name: 'service-2', slug: 'service-2', status: 'CREATED', deletionRequestedAt: null },
     ],
     resources: [{ id: 'resource-1', projectId: 'project-1', name: 'resource-1', engine: 'postgresql', status: 'READY', deletionRequestedAt: null, connectionSecretName: 'provider-secret-1' }],
+    environmentServices: [
+      { serviceId: 'service-1', projectId: 'project-1', environmentId: 'env_prod_project-1', logicalSlug: 'service-1', displayName: 'service-1' },
+      { serviceId: 'service-2', projectId: 'project-1', environmentId: 'env_prod_project-1', logicalSlug: 'service-2', displayName: 'service-2' },
+    ],
+    environmentResources: [{ resourceId: 'resource-1', projectId: 'project-1', environmentId: 'env_prod_project-1', logicalSlug: 'resource-1', displayName: 'resource-1' }],
     deployments: [{ id: 'deployment-1', projectId: 'project-1', serviceId: 'service-1', status: 'QUEUED', finishedAt: null, reconcileAction: 'apply', reconcileLockedBy: 'worker-a', reconcileLockedAt: new Date('2026-01-01T00:00:00Z') }],
     workflowJobs: [{ id: 'workflow-1', targetType: 'deployment', targetId: 'deployment-1', status: 'queued' }],
     attachments: [{ id: 'attachment-1', resourceId: 'resource-1', serviceId: 'service-1', injectedEnv: { DATABASE_URL: '****' } }],
@@ -206,6 +213,7 @@ function deletionPrisma() {
     return row[key] === value;
   });
   const updateMany = (rows) => async ({ where, data }) => {
+    assert.equal(protocolEnabled, true, 'deletion writes must opt into operational protocol 2');
     let count = 0;
     for (const row of rows) {
       if (!matchesWhere(row, where)) continue;
@@ -228,6 +236,26 @@ function deletionPrisma() {
     throw new Error(`${model}.delete must not be called by a deletion request`);
   };
   const prisma = {
+    $executeRawUnsafe: async (sql) => {
+      assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'");
+      protocolEnabled = true;
+      return 0;
+    },
+    environment: {
+      upsert: async ({ where, update, create }) => {
+        const environment = state.environments.find((row) => row.projectId === where.projectId_kind.projectId && row.kind === where.projectId_kind.kind);
+        assert.ok(environment, 'the existing project must retain its production environment');
+        assert.deepEqual(update, {});
+        assert.deepEqual(create, environment);
+        return environment;
+      },
+    },
+    environmentService: {
+      findUnique: async ({ where }) => state.environmentServices.find((row) => matchesWhere(row, where)) || null,
+    },
+    environmentResource: {
+      findUnique: async ({ where }) => state.environmentResources.find((row) => matchesWhere(row, where)) || null,
+    },
     project: {
       findUnique: async ({ where }) => where.id
         ? find(state.projects, where.id)
@@ -238,9 +266,15 @@ function deletionPrisma() {
       delete: hardDelete('project'),
     },
     service: {
-      findUnique: async ({ where }) => where.id
-        ? find(state.services, where.id)
-        : state.services.find((row) => row.projectId === where.projectId_slug?.projectId && row.id === where.projectId_slug?.slug) || null,
+      findUnique: async ({ where, include }) => {
+        const service = where.id
+          ? find(state.services, where.id)
+          : state.services.find((row) => row.projectId === where.projectId_slug?.projectId && row.slug === where.projectId_slug?.slug) || null;
+        if (!service || !include?.environmentBinding) return service;
+        const binding = state.environmentServices.find((row) => row.serviceId === service.id);
+        const environment = state.environments.find((row) => row.id === binding?.environmentId);
+        return { ...service, environmentBinding: binding ? { ...binding, environment } : null };
+      },
       findMany: async ({ where = {} } = {}) => state.services.filter((row) => matchesWhere(row, where)),
       updateMany: updateMany(state.services),
       update: async () => { throw new Error('service mutation reached'); },
@@ -295,6 +329,14 @@ function deletionPrisma() {
     }
     return [];
   };
-  prisma.$transaction = async (operation) => operation(prisma);
+  prisma.$transaction = async (operation, options) => {
+    assert.equal(options?.isolationLevel, 'Serializable');
+    protocolEnabled = false;
+    try {
+      return await operation(prisma);
+    } finally {
+      protocolEnabled = false;
+    }
+  };
   return { prisma, state, hardDeletes };
 }

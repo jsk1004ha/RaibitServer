@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "provider": "seaweedfs",
+  "release": {
+    "version": "4.46",
+    "sourceRepository": "https://github.com/seaweedfs/seaweedfs",
+    "sourceTag": "4.46",
+    "sourceCommit": "d997fba1575583a89cf0cc50dc0150642286c86d",
+    "releaseUrl": "https://github.com/seaweedfs/seaweedfs/releases/tag/4.46"
+  },
+  "artifact": {
+    "repository": "chrislusf/seaweedfs",
+    "image": "chrislusf/seaweedfs@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62",
+    "ociIndexDigest": "sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62",
+    "platforms": {
+      "linux/amd64": "sha256:6a602956ac4915057199a5271343e9c86c403a561db7c21033362f6791aa29c9"
+    },
+    "provenanceSource": "official Docker Registry v2 OCI index receipt",
+    "resolvedAt": "2026-09-13T00:00:00+09:00"
+  },
+  "runtimeContract": {
+    "topology": "one-instance-and-one-pvc-per-resource",
+    "s3Port": 8333,
+    "runAsUser": 1000,
+    "credentials": [
+      "provider-admin",
+      "tenant-exact-bucket"
+    ],
+    "tenantPath": "trusted-tls-admission-gateway-only",
+    "providerEndpoint": "private-cluster-service",
+    "gatewayIngressIdentity": "exact-namespace-plus-admission-protected-pod-label",
+    "managementPortsExternallyExposed": false,
+    "anonymousFallbackAllowed": false
+  },
+  "conformance": {
+    "packageRender": true,
+    "runtimeAuthentication": false,
+    "runtimeNetworkIsolation": false,
+    "hardByteQuota": false,
+    "providerAvailable": false
+  },
+  "quotaRisk": {
+    "nativeMechanism": "periodic-read-only-sweep",
+    "atomicByteAdmission": false,
+    "laterGate": [
+      11,
+      14,
+      23
+    ]
+  }
+}

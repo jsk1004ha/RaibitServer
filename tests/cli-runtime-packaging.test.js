@@ -62,11 +62,21 @@ test('Given production dependencies, when Docker packages the CLI, then Node loa
       import assert from 'node:assert/strict';
       import { createServer } from 'node:http';
       import { once } from 'node:events';
-      import { RAIBITSERVERClient } from '@raibitserver/api-client';
+      import { RAIBITSERVERClient, apiOperationError } from '@raibitserver/api-client';
       import { apiOperations } from '@raibitserver/schemas';
       const client = new RAIBITSERVERClient({ baseUrl: 'http://127.0.0.1:1' });
       assert.equal(typeof client.operations.health, 'function');
       assert.equal(typeof client.listProjects, 'function');
+      for (const [status, body, message] of [
+        [503, { error: { code: 'DISCORD_PERSISTENCE_UNAVAILABLE' } }, 'DISCORD_PERSISTENCE_UNAVAILABLE'],
+        [409, { statusCode: 409, code: 'BACKUP_POLICY_VERSION_CONFLICT' }, 'BACKUP_POLICY_VERSION_CONFLICT'],
+        [400, { statusCode: 400, message: 'Invalid request', error: 'Bad Request' }, 'Invalid request'],
+        [400, { statusCode: 400, message: ['first', 'second'] }, 'first,second'],
+      ]) {
+        const error = apiOperationError(status, body);
+        assert.equal(error.message, 'RAIBITSERVER API ' + status + ': ' + message);
+        assert.deepEqual(error.body, body);
+      }
       assert.throws(() => apiOperations.health.response.parse({ status: false }));
       await assert.rejects(client.operations['projects-get']({ path: { projectId: 42 }, query: {}, body: {} }), error => error.name === 'ZodError');
       const server = createServer((request, response) => {
