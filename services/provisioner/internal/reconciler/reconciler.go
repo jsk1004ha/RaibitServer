@@ -574,9 +574,36 @@ func (r *Reconciler) reconcileDeletion(ctx context.Context, resource *store.Reso
 				return &Result{Processed: 1, ResourceID: resource.ID, Status: store.StatusDeleting, Command: commandLine, DryRun: false}, err
 			}
 		}
-		credentialUID, uidErr := credentialSecretUID(resource.DesiredState)
+		credentialUID, uidErr := optionalCredentialSecretUID(resource.DesiredState)
 		if uidErr != nil {
 			return &Result{Processed: 1, ResourceID: resource.ID, Status: store.StatusDeleting, Command: commandLine, DryRun: false}, uidErr
+		}
+		if credentialUID == "" {
+			// A resource deleted before provisioning has no credential UID. Only
+			// finalize it once every provider object is demonstrably absent.
+			commandLine, _, secretErr := runner.GetSecretMetadata(ctx, namespace, secretName, r.config.Timeout)
+			result := &Result{Processed: 1, ResourceID: resource.ID, Status: store.StatusDeleting, Command: commandLine, DryRun: false}
+			if secretErr == nil {
+				return result, errors.New("provider credential Secret exists without a persisted UID; refusing deletion")
+			}
+			if !errors.Is(secretErr, command.ErrSecretNotFound) {
+				return result, secretErr
+			}
+			for _, object := range []string{"service/" + name, "statefulset/" + name, "networkpolicy/" + name + "-provider", "persistentvolumeclaim/" + pvcName} {
+				commandLine, output, lookupErr := runner.RunSensitiveOutput(ctx, "kubectl", []string{"get", object, "--namespace", namespace, "--ignore-not-found", "-o", "name"}, r.config.Timeout)
+				result.Command = commandLine
+				if lookupErr != nil {
+					return result, lookupErr
+				}
+				if len(strings.TrimSpace(string(output))) > 0 {
+					return result, fmt.Errorf("provider object %s exists without a persisted credential UID; refusing deletion", object)
+				}
+			}
+			if err := r.store.FinalizeResourceDeletion(ctx, resource); err != nil {
+				return result, err
+			}
+			result.Status = store.StatusDeleted
+			return result, nil
 		}
 		commandLine, uidErr = runner.VerifySecretUID(ctx, namespace, secretName, credentialUID, r.config.Timeout)
 		if errors.Is(uidErr, command.ErrSecretNotFound) {

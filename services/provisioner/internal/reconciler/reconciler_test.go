@@ -167,6 +167,67 @@ func TestDeletionDoesNotFinalizeWhilePersistentVolumeClaimDeletionIsPending(t *t
 	}
 }
 
+func TestDeletionFinalizesUnprovisionedResourceInExistingNamespace(t *testing.T) {
+	resource := &store.Resource{ID: "res-unprovisioned", ProjectID: "project-1", OrganizationID: "org-1", ProjectSlug: "demo", Name: "db", Engine: "postgresql", Status: store.StatusDeleteRequested}
+	name, _, secretName, pvcName, err := provider.ObjectNames(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &fakeStore{deletion: resource}
+	runner := &fakeRunner{namespaceExists: true}
+	result, err := New(postgresqlLiveConfig(t.TempDir()), state, runner).RunOnce(context.Background())
+	if err != nil || result.Status != store.StatusDeleted || state.finalized != 1 {
+		t.Fatalf("unprovisioned resource must not block project deletion: result=%#v err=%v finalized=%d", result, err, state.finalized)
+	}
+	for _, object := range []string{"service/" + name, "statefulset/" + name, "networkpolicy/" + name + "-provider", "persistentvolumeclaim/" + pvcName} {
+		if indexContaining(runner.calls, "kubectl get "+object+" --namespace ") < 0 {
+			t.Fatalf("must confirm absence of %s before finalizing: %#v", object, runner.calls)
+		}
+	}
+	if indexContaining(runner.calls, "patch metadata secret/"+secretName) < 0 || indexContaining(runner.calls, "delete ") >= 0 {
+		t.Fatalf("must confirm Secret absence without issuing deletes: %#v", runner.calls)
+	}
+}
+
+func TestUnprovisionedDeletionRetainsResourceWhenAbsenceCannotBeProven(t *testing.T) {
+	for _, scenario := range []string{"service", "statefulset", "networkpolicy", "persistentvolumeclaim", "secret", "lookup-error", "secret-error", "invalid-uid"} {
+		t.Run(scenario, func(t *testing.T) {
+			resource := &store.Resource{ID: "res-unprovisioned", ProjectID: "project-1", OrganizationID: "org-1", ProjectSlug: "demo", Name: "db", Engine: "postgresql", Status: store.StatusDeleteRequested}
+			name, _, _, pvcName, err := provider.ObjectNames(resource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner := &fakeRunner{namespaceExists: true, objectOutputs: map[string]string{}}
+			switch scenario {
+			case "secret":
+				runner.secretExists = true
+			case "lookup-error":
+				runner.failure, runner.failureNeedle = errors.New("cluster unavailable"), "kubectl get service/"
+			case "secret-error":
+				runner.failure, runner.failureNeedle = errors.New("metadata forbidden"), "patch metadata secret/"
+			case "invalid-uid":
+				resource.DesiredState = map[string]any{"credentialSecretUID": "invalid/uid"}
+			default:
+				objectName := name
+				if scenario == "networkpolicy" {
+					objectName += "-provider"
+				} else if scenario == "persistentvolumeclaim" {
+					objectName = pvcName
+				}
+				runner.objectOutputs[scenario+"/"+objectName] = scenario + "/" + objectName
+			}
+			state := &fakeStore{deletion: resource}
+			result, err := New(postgresqlLiveConfig(t.TempDir()), state, runner).RunOnce(context.Background())
+			if err == nil || result == nil || result.Status != store.StatusDeleting || state.finalized != 0 {
+				t.Fatalf("unproven absence must retain resource: result=%#v err=%v finalized=%d", result, err, state.finalized)
+			}
+			if indexContaining(runner.calls, "delete ") >= 0 {
+				t.Fatalf("missing ownership must not trigger any deletion: %#v", runner.calls)
+			}
+		})
+	}
+}
+
 func TestContinuousDeletionBacklogCannotStarveProvisioning(t *testing.T) {
 	state := &fakeStore{
 		deletion: &store.Resource{ID: "delete-1", ProjectID: "project-1", OrganizationID: "org-1", ProjectSlug: "demo", Name: "old-db", Engine: "postgresql", Status: store.StatusDeleteRequested},
@@ -947,6 +1008,7 @@ type fakeRunner struct {
 	namespaceExists        bool
 	workloadOutput         []byte
 	pvcOutput              []byte
+	objectOutputs          map[string]string
 	createRace             bool
 	replacementUIDMismatch bool
 	secretUID              string
@@ -985,6 +1047,11 @@ func (r *fakeRunner) RunInput(_ context.Context, name string, args []string, inp
 func (r *fakeRunner) RunSensitiveOutput(_ context.Context, name string, args []string, _ time.Duration) (string, []byte, error) {
 	call := name + " " + strings.Join(args, " ")
 	r.calls = append(r.calls, call)
+	if len(args) > 1 {
+		if output, ok := r.objectOutputs[args[1]]; ok {
+			return call, []byte(output), r.callError(call)
+		}
+	}
 	if strings.Contains(call, "kubectl apply") && strings.Contains(call, "--output=json") {
 		payload, err := os.ReadFile(args[3])
 		if err != nil {
