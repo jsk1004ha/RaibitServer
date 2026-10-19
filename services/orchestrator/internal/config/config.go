@@ -25,6 +25,7 @@ type Config struct {
 	PollInterval            time.Duration
 	ClaimLease              time.Duration
 	WorkerID                string
+	DevelopmentEnvironments bool
 }
 
 func FromEnv() Config {
@@ -56,6 +57,7 @@ func FromEnv() Config {
 		PollInterval:            pollInterval,
 		ClaimLease:              claimLease,
 		WorkerID:                firstNonEmpty(os.Getenv("RAIBITSERVER_WORKER_ID"), hostname, "raibitserver-orchestrator"),
+		DevelopmentEnvironments: strings.TrimSpace(os.Getenv("RAIBITSERVER_OPERATIONAL_PROTOCOL_VERSION")) == "2",
 	}
 }
 

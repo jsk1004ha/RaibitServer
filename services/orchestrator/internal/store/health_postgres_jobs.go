@@ -9,7 +9,9 @@ import (
 )
 
 const claimHealthJobSQL = `SELECT j.id,j.payload,j.attempts,j."lockedBy",j."lockedAt",j."targetType",j."targetId"
- FROM "WorkflowJob" j WHERE j.type=$1 AND j.status IN ('queued','running') AND (
+ FROM "WorkflowJob" j LEFT JOIN "Deployment" target ON target.id=j."targetId" AND j."targetType"='deployment'
+ LEFT JOIN "Environment" environment ON environment.id=target."environmentId" AND environment."projectId"=target."projectId"
+ WHERE j.type=$1 AND (COALESCE(environment.kind,'prod')='prod' OR $4) AND j.status IN ('queued','running') AND (
  (j.status='queued' AND j."runAfter"<=$2) OR (j.status='running' AND (j."lockedAt" IS NULL OR j."lockedAt"<=$3))
  OR NOT EXISTS (SELECT 1 FROM "Deployment" d JOIN "Service" s ON s.id=d."serviceId" AND s."projectId"=d."projectId"
  JOIN "Project" p ON p.id=d."projectId" WHERE d.id=j."targetId" AND d.status='READY'
@@ -26,7 +28,7 @@ func (s *PostgresStore) ClaimNextHealth(ctx context.Context, options ClaimOption
 	err := s.healthTransaction(ctx, func(tx *sql.Tx) error {
 		h := healthTransaction{ctx: ctx, tx: tx}
 		for range 100 {
-			job, err := scanHealthJob(tx.QueryRowContext(ctx, claimHealthJobSQL, PublicHealthObserve, at, at.Add(-HealthLeaseDuration)))
+			job, err := scanHealthJob(tx.QueryRowContext(ctx, claimHealthJobSQL, PublicHealthObserve, at, at.Add(-HealthLeaseDuration), options.AllowDevelopment))
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}

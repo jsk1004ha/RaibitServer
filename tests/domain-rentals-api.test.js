@@ -39,6 +39,30 @@ test('rental API uses real authentication and shared custom-domain persistence',
       assert.equal(rentalCount + domainCount, 1);
     }
   });
+  await t.test('development domains keep environment scope and share rental hostname claims', async () => {
+    const previous = process.env.RAIBITSERVER_OPERATIONAL_FEATURES_ENABLED;
+    process.env.RAIBITSERVER_OPERATIONAL_FEATURES_ENABLED = '1';
+    try {
+      const { token } = await fx.account('dev-domain', 'CLUB_MEMBER');
+      const environment = fx.store.createEnvironment({ projectId: fx.project.id, kind: 'dev', expectedVersion: 0 });
+      const service = fx.store.createService({ projectId: fx.project.id, environmentId: environment.id, name: 'Web', type: 'web' });
+      const path = `/projects/${fx.project.id}/domains`;
+      const input = { serviceId: service.id, hostname: 'dev-only.raibit.kr', environmentId: environment.id };
+      const wrongScope = await fx.request(token, path, { ...input, environmentKind: 'prod' });
+      assert.equal(wrongScope.status, 404);
+      assert.equal((await fx.request(token, path, input)).status, 201);
+      assert.equal((await fx.request(token, path)).body.domains.some(row => row.hostname === input.hostname), false);
+      const selected = await fx.request(token, `${path}?environmentId=${environment.id}`);
+      assert.equal(selected.status, 200);
+      assert.equal(selected.body.domains.some(row => row.hostname === input.hostname), true);
+      const rental = await fx.request(token, '/domain-rentals', { name: 'dev-only', targetUrl });
+      assert.equal(rental.status, 409);
+      assert.equal(rental.body.error, 'DOMAIN_RENTAL_NAME_TAKEN');
+    } finally {
+      if (previous === undefined) delete process.env.RAIBITSERVER_OPERATIONAL_FEATURES_ENABLED;
+      else process.env.RAIBITSERVER_OPERATIONAL_FEATURES_ENABLED = previous;
+    }
+  });
   await t.test('2/5 limits come from current account and paused addresses count', async () => {
     for (const [type, limit] of [['NON_CLUB', 2], ['CLUB_MEMBER', 5]]) {
       const { token } = await fx.account(`quota-${limit}`, type);

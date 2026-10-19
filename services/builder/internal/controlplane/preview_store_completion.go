@@ -43,9 +43,9 @@ func (s *PostgresStore) CommitPreviewResolution(ctx context.Context, claim Previ
 		return false, ErrPreviewResolutionLeaseLost
 	}
 	applyID := fmt.Sprintf("preview-apply:%s:%d", claim.Target.LineageID, claim.Target.LineageVersion)
-	result, err := tx.ExecContext(ctx, `INSERT INTO "WorkflowJob" (id,type,status,"targetType","targetId",payload,attempts,"maxAttempts","runAfter","updatedAt")
-VALUES ($1,'github.preview-apply','queued','preview-lineage',$2,jsonb_build_object('version',1,'lineageId',$2::text,'lineageVersion',$3::int),0,3,$4,$4)
-ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id WHERE "WorkflowJob".type=EXCLUDED.type AND "WorkflowJob"."targetType"=EXCLUDED."targetType" AND "WorkflowJob"."targetId"=EXCLUDED."targetId" AND "WorkflowJob".payload=EXCLUDED.payload`, applyID, claim.Target.LineageID, claim.Target.LineageVersion, now)
+	result, err := tx.ExecContext(ctx, `INSERT INTO "WorkflowJob" (id,type,status,"targetType","targetId",payload,attempts,"maxAttempts","runAfter","updatedAt","environmentId","operationalProtocolVersion")
+VALUES ($1,'github.preview-apply','queued','preview-lineage',$2,jsonb_build_object('version',1,'lineageId',$2::text,'lineageVersion',$3::int),0,3,$4,$4,$5,$6)
+ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id WHERE "WorkflowJob".type=EXCLUDED.type AND "WorkflowJob"."targetType"=EXCLUDED."targetType" AND "WorkflowJob"."targetId"=EXCLUDED."targetId" AND "WorkflowJob".payload=EXCLUDED.payload AND "WorkflowJob"."environmentId" IS NOT DISTINCT FROM EXCLUDED."environmentId" AND "WorkflowJob"."operationalProtocolVersion"=EXCLUDED."operationalProtocolVersion"`, applyID, claim.Target.LineageID, claim.Target.LineageVersion, now, claim.Target.EnvironmentID, s.operationalProtocol)
 	if err != nil {
 		return false, fmt.Errorf("enqueue preview apply: %w", err)
 	}
@@ -107,6 +107,10 @@ func (s *PostgresStore) lockPreviewClaimForCompletion(ctx context.Context, claim
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, nil, fmt.Errorf("begin preview resolution completion: %w", err)
+	}
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		_ = tx.Rollback()
+		return nil, nil, err
 	}
 	if err := lockPreviewTenant(ctx, tx, organizationID, serviceID); err != nil {
 		_ = tx.Rollback()

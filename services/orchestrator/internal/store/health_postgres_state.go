@@ -10,7 +10,7 @@ import (
 )
 
 func (s *PostgresStore) healthTransaction(ctx context.Context, apply func(*sql.Tx) error) (err error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := s.beginOperationalTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return fmt.Errorf("begin health transaction: %w", err)
 	}

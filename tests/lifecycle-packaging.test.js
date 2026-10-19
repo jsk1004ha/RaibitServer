@@ -84,10 +84,12 @@ test('Given the API Docker core rootDir, when emitted and isolated, then core li
   await mkdir(path.join(schemasPackage, 'node_modules'), { recursive: true });
   await symlink(path.dirname(require.resolve('zod/package.json', { paths: [path.join(root, 'packages', 'schemas')] })), path.join(schemasPackage, 'node_modules', 'zod'), 'junction');
   await writeFile(path.join(api, 'package.json'), '{"name":"@raibitserver/api","type":"module"}');
+  const schemaExports = Object.keys(JSON.parse(await readFile(path.join(schemasPackage, 'package.json'), 'utf8')).exports);
   const emittedSchemas = spawnSync(process.execPath, [
     path.join(root, 'scripts', 'build-cli-runtime.mjs'), '--schemas-only', api,
   ], { cwd: root, encoding: 'utf8' });
   assert.equal(emittedSchemas.status, 0, emittedSchemas.stdout + emittedSchemas.stderr);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(path.join(schemasPackage, 'package.json'), 'utf8')).exports), schemaExports);
   await writeFile(path.join(output, 'package.json'), '{"type":"module"}');
   await mkdir(path.join(output, 'node_modules'), { recursive: true });
   await symlink(path.dirname(require.resolve('yaml/package.json')), path.join(output, 'node_modules', 'yaml'), 'junction');
@@ -97,6 +99,11 @@ test('Given the API Docker core rootDir, when emitted and isolated, then core li
     import assert from 'node:assert/strict';
     import { canTransitionDeployment, normalizeDeploymentStatus, isDeploymentTerminal, createWorkflowJobRecord } from './index.js';
     import { ServiceCreateSchema } from '@raibitserver/schemas';
+    for (const subpath of ${JSON.stringify(schemaExports)}) {
+      const specifier = '@raibitserver/schemas' + (subpath === '.' ? '' : subpath.slice(1));
+      assert.ok(import.meta.resolve(specifier).endsWith('.js'), specifier);
+      await import(specifier);
+    }
     assert.equal(normalizeDeploymentStatus('cleanup-requested'), 'PREVIEW_CLEANUP_REQUESTED');
     assert.equal(canTransitionDeployment('ROLLBACK_REQUESTED', 'DEPLOYING'), true);
     assert.equal(canTransitionDeployment('DEPLOYING', 'CLEANED_UP'), true);

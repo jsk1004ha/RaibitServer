@@ -75,7 +75,7 @@ func (s *PostgresStore) CompleteRollout(ctx context.Context, input RolloutComple
 			if err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO "WorkflowJob" (id,type,status,"targetType","targetId",payload,attempts,"maxAttempts","runAfter","createdAt","updatedAt") VALUES($1,$2,'queued','deployment',$3,$4,0,3,$5,$5,$5) ON CONFLICT(id) DO NOTHING`, healthJobID(*observation), PublicHealthObserve, observation.DeploymentID, raw, input.Now)
+			_, err = tx.ExecContext(ctx, `INSERT INTO "WorkflowJob" (id,type,status,"targetType","targetId",payload,attempts,"maxAttempts","runAfter","createdAt","updatedAt","operationalProtocolVersion") VALUES($1,$2,'queued','deployment',$3,$4,0,3,$5,$5,$5,2) ON CONFLICT(id) DO NOTHING`, healthJobID(*observation), PublicHealthObserve, observation.DeploymentID, raw, input.Now)
 			if err != nil {
 				return err
 			}

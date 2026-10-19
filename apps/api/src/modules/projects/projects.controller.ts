@@ -23,8 +23,8 @@ export class ProjectsController {
 
   @RequirePermission('project:read')
   @Get(':projectId/overview')
-  overview(@Param('projectId') projectId: string, @Req() req: any) {
-    return this.projectsService.overview(projectId, req.raibitSubject);
+  overview(@Param('projectId') projectId: string, @Query() query: Record<string, unknown>, @Req() req: any) {
+    return this.projectsService.overview(projectId, req.raibitSubject, query);
   }
 
   @RequirePermission('project:read')

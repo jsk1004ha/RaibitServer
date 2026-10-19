@@ -10,10 +10,54 @@ import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
 import { hashPassword } from '../packages/core/src/identity.ts';
 import { encodeDeploymentActivityResumeToken } from '../packages/core/src/sse.ts';
 import { bootParityApi } from './fixtures/api-parity-runtime.mjs';
+import { parseDiscordConfiguration, parseDiscordDeliveryQuery, parseDiscordExpectedVersion, publicDiscordDestination } from '../packages/core/src/discord-alerts.ts';
+import { parseScheduledRecoveryIntent } from '../packages/core/src/backup-policy.ts';
+import { apiOperationError } from '../packages/api-client/src/operations.ts';
 
 const requiredWireBodies = {
   'github-repositories-refresh': { expectedIntegrationVersion: 1, expectedGeneration: 0 },
+  'projects-environments-post': { kind: 'dev', expectedVersion: 0 },
+  'projects-environments-delete': { expectedVersion: 1, confirmation: 'delete dev' },
 };
+
+test('operational HTTP contracts preserve core input validation, public masking and typed failures', async () => {
+  const fixtures = JSON.parse(await fs.readFile(new URL('./fixtures/openapi/semantic-parity.json', import.meta.url), 'utf8'));
+  const configuration = fixtures.wireBodies['discord-configure'];
+  const policy = fixtures.wireBodies['resource-backup-policy-update'];
+  const configureBody = apiOperations['discord-configure'].input.shape.body;
+  const policyBody = apiOperations['resource-backup-policy-update'].input.shape.body;
+  assert.deepEqual(parseDiscordConfiguration(configureBody.parse(configuration)), parseDiscordConfiguration(configuration));
+  assert.deepEqual(policyBody.parse(policy), parseScheduledRecoveryIntent(policy));
+  assert.equal(parseDiscordExpectedVersion(apiOperations['discord-delete'].input.shape.body.parse({ expectedVersion: 1 })), 1);
+  assert.deepEqual(parseDiscordDeliveryQuery(apiOperations['discord-deliveries'].input.shape.query.parse({ limit: 2 })), { limit: 2, cursor: null });
+  for (const invalid of [{ ...configuration, expectedVersion: -1 }, { ...configuration, webhookUrl: 'https://example.org/webhook' }, { ...configuration, environments: ['preview'] }, { ...configuration, events: [] }, { ...configuration, secret: 'hidden' }]) {
+    assert.equal(configureBody.safeParse(invalid).success, false);
+    assert.throws(() => parseDiscordConfiguration(invalid));
+  }
+  for (const invalid of [{ ...policy, timezone: 'UTC' }, { ...policy, localMinute: 1440 }, { ...policy, retention: { mode: 'success-count', count: 8 } }, { ...policy, cron: '* * * * *' }]) {
+    assert.equal(policyBody.safeParse(invalid).success, false);
+    assert.throws(() => parseScheduledRecoveryIntent(invalid));
+  }
+  const destination = fixtures.responseFixtures.find((fixture) => fixture.operation === 'discord-configure').body;
+  const publicDestination = publicDiscordDestination({ ...destination, sealedWebhookUrl: 'sealed-fixture', deletedAt: null });
+  assert.deepEqual(apiOperations['discord-configure'].response.parse(publicDestination), destination);
+  assert.equal(apiOperations['discord-configure'].response.safeParse({ ...destination, webhookUrl: configuration.webhookUrl }).success, false);
+  assert.equal(apiOperations['discord-configure'].response.safeParse({ ...destination, sealedWebhookUrl: 'sealed-fixture' }).success, false);
+  for (const [status, body, code] of [
+    [503, { error: { code: 'DISCORD_PERSISTENCE_UNAVAILABLE' } }, 'DISCORD_PERSISTENCE_UNAVAILABLE'],
+    [409, { statusCode: 409, code: 'BACKUP_POLICY_VERSION_CONFLICT' }, 'BACKUP_POLICY_VERSION_CONFLICT'],
+    [503, { statusCode: 503, code: 'OPERATIONAL_PERSISTENCE_UNAVAILABLE' }, 'OPERATIONAL_PERSISTENCE_UNAVAILABLE'],
+  ]) {
+    const error = apiOperationError(status, body);
+    assert.equal(error.status, status);
+    assert.deepEqual(error.body, body);
+    assert.match(error.message, new RegExp(code));
+  }
+  for (const id of ['discord-configure', 'resource-backup-policy-update']) {
+    const operation = apiOperations[id];
+    assert.equal(createOpenApiDocument().paths[operation.path].put.requestBody.required, true);
+  }
+});
 
 test('OAuth callback contract represents exactly one bound code or fixed denial', () => {
   // Given: the same binding is required for both callback variants.

@@ -280,7 +280,7 @@ func TestPostgresClaimReapsExpiredExhaustedBuild(t *testing.T) {
 		evidence := jsonMap(payload)
 		errorSpec := mapField(evidence, "lastErrorSpec")
 		if status != WorkflowFailed || lockedBy.Valid || persistedLockedAt.Valid {
-			t.Fatalf("expired exhausted job was not terminalized and unlocked: status=%q lockedBy=%#v lockedAt=%#v", status, lockedBy, persistedLockedAt)
+			t.Fatalf("expired exhausted job was not terminalized and unlocked: id=%s status=%q lockedBy=%#v lockedAt=%#v", id, status, lockedBy, persistedLockedAt)
 		}
 		if stringField(evidence, "lastError") != exhaustedWorkflowFailureMessage || stringField(evidence, "failedAt") != now.Format(time.RFC3339Nano) ||
 			stringField(errorSpec, "code") != ErrorCodeBuildFailed || stringField(errorSpec, "message") != exhaustedWorkflowFailureMessage {
@@ -321,6 +321,56 @@ func TestPostgresClaimReapsExpiredExhaustedBuild(t *testing.T) {
 		t.Fatalf("defaulted final attempt must be reaped rather than reclaimed: %#v", claimed)
 	}
 	assertDeploymentFailure(defaultMaxDeploymentID, defaultMaxReapedAt)
+
+	// Orphan cleanup must not bypass stored identity or either deployment reference.
+	// Keep malformed binding fixtures transaction-local and roll them back.
+	func() {
+		guardTx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = guardTx.Rollback() }()
+		if _, err := guardTx.ExecContext(ctx, setOperationalProtocolSQL); err != nil {
+			t.Fatal(err)
+		}
+		protectedJobs := []struct {
+			name, targetID, deploymentID string
+			environmentID                any
+			protocol                     int
+		}{
+			{"orphan-environment", prefix + "-absent", prefix + "-absent", "env_prod_" + projectID, 1},
+			{"orphan-protocol-two", prefix + "-absent", prefix + "-absent", nil, 2},
+			{"missing-payload-existing-target", buildingDeploymentID, prefix + "-absent", nil, 1},
+			{"existing-target-missing-binding", buildingDeploymentID, buildingDeploymentID, nil, 1},
+		}
+		for _, job := range protectedJobs {
+			payload, err := json.Marshal(map[string]any{"deploymentId": job.deploymentID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := guardTx.ExecContext(ctx, `INSERT INTO "WorkflowJob" (id, type, status, "targetType", "targetId", payload, attempts, "maxAttempts", "runAfter", "lockedBy", "lockedAt", "updatedAt", "environmentId", "operationalProtocolVersion") VALUES ($1, 'build-and-deploy', 'running', ' deployment ', $2, $3::jsonb, 1, 1, $4, 'guard-worker', $4, $4, $5, $6)`, prefix+"-"+job.name, job.targetID, string(payload), lockedAt, job.environmentID, job.protocol); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := guardTx.ExecContext(ctx, `DELETE FROM "EnvironmentService" WHERE "serviceId" = $1`, serviceID); err != nil {
+			t.Fatal(err)
+		}
+		for _, protocol := range []int{OperationalProtocolLegacy, OperationalProtocolActive} {
+			_, err := scanWorkflowJob(guardTx.QueryRowContext(ctx, claimWorkflowJobSQL, WorkflowQueued, now, now.Add(-time.Second), WorkflowRunning, exhaustedWorkflowReapLimit, exhaustedWorkflowFailureMessage, `{}`, now.Format(time.RFC3339Nano), "guard-reaper", protocol))
+			if !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("protocol %d unexpectedly claimed a protected job: %v", protocol, err)
+			}
+		}
+		for _, job := range protectedJobs {
+			var status, lockedBy string
+			if err := guardTx.QueryRowContext(ctx, `SELECT status, "lockedBy" FROM "WorkflowJob" WHERE id = $1`, prefix+"-"+job.name).Scan(&status, &lockedBy); err != nil {
+				t.Fatal(err)
+			}
+			if status != WorkflowRunning || lockedBy != "guard-worker" {
+				t.Fatalf("orphan cleanup crossed %s guard: status=%s lockedBy=%s", job.name, status, lockedBy)
+			}
+		}
+	}()
 
 	publicationLease := WorkflowLease{JobID: publicationJobID, WorkerID: "publisher-a", Attempt: 1}
 	publication := ImagePublicationInput{

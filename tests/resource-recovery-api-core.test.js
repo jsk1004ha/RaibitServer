@@ -187,7 +187,8 @@ test('recovery API core PostgreSQL transaction replays retired sources without p
   assert.equal((await repository.createBackup(backupInput)).operation.id, backup.operation.id);
   assert.equal((await repository.createRestore(restoreInput)).operation.id, restore.operation.id);
   assert.equal(quotaCalls, 0);
-  assert.equal(writes.length, 0);
+  const protocolSetup = { query: "SET LOCAL raibitserver.operational_protocol = '2'", values: [] };
+  assert.deepEqual(writes, [protocolSetup, protocolSetup], 'replays may configure the transaction but must not write durable rows');
 });
 
 test('recovery API core accepts every terminal cleanup state and replays deleted backups', async () => {

@@ -12,13 +12,21 @@ test('Prisma deployment retry sends SQL NULL preview identity for a production s
   // Given: a production source whose immutable successor has no preview lineage.
   const source = {
     id: 'production-source', serviceId: 'service', projectId: 'project', status: 'BUILD_FAILED',
+    environmentId: 'env_prod_project',
     deploymentType: 'production', branch: 'main', commitSha: 'a'.repeat(40), commitHash: 'a'.repeat(40),
     snapshotVersion: 1, desiredSpecSnapshot: { port: 3000 }, previewLineageId: null, previewGeneration: null, previewRuntime: null,
   };
   const deploymentWrites = [];
   const tx = {
     $queryRaw: async () => [{ locked: 1 }],
-    service: { findUnique: async () => ({ id: 'service', projectId: 'project', status: 'ACTIVE' }) },
+    $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
+    service: { findUnique: async () => ({
+      id: 'service', projectId: 'project', status: 'ACTIVE',
+      environmentBinding: {
+        environmentId: source.environmentId, projectId: source.projectId, logicalSlug: 'web',
+        environment: { id: source.environmentId, projectId: source.projectId, kind: 'prod' },
+      },
+    }) },
     project: { findUnique: async () => ({ id: 'project', status: 'ACTIVE' }) },
     deployment: {
       findUnique: async ({ where }) => where.serviceId_requestIdempotencyKey ? null : (where.id === source.id ? source : null),
@@ -36,6 +44,7 @@ test('Prisma deployment retry sends SQL NULL preview identity for a production s
   // Then: absence remains SQL NULL (omitted JSON field), never Prisma JsonNull.
   assert.equal(deploymentWrites.length, 1);
   assert.equal(deploymentWrites[0].deploymentType, 'production');
+  assert.equal(deploymentWrites[0].environmentId, source.environmentId);
   assert.equal(deploymentWrites[0].previewLineageId, null);
   assert.equal(deploymentWrites[0].previewGeneration, null);
   assert.equal(Object.hasOwn(deploymentWrites[0], 'previewRuntime'), false);

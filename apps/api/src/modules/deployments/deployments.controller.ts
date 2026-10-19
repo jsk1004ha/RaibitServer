@@ -16,8 +16,8 @@ export class DeploymentsController {
   @RequirePermission('deploy:run')
   @Post()
   @HttpCode(202)
-  create(@Param('projectId') projectId: string, @Param('serviceId') serviceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.deploymentsService.createDeployment(projectId, serviceId, input || {}, req.raibitSubject);
+  create(@Param('projectId') projectId: string, @Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.createDeployment(projectId, serviceId, input || {}, req.raibitSubject, query);
   }
 }
 
@@ -34,8 +34,8 @@ export class ServiceDeploymentsController {
   @RequirePermission('deploy:run')
   @Post()
   @HttpCode(202)
-  create(@Param('serviceId') serviceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.deploymentsService.createDeploymentForService(serviceId, input || {}, req.raibitSubject);
+  create(@Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.createDeploymentForService(serviceId, input || {}, req.raibitSubject, query);
   }
 }
 
@@ -52,54 +52,54 @@ export class DeploymentLogsController {
   @RequirePermission('deploy:run')
   @Post('deployments/:deploymentId/retry')
   @HttpCode(202)
-  retry(@Param('deploymentId') deploymentId: string, @Body() input: unknown, @Req() req: { readonly raibitSubject: { readonly id: string } }) {
-    return this.deploymentsService.createDeploymentOperation({ operation: 'retry', id: deploymentId }, input, req.raibitSubject);
+  retry(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Body() input: unknown, @Req() req: { readonly raibitSubject: { readonly id: string } }) {
+    return this.deploymentsService.createDeploymentOperation({ operation: 'retry', id: deploymentId }, input, req.raibitSubject, query);
   }
 
   @RequirePermission('deploy:run')
   @Post('services/:serviceId/redeploy')
   @HttpCode(202)
-  redeploy(@Param('serviceId') serviceId: string, @Body() input: unknown, @Req() req: { readonly raibitSubject: { readonly id: string } }) {
-    return this.deploymentsService.createDeploymentOperation({ operation: 'redeploy', id: serviceId }, input, req.raibitSubject);
+  redeploy(@Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Body() input: unknown, @Req() req: { readonly raibitSubject: { readonly id: string } }) {
+    return this.deploymentsService.createDeploymentOperation({ operation: 'redeploy', id: serviceId }, input, req.raibitSubject, query);
   }
 
   @RequirePermission('project:read')
   @Get('deployments/:deploymentId')
-  get(@Param('deploymentId') deploymentId: string, @Req() req: any) {
-    return this.deploymentsService.getDeployment(deploymentId, req.raibitSubject);
+  get(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.getDeployment(deploymentId, req.raibitSubject, query);
   }
 
   @RequirePermission('deploy:run')
   @Patch('deployments/:deploymentId/status')
-  statusPatch(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.deploymentsService.updateDeploymentStatus(deploymentId, input || {}, req.raibitSubject);
+  statusPatch(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.updateDeploymentStatus(deploymentId, input || {}, req.raibitSubject, query);
   }
 
   @RequirePermission('deploy:run')
   @Post('deployments/:deploymentId/status')
-  statusPost(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.deploymentsService.updateDeploymentStatus(deploymentId, input || {}, req.raibitSubject);
+  statusPost(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.updateDeploymentStatus(deploymentId, input || {}, req.raibitSubject, query);
   }
 
   @RequirePermission('deploy:run')
   @Post('deployments/:deploymentId/cancel')
   @HttpCode(200)
-  cancel(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.deploymentsService.cancelDeployment(deploymentId, input || {}, req.raibitSubject);
+  cancel(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.cancelDeployment(deploymentId, input || {}, req.raibitSubject, query);
   }
 
   @RequirePermission('deploy:run')
   @Post('deployments/:deploymentId/rollback')
   @HttpCode(202)
-  rollback(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.deploymentsService.rollbackDeployment(deploymentId, input || {}, req.raibitSubject);
+  rollback(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.rollbackDeployment(deploymentId, input || {}, req.raibitSubject, query);
   }
 
   @RequirePermission('deploy:run')
   @Post('deployments/:deploymentId/preview-cleanup')
   @HttpCode(202)
-  previewCleanup(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.deploymentsService.requestPreviewCleanup(deploymentId, input || {}, req.raibitSubject);
+  previewCleanup(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.deploymentsService.requestPreviewCleanup(deploymentId, input || {}, req.raibitSubject, query);
   }
 
   @RequirePermission('logs:read')
@@ -116,9 +116,10 @@ export class DeploymentLogsController {
 
   @RequirePermission('logs:read')
   @Get('deployments/:deploymentId/stream')
-  async deploymentStream(@Param('deploymentId') deploymentId: string, @Req() req: any, @Res() res: any) {
+  async deploymentStream(@Param('deploymentId') deploymentId: string, @Query() query: Record<string, any>, @Req() req: any, @Res() res: any) {
     const continuation = createObservationProjectionContinuation();
     const { snapshot, resumeScope } = await this.deploymentsService.openDeploymentActivityStream(deploymentId, req.raibitSubject, {
+      ...query,
       lastEventId: req.headers?.['last-event-id'],
       observationContinuation: continuation,
     });
@@ -132,6 +133,7 @@ export class DeploymentLogsController {
       terminalError: (error) => error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500,
       onClose: () => clearObservationProjectionContinuation(continuation),
       load: (cursors) => this.deploymentsService.deploymentActivitySnapshot(deploymentId, req.raibitSubject, {
+        ...query,
         deploymentCursor: cursors.deploymentCursor,
         logCursor: cursors.logCursor,
         eventCursor: cursors.eventCursor,
@@ -148,9 +150,10 @@ export class DeploymentLogsController {
 
   @RequirePermission('logs:read')
   @Get('services/:serviceId/logs/stream')
-  async runtimeStream(@Param('serviceId') serviceId: string, @Req() req: any, @Res() res: any) {
+  async runtimeStream(@Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Req() req: any, @Res() res: any) {
     const continuation = createObservationProjectionContinuation();
     const { snapshot, resumeScope } = await this.deploymentsService.openServiceLogStream(serviceId, req.raibitSubject, {
+      ...query,
       lastEventId: req.headers?.['last-event-id'],
       observationContinuation: continuation,
     });
@@ -164,6 +167,7 @@ export class DeploymentLogsController {
       terminalError: (error) => error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500,
       onClose: () => clearObservationProjectionContinuation(continuation),
       load: (cursors) => this.deploymentsService.serviceLogSnapshot(serviceId, req.raibitSubject, {
+        ...query,
         serviceCursor: cursors.serviceCursor,
         logCursor: cursors.logCursor,
         observationContinuation: continuation,

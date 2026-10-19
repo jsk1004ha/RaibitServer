@@ -19,6 +19,7 @@ export type RecoveryProvenance = {
 };
 export type RecoveryResource = {
   readonly id: string; readonly projectId: string; readonly name: string; readonly slug: string;
+  readonly environmentId?: string; readonly environmentKind?: 'prod' | 'dev'; readonly logicalSlug?: string; readonly displayName?: string | null;
   readonly type: string; readonly engine: string; readonly provider: string; readonly plan: string;
   readonly region: string; readonly version?: string | null; readonly status: string;
   readonly deletionRequestedAt?: string | null; readonly desiredSpec: RecoverySpec;
@@ -35,13 +36,13 @@ export type RecoveryBase = CleanupLease & {
   readonly deadlineAt: string | null; readonly readyAt: string | null; readonly errorCode: string | null;
 };
 export type RecoveryBackup = RecoveryBase & {
-  readonly resourceId: string; readonly status: BackupStatus; readonly sourceProvenance: RecoveryProvenance;
+  readonly resourceId: string; readonly environmentId: string; readonly status: BackupStatus; readonly sourceProvenance: RecoveryProvenance;
   readonly sourceSpec: RecoverySpec; readonly artifactKey: string | null; readonly artifactChecksum: string | null;
   readonly artifactSize: string | null; readonly encryptionKeyVersion: string | null;
   readonly winningAttempt: number | null; readonly expiresAt: string | null;
 };
 export type RecoveryRestore = RecoveryBase & {
-  readonly backupId: string; readonly sourceResourceId: string; readonly targetResourceId: string;
+  readonly backupId: string; readonly environmentId: string; readonly sourceResourceId: string; readonly targetResourceId: string;
   readonly status: RestoreStatus; readonly targetCleanedAt: string | null;
 };
 export type RecoveryPin = {
@@ -57,7 +58,8 @@ export type RecoveryAttempt = {
 };
 export type RecoveryJob = {
   readonly id: string; readonly type: 'resource.backup' | 'resource.restore'; readonly targetType: 'resource-backup' | 'resource-restore';
-  readonly targetId: string; readonly payload: { readonly version: 1; readonly operationId: string };
+  readonly targetId: string; readonly environmentId: string; readonly operationalProtocolVersion: 2;
+  readonly payload: { readonly version: 1; readonly operationId: string };
   readonly status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   readonly attempts: number; readonly maxAttempts: number; readonly lockedBy: string | null; readonly lockedAt: string | null;
   readonly createdAt: string; readonly updatedAt: string; readonly runAfter: string;

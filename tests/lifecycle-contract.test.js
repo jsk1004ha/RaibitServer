@@ -15,12 +15,28 @@ const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
 test('Given a completed failed build, when its service is deleted, then persistence preserves the terminal outcome', async () => {
   const rows = [{ id: 'd', serviceId: 's', status: 'BUILD_FAILED' }, { id: 'active', serviceId: 's', status: 'BUILDING' }];
   const service = { id: 's', projectId: 'p', status: 'READY' };
+  let protocolEnabled = false;
   const prisma = {
-    $transaction: callback => callback(prisma),
-    service: { findUnique: async () => service, updateMany: async ({ data }) => Object.assign(service, data) },
+    $transaction: (callback, options) => {
+      assert.equal(options?.isolationLevel, 'Serializable');
+      return callback(prisma);
+    },
+    $executeRawUnsafe: async (sql) => {
+      assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'");
+      protocolEnabled = true;
+      return 0;
+    },
+    service: {
+      findUnique: async () => service,
+      updateMany: async ({ data }) => {
+        assert.equal(protocolEnabled, true, 'service deletion must opt into operational protocol 2');
+        return Object.assign(service, data);
+      },
+    },
     deployment: {
       findMany: async () => rows,
       updateMany: async ({ where, data }) => {
+        assert.equal(protocolEnabled, true, 'deployment cancellation must opt into operational protocol 2');
         for (const row of rows) if (!where.status.notIn.includes(row.status)) Object.assign(row, data);
       },
     },

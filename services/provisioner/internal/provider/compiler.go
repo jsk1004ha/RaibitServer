@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/raibitserver/provisioner/internal/objectstorage"
 	"github.com/raibitserver/provisioner/internal/providercontract"
 	"github.com/raibitserver/provisioner/internal/store"
 )
@@ -48,6 +49,29 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	return compileEngine(resource, image, engine)
+}
+
+// CompileObjectStoragePackage renders the disabled-by-default storage package
+// for static conformance. It does not bypass capability admission in Compile.
+func CompileObjectStoragePackage(resource *store.Resource, image string) (*Plan, error) {
+	if resource == nil {
+		return nil, fmt.Errorf("resource is required")
+	}
+	engine, err := normalizeEngine(resource.Engine)
+	if err != nil {
+		return nil, err
+	}
+	if engine != "object-storage" {
+		return nil, fmt.Errorf("storage package compiler requires object-storage")
+	}
+	if err := validateConfiguredProvider(engine, resource.Provider); err != nil {
+		return nil, err
+	}
+	return compileEngine(resource, image, engine)
+}
+
+func compileEngine(resource *store.Resource, image, engine string) (*Plan, error) {
 	planName := strings.ToLower(strings.TrimSpace(resource.Plan))
 	if planName != "" && planName != "shared-small" && planName != "dedicated-local" {
 		return nil, fmt.Errorf("provider plan %q is not implemented by the dedicated local reconciler", resource.Plan)
@@ -79,6 +103,17 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate provider reconcile token: %w", err)
 	}
+	adminAccess, adminSecret := "", ""
+	if engine == "object-storage" {
+		adminAccess, err = randomSecret(18)
+		if err != nil {
+			return nil, fmt.Errorf("generate storage admin access key: %w", err)
+		}
+		adminSecret, err = randomSecret(32)
+		if err != nil {
+			return nil, fmt.Errorf("generate storage admin secret key: %w", err)
+		}
+	}
 	database, username := "", ""
 	host := name + "." + namespace + ".svc.cluster.local"
 	if providercontract.SupportsRecovery(engine) {
@@ -103,8 +138,49 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 	if (engine == "mysql" || engine == "mariadb") && username == "root" {
 		return nil, fmt.Errorf("provider username %q is reserved by the %s image", username, engine)
 	}
-	port, data, connectionKeys, container := providerContract(engine, host, target, username, password, secondary, secretName)
-	endpoint := fmt.Sprintf("%s:%d", host, port)
+	var (
+		port             int
+		data             map[string]string
+		connectionKeys   []string
+		container        containerContract
+		endpoint         string
+		gatewayNamespace string
+	)
+	if engine == "object-storage" {
+		runtime, runtimeErr := objectstorage.Compile(objectstorage.Config{
+			Image: image, Bucket: target, SecretName: secretName,
+			GatewayNamespace:   stringValue(resource.DesiredState, "storageGatewayNamespace"),
+			TrustedTLSEndpoint: stringValue(resource.DesiredState, "trustedTLSS3Endpoint"),
+			Admin:              objectstorage.Credentials{AccessKey: adminAccess, SecretKey: adminSecret},
+			Tenant:             objectstorage.Credentials{AccessKey: "tenant-" + strings.ToLower(secondary[:18]), SecretKey: password},
+		})
+		if runtimeErr != nil {
+			return nil, fmt.Errorf("compile object-storage runtime: %w", runtimeErr)
+		}
+		port, data, connectionKeys = runtime.Port, runtime.SecretData, runtime.ConnectionKeys
+		endpoint = runtime.SecretData["S3_ENDPOINT"]
+		gatewayNamespace = runtime.GatewayNamespace
+		args := make([]any, len(runtime.Args))
+		for index, arg := range runtime.Args {
+			args[index] = arg
+		}
+		container = containerContract{
+			Args: args, DataMountPath: "/data", RunAsUser: runtime.RunAsUser, ExplicitEnvironment: true,
+			AdditionalVolume: map[string]any{
+				"name": "provider-config",
+				"secret": map[string]any{
+					"secretName": secretName,
+					"items":      []any{map[string]any{"key": runtime.ConfigSecretKey, "path": "s3.json"}},
+				},
+			},
+			AdditionalMount: map[string]any{
+				"name": "provider-config", "mountPath": "/etc/seaweedfs", "readOnly": true,
+			},
+		}
+	} else {
+		port, data, connectionKeys, container = providerContract(engine, host, target, username, password, secondary, secretName)
+		endpoint = fmt.Sprintf("%s:%d", host, port)
+	}
 	labels := map[string]any{
 		"app.kubernetes.io/name":       name,
 		"app.kubernetes.io/managed-by": "raibitserver",
@@ -113,18 +189,31 @@ func Compile(resource *store.Resource, image string) (*Plan, error) {
 		"raibitserver.io/resource-id":  boundedDNSName(resource.ID, resource.ID, 63),
 		"raibitserver.io/provider":     engine,
 	}
+	for key, value := range environmentLabels(resource) {
+		labels[key] = value
+	}
 	storage := storageSize(resource.DesiredSpec)
 	plan := &Plan{
 		Image:  image,
 		Engine: engine, Provider: "raibitserver-local-" + engine, Name: name, Namespace: namespace,
 		SecretName: secretName, PVCName: pvcName, Endpoint: endpoint, Database: database, User: username, ConnectionKeys: connectionKeys, ProbeCommand: container.ProbeCommand, SecretData: data, Labels: labels,
 	}
+	namespaceManifest := tenantNamespaceManifest(namespace, resource.ProjectID, resource.ProjectSlug)
+	addEnvironmentLabels(namespaceManifest, resource)
 	plan.PublicManifests = []map[string]any{
-		tenantNamespaceManifest(namespace, resource.ProjectID, resource.ProjectSlug),
+		namespaceManifest,
 		persistentVolumeClaim(namespace, pvcName, labels, storage),
 		service(namespace, name, labels, port),
 		statefulSet(namespace, name, labels, image, port, secretName, pvcName, reconcileToken, data, container),
-		networkPolicy(namespace, name, labels, port),
+		networkPolicy(namespace, name, labels, port, engine, gatewayNamespace),
+	}
+	if engine == "object-storage" {
+		if err := objectstorage.ValidateRendered(plan.PublicManifests, objectstorage.Ownership{
+			Namespace: namespace, Name: name, PVCName: pvcName, SecretName: secretName,
+			GatewayNamespace: gatewayNamespace,
+		}); err != nil {
+			return nil, fmt.Errorf("validate object-storage render: %w", err)
+		}
 	}
 	return plan, nil
 }
@@ -203,8 +292,10 @@ func TenantBootstrapManifests(resource *store.Resource, serviceAccountName, serv
 	if err != nil {
 		return nil, err
 	}
+	namespaceManifest := tenantNamespaceManifest(namespace, resource.ProjectID, resource.ProjectSlug)
+	addEnvironmentLabels(namespaceManifest, resource)
 	return []map[string]any{
-		tenantNamespaceManifest(namespace, resource.ProjectID, resource.ProjectSlug),
+		namespaceManifest,
 		access,
 	}, nil
 }
@@ -287,11 +378,23 @@ func (p *Plan) UseExistingSecret(existing map[string]string) error {
 	case "nats":
 		_, expected, _, _ = providerContract(p.Engine, hostFromEndpoint(p.Endpoint), p.SecretData["QUEUE_TOPIC"], p.SecretData["QUEUE_USERNAME"], existing["QUEUE_PASSWORD"], "", p.SecretName)
 	case "object-storage":
-		expected = cloneSecretData(p.SecretData)
-		expected["S3_ACCESS_KEY"] = existing["S3_ACCESS_KEY"]
-		expected["MINIO_ROOT_USER"] = existing["S3_ACCESS_KEY"]
-		expected["S3_SECRET_KEY"] = existing["S3_SECRET_KEY"]
-		expected["MINIO_ROOT_PASSWORD"] = existing["S3_SECRET_KEY"]
+		runtime, err := objectstorage.Compile(objectstorage.Config{
+			Image: p.Image, Bucket: p.SecretData["S3_BUCKET"], SecretName: p.SecretName,
+			GatewayNamespace:   p.SecretData["gateway.namespace"],
+			TrustedTLSEndpoint: p.SecretData["S3_ENDPOINT"],
+			Admin: objectstorage.Credentials{
+				AccessKey: existing["admin.access-key"],
+				SecretKey: existing["admin.secret-key"],
+			},
+			Tenant: objectstorage.Credentials{
+				AccessKey: existing["tenant.access-key"],
+				SecretKey: existing["tenant.secret-key"],
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("validate existing object-storage Secret: %w", err)
+		}
+		expected = runtime.SecretData
 	case "qdrant":
 		expected = cloneSecretData(p.SecretData)
 		expected["VECTOR_DB_API_KEY"] = existing["VECTOR_DB_API_KEY"]
@@ -332,6 +435,36 @@ func ObjectNames(resource *store.Resource) (name, namespace, secretName, pvcName
 	// new provisioning.
 	if _, err = normalizeEngine(resource.Engine); err != nil {
 		return "", "", "", "", err
+	}
+	environmentKind, err := resourceEnvironmentKind(resource)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	if environmentKind == "dev" {
+		name, err = devResourceName(resource.EnvironmentID, resource.LogicalSlug)
+		if err != nil {
+			return "", "", "", "", err
+		}
+		namespace = devNamespace(resource.EnvironmentID)
+		secretName, pvcName = name+"-connection", name+"-data"
+		if identity, exists := resource.DesiredState["providerIdentity"]; exists {
+			persisted, ok := identity.(map[string]any)
+			if !ok || strings.TrimSpace(stringValue(persisted, "namespace")) != namespace || strings.TrimSpace(stringValue(persisted, "name")) != name {
+				return "", "", "", "", fmt.Errorf("persisted provider object identity conflicts with authoritative dev environment")
+			}
+		}
+		if providerResult, ok := resource.DesiredState["providerResult"].(map[string]any); ok {
+			if persistedNamespace := strings.TrimSpace(stringValue(providerResult, "namespace")); persistedNamespace != "" && persistedNamespace != namespace {
+				return "", "", "", "", fmt.Errorf("persisted provider namespace conflicts with authoritative dev environment")
+			}
+			if persistedName := strings.TrimSpace(stringValue(providerResult, "name")); persistedName != "" && persistedName != name {
+				return "", "", "", "", fmt.Errorf("persisted provider name conflicts with authoritative dev environment")
+			}
+		}
+		if existing := strings.TrimSpace(resource.ConnectionSecretName); existing != "" && existing != secretName {
+			return "", "", "", "", fmt.Errorf("persisted provider credential name conflicts with authoritative dev environment")
+		}
+		return name, namespace, secretName, pvcName, nil
 	}
 	if identity, exists := resource.DesiredState["providerIdentity"]; exists {
 		persisted, ok := identity.(map[string]any)
@@ -383,6 +516,61 @@ func ObjectNames(resource *store.Resource) (name, namespace, secretName, pvcName
 	return name, namespace, boundedSlug(name+"-connection", 63), boundedSlug(name+"-data", 63), nil
 }
 
+func resourceEnvironmentKind(resource *store.Resource) (string, error) {
+	kind := strings.TrimSpace(resource.EnvironmentKind)
+	environmentID := strings.TrimSpace(resource.EnvironmentID)
+	logicalSlug := strings.TrimSpace(resource.LogicalSlug)
+	if kind == "" && environmentID == "" && logicalSlug == "" {
+		return "prod", nil
+	}
+	if kind != "prod" && kind != "dev" {
+		return "", fmt.Errorf("resource environment kind %q is invalid", resource.EnvironmentKind)
+	}
+	if environmentID == "" || logicalSlug == "" {
+		return "", fmt.Errorf("resource environment identity is incomplete")
+	}
+	return kind, nil
+}
+
+func devNamespace(environmentID string) string {
+	hash := sha256.Sum256([]byte(environmentID))
+	return "rb-dev-" + fmt.Sprintf("%x", hash[:10])
+}
+
+func devResourceName(environmentID, logicalSlug string) (string, error) {
+	logical := boundedSlug(logicalSlug, 37)
+	if logical == "" {
+		return "", fmt.Errorf("resource logical slug is invalid")
+	}
+	hash := sha256.Sum256([]byte(environmentID + ":" + logicalSlug))
+	return "dev-" + fmt.Sprintf("%x", hash[:5]) + "-" + logical, nil
+}
+
+func environmentLabels(resource *store.Resource) map[string]any {
+	if strings.TrimSpace(resource.EnvironmentKind) != "dev" {
+		return nil
+	}
+	return map[string]any{
+		"raibitserver.io/environment-id":   boundedDNSName(resource.EnvironmentID, resource.EnvironmentID, 63),
+		"raibitserver.io/environment-kind": "dev",
+		"raibitserver.io/logical-slug":     boundedDNSName(resource.LogicalSlug, resource.EnvironmentID+":"+resource.LogicalSlug, 63),
+	}
+}
+
+func addEnvironmentLabels(manifest map[string]any, resource *store.Resource) {
+	metadata, ok := manifest["metadata"].(map[string]any)
+	if !ok {
+		return
+	}
+	labels, ok := metadata["labels"].(map[string]any)
+	if !ok {
+		return
+	}
+	for key, value := range environmentLabels(resource) {
+		labels[key] = value
+	}
+}
+
 func validDNSLabel(value string) bool {
 	return len(value) > 0 && len(value) <= 63 && dnsLabelPattern.MatchString(value)
 }
@@ -398,15 +586,16 @@ func stableResourceName(resource *store.Resource) (string, error) {
 }
 
 type containerContract struct {
-	Args             []any
-	Command          []any
-	Ports            []any
-	FixedEnvironment map[string]string
-	DataMountPath    string
-	AdditionalVolume map[string]any
-	AdditionalMount  map[string]any
-	ProbeCommand     []string
-	RunAsUser        int64
+	Args                []any
+	Command             []any
+	Ports               []any
+	FixedEnvironment    map[string]string
+	ExplicitEnvironment bool
+	DataMountPath       string
+	AdditionalVolume    map[string]any
+	AdditionalMount     map[string]any
+	ProbeCommand        []string
+	RunAsUser           int64
 }
 
 func providerContract(engine, host, database, username, password, secondary, secretName string) (int, map[string]string, []string, containerContract) {
@@ -454,12 +643,6 @@ func providerContract(engine, host, database, username, password, secondary, sec
 		}
 		probe += "; unset REDISCLI_AUTH VALKEYCLI_AUTH; test \"$(" + cli + " -h 127.0.0.1 -p \"$REDIS_PORT\" --raw AUTH \"$REDIS_PASSWORD\")\" = \"OK\"; export REDISCLI_AUTH=\"$REDIS_PASSWORD\" VALKEYCLI_AUTH=\"$REDIS_PASSWORD\"; test \"$(" + cli + " -h 127.0.0.1 -p \"$REDIS_PORT\" --raw PING)\" = PONG"
 		return port, data, keys, containerContract{Args: []any{"--requirepass", "$(REDIS_PASSWORD)"}, DataMountPath: "/data", ProbeCommand: []string{"/bin/sh", "-ec", probe}, RunAsUser: 999}
-	case "object-storage":
-		port := 9000
-		accessKey := "ak-" + strings.ToLower(secondary[:18])
-		endpoint := fmt.Sprintf("http://%s:%d", host, port)
-		data := map[string]string{"S3_ENDPOINT": endpoint, "S3_BUCKET": database, "S3_REGION": "local", "S3_ACCESS_KEY": accessKey, "S3_SECRET_KEY": password, "MINIO_ROOT_USER": accessKey, "MINIO_ROOT_PASSWORD": password}
-		return port, data, []string{"S3_ENDPOINT", "S3_BUCKET", "S3_REGION", "S3_ACCESS_KEY", "S3_SECRET_KEY"}, containerContract{Args: []any{"server", "/data", "--console-address", ":9001"}, Ports: []any{map[string]any{"name": "console", "containerPort": 9001}}, DataMountPath: "/data"}
 	case "qdrant":
 		port := 6333
 		endpoint := fmt.Sprintf("http://%s:%d", host, port)
@@ -510,9 +693,11 @@ func statefulSet(namespace, name string, labels map[string]any, image string, po
 	ports = append(ports, contract.Ports...)
 	environment := make([]any, 0, len(secretData)+len(contract.FixedEnvironment))
 	keys := make([]string, 0, len(secretData))
-	for key := range secretData {
-		if validEnvironmentVariable(key) {
-			keys = append(keys, key)
+	if !contract.ExplicitEnvironment {
+		for key := range secretData {
+			if validEnvironmentVariable(key) {
+				keys = append(keys, key)
+			}
 		}
 	}
 	sort.Strings(keys)
@@ -583,10 +768,19 @@ func validEnvironmentVariable(value string) bool {
 	return true
 }
 
-func networkPolicy(namespace, name string, labels map[string]any, port int) map[string]any {
+func networkPolicy(namespace, name string, labels map[string]any, port int, engine, gatewayNamespace string) map[string]any {
+	from := []any{map[string]any{"namespaceSelector": map[string]any{"matchLabels": map[string]any{"kubernetes.io/metadata.name": namespace}}}}
+	if engine == "object-storage" {
+		from = []any{map[string]any{
+			"namespaceSelector": map[string]any{"matchLabels": map[string]any{"kubernetes.io/metadata.name": gatewayNamespace}},
+			"podSelector": map[string]any{"matchLabels": map[string]any{
+				objectstorage.GatewayPodLabelKey: objectstorage.GatewayPodLabelValue,
+			}},
+		}}
+	}
 	return map[string]any{
 		"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": map[string]any{"name": name + "-provider", "namespace": namespace, "labels": labels},
-		"spec": map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": name}}, "policyTypes": []any{"Ingress", "Egress"}, "ingress": []any{map[string]any{"from": []any{map[string]any{"namespaceSelector": map[string]any{"matchLabels": map[string]any{"kubernetes.io/metadata.name": namespace}}}}, "ports": []any{map[string]any{"protocol": "TCP", "port": port}}}}, "egress": []any{}},
+		"spec": map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": name}}, "policyTypes": []any{"Ingress", "Egress"}, "ingress": []any{map[string]any{"from": from, "ports": []any{map[string]any{"protocol": "TCP", "port": port}}}}, "egress": []any{}},
 	}
 }
 
@@ -598,6 +792,13 @@ func supportedEngine(engine, configuredProvider string) (string, error) {
 	if err := requireLocalCapability(normalizedEngine); err != nil {
 		return "", err
 	}
+	if err := validateConfiguredProvider(normalizedEngine, configuredProvider); err != nil {
+		return "", err
+	}
+	return normalizedEngine, nil
+}
+
+func validateConfiguredProvider(normalizedEngine, configuredProvider string) error {
 	providerName := strings.ToLower(strings.TrimSpace(configuredProvider))
 	allowedProviders := map[string]bool{
 		"":                                       true,
@@ -609,9 +810,9 @@ func supportedEngine(engine, configuredProvider string) (string, error) {
 		"raibitserver-local-" + normalizedEngine: true,
 	}
 	if !allowedProviders[providerName] {
-		return "", fmt.Errorf("provider %q is not served by the dedicated local reconciler", configuredProvider)
+		return fmt.Errorf("provider %q is not served by the dedicated local reconciler", configuredProvider)
 	}
-	return normalizedEngine, nil
+	return nil
 }
 
 func normalizeEngine(engine string) (string, error) {

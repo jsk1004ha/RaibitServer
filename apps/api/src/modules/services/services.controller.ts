@@ -26,45 +26,45 @@ export class ServiceDetailController {
 
   @RequirePermission('project:read')
   @Get()
-  get(@Param('serviceId') serviceId: string, @Req() req: any) {
-    return this.servicesService.getService(serviceId, req.raibitSubject);
+  get(@Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.servicesService.getService(serviceId, req.raibitSubject, query);
   }
 
   @RequirePermission('service:update')
   @Patch()
-  update(@Param('serviceId') serviceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.servicesService.updateService(serviceId, input || {}, req.raibitSubject);
+  update(@Param('serviceId') serviceId: string, @Body() input: Record<string, any>, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.servicesService.updateService(serviceId, input || {}, req.raibitSubject, query);
   }
 
   @RequirePermission('project:read')
   @Get('settings')
-  settings(@Param('serviceId') serviceId: string, @Req() req: any) {
-    return this.servicesService.getServiceSettings(serviceId, req.raibitSubject);
+  settings(@Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.servicesService.getServiceSettings(serviceId, req.raibitSubject, query);
   }
 
   @RequirePermission('service:update')
   @Post('settings/preview')
   @HttpCode(200)
-  previewSettings(@Param('serviceId') serviceId: string, @Body() input: ServiceSettingsMutation, @Req() req: any) {
-    return this.servicesService.previewServiceSettings(serviceId, input, req.raibitSubject);
+  previewSettings(@Param('serviceId') serviceId: string, @Body() input: ServiceSettingsMutation, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.servicesService.previewServiceSettings(serviceId, input, req.raibitSubject, query);
   }
 
   @RequirePermission('service:update')
   @Patch('settings')
-  updateSettings(@Param('serviceId') serviceId: string, @Body() input: ServiceSettingsMutation, @Req() req: any) {
-    return this.servicesService.updateServiceSettings(serviceId, input, req.raibitSubject);
+  updateSettings(@Param('serviceId') serviceId: string, @Body() input: ServiceSettingsMutation, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.servicesService.updateServiceSettings(serviceId, input, req.raibitSubject, query);
   }
 
   @RequirePermission('service:create')
   @Post('replacements')
-  createReplacement(@Param('serviceId') serviceId: string, @Body() input: ServiceReplacementInput, @Req() req: any) {
-    return this.servicesService.createServiceReplacement(serviceId, input, req.raibitSubject);
+  createReplacement(@Param('serviceId') serviceId: string, @Body() input: ServiceReplacementInput, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.servicesService.createServiceReplacement(serviceId, input, req.raibitSubject, query);
   }
 
   @RequirePermission('project:delete')
   @Delete()
   @HttpCode(200)
-  delete(@Param('serviceId') serviceId: string, @Req() req: any) {
-    return this.servicesService.deleteService(serviceId, req.raibitSubject);
+  delete(@Param('serviceId') serviceId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.servicesService.deleteService(serviceId, req.raibitSubject, query);
   }
 }

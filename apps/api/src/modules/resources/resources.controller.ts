@@ -26,32 +26,32 @@ export class ResourceLifecycleController {
 
   @RequirePermission('project:read')
   @Get()
-  get(@Param('resourceId') resourceId: string, @Req() req: any) {
-    return this.resourcesService.getResource(resourceId, req.raibitSubject);
+  get(@Param('resourceId') resourceId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.getResource(resourceId, req.raibitSubject, query);
   }
 
   @RequirePermission('db:create')
   @Patch()
-  update(@Param('resourceId') resourceId: string, @Body() updates: Record<string, any>, @Req() req: any) {
-    return this.resourcesService.updateResource(resourceId, updates, req.raibitSubject);
+  update(@Param('resourceId') resourceId: string, @Body() updates: Record<string, any>, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.updateResource(resourceId, updates, req.raibitSubject, query);
   }
 
   @RequirePermission('db:delete')
   @Delete()
-  delete(@Param('resourceId') resourceId: string, @Req() req: any) {
-    return this.resourcesService.deleteResource(resourceId, req.raibitSubject);
+  delete(@Param('resourceId') resourceId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.deleteResource(resourceId, req.raibitSubject, query);
   }
 
   @RequirePermission('db:create')
   @Post('attach')
-  attach(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.resourcesService.attachResource(resourceId, input, req.raibitSubject);
+  attach(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.attachResource(resourceId, input, req.raibitSubject, query);
   }
 
   @RequirePermission('db:create')
   @Post('provision')
-  provision(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.resourcesService.provisionResource(resourceId, input, req.raibitSubject);
+  provision(@Param('resourceId') resourceId: string, @Body() input: Record<string, any>, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.provisionResource(resourceId, input, req.raibitSubject, query);
   }
 }
 
@@ -62,14 +62,15 @@ export class ResourceBackupsController {
   @RequirePermission('backup:manage')
   @Post()
   @HttpCode(202)
-  create(@Param('resourceId') resourceId: string, @Body() input: ResourceBackupCreate, @Req() req: any) {
-    return this.resourcesService.createResourceBackup(resourceId, input, req.raibitSubject);
+  create(@Param('resourceId') resourceId: string, @Body() input: ResourceBackupCreate, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.createResourceBackup(resourceId, input, req.raibitSubject, query);
   }
 
   @RequirePermission('backup:manage')
   @Get()
   list(@Param('resourceId') resourceId: string, @Query() input: Record<string, unknown>, @Req() req: any) {
-    return this.resourcesService.listResourceBackups(resourceId, input, req.raibitSubject);
+    const { environmentId, environment, environmentKind, ...pagination } = input;
+    return this.resourcesService.listResourceBackups(resourceId, pagination, req.raibitSubject, { environmentId, environment, environmentKind });
   }
 }
 
@@ -80,15 +81,15 @@ export class BackupRecoveryController {
   @RequirePermission('backup:manage')
   @Delete()
   @HttpCode(200)
-  delete(@Param('backupId') backupId: string, @Body() input: ResourceBackupDelete, @Req() req: any) {
-    return this.resourcesService.deleteResourceBackup(backupId, input, req.raibitSubject);
+  delete(@Param('backupId') backupId: string, @Body() input: ResourceBackupDelete, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.deleteResourceBackup(backupId, input, req.raibitSubject, query);
   }
 
   @RequirePermission('backup:restore')
   @Post('restores')
   @HttpCode(202)
-  createRestore(@Param('backupId') backupId: string, @Body() input: ResourceRestoreCreate, @Req() req: any) {
-    return this.resourcesService.createBackupRestore(backupId, input, req.raibitSubject);
+  createRestore(@Param('backupId') backupId: string, @Body() input: ResourceRestoreCreate, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.createBackupRestore(backupId, input, req.raibitSubject, query);
   }
 }
 
@@ -98,7 +99,7 @@ export class ResourceRestoreController {
 
   @RequirePermission('backup:restore')
   @Get()
-  get(@Param('restoreId') restoreId: string, @Req() req: any) {
-    return this.resourcesService.getRecoveryRestore(restoreId, req.raibitSubject);
+  get(@Param('restoreId') restoreId: string, @Query() query: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.getRecoveryRestore(restoreId, req.raibitSubject, query);
   }
 }

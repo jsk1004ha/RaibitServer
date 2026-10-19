@@ -15,9 +15,12 @@ import (
 
 const claimResourceSQL = `
 SELECT r.id, r."projectId", p."organizationId", p.slug, r.name, r.slug, r.type, r.engine,
-       r.provider, r.plan, r.region, r.version, r.status, r."connectionSecretName", r."desiredSpec", r."desiredState"
+       r.provider, r.plan, r.region, r.version, r.status, r."connectionSecretName", r."desiredSpec", r."desiredState",
+       e.id, e.kind, er."logicalSlug", er."resourceId", er."environmentId", er."projectId", e."projectId"
 FROM "Resource" r
 JOIN "Project" p ON p.id = r."projectId"
+LEFT JOIN "EnvironmentResource" er ON er."resourceId" = r.id
+LEFT JOIN "Environment" e ON e.id = er."environmentId"
 WHERE UPPER(p.status) NOT IN ('DELETE_REQUESTED', 'DELETING')
 	AND p."deletionRequestedAt" IS NULL
 	AND r."deletionRequestedAt" IS NULL
@@ -26,6 +29,9 @@ WHERE UPPER(p.status) NOT IN ('DELETE_REQUESTED', 'DELETING')
   AND r."desiredState"->'resourceExecution'->>'environment' = $5
   AND ($6::jsonb ->> LOWER(r.engine)) IS NOT NULL
   AND r."desiredState"->'resourceExecution'->>'image' = ($6::jsonb ->> LOWER(r.engine))
+  AND ((NOT $7::boolean AND er."resourceId" IS NULL)
+    OR (er."projectId" = r."projectId" AND e."projectId" = r."projectId"
+      AND (e.kind = 'prod' OR ($7::boolean AND e.kind = 'dev'))))
   AND ((UPPER(r.status) = $1 AND (
         $4::numeric <= 0
         OR NOT (COALESCE(r."desiredState", '{}'::jsonb) ? 'lastDryRunAt')
@@ -42,9 +48,12 @@ LIMIT 1`
 
 const claimReadyResourceSQL = `
 SELECT r.id, r."projectId", p."organizationId", p.slug, r.name, r.slug, r.type, r.engine,
-       r.provider, r.plan, r.region, r.version, r.status, r."connectionSecretName", r."desiredSpec", r."desiredState"
+       r.provider, r.plan, r.region, r.version, r.status, r."connectionSecretName", r."desiredSpec", r."desiredState",
+       e.id, e.kind, er."logicalSlug", er."resourceId", er."environmentId", er."projectId", e."projectId"
 FROM "Resource" r
 JOIN "Project" p ON p.id = r."projectId"
+LEFT JOIN "EnvironmentResource" er ON er."resourceId" = r.id
+LEFT JOIN "Environment" e ON e.id = er."environmentId"
 WHERE (UPPER(r.status) = 'READY'
    OR (UPPER(r.status) = 'FAILED'
        AND r."desiredState"->>'healthManaged' = 'true'
@@ -55,16 +64,25 @@ WHERE (UPPER(r.status) = 'READY'
   AND r."deletionRequestedAt" IS NULL
   AND r."desiredState"->>'recoveryPublicationBlocked' IS DISTINCT FROM 'true'
   AND NOT EXISTS (SELECT 1 FROM "ResourceRecoveryPin" pin WHERE pin."resourceId"=r.id AND pin.kind='RESTORE_TARGET')
+  AND ((NOT $2::boolean AND er."resourceId" IS NULL)
+    OR (er."projectId" = r."projectId" AND e."projectId" = r."projectId"
+      AND (e.kind = 'prod' OR ($2::boolean AND e.kind = 'dev'))))
 ORDER BY r."updatedAt" ASC, r.id ASC
 FOR UPDATE OF r SKIP LOCKED
 LIMIT 1`
 
 const claimResourceDeletionSQL = `
 SELECT r.id, r."projectId", p."organizationId", p.slug, r.name, r.slug, r.type, r.engine,
-       r.provider, r.plan, r.region, r.version, r.status, r."connectionSecretName", r."desiredSpec", r."desiredState"
+       r.provider, r.plan, r.region, r.version, r.status, r."connectionSecretName", r."desiredSpec", r."desiredState",
+       e.id, e.kind, er."logicalSlug", er."resourceId", er."environmentId", er."projectId", e."projectId"
 FROM "Resource" r
 JOIN "Project" p ON p.id = r."projectId"
+LEFT JOIN "EnvironmentResource" er ON er."resourceId" = r.id
+LEFT JOIN "Environment" e ON e.id = er."environmentId"
 WHERE NOT EXISTS (SELECT 1 FROM "ResourceRecoveryPin" pin WHERE pin."resourceId"=r.id)
+ AND ((NOT $5::boolean AND er."resourceId" IS NULL)
+   OR (er."projectId" = r."projectId" AND e."projectId" = r."projectId"
+     AND (e.kind = 'prod' OR ($5::boolean AND e.kind = 'dev'))))
  AND ((UPPER(r.status) = $1 AND (
         $4::numeric <= 0
         OR NOT (COALESCE(r."desiredState", '{}'::jsonb) ? 'lastDryRunDeletionAt')
@@ -78,6 +96,8 @@ WHERE NOT EXISTS (SELECT 1 FROM "ResourceRecoveryPin" pin WHERE pin."resourceId"
 ORDER BY r."updatedAt" ASC, r."createdAt" ASC, r.id ASC
 FOR UPDATE OF r SKIP LOCKED
 LIMIT 1`
+
+const setOperationalProtocolSQL = `SET LOCAL raibitserver.operational_protocol = '2'`
 
 const claimResourceDeletionUpdateSQL = `
 UPDATE "Resource"
@@ -217,9 +237,10 @@ WHERE id = $2
 RETURNING id`
 
 type PostgresStore struct {
-	db                  *sql.DB
-	resourceEnvironment string
-	resourceImages      map[string]string
+	db                       *sql.DB
+	resourceEnvironment      string
+	resourceImages           map[string]string
+	environmentClaimsEnabled bool
 }
 
 func (s *PostgresStore) ConfigureResourceClaims(environment string, images map[string]string) {
@@ -228,6 +249,12 @@ func (s *PostgresStore) ConfigureResourceClaims(environment string, images map[s
 	for engine, image := range images {
 		s.resourceImages[engine] = image
 	}
+}
+
+// ConfigureEnvironmentClaims is a trusted server-side activation seam. The
+// zero value intentionally keeps dev claims disabled during rollout.
+func (s *PostgresStore) ConfigureEnvironmentClaims(enabled bool) {
+	s.environmentClaimsEnabled = enabled
 }
 
 func OpenPostgresStore(ctx context.Context, dsn string) (*PostgresStore, func() error, error) {
@@ -254,7 +281,10 @@ func (s *PostgresStore) ClaimNextResourceDeletion(ctx context.Context, staleAfte
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	resource, err := scanResource(tx.QueryRowContext(ctx, claimResourceDeletionSQL, StatusDeleteRequested, StatusDeleting, staleAfter.Milliseconds(), dryRunRecheck.Milliseconds()))
+	if err := setOperationalProtocol(ctx, tx); err != nil {
+		return nil, err
+	}
+	resource, err := scanResourceClaim(tx.QueryRowContext(ctx, claimResourceDeletionSQL, StatusDeleteRequested, StatusDeleting, staleAfter.Milliseconds(), dryRunRecheck.Milliseconds(), s.environmentClaimsEnabled), s.environmentClaimsEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -298,7 +328,10 @@ func (s *PostgresStore) ClaimNextResource(ctx context.Context, staleAfter, dryRu
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	resource, err := scanResource(tx.QueryRowContext(ctx, claimResourceSQL, StatusProvisioning, StatusReconciling, staleAfter.Milliseconds(), dryRunRecheck.Milliseconds(), s.resourceEnvironment, images))
+	if err := setOperationalProtocol(ctx, tx); err != nil {
+		return nil, err
+	}
+	resource, err := scanResourceClaim(tx.QueryRowContext(ctx, claimResourceSQL, StatusProvisioning, StatusReconciling, staleAfter.Milliseconds(), dryRunRecheck.Milliseconds(), s.resourceEnvironment, images, s.environmentClaimsEnabled), s.environmentClaimsEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -335,7 +368,10 @@ func (s *PostgresStore) ClaimNextReadyResource(ctx context.Context, revalidateAf
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	resource, err := scanResource(tx.QueryRowContext(ctx, claimReadyResourceSQL, revalidateAfter.Milliseconds()))
+	if err := setOperationalProtocol(ctx, tx); err != nil {
+		return nil, err
+	}
+	resource, err := scanResourceClaim(tx.QueryRowContext(ctx, claimReadyResourceSQL, revalidateAfter.Milliseconds(), s.environmentClaimsEnabled), s.environmentClaimsEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -369,7 +405,9 @@ func (s *PostgresStore) RenewResourceClaim(ctx context.Context, resource *Resour
 		return err
 	}
 	var updatedID string
-	err = s.db.QueryRowContext(ctx, renewResourceClaimSQL, resource.ID, status, claimedAt).Scan(&updatedID)
+	err = s.withOperationalTransaction(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, renewResourceClaimSQL, resource.ID, status, claimedAt).Scan(&updatedID)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("resource %s claim renewal conflict", resource.ID)
 	}
@@ -395,7 +433,9 @@ func (s *PostgresStore) PersistProviderIdentity(ctx context.Context, resource *R
 		return err
 	}
 	var updatedID string
-	err = s.db.QueryRowContext(ctx, persistProviderIdentitySQL, string(payload), resource.ID, status, claimedAt).Scan(&updatedID)
+	err = s.withOperationalTransaction(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, persistProviderIdentitySQL, string(payload), resource.ID, status, claimedAt).Scan(&updatedID)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("resource %s provider object identity persistence conflict", resource.ID)
 	}
@@ -418,7 +458,9 @@ func (s *PostgresStore) PersistCredentialSecretUID(ctx context.Context, resource
 		return errors.New("credential Secret UID is invalid")
 	}
 	var updatedID string
-	err = s.db.QueryRowContext(ctx, persistCredentialSecretUIDSQL, uid, resource.ID, status, claimedAt).Scan(&updatedID)
+	err = s.withOperationalTransaction(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, persistCredentialSecretUIDSQL, uid, resource.ID, status, claimedAt).Scan(&updatedID)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("resource %s credential identity persistence conflict", resource.ID)
 	}
@@ -441,7 +483,9 @@ func (s *PostgresStore) ReserveCredentialSecretGeneration(ctx context.Context, r
 		return errors.New("credential Secret generation is invalid")
 	}
 	var updatedID string
-	err = s.db.QueryRowContext(ctx, reserveCredentialSecretGenerationSQL, generation, resource.ID, status, claimedAt).Scan(&updatedID)
+	err = s.withOperationalTransaction(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, reserveCredentialSecretGenerationSQL, generation, resource.ID, status, claimedAt).Scan(&updatedID)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("resource %s credential generation reservation conflict", resource.ID)
 	}
@@ -478,7 +522,12 @@ func (s *PostgresStore) TransitionResource(ctx context.Context, resource *Resour
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, transitionResourceSQL, nextStatus, payload, resource.ID, strings.ToUpper(expectedStatus), claimedAt)
+	var result sql.Result
+	err = s.withOperationalTransaction(ctx, func(tx *sql.Tx) error {
+		var executeErr error
+		result, executeErr = tx.ExecContext(ctx, transitionResourceSQL, nextStatus, payload, resource.ID, strings.ToUpper(expectedStatus), claimedAt)
+		return executeErr
+	})
 	if err != nil {
 		return err
 	}
@@ -528,7 +577,9 @@ func (s *PostgresStore) FinalizeResourceDeletion(ctx context.Context, resource *
 		return fmt.Errorf("invalid resource deletion claim token: %w", err)
 	}
 	var deletedID string
-	err = s.db.QueryRowContext(ctx, finalizeResourceDeletionSQL, resource.ID, claimedAt).Scan(&deletedID)
+	err = s.withOperationalTransaction(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, finalizeResourceDeletionSQL, resource.ID, claimedAt).Scan(&deletedID)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("resource %s deletion finalization conflict: claim expired or status is not %s", resource.ID, StatusDeleting)
 	}
@@ -538,11 +589,16 @@ func (s *PostgresStore) FinalizeResourceDeletion(ctx context.Context, resource *
 type scanner interface{ Scan(...any) error }
 
 func scanResource(row scanner) (*Resource, error) {
+	return scanResourceFields(row, nil)
+}
+
+func scanResourceFields(row scanner, environmentColumns []any) (*Resource, error) {
 	var resource Resource
 	var version, connectionSecretName sql.NullString
 	var desiredSpec, desiredState []byte
-	err := row.Scan(&resource.ID, &resource.ProjectID, &resource.OrganizationID, &resource.ProjectSlug, &resource.Name, &resource.Slug,
-		&resource.Type, &resource.Engine, &resource.Provider, &resource.Plan, &resource.Region, &version, &resource.Status, &connectionSecretName, &desiredSpec, &desiredState)
+	columns := []any{&resource.ID, &resource.ProjectID, &resource.OrganizationID, &resource.ProjectSlug, &resource.Name, &resource.Slug,
+		&resource.Type, &resource.Engine, &resource.Provider, &resource.Plan, &resource.Region, &version, &resource.Status, &connectionSecretName, &desiredSpec, &desiredState}
+	err := row.Scan(append(columns, environmentColumns...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -555,7 +611,99 @@ func scanResource(row scanner) (*Resource, error) {
 	}
 	resource.DesiredSpec = decodeMap(desiredSpec)
 	resource.DesiredState = decodeMap(desiredState)
+	if environmentColumns != nil && len(desiredState) > 0 {
+		if err := json.Unmarshal(desiredState, &resource.DesiredState); err != nil || resource.DesiredState == nil {
+			return nil, fmt.Errorf("%w: malformed resource state", ErrResourceEnvironment)
+		}
+	}
 	return &resource, nil
+}
+
+var ErrResourceEnvironment = errors.New("RESOURCE_ENVIRONMENT_IDENTITY_INVALID")
+
+func scanResourceClaim(row scanner, environmentsEnabled bool) (*Resource, error) {
+	var id, kind, logical, resourceID, bindingID, bindingProject, environmentProject sql.NullString
+	fields := []*sql.NullString{&id, &kind, &logical, &resourceID, &bindingID, &bindingProject, &environmentProject}
+	columns := make([]any, len(fields))
+	for i, field := range fields {
+		columns[i] = field
+	}
+	resource, err := scanResourceFields(row, columns)
+	if err != nil {
+		return nil, err
+	}
+	absent := true
+	for _, field := range fields {
+		absent = absent && !field.Valid
+	}
+	if absent {
+		if environmentsEnabled || hasResourceEnvironmentHint(resource) {
+			return nil, fmt.Errorf("%w: legacy fallback unavailable", ErrResourceEnvironment)
+		}
+		return resource, nil
+	}
+	for _, field := range fields {
+		if !field.Valid || field.String == "" || field.String != strings.TrimSpace(field.String) {
+			return nil, fmt.Errorf("%w: incomplete binding", ErrResourceEnvironment)
+		}
+	}
+	if resourceID.String != resource.ID || bindingID.String != id.String || bindingProject.String != resource.ProjectID || environmentProject.String != resource.ProjectID {
+		return nil, fmt.Errorf("%w: foreign binding", ErrResourceEnvironment)
+	}
+	if kind.String != "prod" && (kind.String != "dev" || !environmentsEnabled) {
+		return nil, fmt.Errorf("%w: environment not enabled", ErrResourceEnvironment)
+	}
+	resource.EnvironmentID, resource.EnvironmentKind, resource.LogicalSlug = id.String, kind.String, logical.String
+	return resource, nil
+}
+
+func hasResourceEnvironmentHint(resource *Resource) bool {
+	for _, state := range []map[string]any{resource.DesiredState, resource.DesiredSpec} {
+		for _, key := range []string{"environment", "environmentId", "environmentKind", "logicalSlug", "runtimeEnvironment"} {
+			if _, exists := state[key]; exists {
+				return true
+			}
+		}
+	}
+	for _, key := range []string{"providerIdentity", "providerResult"} {
+		if identity, ok := resource.DesiredState[key].(map[string]any); ok {
+			if namespace, ok := identity["namespace"].(string); ok && strings.HasPrefix(strings.TrimSpace(namespace), "rb-dev-") {
+				return true
+			}
+		}
+	}
+	return developmentPhysicalName.MatchString(resource.Slug) || developmentPhysicalName.MatchString(resource.Name)
+}
+
+var developmentPhysicalName = regexp.MustCompile(`^dev-[a-f0-9]{10}-`)
+
+func setOperationalProtocol(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, setOperationalProtocolSQL); err != nil {
+		return fmt.Errorf("set resource transaction operational protocol: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) withOperationalTransaction(ctx context.Context, operation func(*sql.Tx) error) (err error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin resource transaction: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && err == nil {
+			err = fmt.Errorf("rollback resource transaction: %w", rollbackErr)
+		}
+	}()
+	if err := setOperationalProtocol(ctx, tx); err != nil {
+		return err
+	}
+	if err := operation(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit resource transaction: %w", err)
+	}
+	return nil
 }
 
 func decodeMap(value []byte) map[string]any {

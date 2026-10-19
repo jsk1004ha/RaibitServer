@@ -1,4 +1,4 @@
-import type { ApiOutput, CustomDomain, CustomDomainChallenge, CustomDomainCreate, CustomDomainMutation, CustomDomainRotate, DeploymentHistoryQueryInput, DeploymentHistoryResponse, DeploymentHistoryRow, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, OrganizationCreateRequest, OrganizationCreated, OrganizationInviteAccept, OrganizationInviteCreate, OrganizationMembershipRoleChange, OrganizationMembershipSnapshot, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec, ServiceReplacementInput, ServiceReplacementResult, ServiceSettingsMutation, ServiceSettingsPreview, ServiceSettingsSnapshot } from '@raibitserver/schemas';
+import type { ApiOutput, CustomDomain, CustomDomainChallenge, CustomDomainCreate, CustomDomainMutation, CustomDomainRotate, DeploymentHistoryQueryInput, DeploymentHistoryResponse, DeploymentHistoryRow, DeploymentListResponse, DeploymentOperationInput, DeploymentRequest, DeploymentSpec, EnvironmentCreate, EnvironmentDelete, OrganizationCreateRequest, OrganizationCreated, OrganizationInviteAccept, OrganizationInviteCreate, OrganizationMembershipRoleChange, OrganizationMembershipSnapshot, PasswordRecoveryAccepted, PasswordRecoveryComplete, PasswordRecoveryCompleted, PasswordRecoveryRequest, ProjectDeletionScheduled, ProjectListResponse, ProjectSettingsUpdate, ProjectSettingsView, ProjectSpec, ResourceBackupCreate, ResourceBackupDelete, ResourceBackupList, ResourceBackupListView, ResourceBackupView, ResourceListResponse, ResourceRestoreCreate, ResourceRestoreView, ResourceSpec, ServiceListResponse, ServiceSpec, ServiceReplacementInput, ServiceReplacementResult, ServiceSettingsMutation, ServiceSettingsPreview, ServiceSettingsSnapshot } from '@raibitserver/schemas';
 import { apiOperationError, createOperationsClient } from './operations.ts';
 import { runtimeLogStreamUrl } from './runtime-log-stream.ts';
 import type { ApiInput } from '@raibitserver/schemas';
@@ -101,6 +101,18 @@ export class RAIBITSERVERClient {
 
   scheduleProjectDeletion(projectId: string, confirmed: true): Promise<ProjectDeletionScheduled> {
     return this.operations['project-settings-delete']({ path: { projectId }, query: {}, body: { confirmed } });
+  }
+
+  listProjectEnvironments(projectId: string): Promise<ApiOutput<'projects-environments'>> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/environments`);
+  }
+
+  createProjectEnvironment(projectId: string, input: EnvironmentCreate): Promise<ApiOutput<'projects-environments-post'>> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/environments`, { method: 'POST', body: input });
+  }
+
+  deleteProjectEnvironment(projectId: string, environmentId: string, input: EnvironmentDelete): Promise<ApiOutput<'projects-environments-delete'>> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(environmentId)}`, { method: 'DELETE', body: input });
   }
 
   createService(projectId: string, service: Partial<ServiceSpec> & Record<string, unknown>): Promise<ServiceSpec> {
@@ -233,7 +245,7 @@ export class RAIBITSERVERClient {
     return this.operations['github-attach']({ path: { projectId, serviceId }, query: {}, body: input });
   }
   importGitHubRepository(input: ApiInput<'github-import'>['body']): Promise<ApiOutput<'github-import'>> { return this.operations['github-import']({ path: {}, query: {}, body: input }); }
-  syncGitHubRepository(repositoryId: string, input: ApiInput<'github-sync'>['body'] = {}): Promise<ApiOutput<'github-sync'>> { return this.operations['github-sync']({ path: { repositoryId }, query: {}, body: input }); }
+  syncGitHubRepository(repositoryId: string, input: ApiInput<'github-sync'>['body'] = {}, query: ApiInput<'github-sync'>['query'] = {}): Promise<ApiOutput<'github-sync'>> { return this.operations['github-sync']({ path: { repositoryId }, query, body: input }); }
   queryResource(resourceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/query`, { method: 'POST', body: input }); }
   commandResource(resourceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/command`, { method: 'POST', body: input }); }
   browseResource(resourceId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/browse`, { method: 'POST', body: input }); }

@@ -173,9 +173,15 @@ test('desired-state adversarial mutation matrix: real Nest and thin HTTP parity'
 
 test('desired-state adversarial mutation matrix: Prisma rejects deployed identity before update', async () => {
   // Given: adapter contract fake, not a live PostgreSQL claim.
-  let row = { id: 'service', projectId: 'project', name: 'web', type: 'web', sourceType: 'github', status: 'FAILED', desiredState: fixture.editable };
+  const environment = { id: 'env_prod_project', projectId: 'project', kind: 'prod', status: 'active' };
+  let row = { id: 'service', projectId: 'project', name: 'web', slug: 'web', type: 'web', sourceType: 'github', status: 'FAILED', desiredState: fixture.editable, environmentBinding: { environmentId: environment.id, projectId: environment.projectId, logicalSlug: 'web', environment } };
   let writes = 0;
-  const tx = { service: { findUnique: async () => structuredClone(row), update: async ({ data }) => { writes++; row = { ...row, ...data }; return row; } }, project: { findUnique: async () => ({ id: 'project', status: 'ACTIVE' }) }, deployment: { findFirst: async () => ({ id: 'first', status: 'FAILED' }) } };
+  const tx = {
+    $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
+    service: { findUnique: async () => structuredClone(row), update: async ({ data }) => { writes++; row = { ...row, ...data }; return row; } },
+    project: { findUnique: async () => ({ id: 'project', status: 'ACTIVE' }) },
+    deployment: { findFirst: async () => ({ id: 'first', status: 'FAILED' }) },
+  };
   const repository = new PrismaControlPlaneRepository({ ...tx, $transaction: async (operation) => operation(tx) });
   // When / Then
   await assert.rejects(() => repository.updateService('service', { branch: 'no-partial', name: 'renamed' }), (error) => error.statusCode === 409);
@@ -248,23 +254,30 @@ test('desired-state adversarial mutation matrix: explicit attach cannot replace 
   // Given: a deployed service without a verified repository binding.
   const store = new ControlPlaneStore(); const { organization, project, service } = seed(store);
   const integration = store.createGitHubIntegration({ organizationId: organization.id, accountLogin: 'fixture', installationId: 'installation' });
-  store.verifyGitHubIntegration({ integrationId: integration.id, installationId: 'installation', accountLogin: 'fixture', verifiedBy: 'github-app-callback' });
+  const verified = store.verifyGitHubIntegration({ integrationId: integration.id, installationId: 'installation', accountLogin: 'fixture', verifiedBy: 'github-app-callback' });
   store.registerGitHubRepository({ installationId: 'installation', githubRepoId: '42', fullName: 'fixture/replacement', private: true });
   const before = digest(store.snapshot());
   // When / Then
   assert.throws(() => store.attachGitHubRepositoryToService({ projectId: project.id, serviceId: service.id, integrationId: integration.id, repositoryId: '42' }), (error) => error.statusCode === 409);
   assert.equal(digest(store.snapshot()), before);
-  const verified = { ...integration, verifiedAt: '2026-01-01', installationId: 'installation' };
+  const environment = { id: service.environmentId, projectId: project.id, kind: 'prod', status: 'active' };
+  const binding = { environmentId: environment.id, projectId: project.id, serviceId: service.id, logicalSlug: service.slug, environment };
+  const unexpectedWrite = async () => { throw new Error('unexpected write'); };
   const tx = {
-    project: { findUnique: async () => project }, service: { findUnique: async () => ({ ...service, project }), upsert: async () => { throw new Error('unexpected write'); } },
+    $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
+    project: { findUnique: async () => project },
+    environment: { findUnique: async ({ where }) => { assert.deepEqual(where, { projectId_kind: { projectId: project.id, kind: 'prod' } }); return environment; } },
+    environmentService: { findUnique: async ({ where }) => { assert.deepEqual(where, { environmentId_logicalSlug: { environmentId: environment.id, logicalSlug: service.slug } }); return binding; }, create: unexpectedWrite },
+    service: { findUnique: async () => ({ ...service, project, environmentBinding: binding }), findFirst: async ({ where }) => { assert.equal(where.githubRepositoryId, '42'); return null; }, create: unexpectedWrite, update: unexpectedWrite },
     deployment: { findFirst: async () => ({ id: 'first' }) },
     gitHubIntegration: { findUnique: async () => verified },
+    gitHubInstallation: { findUnique: async () => ({ installationId: 'installation', generation: 0, refreshStatus: 'IDLE' }) },
     gitHubRepository: { findMany: async () => [{ installationId: 'installation', githubRepoId: '42', fullName: 'fixture/replacement', defaultBranch: 'main', private: true }] },
   };
   const prisma = new PrismaControlPlaneRepository({ ...tx, $transaction: async (callback) => callback(tx) });
   const input = { projectId: project.id, serviceId: service.id, serviceName: service.name, integrationId: integration.id, repositoryId: '42' };
-  await assert.rejects(() => prisma.attachGitHubRepositoryToService(input), (error) => error.statusCode === 409);
-  await assert.rejects(() => prisma.importGitHubRepository(input), (error) => error.statusCode === 409);
+  await assert.rejects(() => prisma.attachGitHubRepositoryToService(input), (error) => error.statusCode === 409 && /service replacement requires a new service/.test(error.message));
+  await assert.rejects(() => prisma.importGitHubRepository(input), (error) => error.statusCode === 409 && error.code === 'GITHUB_PROJECT_SLUG_COLLISION');
   await capture('source-replacement', { memoryAttach: 'rejected', prismaAttach: 'rejected', prismaImport: 'rejected', truth: 'L1 adapter fake' });
 });
 
@@ -313,10 +326,12 @@ for (const adapter of ['memory', 'Prisma contract fake']) test(`resource quota r
   for (const [index, scenario] of quotaBoundaryCases.entries()) {
     // Given: either no resources or retained high values, with one actor's exact policy.
     const store = new ControlPlaneStore(); const { service, user } = quotaFixture(store, scenario, index);
-    let row = { id: service.id, projectId: service.projectId, name: service.name, status: 'CREATED', desiredState: scenario.retained ? { resources: retainedResources } : {} };
+    const environment = { id: service.environmentId, projectId: service.projectId, kind: 'prod', status: 'active' };
+    let row = { id: service.id, projectId: service.projectId, name: service.name, slug: service.slug, status: 'CREATED', desiredState: scenario.retained ? { resources: retainedResources } : {}, environmentBinding: { environmentId: environment.id, projectId: service.projectId, logicalSlug: service.slug, environment } };
     let writes = 0;
     const quota = { maxCpuMillicores: 8000, maxMemoryMb: 16384, maxObjectStorageMb: 102400, ...(scenario.quota || {}) };
     const tx = {
+      $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
       service: { findUnique: async () => structuredClone(row), update: async ({ data }) => { writes++; row = { ...row, ...data }; return row; } },
       project: { findUnique: async () => ({ id: service.projectId, status: 'ACTIVE' }) },
       deployment: { findFirst: async () => null },
@@ -326,7 +341,7 @@ for (const adapter of ['memory', 'Prisma contract fake']) test(`resource quota r
         ? [{ locked: 1 }]
         : [{ maxProjects: 1, maxServices: 1, maxDeploymentsPerDay: 0, maxPreviewDeployments: 0, services: [structuredClone(row)], resources: [], deployments: [], usageRecords: [] }],
     };
-    const repository = new PrismaControlPlaneRepository({ $transaction: async (callback) => callback(tx) });
+    const repository = new PrismaControlPlaneRepository({ ...tx, $transaction: async (callback) => callback(tx) });
     const snapshot = () => digest(adapter === 'memory' ? store.snapshot() : { row, writes });
     const before = snapshot(); let response;
     // When: apply the same mixed patch to the real store or serializable adapter seam.

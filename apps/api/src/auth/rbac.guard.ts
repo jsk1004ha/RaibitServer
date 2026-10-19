@@ -1,4 +1,5 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, HttpException, Injectable, NotFoundException } from '@nestjs/common';
+import { PATH_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
 import { authorizeSubject, devHeaderAuthAllowed, safeAuthModeFromEnv, subjectFromRequest } from '@raibitserver/core';
 import { RAIBITSERVER_PERMISSION } from './permissions.decorator';
@@ -12,10 +13,19 @@ export class RbacGuard implements CanActivate {
     const permission = this.reflector.getAllAndOverride<string>(RAIBITSERVER_PERMISSION, [context.getHandler(), context.getClass()]);
     if (!permission) return true;
     const req = context.switchToHttp().getRequest();
-    // Scope checks need repository/project ownership context; controllers/services
-    // enforce that after the action-level RBAC check succeeds.
     req.raibitSubject = subjectFromRequest(req, authConfig());
     await this.controlPlane.validateSessionSubject(req.raibitSubject);
+    try {
+      await this.controlPlane.assertScopedRequestAccess(req.params ?? {}, req.query ?? {}, req.raibitSubject);
+    } catch (error) {
+      const route = this.reflector.get<string>(PATH_METADATA, context.getHandler());
+      if (error instanceof HttpException && error.getStatus() === 404 &&
+          (route === 'deployments/:deploymentId/retry' || route === 'services/:serviceId/redeploy')) {
+        // Keep the retry contract identical for missing and out-of-scope sources.
+        throw new NotFoundException({ statusCode: 404, message: 'DEPLOYMENT_SOURCE_NOT_FOUND', code: 'DEPLOYMENT_SOURCE_NOT_FOUND' });
+      }
+      throw error;
+    }
     req.raibitSubject = authorizeSubject(req.raibitSubject, permission);
     return true;
   }
