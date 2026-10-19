@@ -30,6 +30,10 @@ SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 UPDATER_SOURCE="${SOURCE_DIR}/auto-update.sh"
 [[ -f "$UPDATER_SOURCE" && ! -L "$UPDATER_SOURCE" ]] \
   || fail "auto-update.sh must be a regular non-symlink file next to the installer"
+RECOVERY_SOURCE="${SOURCE_DIR}/boot-recovery.sh"
+[[ -f "$RECOVERY_SOURCE" && ! -L "$RECOVERY_SOURCE" ]] \
+  || fail "boot-recovery.sh must be a regular non-symlink file next to the installer"
+bash -n "$RECOVERY_SOURCE" || fail "boot-recovery.sh has invalid Bash syntax"
 
 VALUES_FILE="${RAIBITSERVER_VALUES_FILE:-${TARGET_HOME}/production-values.yaml}"
 KUBECONFIG_FILE="${RAIBITSERVER_KUBECONFIG:-${TARGET_HOME}/.kube/config}"
@@ -38,11 +42,14 @@ STATE_DIR="${TARGET_HOME}/.local/state/raibitserver-auto-update"
 DEPLOY_ROOT="${TARGET_HOME}/.local/share/raibitserver-production"
 LIBEXEC_DIR="${TARGET_HOME}/.local/libexec"
 UPDATER_INSTALLED="${LIBEXEC_DIR}/raibitserver-production-auto-update"
+RECOVERY_INSTALLED="${LIBEXEC_DIR}/raibitserver-production-boot-recovery"
 ENV_FILE="${CONFIG_DIR}/auto-update.env"
 SERVICE_NAME="raibitserver-auto-update.service"
 TIMER_NAME="raibitserver-auto-update.timer"
+RECOVERY_SERVICE_NAME="raibitserver-boot-recovery.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 TIMER_PATH="/etc/systemd/system/${TIMER_NAME}"
+RECOVERY_SERVICE_PATH="/etc/systemd/system/${RECOVERY_SERVICE_NAME}"
 
 # This installer runs as root. Refuse user-controlled symlinks anywhere below
 # the target home before creating or writing managed files there.
@@ -85,11 +92,15 @@ PY
 [[ -f "$KUBECONFIG_FILE" ]] || fail "kubeconfig does not exist: $KUBECONFIG_FILE"
 [[ ! -L "$UPDATER_INSTALLED" ]] \
   || fail "refusing to replace symlinked updater target: $UPDATER_INSTALLED"
+[[ ! -L "$RECOVERY_INSTALLED" ]] \
+  || fail "refusing to replace symlinked recovery target: $RECOVERY_INSTALLED"
 
 runuser -u "$TARGET_USER" -- install -d -m 700 \
   "$CONFIG_DIR" "$STATE_DIR" "$DEPLOY_ROOT" "$LIBEXEC_DIR"
 runuser -u "$TARGET_USER" -- install -m 0755 \
   "$UPDATER_SOURCE" "$UPDATER_INSTALLED"
+runuser -u "$TARGET_USER" -- install -m 0755 \
+  "$RECOVERY_SOURCE" "$RECOVERY_INSTALLED"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   runuser -u "$TARGET_USER" -- sh -c 'umask 077; cat >"$1"' sh "$ENV_FILE" <<EOF
@@ -132,12 +143,76 @@ if ! runuser -u "$TARGET_USER" -- test -r "$KUBECONFIG_FILE"; then
   fail "$TARGET_USER cannot read $KUBECONFIG_FILE"
 fi
 
+HOST_SERVICES=(docker.service k3s.service)
+add_optional_host_service() {
+  local configured_service="$1"
+  local explicitly_configured="$2"
+  [[ "$configured_service" == none ]] && return 0
+  [[ "$configured_service" =~ ^[A-Za-z0-9@_.-]+\.service$ ]] \
+    || fail "invalid boot recovery service name"
+  local load_state
+  load_state="$(systemctl show -p LoadState --value "$configured_service")" \
+    || fail "could not inspect boot recovery service: $configured_service"
+  if [[ "$explicitly_configured" == 1 ]]; then
+    [[ "$load_state" == loaded ]] || fail "configured boot recovery service is not installed: $configured_service"
+    HOST_SERVICES+=("$configured_service")
+  elif [[ "$load_state" == loaded ]] && {
+    systemctl is-enabled --quiet "$configured_service" \
+      || systemctl is-active --quiet "$configured_service";
+  }; then
+    HOST_SERVICES+=("$configured_service")
+  fi
+}
+add_optional_host_service \
+  "${RAIBITSERVER_BOOT_POSTGRES_SERVICE-postgresql@16-main.service}" \
+  "${RAIBITSERVER_BOOT_POSTGRES_SERVICE+1}"
+add_optional_host_service \
+  "${RAIBITSERVER_BOOT_TUNNEL_SERVICE-cloudflared.service}" \
+  "${RAIBITSERVER_BOOT_TUNNEL_SERVICE+1}"
+SYSTEMCTL_PATH="$(command -v systemctl)"
+[[ "$SYSTEMCTL_PATH" == /* ]] || fail "systemctl path must be absolute"
+
+cat >"$RECOVERY_SERVICE_PATH" <<EOF
+[Unit]
+Description=RaibitServer host boot recovery and workload verification
+Wants=network-online.target ${HOST_SERVICES[*]}
+After=network-online.target ${HOST_SERVICES[*]}
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=${TARGET_USER}
+Group=${TARGET_GROUP}
+Environment=HOME=${TARGET_HOME}
+Environment=KUBECONFIG=${KUBECONFIG_FILE}
+Environment="RAIBITSERVER_BOOT_SERVICES=${HOST_SERVICES[*]}"
+EnvironmentFile=-${ENV_FILE}
+EOF
+for host_service in "${HOST_SERVICES[@]}"; do
+  printf 'ExecStartPre=+%s reset-failed %s\n' "$SYSTEMCTL_PATH" "$host_service" \
+    >>"$RECOVERY_SERVICE_PATH"
+  printf 'ExecStartPre=+%s start %s\n' "$SYSTEMCTL_PATH" "$host_service" \
+    >>"$RECOVERY_SERVICE_PATH"
+done
+cat >>"$RECOVERY_SERVICE_PATH" <<EOF
+ExecStart=${RECOVERY_INSTALLED}
+TimeoutStartSec=30min
+Restart=on-failure
+RestartSec=1min
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 cat >"$SERVICE_PATH" <<EOF
 [Unit]
 Description=RaibitServer CI-gated production auto update
 Documentation=https://github.com/jsk1004ha/RaibitServer/tree/main/deploy/production
 Wants=network-online.target
-After=network-online.target docker.service k3s.service
+Requires=${RECOVERY_SERVICE_NAME}
+After=network-online.target docker.service k3s.service ${RECOVERY_SERVICE_NAME}
 
 [Service]
 Type=oneshot
@@ -178,15 +253,20 @@ Unit=${SERVICE_NAME}
 WantedBy=timers.target
 EOF
 
-chmod 0644 "$SERVICE_PATH" "$TIMER_PATH"
+chmod 0644 "$SERVICE_PATH" "$TIMER_PATH" "$RECOVERY_SERVICE_PATH"
 systemctl daemon-reload
+systemctl enable "$RECOVERY_SERVICE_NAME"
 systemctl enable --now "$TIMER_NAME"
 
+# Start recovery asynchronously so installation does not wait for Kubernetes
+# and the database, while the updater remains ordered behind that check.
+systemctl start --no-block "$RECOVERY_SERVICE_NAME"
 # Trigger the first check immediately without making the installer wait for all
 # production image builds to finish.
 systemctl start --no-block "$SERVICE_NAME"
 
 log "installed and enabled ${TIMER_NAME}"
+log "installed and enabled ${RECOVERY_SERVICE_NAME}"
 log "the first CI-gated update check has been queued"
 log "status: systemctl status ${SERVICE_NAME}"
 log "logs:   journalctl -u ${SERVICE_NAME} -f"
