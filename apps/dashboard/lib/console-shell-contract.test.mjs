@@ -4,6 +4,18 @@ import test from 'node:test';
 
 const component = (name) => readFile(new URL(`../components/${name}`, import.meta.url), 'utf8');
 
+test('merged account navigation retains settings, domain rentals, security, and help', async () => {
+  const [shell, menu] = await Promise.all([component('console-ui.tsx'), component('account-menu.tsx')]);
+  for (const href of ['/account/settings', '/account/domains', '/account/security', '/guide']) {
+    assert.equal(menu.split(`href="${href}"`).length - 1, 1, `${href} must remain reachable exactly once`);
+  }
+  const navigationIds = shell.match(/type NavItemId = ([^;]+);/)?.[1] || '';
+  assert.match(navigationIds, /'account'/);
+  assert.match(navigationIds, /'domains'/);
+  assert.match(shell, /id: 'domains', label: '도메인 대여', href: '\/account\/domains'/);
+  assert.doesNotMatch(`${shell}\n${menu}`, /^(?:<<<<<<< |=======|>>>>>>> )/m);
+});
+
 test('authenticated console shell remains server-first and preserves tenant-safe navigation', async () => {
   // Given: the authenticated shell and its two client-only interaction leaves.
   const [shell, search, mobile, accountMenu] = await Promise.all([
@@ -22,8 +34,8 @@ test('authenticated console shell remains server-first and preserves tenant-safe
   assert.match(shell, /redirect\('\/login\?error=session_expired'\)/);
   assert.match(shell, /String\(user\?\.role \|\| subject\?\.userRole \|\| ''\)\.toUpperCase\(\) === 'ADMIN'/);
   assert.match(shell, /const requestedOrganizationId = typeof orgRouteValue === 'string' \? orgRouteValue\.trim\(\) : '';/);
-  assert.match(shell, /organizationMemberships\.find\(\(membership\) => membership\.organizationId === requestedOrganizationId\)\?\.organizationId/);
-  assert.match(shell, /memberships: me\.body\?\.memberships/);
+  assert.match(shell, /selectedWorkspace\(\{ requested: requestedOrganizationId, subject, memberships: organizationMemberships \}\)/);
+  assert.match(shell, /organizationMemberships\.find\(\(membership\) => membership\.organizationId === resolvedOrgRouteValue\)/);
   assert.match(shell, /<Suspense fallback=\{null\}><FlashBanner \/><\/Suspense>/);
   assert.match(shell, /const logoutAction = apiAction\('\/auth\/logout'\);/);
   assert.match(shell, /<AccountMenu[\s\S]*?logoutAction=\{logoutAction\}/);

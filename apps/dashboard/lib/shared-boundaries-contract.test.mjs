@@ -43,7 +43,8 @@ test('Given public chrome and the home hero When theme-aware responsive markup r
   assert.equal((header.match(/<ThemeMenu/g) ?? []).length, 1);
   assert.doesNotMatch(header, /['"]use client['"]/);
   assert.doesNotMatch(layout, /ThemeToggle|ThemeMenu/);
-  assert.match(header, /flex-col[\s\S]*sm:flex-row/);
+  assert.match(header, /grid-cols-\[1fr_auto\][\s\S]*sm:grid-cols-\[1fr_auto_auto\]/);
+  assert.match(header, /col-span-2 row-start-2[\s\S]*sm:col-span-1[\s\S]*sm:row-start-1/);
   assert.match(header, /w-full[\s\S]*sm:w-auto/);
   assert.match(header, /href: '\/status', label: '운영 현황'/);
   assert.match(header, /href: '\/support', label: '지원'/);

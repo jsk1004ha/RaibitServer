@@ -5,13 +5,14 @@ import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 
 test('dashboard project detail is API-backed instead of hardcoded prototype arrays', async () => {
-  const [detail, hub, services, operations] = await Promise.all([
+  const [detail, hub, services, operations, sourceFields] = await Promise.all([
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/components/project-hub/project-hub.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/components/project-hub/services.tsx', import.meta.url), 'utf8'),
     fs.readFile(new URL('../apps/dashboard/components/project-hub/operations.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../apps/dashboard/components/creation-source-fields.tsx', import.meta.url), 'utf8'),
   ]);
-  const projectFeatures = `${detail}\n${hub}\n${services}\n${operations}`;
+  const projectFeatures = `${detail}\n${hub}\n${services}\n${operations}\n${sourceFields}`;
   assert.doesNotMatch(detail, /const\s+services\s*=\s*\[/);
   assert.doesNotMatch(detail, /const\s+resources\s*=\s*\[/);
   for (const marker of ['loadProjectConsole', 'projectMainLink', 'ProjectHub', '/deployments', '/console', 'sourceType', 'imageUrl', 'dockerfilePath', '서비스 만들기', '리소스 추가', '운영 배포', '미리보기', '런타임 로그']) {
@@ -19,7 +20,7 @@ test('dashboard project detail is API-backed instead of hardcoded prototype arra
   }
   assert.match(detail, /organizationSlug:\s*state\.project\.organizationSlug\s*\|\|\s*state\.project\.organization\?\.slug/);
   assert.doesNotMatch(detail, /organizationSlug:[^\n]*\|\|\s*orgSlug/);
-  assert.match(detail, /const organizationLabel = state\.project\.organization\?\.name \|\| state\.project\.organizationSlug \|\| '내 조직'/);
+  assert.match(detail, /const organizationLabel = state\.project\.organization\?\.name \|\| state\.project\.organizationSlug/);
   assert.ok(detail.includes('orgRouteValue={orgSlug}'));
   assert.ok(detail.includes('orgValue={organizationLabel}'));
 });
@@ -48,7 +49,8 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
     assert.ok(controlRoute.includes(marker), `${marker} missing from same-origin control route`);
   }
   assert.ok(requestSecurity.includes("export { SESSION_COOKIE_NAME, sessionCookieOptions } from './session-cookies.js'"));
-  assert.match(proxy, /isProtectedPage[\s\S]*?\/console[\s\S]*?\/admin[\s\S]*?\/github[\s\S]*?\/guide[\s\S]*?\/org/);
+  assert.match(proxy, /isProtectedPage[\s\S]*?\/console[\s\S]*?\/admin[\s\S]*?\/github[\s\S]*?\/org/);
+  assert.match(guide, /<PublicHeader/);
   assert.match(proxy, /readSessionToken\(request\.headers\.get\('cookie'\)\)/);
   assert.match(shell, /getJson\('\/auth\/me'/);
   assert.match(shell, /String\(user\?\.role \|\| subject\?\.userRole \|\| ''\)\.toUpperCase\(\) === 'ADMIN'/);
@@ -57,7 +59,7 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
   for (const marker of ['/admin/users/', '가입 신청 확인', '클럽 회원 승인', '일반 사용자 승인', '거절 확인']) {
     assert.ok(admin.includes(marker), `${marker} missing from admin screen`);
   }
-  for (const marker of ['/github/install', '/github/repositories/import', '/projects/${firstService.projectId}/services/${firstService.id}/github', '/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync', '저장소 선택', '연결할 서비스와 저장소가 필요합니다.', '동기화할 저장소가 없습니다.']) {
+  for (const marker of ['/github/install', '/github/repositories/import', '/projects/${encodeURIComponent(selectedService.projectId)}/services/${encodeURIComponent(selectedService.id)}/github', '/github/repositories/${encodeURIComponent(selectedRepository.fullName)}/sync', '저장소 선택', '먼저 연결할 서비스를 선택하세요.', '동기화할 저장소가 없습니다.']) {
     assert.ok(github.includes(marker), `${marker} missing from GitHub screen`);
   }
   for (const [name, route] of [['install', githubInstall], ['callback', githubCallback]]) {
@@ -73,7 +75,7 @@ test('dashboard exposes public, authenticated, admin, GitHub, deployment, and re
     assert.ok(githubCallback.includes(marker), `GitHub callback must recover and clear setup state: ${marker}`);
   }
   assert.ok(guide.includes('사용 안내'));
-  for (const marker of ['imageDigest', 'errorCode', '배포 상세', '이미지 정보', '빌드 로그', '배포 이벤트']) {
+  for (const marker of ['imageDigest', 'errorCode', '배포 상세', '기술 세부 정보', '빌드 로그', '배포 이벤트']) {
     assert.ok(deployment.includes(marker), `${marker} missing from deployment screen`);
   }
   assert.match(deployment, /<DeploymentRecoveryAction action=\{history\.eligibleAction\}/);

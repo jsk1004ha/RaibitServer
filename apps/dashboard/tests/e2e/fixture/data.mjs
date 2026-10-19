@@ -226,7 +226,7 @@ export function responseFor({ token, method, pathname, searchParams, publicSiteS
   if (pathname === '/auth/me') {
     const memberships = organizationSession ? (organizationSession.organizationRole ? [{ organizationId: project.organizationId, userId: actor.id, role: organizationSession.organizationRole }] : []) : [{ organizationId: project.organizationId, userId: actor.id, role: actor.role === 'ADMIN' ? 'ADMIN' : 'VIEWER' }];
     const subject = organizationSession?.organizationRole ? { ...actor, organizationId: project.organizationId, organizationSlug: project.organizationSlug } : actor;
-    return json(200, { user: actor, subject, memberships });
+    return json(200, { user: actor, subject, memberships: memberships.map((membership) => ({ ...membership, organizationName: '라이빗 개발팀', organizationSlug: project.organizationSlug })) });
   }
   if (method === 'POST' && pathname === '/organizations') return organizationCreateResponse(actor, body);
   if (pathname === `/organizations/${project.organizationId}/members` || pathname.startsWith(`/organizations/${project.organizationId}/members/`)) return organizationMembersResponse({ actor, body, method, pathname, session: organizationSession, token });

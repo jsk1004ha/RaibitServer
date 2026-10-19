@@ -63,14 +63,14 @@ test('dangerous actions require an explicit target-specific confirmation', async
 	assert.match(recovery, /action\.type === 'rollback' \? <input name="confirmed" type="hidden" value="true"/);
 });
 
-test('project creation displays the route organization but does not submit tenant identity', async () => {
+test('project creation preserves its workspace return target without submitting tenant identity', async () => {
 	const [createProject, wizard, route] = await Promise.all([
 		read('../apps/dashboard/app/org/[orgSlug]/projects/new/page.tsx'),
 		read('../apps/dashboard/components/project-create-wizard.tsx'),
 		read('../apps/dashboard/app/api/control/[...path]/route.ts'),
 	]);
-	assert.match(wizard, /value=\{orgSlug\}\s+readOnly/);
-	assert.match(wizard, /로그인 권한으로 확인/);
+	assert.match(wizard, /name="_returnTo" value=\{`\/org\/\$\{orgSlug\}\/projects`\}/);
+	assert.doesNotMatch(wizard, /id="project-organization"|로그인 권한으로 확인/);
 	assert.match(wizard, /name="serviceName"/);
 	assert.doesNotMatch(`${createProject}\n${wizard}`, /name="organizationId"/);
 	assert.match(route, /projectCreatePayloadFromForm/);

@@ -33,7 +33,7 @@ export function OverviewView({ data }: Readonly<{ data: ProjectHubData }>) {
       <ActionNavigation label="프로젝트 빠른 작업" items={[
         { label: '서비스 만들기', href: `${data.base}?view=new-service` },
         { label: '리소스 추가', href: `${data.base}?view=new-resource` },
-        { label: '저장소 연결', href: '/github?step=attach' },
+        { label: '저장소 연결', href: `/github?${new URLSearchParams({ step: 'attach', projectId: data.projectId, ...(data.selectedService ? { serviceId: data.selectedService.id } : {}) })}` },
       ]} />
     </div>
   );

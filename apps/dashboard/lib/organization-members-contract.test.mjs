@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { resolveOrganizationRouteValue } from './console-navigation.ts';
 
 const component = (name) => readFile(new URL(`../components/${name}`, import.meta.url), 'utf8');
 const page = (name) => readFile(new URL(`../app/${name}`, import.meta.url), 'utf8');
@@ -14,7 +15,11 @@ test('organization navigation is derived from authenticated memberships and uses
 
   assert.doesNotMatch(shell, /^['"]use client['"]/);
   assert.match(shell, /const rawMemberships: unknown\[\] = Array\.isArray\(me\.body\?\.memberships\)/);
-  assert.match(shell, /organizationMemberships\.find\(\(membership\) => membership\.organizationId === requestedOrganizationId\)/);
+  assert.match(shell, /selectedWorkspace\(\{ requested: requestedOrganizationId, subject, memberships: organizationMemberships \}\)/);
+  const memberships = [{ organizationId: 'team-a', organizationSlug: 'alpha' }, { organizationId: 'team-b', organizationSlug: 'beta' }];
+  assert.equal(resolveOrganizationRouteValue({ requested: 'beta', preferred: 'team-a', memberships }), 'team-b');
+  assert.equal(resolveOrganizationRouteValue({ requested: 'outsider', preferred: 'team-b', memberships }), 'team-b');
+  assert.equal(resolveOrganizationRouteValue({ preferred: 'outsider', subject: { organizationId: 'outsider' }, memberships: [] }), '');
   assert.match(shell, /<OrganizationSwitcher currentOrganizationId=\{resolvedOrgRouteValue\} memberships=\{organizationMemberships\}/);
   assert.match(switcher, /^['"]use client['"]/);
   assert.match(switcher, /memberships\.filter/);
@@ -96,7 +101,8 @@ test('approved console users can open the organization creation surface without 
   assert.match(form, /status === 409/);
   assert.match(form, /response\.status === 401 \? \{ kind: 'auth-required' \}/);
   assert.match(form, /kind: 'created-needs-reauthentication'/);
-  assert.match(form, /새 조직이 만들어지지 않았습니다/);
+  assert.match(form, /state\.kind === 'auth-required' \? <Alert role="alert"/);
+  assert.match(form, /state\.kind === 'created-needs-reauthentication' \? <Alert role="status"/);
   assert.match(form, /requiresReauthentication/);
   assert.doesNotMatch(form, /owner|membershipId|role:/i);
   assert.doesNotMatch(pageSource, /^['"]use client['"]/);

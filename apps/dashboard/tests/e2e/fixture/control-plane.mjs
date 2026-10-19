@@ -12,6 +12,7 @@ import {
 } from './data.mjs';
 import { redactFixtureRequestBody } from './redact.mjs';
 import { createFixtureState } from './state.mjs';
+import { uxWorkspaceResponse } from './ux-workspaces.mjs';
 
 const port = 3411;
 const requests = [];
@@ -53,12 +54,14 @@ const server = createServer(async (request, response) => {
   requests.push({ method: request.method, path: url.pathname, query: url.search, authorization: request.headers.authorization ? 'Bearer [MASKED]' : null, lastEventId: request.headers['last-event-id'] || null, body: redactFixtureRequestBody(body, url.pathname) });
   if (url.pathname === '/api/auth/login' && request.method === 'POST') {
     const account = loginAccounts.get(String(body.email || '').toLowerCase());
+    if (body.email === 'unverified@fixture.test' && body.password === 'fixture-unverified-pass') return send(response, 403, { error: 'email_not_verified' });
     if (body.email === 'failure@fixture.test') return send(response, 500, { error: 'fixture_upstream_secret_must_not_escape' });
     if (!account || account.password !== body.password) return send(response, 401, { error: 'invalid_credentials' });
     return send(response, 200, { sessionToken: account.token, user: { email: body.email } });
   }
   const token = String(request.headers.authorization || '').replace(/^Bearer\s+/, '');
-  const result = responseFor({ body, publicSiteScenario: fixtureState.snapshot().publicSiteScenario, token, method: request.method || 'GET', pathname: url.pathname.replace(/^\/api/, '') || '/', searchParams: url.searchParams });
+  const fixtureRequest = { body, publicSiteScenario: fixtureState.snapshot().publicSiteScenario, token, method: request.method || 'GET', pathname: url.pathname.replace(/^\/api/, '') || '/', searchParams: url.searchParams };
+  const result = uxWorkspaceResponse(fixtureRequest) ?? responseFor(fixtureRequest);
   return send(response, result.status, result.body);
 });
 
