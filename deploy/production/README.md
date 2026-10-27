@@ -211,13 +211,56 @@ CI가 아직 실행 중이면 다음 timer 주기까지 기다립니다. CI가 �
 sudo bash deploy/production/install-auto-update.sh raibit1
 ```
 
-설치 후 systemd timer는 boot 후 첫 확인을 수행하고, 각 실행이 끝난 뒤 약 5분 간격으로 다시 `main`을 확인합니다. 첫 확인은 설치 직후에도 비동기로 시작됩니다.
+설치 후 `raibitserver-boot-recovery.service`가 부팅 시 Docker와 K3s를 시작하고, 설치 시 활성화되어 있던 호스트 PostgreSQL 16 instance와 `cloudflared`가 있으면 함께 시작합니다. K3s 노드, API·dashboard·orchestrator·provisioner Deployment, API Pod의 실제 PostgreSQL `SELECT 1`을 확인하며 실패 시 1분 뒤 다시 시도합니다. 업데이트 서비스도 이 검사를 먼저 통과해야 실행됩니다. 복구 검사는 인터넷이나 GitHub CI 없이 현재 Kubernetes desired state와 영속 저장소를 사용합니다. K3s가 Pod를 다시 띄운 뒤 orchestrator와 provisioner가 DB의 desired state를 재조정합니다.
+
+systemd timer는 boot 후 첫 업데이트 확인을 수행하고, 각 실행이 끝난 뒤 5분 또는 다음 5분 단위 시각에 다시 `main`을 확인합니다. 달력 기반 재시도도 함께 두므로 복구 선행 조건 실패로 updater가 한 번도 시작하지 못했어도 이후 확인이 끊기지 않습니다. 이미 updater가 실행 중이면 timer가 중복 실행을 만들지 않습니다. 첫 복구와 업데이트 확인은 설치 직후에도 비동기로 시작됩니다. 이미 설치된 서버에도 새 부팅 복구 unit을 설치하려면 위 설치 명령을 한 번 다시 실행해야 합니다.
 
 ```sh
 systemctl status raibitserver-auto-update.timer
 systemctl status raibitserver-auto-update.service
+systemctl status raibitserver-boot-recovery.service
+systemctl status raibitserver-host-recovery.service
+journalctl -u raibitserver-boot-recovery.service -b
 journalctl -u raibitserver-auto-update.service -f
 ```
+
+PostgreSQL이나 tunnel이 별도의 systemd unit 이름을 쓰면 설치 전에 `RAIBITSERVER_BOOT_POSTGRES_SERVICE` 또는 `RAIBITSERVER_BOOT_TUNNEL_SERVICE`를 지정합니다. 명시한 unit은 설치되어 있으면 현재 활성화 여부와 관계없이 복구 대상에 포함합니다. 외부 관리형 DB나 tunnel을 사용하지 않을 때는 해당 값을 `none`으로 지정할 수 있습니다. 기본 unit은 설치 시점에 활성화 또는 enable되어 있을 때만 포함합니다. 전원 차단으로 손상된 DB 파일이나 볼륨 자체는 이 절차가 복구하지 못하므로 백업과 복구 리허설은 별도로 유지해야 합니다.
+
+### 복구 검사 때문에 업데이트가 대기하는 경우
+
+복구 서비스의 `Requires=` / `After=` 선행 조건은 의도적인 차단입니다. DB가 연결되지 않거나 Deployment가 준비되지 않으면 자동 업데이트도 실행되지 않습니다. 따라서 현재 release 자체의 회귀로 복구가 실패한다면, 정상 commit이 `main`에 올라오는 것만으로 장애가 해결되지는 않습니다. updater를 직접 실행해도 기존 API Pod의 DB 사전 검사는 그대로 적용됩니다.
+
+먼저 아래와 같이 자동 작업을 멈추고 장애 원인을 확인합니다. 명령의 release/namespace는 설치 설정이 다르면 해당 값으로 바꿉니다.
+
+```sh
+sudo systemctl stop raibitserver-auto-update.timer
+sudo systemctl stop raibitserver-auto-update.service raibitserver-boot-recovery.service
+sudo systemctl restart raibitserver-host-recovery.service
+kubectl -n raibitserver-system get deployments,pods
+journalctl -u raibitserver-boot-recovery.service -b --no-pager -n 100
+helm history raibitserver -n raibitserver-system
+```
+
+호스트 서비스나 DB 장애는 해당 서비스와 저장소를 먼저 복구합니다. 애플리케이션 회귀라면 `helm history`에서 실제로 정상 작동을 확인했던 revision을 선택하고, 현재 DB 스키마와 호환되는지 확인한 다음 운영자가 `helm rollback raibitserver <검증된-revision> -n raibitserver-system --wait --timeout 20m`을 실행합니다. Helm rollback은 DB migration을 되돌리지 않습니다. 호환되는 정상 revision이 없으면 백업 복구 또는 검증된 수동 production 배포 절차가 필요하며, 복구 검사·CI 승인·이미지 서명 검증을 끄고 진행하지 않습니다.
+
+서비스와 DB가 정상화되면 복구 검사를 다시 실행합니다. 아래 첫 두 명령이 성공한 뒤에만 timer를 재개합니다.
+
+```sh
+sudo systemctl reset-failed raibitserver-host-recovery.service raibitserver-boot-recovery.service raibitserver-auto-update.service &&
+sudo systemctl start raibitserver-boot-recovery.service &&
+sudo systemctl enable --now raibitserver-auto-update.timer &&
+sudo systemctl start --no-block raibitserver-auto-update.service
+```
+
+### 복구 서비스 권한과 검증 범위
+
+호스트 서비스 시작은 별도의 root 소유 `raibitserver-host-recovery.service`에 고정된 `systemctl` 명령으로만 수행합니다. 이 unit은 사용자 소유 환경 파일이나 스크립트를 읽지 않습니다. 대상 서비스는 root 설치 시 확정되며 문자·숫자로 시작하는 제한된 `.service` 이름만 허용합니다. `%` 치환, 옵션 형태와 줄바꿈은 거부합니다. Kubernetes·DB 확인과 updater는 지정한 일반 사용자로 실행되며 `ExecStartPre=+`로 권한을 올리지 않습니다.
+
+검증 서비스는 호스트 시작 unit에 `Wants=` / `After=`로 연결됩니다. 호스트 시작 명령이 실패해도 검증 스크립트 자체는 실행되어 비활성 서비스를 실패로 기록하고 1분 뒤 다시 시도합니다. 호스트 시작 unit도 독립적으로 재시도합니다. updater에서 검증 서비스로 향하는 `Requires=` / `After=`는 유지하므로 호스트·Kubernetes·DB 검사가 성공하기 전에는 배포하지 않습니다.
+
+설치된 네 systemd unit은 `root:root`, `0644`이며 symlink 또는 특수 파일인 기존 대상은 덮어쓰지 않습니다. 홈 아래 실행 파일은 대상 사용자 소유 `0755`, 관리 디렉터리는 `0700`, 새 환경 파일은 `0600`입니다. 사용자 환경 파일을 수정해도 root unit의 명령이나 환경이 바뀌지 않습니다.
+
+자동 테스트는 실제 unit 생성 결과의 권한 경계와 모의 명령을 통한 API 지연·Deployment 실패·DB 실패·종료 중인 Pod 제외를 확인합니다. 실제 서버 재부팅, K3s 복구, systemd 재시도와 영속 DB 상태는 이 테스트로 입증되지 않습니다. 운영 적용 전 서버에서 이 장애 시나리오를 검증하고 journal 및 rollout 결과를 보관해야 합니다.
 
 updater는 사람이 사용하는 repository checkout을 `git reset`하지 않습니다. 별도의 managed checkout을 사용합니다.
 

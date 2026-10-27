@@ -1,0 +1,3 @@
+deploy/production/auto-update.sh text eol=lf
+deploy/production/install-auto-update.sh text eol=lf
+deploy/production/boot-recovery.sh text eol=lf
