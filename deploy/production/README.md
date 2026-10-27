@@ -238,9 +238,9 @@ helm history raibitserver -n raibitserver-system
 서비스와 DB가 정상화되면 복구 검사를 다시 실행합니다. 아래 첫 두 명령이 성공한 뒤에만 timer를 재개합니다.
 
 ```sh
-sudo systemctl reset-failed raibitserver-host-recovery.service raibitserver-boot-recovery.service raibitserver-auto-update.service
-sudo systemctl start raibitserver-boot-recovery.service
-sudo systemctl enable --now raibitserver-auto-update.timer
+sudo systemctl reset-failed raibitserver-host-recovery.service raibitserver-boot-recovery.service raibitserver-auto-update.service &&
+sudo systemctl start raibitserver-boot-recovery.service &&
+sudo systemctl enable --now raibitserver-auto-update.timer &&
 sudo systemctl start --no-block raibitserver-auto-update.service
 ```
 
