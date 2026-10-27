@@ -47,9 +47,16 @@ ENV_FILE="${CONFIG_DIR}/auto-update.env"
 SERVICE_NAME="raibitserver-auto-update.service"
 TIMER_NAME="raibitserver-auto-update.timer"
 RECOVERY_SERVICE_NAME="raibitserver-boot-recovery.service"
+HOST_RECOVERY_SERVICE_NAME="raibitserver-host-recovery.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 TIMER_PATH="/etc/systemd/system/${TIMER_NAME}"
 RECOVERY_SERVICE_PATH="/etc/systemd/system/${RECOVERY_SERVICE_NAME}"
+HOST_RECOVERY_SERVICE_PATH="/etc/systemd/system/${HOST_RECOVERY_SERVICE_NAME}"
+
+for unit_path in "$SERVICE_PATH" "$TIMER_PATH" "$RECOVERY_SERVICE_PATH" "$HOST_RECOVERY_SERVICE_PATH"; do
+  [[ ! -L "$unit_path" && ( ! -e "$unit_path" || -f "$unit_path" ) ]] \
+    || fail "refusing to replace a symlink or non-regular systemd unit: $unit_path"
+done
 
 # This installer runs as root. Refuse user-controlled symlinks anywhere below
 # the target home before creating or writing managed files there.
@@ -148,7 +155,7 @@ add_optional_host_service() {
   local configured_service="$1"
   local explicitly_configured="$2"
   [[ "$configured_service" == none ]] && return 0
-  [[ "$configured_service" =~ ^[A-Za-z0-9@_.-]+\.service$ ]] \
+  [[ "$configured_service" =~ ^[A-Za-z0-9][A-Za-z0-9@_.-]*\.service$ ]] \
     || fail "invalid boot recovery service name"
   local load_state
   load_state="$(systemctl show -p LoadState --value "$configured_service")" \
@@ -172,11 +179,40 @@ add_optional_host_service \
 SYSTEMCTL_PATH="$(command -v systemctl)"
 [[ "$SYSTEMCTL_PATH" == /* ]] || fail "systemctl path must be absolute"
 
+# Keep privileged host-service commands in their own root-owned unit. The
+# unprivileged recovery/update environment file must never reach root commands.
+cat >"$HOST_RECOVERY_SERVICE_PATH" <<EOF
+[Unit]
+Description=RaibitServer host service startup
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+TimeoutStartSec=10min
+Restart=on-failure
+RestartSec=1min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+EOF
+for host_service in "${HOST_SERVICES[@]}"; do
+  printf 'ExecStart=%s reset-failed %s\n' "$SYSTEMCTL_PATH" "$host_service" \
+    >>"$HOST_RECOVERY_SERVICE_PATH"
+  printf 'ExecStart=%s start %s\n' "$SYSTEMCTL_PATH" "$host_service" \
+    >>"$HOST_RECOVERY_SERVICE_PATH"
+done
+
+# The verifier must run even when host startup fails so its own failed checks
+# activate Restart=on-failure instead of leaving a failed dependency job idle.
 cat >"$RECOVERY_SERVICE_PATH" <<EOF
 [Unit]
 Description=RaibitServer host boot recovery and workload verification
-Wants=network-online.target ${HOST_SERVICES[*]}
-After=network-online.target ${HOST_SERVICES[*]}
+Wants=network-online.target ${HOST_RECOVERY_SERVICE_NAME}
+After=network-online.target ${HOST_RECOVERY_SERVICE_NAME}
 StartLimitIntervalSec=0
 
 [Service]
@@ -187,14 +223,6 @@ Environment=HOME=${TARGET_HOME}
 Environment=KUBECONFIG=${KUBECONFIG_FILE}
 Environment="RAIBITSERVER_BOOT_SERVICES=${HOST_SERVICES[*]}"
 EnvironmentFile=-${ENV_FILE}
-EOF
-for host_service in "${HOST_SERVICES[@]}"; do
-  printf 'ExecStartPre=+%s reset-failed %s\n' "$SYSTEMCTL_PATH" "$host_service" \
-    >>"$RECOVERY_SERVICE_PATH"
-  printf 'ExecStartPre=+%s start %s\n' "$SYSTEMCTL_PATH" "$host_service" \
-    >>"$RECOVERY_SERVICE_PATH"
-done
-cat >>"$RECOVERY_SERVICE_PATH" <<EOF
 ExecStart=${RECOVERY_INSTALLED}
 TimeoutStartSec=30min
 Restart=on-failure
@@ -244,6 +272,8 @@ Description=Check RaibitServer main for a CI-approved production update
 [Timer]
 OnBootSec=2min
 OnUnitInactiveSec=5min
+# Retry even if a failed recovery dependency prevented updater activation.
+OnCalendar=*-*-* *:0/5:00
 RandomizedDelaySec=30s
 AccuracySec=30s
 Persistent=true
@@ -253,7 +283,8 @@ Unit=${SERVICE_NAME}
 WantedBy=timers.target
 EOF
 
-chmod 0644 "$SERVICE_PATH" "$TIMER_PATH" "$RECOVERY_SERVICE_PATH"
+chown root:root "$SERVICE_PATH" "$TIMER_PATH" "$RECOVERY_SERVICE_PATH" "$HOST_RECOVERY_SERVICE_PATH"
+chmod 0644 "$SERVICE_PATH" "$TIMER_PATH" "$RECOVERY_SERVICE_PATH" "$HOST_RECOVERY_SERVICE_PATH"
 systemctl daemon-reload
 systemctl enable "$RECOVERY_SERVICE_NAME"
 systemctl enable --now "$TIMER_NAME"

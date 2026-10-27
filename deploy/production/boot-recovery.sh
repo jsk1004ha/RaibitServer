@@ -21,7 +21,7 @@ NAMESPACE="${RAIBITSERVER_NAMESPACE:-raibitserver-system}"
 HOST_SERVICES="${RAIBITSERVER_BOOT_SERVICES:-docker.service k3s.service}"
 read -r -a services <<<"$HOST_SERVICES"
 for service in "${services[@]}"; do
-  [[ "$service" =~ ^[A-Za-z0-9@_.-]+\.service$ ]] || fail "invalid host service name"
+  [[ "$service" =~ ^[A-Za-z0-9][A-Za-z0-9@_.-]*\.service$ ]] || fail "invalid host service name"
   systemctl is-active --quiet "$service" || fail "$service is not active"
 done
 
@@ -53,6 +53,8 @@ import json
 import sys
 
 for pod in json.load(sys.stdin).get("items", []):
+    if pod.get("metadata", {}).get("deletionTimestamp"):
+        continue
     if pod.get("status", {}).get("phase") != "Running":
         continue
     if any(condition.get("type") == "Ready" and condition.get("status") == "True"
