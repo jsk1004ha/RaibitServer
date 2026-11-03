@@ -548,6 +548,24 @@ function canMutateDatabase(role: string) {
   return can(role, 'db:query:write');
 }
 
+const SQLITE_INSPECTION_PRAGMAS = new Set([
+  'TABLE_INFO', 'TABLE_XINFO', 'TABLE_LIST', 'INDEX_INFO', 'INDEX_XINFO', 'INDEX_LIST',
+  'FOREIGN_KEY_LIST', 'FOREIGN_KEY_CHECK', 'INTEGRITY_CHECK', 'QUICK_CHECK',
+]);
+const SQLITE_READ_ONLY_PRAGMA_VALUES = new Set([
+  'APPLICATION_ID', 'COLLATION_LIST', 'COMPILE_OPTIONS', 'DATA_VERSION', 'DATABASE_LIST',
+  'ENCODING', 'FOREIGN_KEYS', 'FREELIST_COUNT', 'FUNCTION_LIST', 'MODULE_LIST',
+  'PAGE_COUNT', 'PRAGMA_LIST', 'QUERY_ONLY', 'SCHEMA_VERSION', 'USER_VERSION',
+]);
+
+function isReadOnlySqlitePragma(query: string) {
+  const match = query.match(/^PRAGMA\s+(?:[A-Z_][A-Z0-9_]*\s*\.\s*)?([A-Z_][A-Z0-9_]*)\s*(\([\s\S]*\))?$/);
+  if (!match) return false;
+  // SQLite also accepts setters as PRAGMA name(value), without an equals sign.
+  return SQLITE_INSPECTION_PRAGMAS.has(match[1])
+    || (!match[2] && SQLITE_READ_ONLY_PRAGMA_VALUES.has(match[1]));
+}
+
 export function isReadOnlyDatabaseQuery(query: any) {
   const text = stripLeadingSqlComments(String(query || '').trim()).replace(/;+\s*$/, '').trim();
   if (!text || text.includes(';')) return false;
@@ -557,7 +575,7 @@ export function isReadOnlyDatabaseQuery(query: any) {
   }
   if (/^SHOW\b/.test(normalized) || /^DESCRIBE\b/.test(normalized)) return true;
   if (/^EXPLAIN\s+SELECT\b/.test(normalized)) return true;
-  if (/^PRAGMA\b/.test(normalized)) return !/[=;]/.test(normalized);
+  if (/^PRAGMA\b/.test(normalized)) return isReadOnlySqlitePragma(normalized);
   return false;
 }
 

@@ -93,6 +93,38 @@ test('query guard requires confirmation for destructive queries', () => {
   assert.equal(guardDatabaseQuery('UPDATE users SET admin = true', { role: 'viewer' }).allowed, false);
 });
 
+test('SQLite inspection PRAGMAs remain readable while setters require write permission and confirmation', () => {
+  for (const query of [
+    'PRAGMA table_info(notes)',
+    "PRAGMA main.table_xinfo('notes')",
+    'PRAGMA index_info(notes_title_idx)',
+    'PRAGMA index_xinfo(notes_title_idx)',
+    'PRAGMA index_list(notes)',
+    'PRAGMA foreign_key_list(notes)',
+    'PRAGMA table_list',
+    'PRAGMA user_version',
+    'PRAGMA query_only',
+  ]) {
+    const guard = guardDatabaseQuery(query, { role: 'maintainer' });
+    assert.equal(guard.allowed, true, query);
+    assert.equal(guard.readOnly, true, query);
+  }
+  for (const query of [
+    'PRAGMA user_version(123)',
+    'PRAGMA main.application_id(123)',
+    'PRAGMA schema_version = 7',
+    'PRAGMA query_only(0)',
+    'PRAGMA optimize',
+    'PRAGMA unknown_operation',
+  ]) {
+    assert.equal(guardDatabaseQuery(query, { role: 'maintainer', confirmed: true }).allowed, false, query);
+    assert.equal(guardDatabaseQuery(query, { role: 'db-admin' }).allowed, false, query);
+    const confirmed = guardDatabaseQuery(query, { role: 'db-admin', confirmed: true });
+    assert.equal(confirmed.allowed, true, query);
+    assert.equal(confirmed.readOnly, false, query);
+  }
+});
+
 test('secret-looking log values are masked', () => {
   const line = sanitizeLogRecord('DATABASE_URL=postgres://user:pass@host/db TOKEN=abc123 OK=yes');
   assert.match(line, /DATABASE_URL=\*\*\*\*/);
