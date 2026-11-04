@@ -31,7 +31,7 @@ test('github-conflict-recovery-contract import preserves an idempotency key acro
 });
 
 test('github-conflict-recovery-contract-attach attach and opaque collisions offer only their typed recovery action', async ({ adminPage }) => {
-  await adminPage.goto('/github?step=attach&installation=9001');
+  await adminPage.goto('/github?step=attach&installation=9001&projectId=prj_fixture_001&serviceId=svc_fixture_web');
   await adminPage.locator('#github-attach-branch').fill('changed');
   await adminPage.getByRole('button', { name: '연결', exact: true }).click();
   await expect(adminPage.locator('[data-github-recovery]')).toContainText('GitHub 기본 브랜치가 변경되었습니다.');

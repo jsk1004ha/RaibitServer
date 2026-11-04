@@ -7,6 +7,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import type { RuntimeLog, ServiceRecord } from './types';
+import { logEmptyState } from '@/lib/operations-ux';
 
 const MAX_RUNTIME_LOG_ROWS = 200;
 const MAX_SSE_FAILURES = 3;
@@ -261,7 +262,9 @@ export function RuntimeLogStream({ initialRows, serviceId }: Readonly<{ initialR
         <label className="flex min-w-0 flex-col gap-raibit-xs text-caption text-muted-foreground">검색<Input aria-label="로그 검색" onChange={(event) => setSearch(event.currentTarget.value)} value={search} /></label>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-raibit-sm"><p aria-live="polite" className="text-caption text-muted-foreground">{copyStatus}</p><Button onClick={copyVisibleRows} size="sm" type="button" variant="outline">표시한 로그 복사</Button></div>
-      <RuntimeLogRows rows={filteredRows} />
+      {logEmptyState(rows.length, filteredRows.length) === 'filtered'
+        ? <Empty className="min-h-48 border border-dashed border-border"><EmptyHeader><EmptyTitle>조건에 맞는 로그가 없습니다.</EmptyTitle><EmptyDescription>검색어 또는 로그 수준을 변경해 보세요.</EmptyDescription></EmptyHeader><Button onClick={() => { setLevel('all'); setSearch(''); }} size="sm" type="button" variant="outline">필터 초기화</Button></Empty>
+        : <RuntimeLogRows rows={filteredRows} />}
     </div>
   );
 }

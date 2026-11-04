@@ -121,16 +121,21 @@ test('project navigation reveals the active tab after direct mobile navigation',
   assert.match(scroll, /scrollIntoView\(\{ block: 'nearest', inline: 'center' \}\)/);
 });
 
-test('service creation keeps baseline sources while editing retains advanced sources and a valid port range', async () => {
+test('service creation offers supported sources while editing retains advanced sources and port validation', async () => {
   // Given the service create/edit form source.
-  const services = await fs.readFile(new URL('services.tsx', featureDirectoryUrl), 'utf8');
+  const [services, creation, settings] = await Promise.all([
+    fs.readFile(new URL('services.tsx', featureDirectoryUrl), 'utf8'),
+    fs.readFile(new URL('../creation-source-fields.tsx', featureDirectoryUrl), 'utf8'),
+    fs.readFile(new URL('service-settings.tsx', featureDirectoryUrl), 'utf8'),
+  ]);
 
   // When source choices and numeric constraints are inspected.
   // Then create stays on the supported baseline, while edit preserves legacy choices and TCP port bounds.
-  assert.match(services, /const createSourceTypes = \[[\s\S]*?'github'[\s\S]*?'image'[\s\S]*?'local'[\s\S]*?\] as const;/);
-  const createSources = services.match(/const createSourceTypes = \[([\s\S]*?)\] as const;/)?.[1] || '';
-  assert.doesNotMatch(createSources, /'gitlab'|'zip'/);
-  assert.match(services, /const editSourceTypes = \[[\s\S]*?'gitlab'[\s\S]*?'zip'/);
-  assert.match(services, /service \? editSourceTypes : createSourceTypes/);
-  assert.match(services, /label="포트" max=\{65535\} min=\{1\}/);
+  assert.match(services, /<CreationSourceFields imageField="imageUrl"\s*\/>/);
+  assert.deepEqual([...creation.matchAll(/<option\s+value="([^"]+)"/g)].map(([, value]) => value), ['github', 'image']);
+  assert.match(services, /if \(service\) return <ServiceSettingsForm/);
+  assert.match(settings, /const sourceTypes = \[[\s\S]*?'gitlab'[\s\S]*?'zip'/);
+  assert.match(settings, /sourceTypes\.map/);
+  assert.match(settings, /field\('port', '포트', \{ type: 'number' \}\)/);
+  assert.match(settings, /Number\(draft\.port\) < 1 \|\| Number\(draft\.port\) > 65535/);
 });

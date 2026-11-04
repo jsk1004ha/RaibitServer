@@ -62,8 +62,12 @@ test('console host protects non-login pages without trusting lookalike hosts', {
   delete process.env.RAIBITSERVER_DASHBOARD_ORIGIN;
   try {
     const support = proxy(new NextRequest('https://console.raibit.kr/support'));
-    assert.equal(support.status, 307);
-    assert.equal(support.headers.get('location'), 'https://console.raibit.kr/login?next=%2Fsupport');
+    assert.equal(support.status, 200);
+    assert.equal(support.headers.get('location'), null);
+
+    const account = proxy(new NextRequest('https://console.raibit.kr/account/settings'));
+    assert.equal(account.status, 307);
+    assert.equal(new URL(account.headers.get('location')).pathname, '/login');
 
     const login = proxy(new NextRequest('https://console.raibit.kr/login'));
     assert.equal(login.status, 200);
@@ -241,3 +245,23 @@ function restoreEnvironment(key, value) {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
 }
+
+test('guide stays available before login on public and console hosts', () => {
+  for (const host of ['console.raibit.kr', 'raibit.kr', 'localhost:3000']) {
+    const response = proxy(new NextRequest(`https://${host}/guide?topic=organizations`));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('location'), null);
+  }
+});
+
+test('workspace navigation records a preference but prefetch and login redirects do not', () => {
+  const href = 'https://console.raibit.kr/org/org_b/projects';
+  const headers = { cookie: '__Host-raibitserver_session=signed-session' };
+  const selected = proxy(new NextRequest(href, { headers }));
+  const preference = selected.cookies.get('raibit-workspace');
+  assert.equal(preference?.value, 'org_b');
+  assert.equal(preference?.httpOnly, true);
+  assert.equal(preference?.secure, true);
+  assert.equal(proxy(new NextRequest(href, { headers: { ...headers, 'next-router-prefetch': '1' } })).cookies.has('raibit-workspace'), false);
+  assert.equal(proxy(new NextRequest(href)).cookies.has('raibit-workspace'), false);
+});

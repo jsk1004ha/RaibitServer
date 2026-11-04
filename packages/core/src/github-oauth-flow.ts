@@ -38,8 +38,8 @@ function text(value: unknown, pattern: RegExp, code: string): string {
 
 function configuration(context: OAuthContext, input: Readonly<Record<string, unknown>>) {
   const provider = context.provider ?? {};
-  const clientId = provider.clientId ?? process.env.GITHUB_CLIENT_ID ?? process.env.RAIBITSERVER_GITHUB_CLIENT_ID;
-  const clientSecret = provider.clientSecret ?? process.env.GITHUB_CLIENT_SECRET ?? process.env.RAIBITSERVER_GITHUB_CLIENT_SECRET;
+  const clientId = provider.clientId ?? (process.env.GITHUB_CLIENT_ID || process.env.RAIBITSERVER_GITHUB_CLIENT_ID);
+  const clientSecret = provider.clientSecret ?? (process.env.GITHUB_CLIENT_SECRET || process.env.RAIBITSERVER_GITHUB_CLIENT_SECRET);
   const redirectUri = provider.redirectUri ?? process.env.RAIBITSERVER_GITHUB_REDIRECT_URI;
   const sourceSecret = sourceKey(context);
   if (typeof clientId !== 'string' || !clientId || typeof clientSecret !== 'string' || !clientSecret

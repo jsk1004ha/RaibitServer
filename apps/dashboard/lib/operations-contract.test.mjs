@@ -68,7 +68,8 @@ test('deployment route IDs decode at most once and use one canonical encoded pat
     assert.match(source, /DeploymentRecoveryAction/);
     assert.match(source, /history\.eligibleAction/);
     assert.match(source, /deployments\/\$\{encodedDeploymentId\}`/);
-    assert.match(source, />\{decodedDeploymentId\}<\/span>/);
+    assert.match(source, /<details[\s\S]*decodedDeploymentId[\s\S]*\.map\(\(\[label, value\]\)[\s\S]*\{String\(value\)\}[\s\S]*<\/details>/);
+    assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
     assert.doesNotMatch(source, /deployments\/\$\{deploymentId\}/);
   });
 });

@@ -138,7 +138,7 @@ test.describe('@t13-operations', () => {
     await expectRoute(userPage, resourceBase, { view: 'provision', notice: 'saved' });
 
     await userPage.goto(`${resourceBase}?view=connection`);
-    await userPage.getByLabel('서비스 ID').fill('svc_fixture_web');
+    await userPage.getByLabel('연결할 서비스').selectOption('svc_fixture_web');
     await userPage.getByLabel('환경 변수 접두사').fill('DATABASE');
     expect(await nativeFormData(userPage, '#connection')).toEqual([
       ['_returnTo', `${resourceBase}?view=connection`],

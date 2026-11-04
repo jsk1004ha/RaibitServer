@@ -453,7 +453,10 @@ export class ControlPlaneStore {
   }
 
   listMembershipsForUser(userId: string) {
-    return deepClone(this.members.filter((member) => String(member.userId) === String(userId)));
+    return deepClone(this.members.filter((member) => String(member.userId) === String(userId)).map((member) => {
+      const organization = this.organizations.get(member.organizationId);
+      return { ...member, organizationName: organization?.name ?? null, organizationSlug: organization?.slug ?? null };
+    }));
   }
 
   replaceOrganizationInvite(input: ReplaceOrganizationInviteInput) {

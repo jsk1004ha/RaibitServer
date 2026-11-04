@@ -11,9 +11,10 @@ test('auth theme surface preserves native submissions while separating the brand
   for (const action of ['/auth/login', '/auth/signup', '/auth/email/verify', '/auth/email/resend']) {
     assert.match(login, new RegExp(`apiAction\\('${action.replaceAll('/', '\\/')}\\'\\)`));
   }
-  for (const name of ['_returnTo', 'email', 'password', 'name', 'studentId', 'clubMemberClaim', 'code']) {
+  for (const name of ['_returnTo', 'email', 'password', 'name', 'studentId', 'clubMemberClaim']) {
     assert.match(login, new RegExp(`name="${name}"`));
   }
+  assert.match(await read('components/email-verification-form.tsx'), /name="code"/);
   assert.match(login, /function authHref\(/);
   assert.match(login, /function errorMessage\(/);
   assert.match(login, /function noticeMessage\(/);

@@ -6,6 +6,7 @@ const dashboardRoot = new URL("../", import.meta.url);
 const css = await readFile(new URL("app/globals.css", dashboardRoot), "utf8");
 const shell = await readFile(new URL("components/console-ui.tsx", dashboardRoot), "utf8");
 const login = await readFile(new URL("app/login/page.tsx", dashboardRoot), "utf8");
+const verification = await readFile(new URL("components/email-verification-form.tsx", dashboardRoot), "utf8");
 const operations = await readFile(
   new URL("app/org/[orgSlug]/projects/[projectId]/deployments/[deploymentId]/page.tsx", dashboardRoot),
   "utf8",
@@ -63,7 +64,8 @@ test("Given surviving non-Tailwind consumers, when classes are composed dynamica
   assert.match(shell, /item\.tone \|\| 'ok'/);
   assert.match(login, /className="auth-form"/);
   assert.match(login, /className="auth-message/);
-  assert.match(login, /className="auth-resend"/);
+  assert.match(login, /<EmailVerificationForm/);
+  assert.match(verification, /className="auth-resend"/);
   assert.match(operations, /<DeploymentRecoveryAction action=\{history\.eligibleAction\}/);
   assert.match(deploymentRecovery, /action\.type === 'rollback' \? <input name="confirmed" type="hidden" value="true"/);
   assert.match(resources, /className="confirmation-control"/);

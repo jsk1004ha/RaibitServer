@@ -2,7 +2,8 @@ import { Suspense, type ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import { buttonVariants } from '@/components/ui/button';
 import { apiAction, dashboardApiContext, getJson } from '../lib/api';
-import { consoleOrganizationLinks, resolveOrganizationRouteValue } from '../lib/console-navigation';
+import { consoleOrganizationLinks, roleLabel } from '../lib/console-navigation';
+import { selectedWorkspace } from '../lib/workspace-context';
 import { cn } from '../lib/utils';
 import { ConsoleSearch } from './console-search';
 import { ConsoleMobileNav } from './console-mobile-nav';
@@ -21,7 +22,7 @@ type JsonCardProps = {
   value: any;
 };
 
-type NavItemId = 'overview' | 'projects' | 'create-project' | 'github' | 'guide' | 'admin' | 'domains';
+type NavItemId = 'overview' | 'projects' | 'create-project' | 'github' | 'guide' | 'admin' | 'account' | 'domains';
 
 type ShellProps = {
   children: ReactNode;
@@ -49,7 +50,7 @@ type NavItem = { id: NavItemId; label: string; href: string; icon: IconName };
 export async function ConsoleShell({
   children,
   eyebrow = '운영',
-  orgLabel = '현재 조직',
+  orgLabel = '작업 공간',
   orgValue = 'RAIBITSERVER',
   orgRouteValue,
   projectLabel = '현재 프로젝트',
@@ -67,16 +68,17 @@ export async function ConsoleShell({
   const isAdmin = me.ok && String(user?.role || subject?.userRole || '').toUpperCase() === 'ADMIN';
   const rawMemberships: unknown[] = Array.isArray(me.body?.memberships) ? me.body.memberships as unknown[] : [];
   const organizationMemberships: OrganizationSwitcherMembership[] = rawMemberships
-      .filter((membership: unknown): membership is { organizationId?: unknown; role?: unknown } => Boolean(membership) && typeof membership === 'object')
+      .filter((membership: unknown): membership is { organizationId?: unknown; organizationName?: unknown; organizationSlug?: unknown; role?: unknown } => Boolean(membership) && typeof membership === 'object')
       .flatMap((membership) => typeof membership.organizationId === 'string' && membership.organizationId.trim()
-        ? [{ organizationId: membership.organizationId, role: typeof membership.role === 'string' ? membership.role : null }]
+        ? [{ organizationId: membership.organizationId, organizationName: typeof membership.organizationName === 'string' ? membership.organizationName : null, organizationSlug: typeof membership.organizationSlug === 'string' ? membership.organizationSlug : null, role: typeof membership.role === 'string' ? membership.role : null }]
         : []);
   const requestedOrganizationId = typeof orgRouteValue === 'string' ? orgRouteValue.trim() : '';
-  const resolvedOrgRouteValue = organizationMemberships.find((membership) => membership.organizationId === requestedOrganizationId)?.organizationId
-    ?? organizationMemberships[0]?.organizationId
-    ?? resolveOrganizationRouteValue({ subject, memberships: me.body?.memberships });
+  const resolvedOrgRouteValue = await selectedWorkspace({ requested: requestedOrganizationId, subject, memberships: organizationMemberships });
+  const showProject = active !== 'account';
   const organizationLinks = consoleOrganizationLinks(resolvedOrgRouteValue);
-  const membershipRole = organizationMemberships.find((membership) => membership.organizationId === resolvedOrgRouteValue)?.role || '권한 확인 중';
+  const currentMembership = organizationMemberships.find((membership) => membership.organizationId === resolvedOrgRouteValue);
+  const organizationDisplayName = currentMembership?.organizationName || currentMembership?.organizationSlug || '현재 작업 공간';
+  const membershipRole = roleLabel(currentMembership?.role || 'USER');
   const navItems: NavItem[] = [
     { id: 'overview', label: '개요', href: '/console', icon: 'squares-2x2' },
     { id: 'projects', label: '프로젝트', href: organizationLinks.projects, icon: 'folder' },
@@ -116,10 +118,10 @@ export async function ConsoleShell({
             <p className="text-xs text-muted-foreground">{orgLabel}</p>
             <OrganizationSwitcher currentOrganizationId={resolvedOrgRouteValue} memberships={organizationMemberships} />
           </div>
-          <div className="min-w-0 px-3 py-1">
+          {showProject ? <div className="min-w-0 px-3 py-1">
             <p className="text-xs text-muted-foreground">{projectLabel}</p>
             <p className="truncate text-sm text-foreground" title={projectValue}>{projectValue}</p>
-          </div>
+          </div> : null}
         </div>
         <nav className="flex min-h-0 flex-1 flex-col gap-1 p-3" aria-label="콘솔 메뉴">
           <p className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">{eyebrow}</p>
@@ -134,11 +136,11 @@ export async function ConsoleShell({
           })}
         </nav>
         <div className="border-t border-border p-3">
-          <AccountMenu avatarUrl={user?.avatarUrl} email={user?.email} logoutAction={logoutAction} name={user?.name} organization={orgValue} role={membershipRole} />
+          <AccountMenu avatarUrl={user?.avatarUrl} email={user?.email} logoutAction={logoutAction} name={user?.name} organization={organizationDisplayName} role={membershipRole} />
         </div>
       </aside>
       <header className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 md:hidden">
-        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={orgValue} organizationMemberships={organizationMemberships} organizationRouteValue={resolvedOrgRouteValue} projectLabel={projectLabel} projectValue={projectValue} role={membershipRole} userAvatarUrl={user?.avatarUrl} userEmail={user?.email || '로그인 사용자'} userName={user?.name} />
+        <ConsoleMobileNav active={active} eyebrow={eyebrow} logoutAction={logoutAction} navItems={navItems} orgLabel={orgLabel} orgValue={organizationDisplayName} organizationMemberships={organizationMemberships} organizationRouteValue={resolvedOrgRouteValue} projectLabel={projectLabel} projectValue={projectValue} role={membershipRole} userAvatarUrl={user?.avatarUrl} userEmail={user?.email || '로그인 사용자'} userName={user?.name} />
         <div className="flex shrink-0 items-center gap-2 max-[12rem]:w-full max-[12rem]:justify-end" aria-label="모바일 콘솔 도구">
           <ConsoleSearch compact items={searchItems} />
           <ThemeMenu />
