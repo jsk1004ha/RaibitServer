@@ -43,9 +43,16 @@ function domainRow(overrides = {}) {
 
 function prismaFixture(rows) {
   const mutations = [];
+  const environment = { id: 'env_prod_project-1', projectId: 'project-1', kind: 'prod', status: 'active' };
   const prisma = {
+    $executeRawUnsafe: async (query) => {
+      assert.equal(query, "SET LOCAL raibitserver.operational_protocol = '2'");
+      return 0;
+    },
+    environment: { findUnique: async ({ where }) => where.projectId_kind.projectId === environment.projectId && where.projectId_kind.kind === environment.kind ? environment : null },
+    environmentService: { findMany: async ({ where }) => where.environmentId === environment.id ? [{ serviceId: 'service-1' }] : [] },
     domain: {
-      findMany: async () => rows,
+      findMany: async ({ where }) => rows.filter((row) => row.projectId === where.projectId && where.serviceId.in.includes(row.serviceId)),
       findUnique: async ({ where }) => rows.find((row) => row.id === where.id) ?? null,
       updateMany: async (input) => {
         mutations.push(input);

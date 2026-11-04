@@ -485,6 +485,19 @@ RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로
 
 자세한 내용은 [리소스 프로비저닝](docs/provisioning.md)과 [DB console](docs/db-console.md)을 참고하세요.
 
+## 운영 기능 기반 (기본 비활성)
+
+운영·개발 환경 분리 API와 데이터 구조, 버전이 고정된 앱 템플릿 3종,
+Discord 알림 설정, 자동 백업 정책, 파일 저장소 실행 구성을 포함합니다.
+`RAIBITSERVER_OPERATIONAL_FEATURES_ENABLED`는 기본 `0`이며, 기존 운영 환경의
+주소·식별자·저장 공간과 최신 인증·권한 검증은 유지합니다.
+
+이 단계는 전체 기능 출시가 아닙니다. 템플릿 설치 화면과 실행 연결,
+Discord 실제 전송, 예약 백업 실행, 파일 관리·용량 제한, 개발 환경의 운영 승격은
+후속 작업입니다. 이 PR만으로 운영 플래그를 켜거나 저장소 사용을 허용하지 마세요.
+변경 시 기존 migration 파일은 수정하지 않고 추가 migration으로 보정하며,
+PR의 PostgreSQL 환경 쓰기·migration 호환성 검사와 기본 CI를 확인합니다.
+
 ## 문제 해결
 
 자주 발생하는 문제는 [troubleshooting](docs/troubleshooting.md)에 정리되어 있습니다.

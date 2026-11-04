@@ -1,0 +1,110 @@
+{
+  "schema": "raibitserver.operational-features/v1",
+  "contractVersion": 1,
+  "approvalBaselineRevision": "75bef013410f981c4e07625c92f250d828d4c62c",
+  "protocol": {
+    "version": 2,
+    "featureActivationDefault": false,
+    "writerRequiredVersion": 2,
+    "readinessComponents": ["api", "operations-worker", "builder", "orchestrator", "provisioner"]
+  },
+  "ownership": {
+    "typescript": ["product-api", "template-policy", "scheduling", "discord-delivery"],
+    "go": ["builds", "resource-provisioning", "runtime-reconciliation"]
+  },
+  "environment": {
+    "defaultKind": "prod",
+    "kinds": ["prod", "dev"],
+    "bindingIdentity": {
+      "environmentId": "env_prod_fixture",
+      "serviceId": "svc_physical_fixture",
+      "resourceId": "res_physical_fixture",
+      "logicalServiceSlug": "web",
+      "logicalResourceSlug": "database"
+    },
+    "legacyProdIdentityUnchanged": true
+  },
+  "features": {
+    "templates": {
+      "protocolSupport": true,
+      "implementationAvailable": false,
+      "liveCapabilityAvailable": false,
+      "productionActivationDefault": false,
+      "catalogs": [{
+        "id": "raibit.first-party.next-postgres",
+        "version": "v1",
+        "catalogDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+        "sourceDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+        "packagingStatus": "contract-only",
+        "immutable": true,
+        "graph": {
+          "services": [{"logicalSlug": "web", "type": "web"}],
+          "resources": [{"logicalSlug": "database", "engine": "postgresql"}]
+        }
+      }]
+    },
+    "notifications": {
+      "protocolSupport": true,
+      "implementationAvailable": false,
+      "liveCapabilityAvailable": false,
+      "productionActivationDefault": false,
+      "defaultEnvironmentKinds": ["prod"],
+      "defaultEvents": ["deployment.failed", "runtime.unhealthy", "backup.failed", "promotion.failed"],
+      "optionalEvents": ["deployment.ready", "runtime.recovered", "backup.ready", "promotion.ready"],
+      "payloadAllowlist": ["projectId", "environmentId", "logicalSubject", "eventCode", "status", "safeErrorCode", "occurredAt", "shortRevision", "consoleUrl"],
+      "semanticDedupFields": ["destinationId", "destinationVersion", "eventCode", "subjectId", "subjectGenerationOrIncidentSequence"]
+    },
+    "storage": {
+      "protocolSupport": true,
+      "implementationAvailable": false,
+      "liveCapabilityAvailable": false,
+      "productionActivationDefault": false,
+      "provider": "dedicated-local",
+      "endpointSource": "provider-state",
+      "requestSelectableEndpoint": false,
+      "bucketPrivate": true,
+      "identityKinds": ["provider-admin", "tenant-bucket-scoped"],
+      "signedUrlTtlSeconds": 300
+    },
+    "scheduledRecovery": {
+      "protocolSupport": true,
+      "implementationAvailable": false,
+      "liveCapabilityAvailable": false,
+      "productionActivationDefault": false,
+      "enabledByDefault": false,
+      "timezone": "Asia/Seoul",
+      "defaultLocalMinute": 180,
+      "scheduledRetention": {"mode": "success-count", "count": 7, "ageExpiryDays": null},
+      "manualRetention": {"origin": "manual", "expiryDays": 30, "unchanged": true}
+    },
+    "environments": {
+      "protocolSupport": true,
+      "implementationAvailable": false,
+      "liveCapabilityAvailable": false,
+      "productionActivationDefault": false,
+      "promotion": {
+        "sourceKind": "dev",
+        "targetKind": "prod",
+        "immutableImageDigestRequired": true,
+        "copiesData": false,
+        "copiesSecrets": false,
+        "copiesProductionQuota": false,
+        "previewTtlSeconds": 600
+      }
+    }
+  },
+  "mutationPolicy": {
+    "unknownFields": "reject",
+    "environmentDefault": "prod",
+    "requiredProtocolVersion": 2
+  },
+  "rbac": {
+    "environmentAdministration": ["OWNER", "ADMIN"],
+    "promotionApproval": ["OWNER", "ADMIN"]
+  },
+  "errors": {
+    "wrongProjectEnvironment": 404,
+    "forbiddenSameScope": 403,
+    "staleMutation": 409
+  }
+}

@@ -25,7 +25,8 @@ test('health path create and mutation boundaries reject unsafe encodings without
 test('health paths persist aliases and explicit clears without stale snapshot fallback', async () => {
   // Given: a service with compatibility alias and distinct probe paths.
   const repository = new InMemoryControlPlaneRepository();
-  const service = await repository.createService({ projectId: 'p', name: 'web', type: 'web', sourceType: 'image', image: 'example/app:v1', ...paths, healthCheck: { path: '/common' } });
+  const project = repository.store.createProject({ name: 'Health paths' });
+  const service = await repository.createService({ projectId: project.id, name: 'web', type: 'web', sourceType: 'image', image: 'example/app:v1', ...paths, healthCheck: { path: '/common' } });
   // When: clear the common path and preserve other omitted paths.
   const updated = await repository.updateService(service.id, { healthCheckPath: null });
   // Then: explicit clear removes compatibility fallback in every captured representation.

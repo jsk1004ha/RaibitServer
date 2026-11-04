@@ -20,7 +20,7 @@ func (s *PostgresStore) ClaimNextPreviewResolution(ctx context.Context, workerID
 		now = time.Now().UTC()
 	}
 	var jobID, organizationID, serviceID string
-	err := s.db.QueryRowContext(ctx, previewCandidateSQL, now, now.Add(-PreviewLeaseDuration)).Scan(&jobID, &organizationID, &serviceID)
+	err := s.db.QueryRowContext(ctx, previewCandidateSQL, now, now.Add(-PreviewLeaseDuration), s.operationalProtocol).Scan(&jobID, &organizationID, &serviceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -32,6 +32,9 @@ func (s *PostgresStore) ClaimNextPreviewResolution(ctx context.Context, workerID
 		return nil, fmt.Errorf("begin preview resolution claim: %w", err)
 	}
 	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return nil, err
+	}
 	if err := lockPreviewTenant(ctx, tx, organizationID, serviceID); err != nil {
 		return nil, err
 	}
@@ -94,14 +97,22 @@ WHERE id=$1`, row.jobID, workerID, now, claimToken, firstClaimAt.Format(time.RFC
 		return nil, fmt.Errorf("commit preview resolution claim: %w", err)
 	}
 	return &PreviewResolutionClaim{
-		Target: PreviewResolutionTarget{LineageID: row.targetID, LineageVersion: row.lineageVersion, InstallationID: row.installationID, RepositoryID: row.repositoryID, Repository: row.repository, PullRequestNumber: row.pullNumber},
+		Target: PreviewResolutionTarget{LineageID: row.targetID, LineageVersion: row.lineageVersion, EnvironmentID: row.environmentID, EnvironmentKind: row.environmentKind, LogicalSlug: row.logicalSlug, InstallationID: row.installationID, RepositoryID: row.repositoryID, Repository: row.repository, PullRequestNumber: row.pullNumber},
 		JobID:  row.jobID, WorkerID: workerID, Attempt: row.attempts + 1, ClaimToken: claimToken, DeadlineAt: deadlineAt,
 	}, nil
 }
 
 func (s *PostgresStore) RenewPreviewResolutionLease(ctx context.Context, claim PreviewResolutionClaim, now time.Time) error {
 	now = now.UTC()
-	result, err := s.db.ExecContext(ctx, `UPDATE "WorkflowJob" SET "lockedAt"=$1,"updatedAt"=$1 WHERE id=$2 AND type='github.preview-resolve' AND status='running' AND "lockedBy"=$3 AND attempts=$4 AND payload->>'claimToken'=$5 AND "lockedAt">$6 AND (payload->>'deadlineAt')::timestamptz>$1`, now, claim.JobID, claim.WorkerID, claim.Attempt, claim.ClaimToken, now.Add(-PreviewLeaseDuration))
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer rollbackUnlessCommitted(tx)
+	if err := s.configureTransaction(ctx, tx); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE "WorkflowJob" SET "lockedAt"=$1,"updatedAt"=$1 WHERE id=$2 AND type='github.preview-resolve' AND status='running' AND "lockedBy"=$3 AND attempts=$4 AND payload->>'claimToken'=$5 AND "lockedAt">$6 AND (payload->>'deadlineAt')::timestamptz>$1`, now, claim.JobID, claim.WorkerID, claim.Attempt, claim.ClaimToken, now.Add(-PreviewLeaseDuration))
 	if err != nil {
 		return fmt.Errorf("renew preview resolution lease: %w", err)
 	}
@@ -109,7 +120,7 @@ func (s *PostgresStore) RenewPreviewResolutionLease(ctx context.Context, claim P
 	if err != nil || updated != 1 {
 		return ErrPreviewResolutionLeaseLost
 	}
-	return nil
+	return tx.Commit()
 }
 
 func newPreviewClaimToken() (string, error) {

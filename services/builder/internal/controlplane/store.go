@@ -96,6 +96,9 @@ type Project struct {
 type Service struct {
 	ID                         string
 	ProjectID                  string
+	EnvironmentID              string
+	EnvironmentKind            string
+	LogicalSlug                string
 	Name                       string
 	Slug                       string
 	Type                       string
@@ -131,6 +134,9 @@ type Deployment struct {
 	ID                  string
 	ServiceID           string
 	ProjectID           string
+	EnvironmentID       string
+	EnvironmentKind     string
+	LogicalSlug         string
 	Status              string
 	DeploymentType      string
 	TriggerType         string
@@ -249,6 +255,9 @@ func (s *FileStore) ClaimNextWorkflowJob(ctx context.Context, options ClaimOptio
 		if !isBuilderWorkflowType(stringField(candidate, "type")) || !workflowReady(candidate, now, time.Duration(leaseSeconds)*time.Second) {
 			continue
 		}
+		if !legacyWorkflowEnvironmentAllowed(state, candidate) {
+			continue
+		}
 		if workflowTargetDeleting(state, candidate) {
 			continue
 		}
@@ -278,6 +287,23 @@ func (s *FileStore) ClaimNextWorkflowJob(ctx context.Context, options ClaimOptio
 		return nil, err
 	}
 	return workflowJobFromRecord(job), nil
+}
+
+func legacyWorkflowEnvironmentAllowed(state map[string]any, job record) bool {
+	deploymentRecord := findRecord(recordSlice(state, "deployments"), workflowDeploymentID(job))
+	if deploymentRecord == nil {
+		return true
+	}
+	deployment := deploymentFromRecord(deploymentRecord)
+	serviceRecord := findRecord(recordSlice(state, "services"), deployment.ServiceID)
+	if serviceRecord == nil {
+		return true
+	}
+	service := serviceFromRecord(serviceRecord)
+	if BindDeploymentEnvironment(service, deployment) != nil {
+		return false
+	}
+	return service.EnvironmentKind == EnvironmentProduction
 }
 
 func (s *FileStore) CompleteWorkflowJob(ctx context.Context, lease WorkflowLease, result map[string]any) error {
@@ -896,7 +922,7 @@ func reapExhaustedWorkflowJobs(state map[string]any, now time.Time, lease time.D
 	deployments := recordSlice(state, "deployments")
 	reaped := 0
 	for _, job := range jobs {
-		if reaped >= limit || !workflowExhaustedAndExpired(job, now, lease) {
+		if reaped >= limit || !workflowExhaustedAndExpired(job, now, lease) || !legacyWorkflowEnvironmentAllowed(state, job) {
 			continue
 		}
 		payload := mapField(job, "payload")
@@ -1007,6 +1033,9 @@ func serviceFromRecord(row record) *Service {
 	service := &Service{
 		ID:                         stringField(row, "id"),
 		ProjectID:                  stringField(row, "projectId"),
+		EnvironmentID:              stringField(row, "environmentId"),
+		EnvironmentKind:            stringField(row, "environmentKind"),
+		LogicalSlug:                stringField(row, "logicalSlug"),
 		Name:                       stringField(row, "name"),
 		Slug:                       stringField(row, "slug"),
 		Type:                       stringField(row, "type"),
@@ -1040,6 +1069,7 @@ func serviceFromRecord(row record) *Service {
 	if service.Port == 0 {
 		service.Port = intField(desiredState, "port")
 	}
+	_ = normalizeServiceEnvironment(service)
 	return service
 }
 
@@ -1048,6 +1078,9 @@ func deploymentFromRecord(row record) *Deployment {
 		ID:                  stringField(row, "id"),
 		ServiceID:           stringField(row, "serviceId"),
 		ProjectID:           stringField(row, "projectId"),
+		EnvironmentID:       stringField(row, "environmentId"),
+		EnvironmentKind:     stringField(row, "environmentKind"),
+		LogicalSlug:         stringField(row, "logicalSlug"),
 		Status:              stringField(row, "status"),
 		DeploymentType:      stringField(row, "deploymentType"),
 		TriggerType:         stringField(row, "triggerType"),

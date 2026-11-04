@@ -4,7 +4,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { checkReviewedTriggerSql, digest, projectRoot } from '../scripts/check-migration-contract.mjs';
+import { checkMigrationContract, checkReviewedTriggerSql, digest, projectRoot } from '../scripts/check-migration-contract.mjs';
 
 const manifest = JSON.parse(readFileSync(new URL('../prisma/migration-contract.json', import.meta.url), 'utf8'));
 const reviewedRecovery = readFileSync(new URL('../prisma/migrations/000014_resource_recovery/migration.sql', import.meta.url), 'utf8');
@@ -82,4 +82,24 @@ test('reviewed trigger grammar is closed through checker and CLI', async t => {
   await verify('rejects a weakened approved guard body', weakenedGuard, weakenedGuard, false, '000014_resource_recovery');
   const unfinishedFunction = 'CREATE FUNCTION reviewed_guard() RETURNS trigger LANGUAGE plpgsql AS $function$ BEGIN RETURN NEW; END;';
   await verify('rejects unterminated function dollar body', unfinishedFunction, reviewedRecovery.replace('END $$;\nCREATE TRIGGER "ResourceBackup_guard"', 'END;\nCREATE TRIGGER "ResourceBackup_guard"'), false);
+});
+
+test('legacy protocol replacement accepts only its exact reviewed bridge functions', t => {
+  const id = '202609300001_legacy_protocol_reset';
+  const path = `prisma/migrations/${id}/migration.sql`;
+  const reviewed = readFileSync(join(projectRoot, path), 'utf8');
+  const root = fixture(t);
+  assert.doesNotThrow(() => checkMigrationContract(root));
+  for (const sql of [
+    reviewed.replace("NULLIF(current_setting('raibitserver.operational_protocol', true), '')", "current_setting('raibitserver.operational_protocol', true)"),
+    reviewed.replace('INSERT INTO "EnvironmentService"', 'INSERT INTO "Service"'),
+    reviewed.replace('BEGIN\n', 'BEGIN\n  DELETE FROM "Service";\n'),
+    `${reviewed}\nCREATE OR REPLACE FUNCTION extra_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;`,
+  ]) {
+    writeFileSync(join(root, path), sql);
+    const next = structuredClone(manifest);
+    next.migrations.find(entry => entry.id === id).sha256 = digest(sql);
+    writeFileSync(join(root, 'prisma/migration-contract.json'), JSON.stringify(next));
+    assert.throws(() => checkMigrationContract(root), /reviewed function replacement changed/);
+  }
 });

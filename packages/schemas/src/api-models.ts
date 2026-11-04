@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BackupPolicyErrorSchema, DiscordErrorSchema } from './operational-api.ts';
 import { GitHubSourceConflictBody, GitHubSourceRecovery } from './github-conflict.ts';
 export { GitHubSourceConflictBody, GitHubSourceConflictCode, GitHubSourceRecovery, GitHubSourceRecoveryAction } from './github-conflict.ts';
 import { ServiceHealthFields, DeploymentHealthFields, refineServiceHealth } from './deployment-health.ts';
@@ -26,6 +27,8 @@ export const QuotaInput = z.strictObject(quotaFields).partial();
 export const Quota = z.strictObject({ ...quotaFields, id, userId: id, createdAt: z.iso.datetime(), updatedAt: z.iso.datetime() });
 export const PageQuery = z.object({ limit: z.number().int().min(1).max(1000).optional(), cursor: z.string().max(1024).optional(), after: z.string().max(1024).optional() }).strict();
 export const ErrorBody = z.union([
+  DiscordErrorSchema,
+  BackupPolicyErrorSchema,
   GitHubSourceConflictBody,
   z.object({ statusCode: z.number().int().min(400).max(599), message: z.union([z.string(), z.array(z.string())]), error: z.string().optional(), code: z.string().optional(), reasonCode: z.string().optional(), retryable: z.boolean().optional(), terminal: z.boolean().optional(), permission: z.boolean().optional(), recovery: GitHubSourceRecovery.optional() }),
   z.object({ message: z.string(), plan: JsonFields }),

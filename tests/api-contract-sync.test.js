@@ -83,6 +83,11 @@ test('production persistence defaults to Prisma and rejects unsafe memory/secret
 test('Prisma desired-state writer uses the authenticated organization id instead of default memory semantics', async () => {
   const calls = [];
   const tx = {
+    $executeRawUnsafe: async (query) => {
+      assert.equal(query, "SET LOCAL raibitserver.operational_protocol = '2'");
+      calls.push({ model: 'protocol', query });
+      return 0;
+    },
     organization: {
       findUnique: async ({ where }) => {
         calls.push({ model: 'organization', op: 'findUnique', where });
@@ -99,8 +104,11 @@ test('Prisma desired-state writer uses the authenticated organization id instead
         return { id: 'prj_123', organizationId: args.where.organizationId_slug.organizationId, slug: args.where.organizationId_slug.slug, name: args.create.name };
       },
     },
-    service: { upsert: async (args) => ({ id: 'svc_123', projectId: args.create.projectId, slug: args.create.slug }) },
-    resource: { upsert: async (args) => ({ id: 'res_123', projectId: args.create.projectId, name: args.create.name }) },
+    environment: { upsert: async ({ create }) => (calls.push({ model: 'environment', create }), create) },
+    environmentService: { upsert: async ({ create }) => (calls.push({ model: 'environmentService', create }), create) },
+    environmentResource: { upsert: async ({ create }) => (calls.push({ model: 'environmentResource', create }), create) },
+    service: { upsert: async (args) => ({ id: 'svc_123', ...args.create }) },
+    resource: { upsert: async (args) => ({ id: 'res_123', ...args.create }) },
     auditLog: { create: async (args) => calls.push({ model: 'auditLog', op: 'create', args }) },
   };
   const repo = new PrismaControlPlaneRepository({ $transaction: (callback) => callback(tx) });
@@ -111,4 +119,6 @@ test('Prisma desired-state writer uses the authenticated organization id instead
   assert.equal(calls.some((call) => call.model === 'organization' && call.op === 'upsert'), false);
   const projectUpsert = calls.find((call) => call.model === 'project' && call.op === 'upsert');
   assert.equal(projectUpsert.args.where.organizationId_slug.organizationId, 'org_123');
+  assert.equal(calls[0].model, 'protocol');
+  assert.deepEqual(calls.filter((call) => call.model.startsWith('environment')).map((call) => call.create.projectId), ['prj_123', 'prj_123', 'prj_123']);
 });

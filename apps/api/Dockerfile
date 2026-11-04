@@ -20,6 +20,9 @@ COPY packages/core packages/core
 COPY packages/schemas packages/schemas
 COPY packages/config packages/config
 COPY prisma prisma
+COPY examples/starters examples/starters
+COPY test-fixtures/contracts/starter-catalog-v1.json test-fixtures/contracts/starter-catalog-v1.json
+COPY test-fixtures/contracts/starter-catalog-v1.bundle.json test-fixtures/contracts/starter-catalog-v1.bundle.json
 RUN DATABASE_URL=postgresql://raibitserver:raibitserver@localhost:5432/raibitserver \
     pnpm --filter @raibitserver/api exec prisma generate --schema ../../prisma/schema.prisma
 RUN pnpm --filter @raibitserver/api exec tsc -p tsconfig.build.json
@@ -30,6 +33,9 @@ RUN pnpm --filter @raibitserver/api exec tsc -p ../../packages/core/tsconfig.jso
 RUN pnpm --filter @raibitserver/api deploy --legacy --prod /opt/raibitserver/api
 RUN node scripts/build-cli-runtime.mjs --schemas-only /opt/raibitserver/api
 RUN cp -R /workspace/prisma /opt/raibitserver/api/prisma && \
+    cp -R /workspace/examples/starters /opt/raibitserver/api/starters && \
+    cp /workspace/test-fixtures/contracts/starter-catalog-v1.json /opt/raibitserver/api/starter-catalog-v1.json && \
+    cp /workspace/test-fixtures/contracts/starter-catalog-v1.bundle.json /opt/raibitserver/api/starter-catalog-v1.bundle.json && \
     cd /opt/raibitserver/api && \
     DATABASE_URL=postgresql://raibitserver:raibitserver@localhost:5432/raibitserver \
     ./node_modules/.bin/prisma generate --schema ./prisma/schema.prisma

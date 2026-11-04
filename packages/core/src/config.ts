@@ -1,6 +1,7 @@
 import { maskSecretValue } from './secrets.ts';
 import { trustedIngressGatewayNamespace } from './constants.ts';
 import { assertEmailDeliveryConfigured } from './email-verification.ts';
+import { parseOperationalRuntimeConfig } from './operational-contract.ts';
 
 type EnvRecord = Record<string, any>;
 
@@ -23,6 +24,12 @@ export const RUNTIME_KEY_CATALOG = Object.freeze([
   { name: 'RAIBITSERVER_REGISTRY_PASSWORD', category: 'registry', required: false, secret: true, description: 'Default image registry password/token' },
   { name: 'DATABASE_URL', category: 'persistence', required: false, secret: true, description: 'PostgreSQL connection string used by Prisma persistence' },
   { name: 'RAIBITSERVER_POSTGRES_POOLER_HOST', category: 'provider', required: false, secret: false, description: 'PgBouncer host used for shared PostgreSQL resource DATABASE_URL injection' },
+  { name: 'RAIBITSERVER_OPERATIONAL_FEATURES_ENABLED', category: 'operations', required: false, secret: false, description: 'Explicit production activation gate; defaults to 0' },
+  { name: 'RAIBITSERVER_OPERATIONAL_IMPLEMENTATION_AVAILABLE', category: 'operations', required: false, secret: false, description: 'Trusted release metadata; remains 0 until lifecycle and conformance tasks are complete' },
+  { name: 'RAIBITSERVER_OPERATIONAL_PROTOCOL_VERSION', category: 'operations', required: false, secret: false, description: 'Required protocol version 2 when operational writers are activated' },
+  { name: 'RAIBITSERVER_OPERATIONAL_CONTRACT_DIGEST', category: 'operations', required: false, secret: false, description: 'Exact packaged operational contract digest required for activation readiness' },
+  { name: 'RAIBITSERVER_RELEASE_REVISION', category: 'operations', required: false, secret: false, description: 'Trusted current release revision compared across active components' },
+  { name: 'RAIBITSERVER_RELEASE_SOURCE_CLEAN', category: 'operations', required: false, secret: false, description: 'Trusted release build cleanliness marker required for activation' },
   { name: 'RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE', category: 'kubernetes', required: false, secret: false, description: 'Trusted namespace allowed to reach public tenant services (default ingress-nginx)' },
 ]);
 
@@ -83,6 +90,7 @@ export function parseApiRuntimeConfig(env: EnvRecord = process.env) {
     kubernetes: {
       ingressGatewayNamespace: trustedIngressGatewayNamespace(env.RAIBITSERVER_INGRESS_GATEWAY_NAMESPACE),
     },
+    operational: parseOperationalRuntimeConfig(env),
   };
 }
 

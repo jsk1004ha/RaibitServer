@@ -184,21 +184,36 @@ test('Prisma project updates persist only tenant-editable fields', async () => {
 
 test('Prisma service updates preserve desired-state metadata and keep image aliases aligned', async () => {
   let updateData = null;
+  const protocolStatements = [];
   let current = {
     id: 'service-1',
     projectId: 'project-1',
     name: 'web',
+    slug: 'web',
     status: 'CREATED',
     image: 'registry.example.test/web:old',
     imageUrl: 'registry.example.test/web:old',
     desiredState: { providerMetadata: { owner: 'builder' }, branch: 'old' },
+    environmentBinding: {
+      serviceId: 'service-1', projectId: 'project-1', environmentId: 'env_prod_project-1', logicalSlug: 'web', displayName: 'web',
+      environment: { id: 'env_prod_project-1', projectId: 'project-1', kind: 'prod' },
+    },
   };
   const prisma = {
-    $transaction: async (callback) => callback(prisma),
+    $transaction: async (callback, options) => {
+      assert.equal(options?.isolationLevel, 'Serializable');
+      return callback(prisma);
+    },
+    $executeRawUnsafe: async (sql) => {
+      assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'");
+      protocolStatements.push(sql);
+      return 0;
+    },
     project: { findUnique: async () => ({ id: 'project-1', status: 'ACTIVE', deletionRequestedAt: null }) },
     service: {
       findUnique: async () => current,
       update: async ({ data }) => {
+        assert.ok(protocolStatements.length > 0, 'service writes must opt into operational protocol 2');
         updateData = data;
         current = { ...current, ...data };
         return current;
@@ -213,9 +228,12 @@ test('Prisma service updates preserve desired-state metadata and keep image alia
   assert.equal(updateData.desiredState.branch, 'main');
   assert.equal(updated.image, null);
   assert.equal(updated.imageUrl, null);
+  assert.equal(updated.environmentId, 'env_prod_project-1');
+  assert.equal(updated.environmentKind, 'prod');
 });
 
 function resourcePrisma(status) {
+  const protocolStatements = [];
   const systemState = {
     providerIdentity: { namespace: 'org-1--demo', name: 'resource-1', secretName: 'resource-1-credentials', pvcName: 'resource-1-data' },
     credentialSecretUID: 'secret-uid-1',
@@ -237,14 +255,27 @@ function resourcePrisma(status) {
     connectionSecretName: 'resource-1-connection',
     desiredSpec: { storageMb: 512, databaseName: 'app', username: 'old_user' },
     desiredState: { ...systemState, desiredSpec: { storageMb: 512, databaseName: 'app', username: 'old_user' } },
+    environmentBinding: {
+      resourceId: 'resource-1', projectId: 'project-1', environmentId: 'env_prod_project-1', logicalSlug: 'primary', displayName: 'primary',
+      environment: { id: 'env_prod_project-1', projectId: 'project-1', kind: 'prod' },
+    },
   };
   const fixture = { systemState, updateCalls: 0 };
   const prisma = {
-    $transaction: async (callback) => callback(prisma),
+    $transaction: async (callback, options) => {
+      assert.equal(options?.isolationLevel, 'Serializable');
+      return callback(prisma);
+    },
+    $executeRawUnsafe: async (sql) => {
+      assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'");
+      protocolStatements.push(sql);
+      return 0;
+    },
     project: { findUnique: async () => ({ id: 'project-1', status: 'ACTIVE' }) },
     resource: {
       findUnique: async () => row,
       update: async ({ data }) => {
+        assert.ok(protocolStatements.length > 0, 'resource writes must opt into operational protocol 2');
         fixture.updateCalls += 1;
         row = { ...row, ...data };
         return row;

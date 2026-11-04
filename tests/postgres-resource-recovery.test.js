@@ -119,7 +119,13 @@ test('resource recovery state happy path and resource recovery adversarial matri
   });
   await t.test('cleaned backup and successful restore history retire with final physical source deletion', async () => {
     // Given successful restore history and verified artifact cleanup, when finalizing source deletion, then terminal metadata retires without deleting the restored target.
-    await sql.resource.create({ data: { ...seed.resources[0], id: 'resource_delete', name: 'delete-source', slug: 'delete-source' } });
+    await sql.$transaction(async tx => {
+      await tx.resource.create({ data: { ...seed.resources[0], id: 'resource_delete', name: 'delete-source', slug: 'delete-source' } });
+      await tx.environmentResource.create({ data: {
+        resourceId: 'resource_delete', projectId: seed.resources[0].projectId,
+        environmentId: `env_prod_${seed.resources[0].projectId}`, logicalSlug: 'delete-source',
+      } });
+    });
     const created = await repository.createBackup({ ...request('retirement'), sourceId: 'resource_delete' });
     await readyBackup(repository, created.operation.id);
     const restore = await repository.createRestore({ ...scope, sourceId: created.operation.id, body: { requestIdempotencyKey: 'retirement', formatVersion: 1, name: 'retained-target' }, now: '2026-09-03T00:00:00Z' });

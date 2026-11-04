@@ -29,12 +29,12 @@ export function tenantProjectLabel(organizationSlug: any, projectSlug: any, stab
   return boundedDnsLabel(tenantRouteIdentity(organizationSlug, projectSlug), MAX_GENERATED_ROUTE_LABEL_LENGTH, stableIdentity);
 }
 
-export function serviceHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'web', baseDomain = DEFAULT_DOMAIN, customDomain = null, preview = null }: AnyRecord = {}) {
+export function serviceHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'web', baseDomain = DEFAULT_DOMAIN, customDomain = null, preview = null, environmentKind = 'prod' }: AnyRecord = {}) {
   if (customDomain) return customDomain;
   const routeIdentity = serviceRouteIdentity(organizationSlug, projectSlug, serviceName);
   const label = preview
-    ? previewRouteLabel(normalizeRoutePart(preview), routeIdentity)
-    : zonedRouteLabel(SUBDOMAIN_ZONES.APPS, routeIdentity);
+    ? previewRouteLabel(normalizeRoutePart(preview), environmentRouteIdentity(environmentKind, routeIdentity))
+    : zonedRouteLabel(environmentKind === 'dev' ? 'dev' : SUBDOMAIN_ZONES.APPS, routeIdentity);
   return `${label}.${baseDomain}`;
 }
 
@@ -60,7 +60,7 @@ export function internalServiceHostname({ projectSlug = 'project', serviceName =
   return `${slugify(serviceName)}.${slugify(projectSlug)}.svc.cluster.local`;
 }
 
-export function domainPlanForProject(spec: AnyRecord = {}) {
+export function domainPlanForProject(spec: AnyRecord = {}, runtime: AnyRecord = {}) {
   const organization = spec.organization || { slug: spec.organizationSlug || 'default' };
   const project = spec.project || { name: spec.name || 'project', slug: spec.slug || spec.name || 'project' };
   const organizationRouteSlug = organization.slug || organization.name || 'org';
@@ -69,6 +69,8 @@ export function domainPlanForProject(spec: AnyRecord = {}) {
   const projectSlug = slugify(projectRouteSlug);
   const baseDomain = spec.baseDomain || DEFAULT_DOMAIN;
   const services = spec.services || [];
+  const environmentKind = runtime.environmentKind || 'prod';
+  const internalNamespace = environmentKind === 'dev' ? runtime.namespace || projectSlug : projectSlug;
   return {
     baseDomain,
     zones: SUBDOMAIN_ZONES,
@@ -82,20 +84,20 @@ export function domainPlanForProject(spec: AnyRecord = {}) {
     workspace: workspaceConsoleHostname({ organizationSlug: organizationRouteSlug, baseDomain }),
     project: projectConsoleHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, baseDomain }),
     services: services.map((service: AnyRecord) => ({
-      name: slugify(service.name),
+      name: slugify(service.logicalSlug || service.name),
       type: service.type || 'web',
       publicHostname: service.type === 'web' || !service.type
-        ? serviceHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, serviceName: service.name, baseDomain, customDomain: service.domain || null })
+        ? serviceHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, serviceName: service.logicalSlug || service.name, baseDomain, customDomain: service.domain || null, environmentKind })
         : null,
-      previewPattern: previewHostnamePattern({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, serviceName: service.name, publicService: isPublicWebService(service), baseDomain }),
-      consoleHostname: serviceConsoleHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, serviceName: service.name, baseDomain }),
-      internalHostname: internalServiceHostname({ projectSlug, serviceName: service.name }),
+      previewPattern: previewHostnamePattern({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, serviceName: service.logicalSlug || service.name, publicService: isPublicWebService(service), baseDomain, environmentKind }),
+      consoleHostname: serviceConsoleHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, serviceName: service.logicalSlug || service.name, baseDomain }),
+      internalHostname: internalServiceHostname({ projectSlug: internalNamespace, serviceName: service.name }),
     })),
     resources: (spec.resources || []).map((resource: AnyRecord) => ({
-      name: slugify(resource.name),
+      name: slugify(resource.logicalSlug || resource.name),
       engine: resource.engine,
-      consoleHostname: resourceConsoleHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, resourceName: resource.name, baseDomain }),
-      internalHostname: `${slugify(resource.name)}.${projectSlug}.svc.cluster.local`,
+      consoleHostname: resourceConsoleHostname({ organizationSlug: organizationRouteSlug, projectSlug: projectRouteSlug, resourceName: resource.logicalSlug || resource.name, baseDomain }),
+      internalHostname: `${slugify(resource.name)}.${internalNamespace}.svc.cluster.local`,
     })),
     wildcardTls: [`*.${baseDomain}`],
   };
@@ -105,17 +107,21 @@ function isPublicWebService(service: AnyRecord) {
   return !service.type || String(service.type).toLowerCase() === 'web';
 }
 
-function previewHostnamePattern({ organizationSlug, projectSlug, serviceName, publicService, baseDomain }: AnyRecord) {
+function previewHostnamePattern({ organizationSlug, projectSlug, serviceName, publicService, baseDomain, environmentKind }: AnyRecord) {
   const identity = publicService
     ? serviceRouteIdentity(organizationSlug, projectSlug, serviceName)
     : tenantRouteIdentity(organizationSlug, projectSlug);
-  const routeLabel = boundedDnsLabel(identity, MAX_PREVIEW_ROUTE_IDENTITY_LENGTH);
+  const routeLabel = boundedDnsLabel(environmentRouteIdentity(environmentKind, identity), MAX_PREVIEW_ROUTE_IDENTITY_LENGTH);
   return `${SUBDOMAIN_ZONES.PREVIEW}--pr-{number}--${routeLabel}.${baseDomain}`;
 }
 
 function previewRouteLabel(preview: string, routeIdentity: string) {
   const routeLabel = boundedDnsLabel(routeIdentity, MAX_PREVIEW_ROUTE_IDENTITY_LENGTH);
   return `${SUBDOMAIN_ZONES.PREVIEW}--${preview}--${routeLabel}`;
+}
+
+function environmentRouteIdentity(environmentKind: any, routeIdentity: string) {
+  return environmentKind === 'dev' ? `dev--${routeIdentity}` : routeIdentity;
 }
 
 function zonedRouteLabel(zone: string, routeIdentity: string) {

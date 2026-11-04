@@ -3,6 +3,7 @@ import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { sanitizeLogRecord } from './security.ts';
 import { normalizeInfrastructureError } from './error-spec.ts';
 import { LIFECYCLE_CONTRACT, parseWorkflowStatus } from './lifecycle.ts';
+import { developmentEnvironmentOperationId } from './environments.ts';
 
 export const WORKFLOW_TYPES = Object.freeze({
   BUILD_AND_DEPLOY: 'build-and-deploy',
@@ -33,11 +34,15 @@ export function createWorkflowJobRecord(input: Record<string, any>) {
   if (!targetId) throw new Error('workflow job targetId is required');
   const createdAt = input.createdAt || nowIso();
   return {
-    id: input.id || stableId('job', type, targetType, targetId, createdAt || Date.now()),
+    id: input.id || (input.environmentKind === 'dev'
+      ? developmentEnvironmentOperationId('job', input.environmentId, [type, targetType, targetId, createdAt, input.attempts || 0, input.identitySequence])
+      : stableId('job', type, targetType, targetId, createdAt || Date.now())),
     type,
     status: normalizeWorkflowStatus(input.status || WORKFLOW_STATUSES.QUEUED),
     targetType,
     targetId,
+    environmentId: input.environmentId || null,
+    operationalProtocolVersion: Number(input.operationalProtocolVersion || 1),
     payload: sanitizeWorkflowValue(input.payload || {}),
     attempts: Math.max(0, Number(input.attempts || 0)),
     maxAttempts: Math.max(1, Number(input.maxAttempts || 3)),

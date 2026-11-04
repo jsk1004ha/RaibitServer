@@ -116,7 +116,15 @@ test('GitHub source mutation inputs survive Nest HTTP routing', async () => {
     const controlPlaneService = new RAIBITSERVERService();
     Object.defineProperty(controlPlaneService, 'repositoryPromise', { value: Promise.resolve({
       getProject: async () => ({ id: 'project-1', organizationId: 'org-1' }),
-      importGitHubRepository: async () => { throw new GitHubSourceConflict('GITHUB_CATALOG_STALE', { action: 'REFRESH_CATALOG', installationId: '800' }); },
+      resolveEnvironment: async (projectId, selector) => {
+        assert.equal(projectId, 'project-1');
+        assert.deepEqual(selector, {});
+        return { id: 'env-prod-1', projectId, kind: 'prod' };
+      },
+      importGitHubRepository: async input => {
+        assert.deepEqual(input, { projectId: 'project-1', environmentId: 'env-prod-1', environmentKind: 'prod', actorUserId: subject.id });
+        throw new GitHubSourceConflict('GITHUB_CATALOG_STALE', { action: 'REFRESH_CATALOG', installationId: '800' });
+      },
     }) });
     await assert.rejects(controlPlaneService.importGitHubRepository({ projectId: 'project-1' }, subject), error => {
       assert.equal(error.getStatus(), 409);
@@ -168,8 +176,11 @@ test('GitHub conflict contract survives semantic HTTP and typed SDK', async () =
 test('Prisma transaction fixture persists one sync result per idempotency key', async () => {
   const mutations = new Map();
   const jobs = [];
-  const service = { id: 'service-1', projectId: 'project-1', githubRepositoryId: '101', branch: 'main', repoUrl: 'https://github.com/acme/web.git', desiredState: { githubIntegrationId: 'integration-1', githubRepositoryId: '101', githubRepository: 'acme/web', sourceAccess: 'github-app-private' }, project: { organizationId: 'organization-1' } };
+  let protocolCalls = 0;
+  const environment = { id: 'env-prod-1', projectId: 'project-1', kind: 'prod' };
+  const service = { id: 'service-1', projectId: 'project-1', githubRepositoryId: '101', branch: 'main', repoUrl: 'https://github.com/acme/web.git', desiredState: { githubIntegrationId: 'integration-1', githubRepositoryId: '101', githubRepository: 'acme/web', sourceAccess: 'github-app-private' }, project: { organizationId: 'organization-1' }, environmentBinding: { environmentId: environment.id, projectId: environment.projectId, logicalSlug: 'web', environment } };
   const tx = {
+    $executeRawUnsafe: async sql => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); protocolCalls += 1; return 0; },
     service: { findMany: async () => [service] },
     gitHubIntegration: { findUnique: async () => ({ id: 'integration-1', organizationId: 'organization-1', installationId: '800', status: 'ACTIVE', verifiedAt: new Date() }) },
     gitHubInstallation: { findUnique: async () => ({ installationId: '800', generation: 0, refreshStatus: 'IDLE' }) },
@@ -185,6 +196,10 @@ test('Prisma transaction fixture persists one sync result per idempotency key', 
   const first = await repository.syncGitHubRepository({ repositoryId: 'acme/web', organizationId: 'organization-1', idempotencyKey: 'prisma-sync-1' });
   const replay = await repository.syncGitHubRepository({ repositoryId: 'acme/web', organizationId: 'organization-1', idempotencyKey: 'prisma-sync-1' });
   assert.equal(first.workflowJob.id, replay.workflowJob.id);
+  assert.equal(first.workflowJob.environmentId, environment.id);
+  assert.equal(first.workflowJob.operationalProtocolVersion, 1);
+  assert.deepEqual(first.workflowJob.payload.environmentBindings, [{ serviceId: service.id, projectId: service.projectId, environmentId: environment.id, environmentKind: environment.kind }]);
   assert.deepEqual({ mutations: mutations.size, jobs: jobs.length }, { mutations: 1, jobs: 1 });
   await assert.rejects(repository.syncGitHubRepository({ repositoryId: 'acme/web', organizationId: 'organization-1', branch: 'changed', idempotencyKey: 'prisma-sync-1' }), error => error.code === 'GITHUB_IDEMPOTENCY_CONFLICT' && error.recovery.action === 'CANCEL');
+  assert.equal(protocolCalls, 3);
 });

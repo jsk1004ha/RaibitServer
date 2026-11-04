@@ -42,12 +42,12 @@ export function serviceSettingsSnapshot(service: Record<string, unknown>, deploy
 export function previewServiceSettings(
   service: Record<string, unknown>,
   input: { readonly expectedUpdatedAt: string; readonly changes: Record<string, unknown>; readonly files?: Record<string, string> },
-  context: { readonly deployed: boolean; readonly quota?: Record<string, unknown> },
+  context: { readonly deployed: boolean; readonly quota?: Record<string, unknown>; readonly displayNameOnly?: boolean },
 ) {
   assertExpectedServiceVersion(service, input.expectedUpdatedAt);
   const before = serviceSettingsSnapshot(service, context.deployed);
   const changes = serviceMutationState(service, parseServiceMutation(input.changes), context);
-  validateServiceRuntimeUpdate(service, changes);
+  validateServiceRuntimeUpdate(service, context.displayNameOnly ? { ...changes, name: service.name } : changes);
   const afterService = { ...service, ...changes, desiredSpec: { ...record(service.desiredSpec), ...changes }, desiredState: { ...record(service.desiredState), ...changes } };
   const after = serviceSettingsSnapshot(afterService, context.deployed);
   const diff = Object.keys(changes).sort().map((field) => ({ field, before: before.settings[field] ?? null, after: after.settings[field] ?? null }));

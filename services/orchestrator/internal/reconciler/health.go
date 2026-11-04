@@ -43,7 +43,7 @@ func (r *ServiceReconciler) observeWorkload(ctx context.Context, spec kube.AppSe
 func (r *ServiceReconciler) runNextHealth(ctx context.Context) (*ReconcileResult, error) {
 	healthCtx, stop := context.WithTimeout(ctx, 45*time.Second)
 	defer stop()
-	job, err := r.store.ClaimNextHealth(healthCtx, store.ClaimOptions{WorkerID: r.config.WorkerID, Now: r.now().UTC(), Lease: 30 * time.Second})
+	job, err := r.store.ClaimNextHealth(healthCtx, store.ClaimOptions{WorkerID: r.config.WorkerID, Now: r.now().UTC(), Lease: 30 * time.Second, AllowDevelopment: r.config.DevelopmentEnvironments})
 	if err != nil {
 		return nil, fmt.Errorf("claim public health: %w", err)
 	}

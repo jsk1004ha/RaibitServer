@@ -107,6 +107,8 @@ test('Prisma project mutations serialize quota reads with the write', async () =
   assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
   assert.match(String(results.find((result) => result.status === 'rejected')?.reason?.message), /quota exceeded: maxProjects/);
   assert.equal(prisma.rows.projects.length, 1);
+  assert.equal(prisma.rows.environments.length, 1);
+  assert.equal(prisma.rows.environments[0].projectId, prisma.rows.projects[0].id);
   assert.ok(prisma.transactionOptions.every((options) => options?.isolationLevel === 'Serializable'));
   assert.ok(prisma.rows.rawQueries.some((query) => /SELECT 1::int AS "locked"\s+FROM pg_advisory_xact_lock/i.test(query)));
   assert.equal(prisma.rows.auditLogs.filter((entry) => entry.action === 'quota:block' && entry.targetId === 'maxProjects').length, 1);
@@ -176,6 +178,10 @@ test('Prisma cancellation locks active build work before terminal cancellation a
     transactionOptions: [],
   };
   const prisma = {
+    async $executeRawUnsafe(query) {
+      assert.equal(query, "SET LOCAL raibitserver.operational_protocol = '2'");
+      return 0;
+    },
     async $transaction(work, options) {
       state.transactionOptions.push(options);
       return work(this);
@@ -222,11 +228,16 @@ test('cancellation rejects deployments once runtime reconciliation has started',
 });
 
 function projectQuotaPrismaHarness() {
-  const rows = { projects: [], auditLogs: [], rawQueries: [] };
+  const rows = { projects: [], environments: [], auditLogs: [], rawQueries: [] };
   let transactionTail = Promise.resolve();
   const prisma = {
     rows,
     transactionOptions: [],
+    async $executeRawUnsafe(query) {
+      assert.equal(query, "SET LOCAL raibitserver.operational_protocol = '2'");
+      rows.rawQueries.push(query);
+      return 0;
+    },
     async $transaction(work, options) {
       this.transactionOptions.push(options);
       const result = transactionTail.then(() => work(this));
@@ -273,6 +284,14 @@ function projectQuotaPrismaHarness() {
         const row = { id: `project-${rows.projects.length + 1}`, ...create, createdAt: new Date(), updatedAt: new Date() };
         rows.projects.push(row);
         return row;
+      },
+    },
+    environment: {
+      upsert: async ({ where, update, create }) => {
+        const existing = rows.environments.find((row) => row.projectId === where.projectId_kind.projectId && row.kind === where.projectId_kind.kind);
+        if (existing) return Object.assign(existing, update);
+        rows.environments.push(create);
+        return create;
       },
     },
     service: { findMany: async () => [] },

@@ -96,6 +96,10 @@ test('versioned keyset cursors preserve equal-timestamp rows and reject malforme
     ['c', { id: 'c', projectId: 'project-1', createdAt: at }],
     ['old', { id: 'old', projectId: 'project-1', createdAt: '2025-12-31T23:59:59.000Z' }],
   ]);
+  const environment = store.ensureProductionEnvironment('project-1');
+  store.environmentServices = new Map([...store.services.values()].map((service) => [service.id, {
+    serviceId: service.id, projectId: service.projectId, environmentId: environment.id, logicalSlug: service.id,
+  }]));
   const newest = await repository.listServicesForProject('project-1', { limit: 2 });
   const older = await repository.listServicesForProject('project-1', { limit: 2, cursor: cursor(newest.at(-1).createdAt, newest.at(-1).id) });
   assert.deepEqual([...newest, ...older].map((row) => row.id), ['c', 'b', 'a', 'old']);

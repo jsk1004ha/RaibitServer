@@ -22,7 +22,10 @@ export const CustomDomainSchema = z.object({
   createdAt: z.iso.datetime(), updatedAt: z.iso.datetime(),
 }).strict();
 
-export const CustomDomainCreateSchema = z.object({ serviceId: z.string().min(1), hostname: z.string().min(1).max(1_024) }).strict();
+export const CustomDomainCreateSchema = z.object({
+  serviceId: z.string().min(1), hostname: z.string().min(1).max(1_024),
+  environmentId: z.string().min(1).optional(), environmentKind: z.enum(['prod', 'dev']).optional(),
+}).strict();
 export const CustomDomainMutationSchema = z.object({ expectedVersion: z.number().int().positive() }).strict();
 export const CustomDomainRotateSchema = CustomDomainMutationSchema.extend({ confirmed: z.literal(true) }).strict();
 export const CustomDomainChallengeSchema = z.object({ domain: CustomDomainSchema, challengeToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();

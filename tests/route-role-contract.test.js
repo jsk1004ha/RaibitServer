@@ -246,6 +246,7 @@ test('given an explicit organization route slug when direct, repository, and API
   const desiredProjectUpserts = [];
   const desiredProjectRepository = new PrismaControlPlaneRepository({
     $transaction: async (callback) => callback({
+      $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
       organization: {
         findUnique: async () => null,
         upsert: async (input) => {
@@ -260,6 +261,7 @@ test('given an explicit organization route slug when direct, repository, and API
           return { id: 'project_desired', organizationId: input.create.organizationId, slug: input.create.slug };
         },
       },
+      environment: { upsert: async ({ create }) => create },
       auditLog: { create: async () => ({}) },
     }),
   });
@@ -293,6 +295,7 @@ test('given an explicit organization route slug when direct, repository, and API
   let existingOrganizationUpserts = 0;
   const existingOrganizationRepository = new PrismaControlPlaneRepository({
     $transaction: async (callback) => callback({
+      $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
       organization: {
         findUnique: async ({ where }) => where.id === 'org_existing' ? { id: 'org_existing', name: 'Existing Organization', slug: 'api', plan: 'free' } : null,
         upsert: async () => { existingOrganizationUpserts += 1; throw new Error('unexpected organization upsert'); },
@@ -301,6 +304,7 @@ test('given an explicit organization route slug when direct, repository, and API
         findUnique: async () => null,
         upsert: async (input) => ({ id: 'project_existing', organizationId: input.create.organizationId, slug: input.create.slug }),
       },
+      environment: { upsert: async ({ create }) => create },
       auditLog: { create: async () => ({}) },
     }),
   });
@@ -545,6 +549,7 @@ test('given valid organization references when desired projects are written then
   assert.equal(byName.organization.id, existing.id);
   const prisma = new PrismaControlPlaneRepository({
     $transaction: async (callback) => callback({
+      $executeRawUnsafe: async (sql) => { assert.equal(sql, "SET LOCAL raibitserver.operational_protocol = '2'"); return 0; },
       organization: {
         findUnique: async ({ where }) => where.id === existing.id ? existing : null,
         upsert: async ({ create }) => ({ id: 'generated-org-id', ...create }),
@@ -553,6 +558,7 @@ test('given valid organization references when desired projects are written then
         findUnique: async () => null,
         upsert: async ({ create }) => ({ id: 'generated-project-id', ...create }),
       },
+      environment: { upsert: async ({ create }) => create },
       auditLog: { create: async () => ({}) },
     }),
   });

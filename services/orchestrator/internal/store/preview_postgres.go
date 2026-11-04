@@ -27,17 +27,18 @@ func (s *PostgresStore) ClaimNextPreviewRoute(ctx context.Context, options Claim
 	if err != nil {
 		return nil, err
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := s.beginOperationalTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, fmt.Errorf("begin preview route claim: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	var lineageID, organizationID, serviceID string
 	err = tx.QueryRowContext(ctx, `SELECT l.id,l."organizationId",l."serviceId" FROM "PreviewLineage" l
- WHERE (l."reconcileLeaseUntil" IS NULL OR l."reconcileLeaseUntil"<=$1) AND (
+ LEFT JOIN "Environment" environment ON environment.id=l."environmentId" AND environment."projectId"=l."projectId"
+ WHERE (COALESCE(environment.kind,'prod')='prod' OR $2) AND (l."reconcileLeaseUntil" IS NULL OR l."reconcileLeaseUntil"<=$1) AND (
   (l.state='OPEN' AND l."candidateDeploymentId" IS NOT NULL AND EXISTS (SELECT 1 FROM "Deployment" d WHERE d.id=l."candidateDeploymentId" AND d."previewLineageId"=l.id AND d."previewGeneration"=l."candidateGeneration" AND d.status='READY' AND d."publicHealthStatus"='HEALTHY') AND COALESCE(l."routeObserved"->>'deploymentId','')<>l."candidateDeploymentId")
   OR (l.state='CLOSED' AND (COALESCE(l."routeObserved"->>'uid','')<>'' OR l."routeIntent"->>'operation'='clear')))
- ORDER BY l."updatedAt",l.id LIMIT 1`, at).Scan(&lineageID, &organizationID, &serviceID)
+ ORDER BY l."updatedAt",l.id LIMIT 1`, at, options.AllowDevelopment).Scan(&lineageID, &organizationID, &serviceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -85,7 +86,7 @@ func (s *PostgresStore) ClaimNextPreviewRoute(ctx context.Context, options Claim
 }
 
 func (s *PostgresStore) RenewPreviewRouteLease(ctx context.Context, lease PreviewRouteLease, at time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE "PreviewLineage" SET "reconcileLeaseUntil"=$1,"updatedAt"=$2 WHERE id=$3 AND version=$4 AND "reconcileToken"=$5 AND "reconcileWorker"=$6 AND "reconcileLeaseUntil">$2`, at.UTC().Add(60*time.Second), at.UTC(), lease.LineageID, lease.Version, lease.Token, lease.WorkerID)
+	result, err := s.execOperational(ctx, `UPDATE "PreviewLineage" SET "reconcileLeaseUntil"=$1,"updatedAt"=$2 WHERE id=$3 AND version=$4 AND "reconcileToken"=$5 AND "reconcileWorker"=$6 AND "reconcileLeaseUntil">$2`, at.UTC().Add(60*time.Second), at.UTC(), lease.LineageID, lease.Version, lease.Token, lease.WorkerID)
 	if err != nil {
 		return err
 	}
@@ -100,7 +101,7 @@ func (s *PostgresStore) SetPreviewRouteIntent(ctx context.Context, lease Preview
 	if intent.Version != 1 || intent.LineageVersion != lease.Version || intent.Token != lease.Token || (intent.UID == "") != (intent.ResourceVersion == "") {
 		return ErrPreviewContract
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE "PreviewLineage" SET "routeIntent"=$1,"updatedAt"=$2 WHERE id=$3 AND version=$4 AND "reconcileToken"=$5 AND "reconcileWorker"=$6 AND "reconcileLeaseUntil">$2 AND namespace=$7 AND "routeName"=$8 AND ((state='OPEN' AND $9='promote' AND "candidateDeploymentId"=$10 AND "candidateGeneration"=$11) OR (state='CLOSED' AND $9='clear' AND $10='' AND $11=0))`, raw, time.Now().UTC(), lease.LineageID, lease.Version, lease.Token, lease.WorkerID, intent.Namespace, intent.Name, intent.Operation, intent.DeploymentID, intent.Generation)
+	result, err := s.execOperational(ctx, `UPDATE "PreviewLineage" SET "routeIntent"=$1,"updatedAt"=$2 WHERE id=$3 AND version=$4 AND "reconcileToken"=$5 AND "reconcileWorker"=$6 AND "reconcileLeaseUntil">$2 AND namespace=$7 AND "routeName"=$8 AND ((state='OPEN' AND $9='promote' AND "candidateDeploymentId"=$10 AND "candidateGeneration"=$11) OR (state='CLOSED' AND $9='clear' AND $10='' AND $11=0))`, raw, time.Now().UTC(), lease.LineageID, lease.Version, lease.Token, lease.WorkerID, intent.Namespace, intent.Name, intent.Operation, intent.DeploymentID, intent.Generation)
 	if err != nil {
 		return err
 	}
@@ -112,7 +113,7 @@ func (s *PostgresStore) CompletePreviewRoute(ctx context.Context, lease PreviewR
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := s.beginOperationalTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return err
 	}

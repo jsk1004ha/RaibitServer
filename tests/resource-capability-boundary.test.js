@@ -51,6 +51,12 @@ test('resource-local fallback slugs keep distinct Korean names separate without 
   const customPath = providerOwnedSqlitePath('historical-custom-file');
   Object.assign(store.resources.get(sqlite.id), { sqlitePath: customPath, desiredSpec: { sqlitePath: customPath }, status: 'provisioning' });
   assert.equal(store.createResource({ projectId: project.id, name: sqlite.name, engine: 'sqlite' }).sqlitePath, customPath);
+  const dev = store.createEnvironment({ projectId: project.id, kind: 'dev', expectedVersion: 0 });
+  const devFirst = store.createResource({ projectId: project.id, environmentId: dev.id, name: first.name, engine: first.engine });
+  const devSecond = store.createResource({ projectId: project.id, environmentId: dev.id, name: second.name, engine: second.engine });
+  assert.notEqual(devFirst.id, devSecond.id);
+  assert.notEqual(devFirst.id, first.id);
+  assert.notEqual(devFirst.slug, devSecond.slug);
 });
 
 test('real PostgreSQL Korean resource names have distinct slugs matching memory', { skip: !databaseUrl }, async () => {
@@ -103,7 +109,7 @@ test('authorized supported-resource boundary: preview returns a plan without mut
 
 test('authorized supported-resource boundary: local live request records only server-owned execution intent', async () => {
   const { store, project } = fixture();
-  const resource = store.createResource({ projectId: project.id, name: 'pg', engine: 'postgresql', desiredState: { resourceExecution: { intent: 'preview-plan', environment: 'release' } } });
+  const resource = store.createResource({ projectId: project.id, name: 'pg', engine: 'postgresql', environment: 'production', desiredState: { resourceExecution: { intent: 'preview-plan', environment: 'release' } } });
   const response = await store.provisionResourceProvider({ resourceId: resource.id, intent: 'live-provision' });
   assert.equal(response.result.intent, 'live-provision');
   assert.equal(response.result.dryRun, false);

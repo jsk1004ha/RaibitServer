@@ -99,8 +99,24 @@
       "sha256": "44a36e6face136eac2dad193ab2282f5c41f423435de61127c4aba08fb36e6bb"
     },
     {
+      "id": "202609130001_operational_persistence",
+      "sha256": "3f0aba94669d906664b6b734d47d02d946a0960ba69e5501945bf6a5b17df817"
+    },
+    {
+      "id": "202609130002_runtime_environment_protocol",
+      "sha256": "eebc11a218f527416688b643f4ab630a9adb90a07fb4362e3467873f8967e191"
+    },
+    {
+      "id": "202609130003_operational_state_dispatch",
+      "sha256": "72001f2d48c4d4890057a258408facd8fb14cc058c61e9a70e2b02dd7b56681c"
+    },
+    {
       "id": "202609291300_domain_rentals",
       "sha256": "509883b50204ea67ec011ff2da29a3ae2460b0ff4e59798dbb5581abfa3f6e15"
+    },
+    {
+      "id": "202609300001_legacy_protocol_reset",
+      "sha256": "0f48017975dfa3ab527b268ed54135aea10dc3a76945892e8beb58039432e513"
     }
   ]
 }

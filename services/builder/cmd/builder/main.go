@@ -110,7 +110,11 @@ func runDispatcher(ctx context.Context, env map[string]string) error {
 	if dsn == "" {
 		return errors.New("dispatcher requires the explicit control-plane PostgreSQL store")
 	}
-	store, closeStore, err := controlplane.OpenPostgresStore(ctx, dsn)
+	protocol, err := controlplane.OperationalProtocolFromEnv(env)
+	if err != nil {
+		return err
+	}
+	store, closeStore, err := controlplane.OpenPostgresStoreWithOperationalProtocol(ctx, dsn, protocol)
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL control-plane store: %w", err)
 	}
@@ -197,6 +201,13 @@ func runExecutor(ctx context.Context, env map[string]string) error {
 
 func validateRoleEnvironment(env map[string]string) error {
 	role := strings.ToLower(strings.TrimSpace(env["RAIBITSERVER_BUILDER_ROLE"]))
+	protocol, err := controlplane.OperationalProtocolFromEnv(env)
+	if err != nil {
+		return err
+	}
+	if protocol == controlplane.OperationalProtocolActive && role != "dispatcher" {
+		return errors.New("operational protocol 2 requires the trusted dispatcher role")
+	}
 	production := envBool(env["RAIBITSERVER_PRODUCTION"]) || strings.EqualFold(strings.TrimSpace(env["RAIBITSERVER_ENV"]), "production")
 	if production && role != "dispatcher" && role != "executor" {
 		return errors.New("production builder role must be dispatcher or executor; combined DB-and-build execution is forbidden")

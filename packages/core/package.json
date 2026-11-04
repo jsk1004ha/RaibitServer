@@ -31,6 +31,11 @@
     "./domain-rentals-http": "./src/domain-rentals-http.ts",
     "./domain-rentals-postgres": "./src/domain-rentals-postgres.ts",
     "./execution": "./src/execution.ts",
+    "./operational-contract": "./src/operational-contract.ts",
+    "./operational-persistence": "./src/operational-persistence.ts",
+    "./environments": "./src/environments.ts",
+    "./discord-alerts": "./src/discord-alerts.ts",
+    "./backup-policy": "./src/backup-policy.ts",
     "./oauth-source": "./src/oauth-source.ts"
   },
   "dependencies": {
