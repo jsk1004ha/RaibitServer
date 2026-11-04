@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,9 @@ function compile(rootNames, options) {
 function install(packageDir, entry, output, exports = { '.': entry }) {
   const dist = path.join(packageDir, 'dist');
   mkdirSync(dist);
-  cpSync(output, dist, { recursive: true, errorOnExist: true, force: false });
+  for (const name of readdirSync(output)) {
+    cpSync(path.join(output, name), path.join(dist, name), { recursive: true, errorOnExist: true, force: false });
+  }
   const manifestPath = path.join(packageDir, 'package.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   manifest.main = entry;

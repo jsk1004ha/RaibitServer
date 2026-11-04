@@ -20,6 +20,33 @@ test('SQLite console creates parent directories and browses tables', async () =>
   assert.deepEqual(rows.fields, ['status']);
 });
 
+test('SQLite read-only console protects metadata while retaining schema inspection', async (t) => {
+  await fs.mkdir(path.resolve('.raibitserver-work/sqlite'), { recursive: true });
+  const directory = await fs.mkdtemp(path.resolve('.raibitserver-work/sqlite/console-readonly-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const resource = { engine: 'sqlite', desiredSpec: { sqlitePath: path.join(directory, 'app.sqlite') } };
+  const writer = { role: 'db-admin', confirmed: true };
+  await runDbConsoleQuery(resource, 'CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT)', writer);
+  await runDbConsoleQuery(resource, 'CREATE INDEX notes_title_idx ON notes(title)', writer);
+  await runDbConsoleQuery(resource, 'PRAGMA user_version(7)', writer);
+
+  for (const query of ['PRAGMA user_version(123)', 'PRAGMA main.application_id(456)', 'PRAGMA query_only(0)']) {
+    await assert.rejects(
+      () => runDbConsoleQuery(resource, query, { role: 'maintainer', confirmed: true }),
+      /requires db:query:write permission/,
+    );
+  }
+  assert.equal((await runDbConsoleQuery(resource, 'PRAGMA user_version', { role: 'maintainer' })).rows[0].user_version, 7);
+  assert.equal((await runDbConsoleQuery(resource, 'PRAGMA application_id', { role: 'maintainer' })).rows[0].application_id, 0);
+  assert.equal((await runDbConsoleQuery(resource, 'PRAGMA query_only', { role: 'maintainer' })).rows[0].query_only, 1);
+  const columns = await runDbConsoleQuery(resource, "PRAGMA main.table_info('notes')", { role: 'maintainer' });
+  assert.deepEqual(columns.rows.map((row) => row.name), ['id', 'title']);
+  const index = await runDbConsoleQuery(resource, 'PRAGMA index_info(notes_title_idx)', { role: 'maintainer' });
+  assert.equal(index.rows[0].name, 'title');
+  await runDbConsoleQuery(resource, 'PRAGMA user_version(8)', writer);
+  assert.equal((await runDbConsoleQuery(resource, 'PRAGMA user_version', { role: 'maintainer' })).rows[0].user_version, 8);
+});
+
 test('PostgreSQL console exposes live execution contract without local credentials', async () => {
   const query = await runDbConsoleQuery({ engine: 'postgresql' }, 'SELECT 1', { role: 'db-admin' });
   assert.equal(query.engine, 'postgresql');

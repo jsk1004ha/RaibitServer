@@ -21,6 +21,7 @@ async function runSqlite(resource: Record<string, any>, query: string, options: 
   const db = new (sqlite as any).DatabaseSync(dbPath);
   try {
     db.exec('PRAGMA busy_timeout=1000');
+    if (guard.readOnly === true) db.exec('PRAGMA query_only=ON');
     const text = String(query || '').trim();
     assertSqliteStatementAllowed(text);
     if (/^SELECT\b/i.test(text)) {
@@ -397,9 +398,10 @@ function trimResultRows(rows: any, maxBytes: any) {
   const kept = [];
   let used = 2;
   for (const row of rows) {
-    const bytes = Buffer.byteLength(JSON.stringify(row));
+    const serialized = JSON.stringify(row, (_key, value) => typeof value === 'bigint' ? value.toString() : value);
+    const bytes = Buffer.byteLength(serialized);
     if (used + bytes > byteLimit) break;
-    kept.push(row);
+    kept.push(JSON.parse(serialized));
     used += bytes + 1;
   }
   return kept;

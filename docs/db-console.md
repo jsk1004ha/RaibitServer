@@ -22,7 +22,7 @@
 ## 공통 guard
 
 - destructive SQL은 명시적 confirmation이 필요합니다.
-- viewer 역할은 read-only입니다.
+- DB 조회는 `db:data:read` 권한이 필요하며, `MAINTAINER`는 조회만 가능합니다. `VIEWER`는 DB 행 조회 권한이 없습니다.
 - query limit, timeout, result-size control을 console layer 또는 provider adapter에서 강제합니다.
 - provider connection material은 sealed provider secret에서만 가져옵니다.
 - request body의 connection URL/URI/DSN/JDBC 값은 사용하지 않습니다.
@@ -38,6 +38,10 @@ SQLite는 실행 전에 다음을 차단합니다.
 - unsafe PRAGMA
 
 SQLite parent directory는 provider-owned `.raibitserver-work/sqlite` local console root 아래에서만 생성합니다.
+
+읽기 전용 SQL은 SQLite의 `query_only=ON` 연결에서 실행합니다. PRAGMA 조회는 명시된 메타데이터 조회 목록으로 제한하며, `table_info(...)`, `index_info(...)` 등 schema 탐색은 허용합니다. `user_version(...)`처럼 괄호로 값을 지정하는 PRAGMA도 쓰기이므로 DB 쓰기 권한과 confirmation이 필요합니다.
+
+PostgreSQL `bigint` 결과는 정밀도 손실을 막기 위해 JSON 문자열로 반환합니다. 중첩 결과에도 같은 변환을 적용한 뒤 반환할 JSON의 UTF-8 크기를 계산해 result-size 제한을 적용합니다.
 
 ## Online manager 화면
 
