@@ -17,6 +17,8 @@ export interface CommandRunResult {
   cwd?: string;
   dryRun: boolean;
   exitCode: number;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
   stdout: string;
   stderr: string;
 }
@@ -43,6 +45,8 @@ export async function runCommand(command: CommandSpec, { dryRun = false, timeout
       cwd: command.cwd,
       dryRun: true,
       exitCode: 0,
+      signal: null,
+      timedOut: false,
       stdout: '',
       stderr: '',
     } satisfies CommandRunResult;
@@ -57,20 +61,33 @@ export async function runCommand(command: CommandSpec, { dryRun = false, timeout
 
   let stdout = '';
   let stderr = '';
-  const timer = setTimeout(() => terminateProcessGroup(child.pid), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    terminateProcessGroup(child.pid);
+  }, timeoutMs);
   child.stdout?.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
   child.stderr?.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
   if (command.stdin) child.stdin?.write(command.stdin);
   child.stdin?.end();
 
-  const [exitCodeRaw] = await once(child, 'close');
-  clearTimeout(timer);
-  const exitCode = Number(exitCodeRaw ?? 0);
+  let exitCodeRaw: number | null;
+  let signal: NodeJS.Signals | null;
+  try {
+    [exitCodeRaw, signal] = await once(child, 'close');
+  } finally {
+    // once() rejects on spawn errors as well; do not leave a live deadline.
+    clearTimeout(timer);
+  }
+  // A timeout remains a failure even if SIGTERM triggers a graceful exit(0).
+  // Signal-only closes have a null code, never a successful numeric zero.
+  const exitCode = timedOut ? 124 : (exitCodeRaw ?? 1);
   const safeStdout = redactCommandText(stdout);
   const safeStderr = redactCommandText(stderr);
-  const result = { command: printable, executable: command.executable, args, cwd: command.cwd, dryRun: false, exitCode, stdout: safeStdout, stderr: safeStderr } satisfies CommandRunResult;
-  if (exitCode !== 0) {
-    const error = new Error(`command failed (${exitCode}): ${printable}\n${safeStderr || safeStdout}`);
+  const result = { command: printable, executable: command.executable, args, cwd: command.cwd, dryRun: false, exitCode, signal, timedOut, stdout: safeStdout, stderr: safeStderr } satisfies CommandRunResult;
+  if (timedOut || signal !== null || exitCode !== 0) {
+    const reason = timedOut ? `command timed out after ${timeoutMs}ms` : `command failed (${signal || exitCode})`;
+    const error = new Error(`${reason}: ${printable}\n${safeStderr || safeStdout}`);
     (error as any).result = result;
     throw error;
   }
