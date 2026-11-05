@@ -104,6 +104,13 @@ done
 
 변경 영역별 검증 명령은 [검증 명령 매트릭스](docs/verification-commands.md)에 정리되어 있습니다.
 
+TypeScript 공통 명령 실행기(`packages/core/src/command-runner.ts`)는 제한 시간 초과를
+종료 코드 `124`와 `timedOut: true`로 보고하고 실패로 처리합니다. 종료 신호만 있고 종료 코드가
+없는 경우도 실패이며 `signal`에 신호를 남깁니다. 제한 시간 때문에 종료한 프로세스가
+자체 정리 후 `0`을 반환해도 성공으로 바꾸지 않습니다. 관련 회귀 검증은
+`node --test tests/command-runner.test.js`로 실행합니다. 이 계약은 TypeScript 실행기에
+적용되며 Go 빌더의 별도 명령 실행 경로와 구분됩니다.
+
 ## API와 CLI 사용 예시
 
 정식 API 계약은 [`openapi/raibitserver.yaml`](openapi/raibitserver.yaml)에 있고, CLI는 API client와 로컬 planner/executor smoke path를 함께 검증합니다.
